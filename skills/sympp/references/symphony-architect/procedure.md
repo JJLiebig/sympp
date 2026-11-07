@@ -79,8 +79,8 @@ truth. `read_plan` also defaults to compact package references; use
   durable planning question helps; do not duplicate every conversational question.
 - Record durable decisions with `record_decision`. Valid
   `source_type`: `human`, `architect`, `operator`, `ask_pro_advisory`.
-- Route product or scope questions that approved intent cannot answer to the
-  chief when present; the chief applies existing user decisions and escalates
+- Route product or scope questions that approved intent and available evidence
+  cannot answer to the chief when present; the chief applies existing user decisions and escalates
   only what it cannot settle. Without a chief, ask the user. Optional
   `human_info_needed` guidance records do not declare blockers. Do not choose
   product behavior just to keep work moving.
@@ -182,10 +182,12 @@ do not repeat the worker checklist. Workers return material product, architectur
 package-boundary, or reviewer-driven scope ambiguity to the architect. Let the
 worker finish review convergence and delivery.
 
-Review findings are hypotheses, not product decisions. Verify them and have
-genuine in-scope defects fixed. Decline requests that exceed approved scope
-rather than implementing them or turning them into human approval requests;
-route unresolved product conflicts to the chief.
+Review findings are hypotheses, not product decisions. Workers verify and
+converge them; you are the first escalation line for findings they cannot
+settle. Judge those against feature intent, cross-repo contracts and the evidence
+you have or obtain: have genuine in-scope defects fixed, and decline unsupported
+requests rather than implementing them or turning them into human approval
+requests. Ask the chief only when you remain genuinely unsure.
 
 ## Guidance
 
@@ -201,6 +203,9 @@ escalations or blockers. No report cadence or extra checklist is required.
 
 - Answer worker questions in the conversation when recorded intent decides them.
   Do not require a duplicate sympp question record. Ordinary waits are not blockers.
+- Workers message you only with actionable issues or blockers, questions,
+  unclear review or scope guidance, and their completion handoff. Request status
+  when you need it.
 - Only the architect (or coordinating parent for direct work) explicitly declares
   and clears work blockers after resolving or escalating the issue. Scope each
   blocker to affected work; do not automatically block the whole WorkRequest.

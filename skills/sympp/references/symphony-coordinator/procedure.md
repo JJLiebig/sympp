@@ -80,11 +80,11 @@ Route decisions to the chief when present, otherwise the user; a conversational
 answer is enough to resolve the escalation. Do not create a WorkRequest solely
 for reporting, require worker receipts, or turn ordinary waits into escalation.
 
-As chief, interpret and apply existing user decisions, resolve scope conflicts
-and reject unsupported reviewer-driven expansion. Bring the human only material
-product trade-offs or ambiguities that approved intent cannot settle, and access
-or authority only the human holds, with brief context, a recommendation and a
-concrete decision. Never override explicit user constraints, bypass security or
+As chief, interpret and apply existing user decisions, resolve scope conflicts,
+and give the final check on reviewer-driven expansion an architect is genuinely
+unsure about. Bring the human only material product trade-offs or ambiguities
+that approved intent cannot settle, and access or authority only the human
+holds, with brief context, a recommendation and a concrete decision. Never override explicit user constraints, bypass security or
 CI, or silently set new product policy.
 
 - Do not take over worker implementation by default.
@@ -94,10 +94,14 @@ CI, or silently set new product policy.
   declares/clears blockers for affected work after resolving or escalating it.
 - Optional Herdr/OSC observations augment last-known state. Missing observation
   means unknown; it never blocks work or authorizes takeover.
-- Treat review findings as hypotheses, not product decisions. Fix verified
-  in-scope defects; decline requests beyond approved scope rather than
-  implementing them or asking the human, and route unresolved product conflicts
-  to the chief.
+- Treat review findings as hypotheses, not product decisions. Workers verify
+  and converge them; the architect or coordinating parent settles findings a
+  worker cannot, fixing genuine in-scope defects and declining unsupported
+  requests rather than implementing them or asking the human. The chief is the
+  final check only when that owner is genuinely unsure.
+- Workers message you only with actionable issues or blockers, questions,
+  unclear review or scope guidance, and their completion handoff. Request status
+  when you need it.
 - Stop or reslice when scope grows, workers collide, or PR budget is at risk.
 
 ## Integrate
