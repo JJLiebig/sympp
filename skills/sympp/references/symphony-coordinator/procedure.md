@@ -8,8 +8,14 @@ Use for ordinary coordination in a dedicated sympp MCP config. For WorkRequests,
 ledger-backed claims, scoped grants, delivery boards, or MCP merge gates, use
 [symphony-architect](../symphony-architect/procedure.md).
 Small clear work stays in this direct worker loop; a chief, WorkRequest or
-feature-planning ceremony is optional. Escalate to an architect when scope or
-unresolved product decisions require it, not because of request type or model.
+feature-planning ceremony is optional. A chief delegates each substantial
+multi-slice feature to a distinct architect, who owns it end to end:
+clarification, architecture, slices and workers, review convergence, authorized
+integration and merges, qualification and delivery. That architect follows this
+procedure for ordinary work, or the architect procedure for a WorkRequest.
+The chief keeps priorities,
+cross-feature and domain coordination and product intent, and receives the
+final delivery.
 
 ## Start
 
@@ -74,6 +80,19 @@ Route decisions to the chief when present, otherwise the user; a conversational
 answer is enough to resolve the escalation. Do not create a WorkRequest solely
 for reporting, require worker receipts, or turn ordinary waits into escalation.
 
+As chief, interpret and apply existing user decisions, resolve scope conflicts,
+and give the final check on reviewer-driven expansion an architect is genuinely
+unsure about. Bring the human only material product trade-offs or ambiguities
+that approved intent cannot settle, and access or authority only the human
+holds. Never override explicit user constraints, bypass security or CI, or
+silently set new product policy.
+
+Write every human question so it stands alone in plain English: avoid jargon or
+briefly explain a necessary term, and focus on what users see and the product
+consequences, not implementation detail. State the current situation, why the
+decision matters, the realistic options with their impact and trade-offs, your
+recommendation, and the concrete question.
+
 - Do not take over worker implementation by default.
 - Answer architecture questions in the conversation; escalate human/product
   decisions to a chief when present, otherwise the user. Questions and ordinary
@@ -81,7 +100,14 @@ for reporting, require worker receipts, or turn ordinary waits into escalation.
   declares/clears blockers for affected work after resolving or escalating it.
 - Optional Herdr/OSC observations augment last-known state. Missing observation
   means unknown; it never blocks work or authorizes takeover.
-- Treat review findings as risk signals, not scope authority.
+- Treat review findings as hypotheses, not product decisions. Workers verify
+  and converge them; the architect or coordinating parent settles findings a
+  worker cannot, fixing genuine in-scope defects and declining unsupported
+  requests rather than implementing them or asking the human. The chief is the
+  final check only when that owner is genuinely unsure.
+- Workers message you only with actionable issues or blockers, questions,
+  unclear review or scope guidance, and their completion handoff. Request status
+  when you need it.
 - Stop or reslice when scope grows, workers collide, or PR budget is at risk.
 
 ## Integrate

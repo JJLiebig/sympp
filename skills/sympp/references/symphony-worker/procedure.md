@@ -16,7 +16,9 @@ description points to `#/parent_work_request/goal`). Use that complete text.
   stopping conditions supplied by the parent before coding.
 - Stay inside that scope. Ask the parent in the conversation when context is
   missing or material product, architecture, dependency, or review ambiguity
-  appears. Questions and ordinary waits are not blockers. Continue independent
+  appears. Message the parent only for actionable issues or blockers, questions,
+  or genuinely unclear review or scope guidance; send progress or status only
+  when asked. Questions and ordinary waits are not blockers. Continue independent
   work while a decision is pending.
 - The architect or coordinating parent owns dispatch authority, dependency
   decisions, explicit blocker declaration/resolution, and delivery reconciliation.
@@ -60,7 +62,8 @@ Return the PR URL and exact head, changed behavior, acceptance evidence, require
 checks and review results (with native links/identifiers and tested heads), and
 remaining risks. For candidate dependencies, name the consumed backend/package
 heads and the final dependent head. No-PR work returns direct evidence for the
-parent's acceptance.
+parent's acceptance. Always send this handoff, once per independently delivered
+PR; it is what lets the parent integrate.
 
 The parent reconciles readiness and delivery from that handoff and authoritative
 GitHub/review evidence. Optional Herdr/OSC observations augment last-known state;
