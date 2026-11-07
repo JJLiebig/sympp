@@ -215,7 +215,12 @@ escalations or blockers. No report cadence or extra checklist is required.
 - Optional Herdr/OSC observations augment last-known state. Missing observation
   means unknown and never blocks work or grants takeover authority.
 - Escalate with `escalate_guidance_request` when human product input is needed.
-- For human choices, include a compact `decision_prompt`: `tl_dr`, `details`,
+- Write every human question so it stands alone in plain English: avoid jargon
+  or briefly explain a necessary term, and focus on what users see and the
+  product consequences, not implementation detail. State the current situation,
+  why the decision matters, the realistic options with their impact and
+  trade-offs, your recommendation, and the concrete question.
+- For human choices, carry that in a compact `decision_prompt`: `tl_dr`, `details`,
   concrete options with labels, exact answer text, descriptions, and useful
   pros/cons.
 
