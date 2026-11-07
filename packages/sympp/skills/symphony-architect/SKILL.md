@@ -13,7 +13,11 @@ Own product clarification, optional Group organization, WorkPackage planning, wo
 dispatch, guidance routing, and delivery closeout. Do not implement worker
 packages yourself. Workers own implementation, required validation/review,
 CI/static gates, and a normal PR/evidence handoff; send findings back to the owner.
-The architect owns readiness and delivery reconciliation. Keep dispatch prompts
+The architect owns readiness and delivery reconciliation, and decides
+implementation and architecture autonomously within approved product intent.
+For a chief-delegated feature, the architect also owns review convergence,
+authorized integration and merges, qualification and delivery to the chief.
+Keep dispatch prompts
 task-specific and supply the full scoped assignment; no worker MCP calls are required.
 Stop for material scope/product ambiguity, missing authority/evidence, branch
 ambiguity, or global Codex/plugin configuration changes. Never expose raw work
@@ -80,7 +84,9 @@ truth. `read_plan` also defaults to compact package references; use
   durable planning question helps; do not duplicate every conversational question.
 - Record durable decisions with `record_decision`. Valid
   `source_type`: `human`, `architect`, `operator`, `ask_pro_advisory`.
-- Route human decisions to the chief when present, otherwise the user. Optional
+- Route product or scope questions that approved intent cannot answer to the
+  chief when present; the chief applies existing user decisions and escalates
+  only what it cannot settle. Without a chief, ask the user. Optional
   `human_info_needed` guidance records do not declare blockers. Do not choose
   product behavior just to keep work moving.
 - Once open questions are answered or closed, continue straight to
@@ -180,6 +186,11 @@ Use [the template](../symphony-work-package/references/worker_prompt.md);
 do not repeat the worker checklist. Workers return material product, architecture, dependency,
 package-boundary, or reviewer-driven scope ambiguity to the architect. Let the
 worker finish review convergence and delivery.
+
+Review findings are hypotheses, not product decisions. Verify them and have
+genuine in-scope defects fixed. Decline requests that exceed approved scope
+rather than implementing them or turning them into human approval requests;
+route unresolved product conflicts to the chief.
 
 ## Guidance
 

@@ -8,8 +8,12 @@ Use for ordinary coordination in a dedicated sympp MCP config. For WorkRequests,
 ledger-backed claims, scoped grants, delivery boards, or MCP merge gates, use
 [symphony-architect](../symphony-architect/procedure.md).
 Small clear work stays in this direct worker loop; a chief, WorkRequest or
-feature-planning ceremony is optional. Escalate to an architect when scope or
-unresolved product decisions require it, not because of request type or model.
+feature-planning ceremony is optional. A chief delegates each substantial
+multi-slice feature to a distinct architect, who owns it end to end:
+clarification, architecture, slices and workers, review convergence, authorized
+integration and merges, qualification and delivery. The chief keeps priorities,
+cross-feature and domain coordination and product intent, and receives the
+final delivery.
 
 ## Start
 
@@ -74,6 +78,13 @@ Route decisions to the chief when present, otherwise the user; a conversational
 answer is enough to resolve the escalation. Do not create a WorkRequest solely
 for reporting, require worker receipts, or turn ordinary waits into escalation.
 
+As chief, interpret and apply existing user decisions, resolve scope conflicts
+and reject unsupported reviewer-driven expansion. Bring the human only material
+product trade-offs or ambiguities that approved intent cannot settle, and access
+or authority only the human holds, with brief context, a recommendation and a
+concrete decision. Never override explicit user constraints, bypass security or
+CI, or silently set new product policy.
+
 - Do not take over worker implementation by default.
 - Answer architecture questions in the conversation; escalate human/product
   decisions to a chief when present, otherwise the user. Questions and ordinary
@@ -81,7 +92,10 @@ for reporting, require worker receipts, or turn ordinary waits into escalation.
   declares/clears blockers for affected work after resolving or escalating it.
 - Optional Herdr/OSC observations augment last-known state. Missing observation
   means unknown; it never blocks work or authorizes takeover.
-- Treat review findings as risk signals, not scope authority.
+- Treat review findings as hypotheses, not product decisions. Fix verified
+  in-scope defects; decline requests beyond approved scope rather than
+  implementing them or asking the human, and route unresolved product conflicts
+  to the chief.
 - Stop or reslice when scope grows, workers collide, or PR budget is at risk.
 
 ## Integrate
