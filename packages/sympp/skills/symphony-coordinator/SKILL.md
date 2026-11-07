@@ -16,7 +16,9 @@ Small clear work stays in this direct worker loop; a chief, WorkRequest or
 feature-planning ceremony is optional. A chief delegates each substantial
 multi-slice feature to a distinct architect, who owns it end to end:
 clarification, architecture, slices and workers, review convergence, authorized
-integration and merges, qualification and delivery. The chief keeps priorities,
+integration and merges, qualification and delivery. That architect follows this
+procedure for ordinary work, or the architect procedure for a WorkRequest.
+The chief keeps priorities,
 cross-feature and domain coordination and product intent, and receives the
 final delivery.
 
