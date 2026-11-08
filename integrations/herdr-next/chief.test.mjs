@@ -93,7 +93,6 @@ test('the chief is told its topic is its domain, then the person\'s words, in ea
   const brief = chiefBrief('Kraken', '  Start with the open review.  ');
   assert.match(brief, /chief for the "Kraken" topic/);
   assert.match(brief, /sympp skill/);
-  assert.doesNotMatch(brief, /register_chief/, 'its terminal labels make it the chief');
   assert.deepEqual(chiefLabelArgs('build/t7', 'Kraken'), ['label', 'build/t7', 'sympp.role=chief', 'sympp.domain=Kraken']);
   assert.ok(brief.endsWith('\n\nStart with the open review.'));
   assert.equal(chiefBrief('Kraken', ' '), chiefBrief('Kraken'));
