@@ -1,8 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPStateStoreTest do
   use ExUnit.Case, async: false
 
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Assignment
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, HTTPStateStore, LedgerNamespace, Server, Session}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, HTTPStateStore, LedgerNamespace, Server}
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.WorkPackageFactory
 
@@ -58,33 +57,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPStateStoreTest do
     end
   end
 
-  test "recovery deadlines are throttled and scoped by ledger" do
-    config = config("deadline-ledger-a")
-    other_config = config("deadline-ledger-b")
-
-    assert HTTPStateStore.recovery_persistence_due?(config, "binding", 60_000)
-    assert :ok = HTTPStateStore.persist_recovery_if_due(config, "binding", 60_000, fn -> :ok end)
-    refute HTTPStateStore.recovery_persistence_due?(config, "binding", 60_000)
-    assert HTTPStateStore.recovery_persistence_due?(other_config, "binding", 60_000)
-
-    assert HTTPStateStore.recovery_cleanup_due?(config, 60_000)
-    assert :ok = HTTPStateStore.cleanup_recovery_if_due(config, 60_000, fn -> :ok end)
-    refute HTTPStateStore.recovery_cleanup_due?(config, 60_000)
-    assert HTTPStateStore.recovery_cleanup_due?(other_config, 60_000)
-
-    assert :ok = HTTPStateStore.persist_recovery_if_due(config, "retry-binding", 60_000, fn -> {:error, :busy} end)
-    assert HTTPStateStore.recovery_persistence_due?(config, "retry-binding", 60_000)
-
-    assert_raise RuntimeError, fn ->
-      HTTPStateStore.persist_recovery_if_due(config, "raised-binding", 60_000, fn -> raise "busy" end)
-    end
-
-    assert HTTPStateStore.recovery_persistence_due?(config, "raised-binding", 60_000)
-
-    assert :ok = HTTPStateStore.defer_recovery_persistence(config, "deferred-binding", 60_000)
-    refute HTTPStateStore.recovery_persistence_due?(config, "deferred-binding", 60_000)
-  end
-
   test "unconfigured ledger fallback preserves dynamic repo isolation" do
     config = Config.default(mode: :http, repo: FailingDynamicRepo)
 
@@ -99,13 +71,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPStateStoreTest do
     end
   end
 
-  test "state key continuity does not recover claimed state for another client" do
+  test "a state key never hands one client's state to another or to the unbound client" do
     config = config("non-bearer-state-key")
-    claimed_server = initialized_server(config, "shared-state", session: worker_session())
 
-    assert :ok = HTTPStateStore.put(config, "bound-client", "shared-state", claimed_server)
+    assert :ok = HTTPStateStore.put(config, "bound-client", "shared-state", initialized_server(config, "shared-state"))
 
-    assert %Server{session: %Session{}} = HTTPStateStore.get(config, "bound-client", "shared-state")
+    assert %Server{initialized: true} = HTTPStateStore.get(config, "bound-client", "shared-state")
     assert HTTPStateStore.get(config, @unbound_client_key, "shared-state") == nil
     assert HTTPStateStore.get(config, "other-client", "shared-state") == nil
   end
@@ -646,24 +617,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPStateStoreTest do
 
   defp config(database), do: Config.default(mode: :http, repo: Repo, database: database)
 
-  defp initialized_server(config, state_key, opts \\ []) do
-    Server.new(config, state_key: state_key, initialized: true, session: Keyword.get(opts, :session))
+  defp initialized_server(config, state_key) do
+    Server.new(config, state_key: state_key, initialized: true)
   end
 
   defp default_server_fun(config, state_key) do
     fn -> Server.new(config, state_key: state_key) end
-  end
-
-  defp worker_session do
-    Session.new(%Assignment{
-      grant_id: "grant-http-state",
-      work_package_id: "SYMPP-HTTP-STATE",
-      display_key: "ABCD",
-      grant_role: "worker",
-      capabilities: ["read:own"],
-      claimed_at: ~U[2026-05-17 00:00:00Z],
-      claimed_by: "worker-1"
-    })
   end
 
   defp wait_for_queued_lock(config, client_key, state_key, expected_len, attempts \\ 50)

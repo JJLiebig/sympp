@@ -2,7 +2,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
-  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository, as: ClaimLeaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository, as: ProductTreeRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
@@ -20,10 +19,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
     sympp_product_tree_dependency_edges
     sympp_progress_events
     sympp_agent_runs
-    sympp_claim_leases
     sympp_work_package_deliveries
-    sympp_access_grants
-    sympp_access_grant_scopes
     sympp_plan_nodes
   )
 
@@ -107,6 +103,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
     {:ok, _dispatch} = WorkPackageDispatch.dispatch(repo, work_request.id, playtest.id)
 
     run!(repo, parse.id, "RUN-FANOUT-PARSE", "fictional-parse-worker", 10)
+    live_run!(repo, parse.id, "RUN-FANOUT-PARSE-LIVE", "fictional-parse-worker", 12)
     run!(repo, index.id, "RUN-FANOUT-INDEX", "fictional-index-worker", 20)
 
     branch!(repo, parse.id, "feat/fixture-parse", "parse-head", 30)
@@ -469,21 +466,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
         last_seen_at: at(offset + 1),
         finished_at: at(offset + 1)
       })
+  end
 
-    {:ok, _claim_lease} =
-      ClaimLeaseRepository.claim(
-        repo,
-        %{
-          id: "LEASE-#{id}",
-          work_package_id: work_package_id,
-          claim_group_id: "GROUP-#{id}",
-          actor_kind: "agent",
-          actor_id: "fixture:#{label}",
-          actor_display_name: label,
-          stale_after_ms: 3_153_600_000_000
-        },
-        now: at(offset)
-      )
+  # A running worker whose heartbeat stays fresh for the fixture's lifetime.
+  defp live_run!(repo, work_package_id, id, label, offset) do
+    {:ok, _run} =
+      AgentRunRepository.start_run(repo, %{
+        id: id,
+        work_package_id: work_package_id,
+        actor_id: "fixture-worker",
+        status: "running",
+        attempt: 1,
+        worker_task_handle: label,
+        started_at: at(offset),
+        last_seen_at: ~U[2126-07-18 08:00:00.000000Z]
+      })
   end
 
   defp branch!(repo, work_package_id, branch, head_sha, offset) do
@@ -538,42 +535,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
   end
 
   defp normalize_generated_dispatch!(repo) do
-    {:ok, _result} =
-      repo.transaction(fn ->
-        repo.query!("PRAGMA defer_foreign_keys = ON")
-
-        %{rows: [[grant_id]]} =
-          repo.query!("SELECT id FROM sympp_access_grants WHERE work_package_id = ?", ["WP-FANOUT-PLAYTEST"])
-
-        repo.query!(
-          "UPDATE sympp_access_grants SET id = ?, display_key = ?, secret_hash = ?, expires_at = ? WHERE id = ?",
-          [
-            "GRANT-FANOUT-PLAYTEST",
-            "PLAY",
-            :crypto.hash(:sha256, "fictional-playtest-worker") |> Base.encode16(case: :lower),
-            ~U[2099-01-01 00:00:00.000000Z],
-            grant_id
-          ]
-        )
-
-        repo.query!("UPDATE sympp_access_grant_scopes SET access_grant_id = ? WHERE access_grant_id = ?", [
-          "GRANT-FANOUT-PLAYTEST",
-          grant_id
-        ])
-
-        %{rows: scopes} =
-          repo.query!("SELECT id FROM sympp_access_grant_scopes WHERE access_grant_id = ? ORDER BY scope_key", [
-            "GRANT-FANOUT-PLAYTEST"
-          ])
-
-        scopes
-        |> Enum.with_index()
-        |> Enum.each(fn {[id], index} ->
-          scope_id = "SCOPE-FANOUT-PLAYTEST-#{String.pad_leading(to_string(index), 2, "0")}"
-          repo.query!("UPDATE sympp_access_grant_scopes SET id = ? WHERE id = ?", [scope_id, id])
-        end)
-      end)
-
     %{rows: plan_nodes} =
       repo.query!("SELECT id, position FROM sympp_plan_nodes WHERE work_package_id = ? ORDER BY position", [
         "WP-FANOUT-PLAYTEST"

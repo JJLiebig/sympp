@@ -3,36 +3,39 @@
 The MCP server is the permission boundary. Skills, prompts, hooks, and the
 dashboard improve workflow but cannot grant authority.
 
-## Claims
+## Ownership
 
-- Ordinary workers need no MCP calls. Optional worker MCP access claims exactly
-  one WorkPackage; the architect owns dispatch and delivery coordination.
-- An architect claims exactly one WorkRequest.
-- Trusted local architect calls acquire or recover the claim automatically
-  when the WorkRequest is known. Read-only browsing does not claim work.
-- `claimed_by` is an optional audit label, not a secret.
-- Repository, branch, worktree, phase, and anchor values are derived from the
-  ledger and treated as validation context when supplied.
-- Fresh claims block competing workers and architects; stale residue can be
-  reclaimed.
+- Any trusted caller may read. Writes need the Herdr terminal identity the sympp
+  bridge sends; callers outside Herdr are read-only (`read_only_outside_herdr`).
+- A WorkRequest is worked on by at most one terminal at a time (one live row per
+  WorkRequest, enforced by a unique index). Owner-gated writes (planning,
+  dispatch, `sync_pr`, closeout, blockers, `set_report`) take ownership of an
+  unowned WorkRequest and are refused `owned_by_other_terminal` from any other
+  terminal. Recording decisions, asking or answering questions, creating a
+  WorkRequest and recording `finished` are open to any Herdr terminal.
+- Ownership ends only when the terminal finishes, its bridge detaches cleanly on
+  a machine the factory's core can't see, the operator presses Release, or the
+  WorkRequest is archived. A lapsed heartbeat or unreachable core keeps the owner.
+- Workers make no sympp calls and hold no ledger authority. No secrets are minted
+  for agents.
+- Repository, branch and worktree values are derived from the ledger and treated
+  as validation context when supplied.
 
-## Capabilities And Scope
+## Remaining Boundary
 
-Authenticated workers may optionally update their own plan, progress, findings,
-branch, pull request, and readiness evidence. Only architects declare
-and resolve work blockers; questions and ordinary waits do not change them. They cannot mint grants,
-dispatch siblings, expand scope silently, merge pull requests, or record
-WorkRequest delivery.
-
-Architects may clarify and plan their WorkRequest, organize Groups, author and
-dispatch WorkPackages, approve allowed scope
-expansion, and reconcile delivery. They do not gain global ledger authority.
+1. Non-loopback MCP and operator HTTP require factory-access authentication;
+   loopback is trusted.
+2. Operator actions (Finish, Release, answering questions on the board,
+   completion, archive, restore) are HTTP-only and need the same trust.
+3. Terminal identity is asserted by the bridge, which verifies it against its
+   local herdr-core. When the factory's own core can see the terminal, it must be
+   live. Anyone who can reach the endpoint can still assert any terminal address:
+   the same trust as a trusted local daemon, stated plainly.
 
 ## Secret Hygiene
 
 Never place raw API keys, bearer tokens, GitHub or Linear tokens, MCP tokens,
-grant verifiers, secret hashes, private handoff payloads, or secret-bearing
-commands in:
+secret hashes, private handoff payloads, or secret-bearing commands in:
 
 - Agent prompts or durable ledger prose.
 - Documentation, comments, pull requests, or reviews.

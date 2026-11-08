@@ -175,8 +175,13 @@ Use an explicitly managed authenticated tunnel for a remote factory; do not
 expose its loopback API publicly or assume every machine shares a filesystem.
 
 Terminal bindings identify the core and the launched process. Recovered shells
-are not resumed agents. A last-known sympp session location is displayed as an
-observation, without claiming that its agent is still alive.
+are not resumed agents. The terminal sympp says works on a task is displayed as
+an observation, without claiming that its agent is still alive.
+
+Start chief labels the chief's terminal `sympp.role=chief` and
+`sympp.domain=<topic>`. The panel finds a topic's chiefs from those labels, and
+the sympp bridge forwards them, so the factory attributes the chief's requests
+and dispatches to the topic. Labels name a chief; they never make it live.
 
 Native agent jumps require an online factory and a fresh process identity check.
 An offline copy can retain identical job IDs; it cannot authorize agent access.

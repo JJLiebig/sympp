@@ -41,7 +41,7 @@ test('human answers retain decision provenance and stale replay cannot append a 
   })).work_package_ids).toHaveLength(1);
 });
 
-test('questions, human escalation and review waits preserve explicit package blockers and sibling state', async ({ factory }) => {
+test('questions, operator reports and review waits preserve explicit package blockers and sibling state', async ({ factory }) => {
   const architect = await factory.client();
   const id = await architect.request('Decision versus blocker');
   const sliced = await architect.call('slice_work_request', { work_packages: [contract('Affected work'), contract('Sibling work')] });
@@ -54,14 +54,9 @@ test('questions, human escalation and review waits preserve explicit package blo
   const question = (await architect.call('ask_question', {
     work_request_id: id, category: 'scope', question: 'Should we change the optional detail?', why_needed: 'A product decision can be answered while independent work continues.',
   })).clarification_question.id;
-  const assignment = await architect.call('get_current_assignment');
-  const anchor = assignment.assignment.work_package_id;
-  await architect.call('append_progress', {
-    work_package_id: anchor, summary: 'A human scope choice is needed.', idempotency_key: 'escalation',
-    payload: { type: 'architect_operator_report', human_escalation: { question: 'Should the optional detail ship?' } },
-  });
-  const escalated = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
-  expect(escalated.work_request.operator_report.human_escalation.question).toBe('Should the optional detail ship?');
+  await architect.call('set_report', { brief: 'Waiting for a human scope choice.', parking: { reason: 'Should the optional detail ship?' } });
+  const parked = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
+  expect(parked.work_request.operator_report.parking.reason).toBe('Should the optional detail ship?');
   await architect.call('append_progress', {
     work_package_id: affected, summary: 'Waiting for hosted review.', status: 'ci_waiting', idempotency_key: 'ordinary-wait',
   });
@@ -85,10 +80,7 @@ test('questions, human escalation and review waits preserve explicit package blo
     source_type: 'human', decision: 'Defer the optional detail.', rationale: 'The current scope is sufficient.', scope_impact: 'No package changes.',
   };
   await architect.call('answer_question_and_record_decision', human);
-  await architect.call('append_progress', {
-    work_package_id: anchor, summary: 'Human answered.', idempotency_key: 'escalation-resolved',
-    payload: { type: 'architect_operator_report', human_escalation: null },
-  });
+  await architect.call('set_report', { parking: null });
   expect((await packageState(architect, id, affected)).blocker_state['active?']).toBe(true);
 
   const resolution = {
@@ -106,8 +98,9 @@ test('questions, human escalation and review waits preserve explicit package blo
   expect((await packageState(architect, id, affected)).blocker_state['active?']).toBe(false);
   expect(await packageState(architect, id, sibling)).toEqual(siblingBefore);
   const report = (await architect.call('read_work_request', { detail: 'full', work_request_id: id })).work_request.operator_report;
-  expect(report.human_escalation.question).toBe('Should the optional detail ship?');
-  expect(report.human_escalation.resolved_at).toBeTruthy();
+  expect(report.brief.text).toBe('Waiting for a human scope choice.');
+  expect(report.parking.reason).toBe('Should the optional detail ship?');
+  expect(report.parking.resumed_at).toBeTruthy();
 });
 
 test('human choice submission rejects unknown or empty redirects and preserves the selected answer', async ({ factory }) => {

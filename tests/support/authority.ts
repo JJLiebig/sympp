@@ -14,14 +14,6 @@ export const initialize = {
 
 export const tool = (name: string, args: object = {}) => ({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } });
 
-export async function worker(factory: Factory, id: string, owner = 'acceptance-worker') {
-  const client = await factory.client();
-  const claimed = await client.call('claim_local_assignment', { work_package_id: id, claimed_by: owner });
-  expect(claimed.assignment.grant_role).toBe('worker');
-  expect(claimed.assignment.work_package_id).toBe(id);
-  return client;
-}
-
 export async function packages(architect: Client, titles: string[]) {
   const ids = (await architect.call('slice_work_request', { work_packages: titles.map((title) => contract(title, { branch_pattern: 'feature/authority' })) })).work_package_ids;
   for (const id of ids) await architect.call('dispatch_work_package', { work_package_id: id });

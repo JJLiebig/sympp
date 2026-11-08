@@ -2,7 +2,7 @@
 // it is told, and resuming the topic's last chief.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chiefArgv, chiefBrief, chiefFolders, factoryMachine, intoTopic, isChiefSpace, chiefMenu,
+import { chiefArgv, chiefBrief, chiefLabelArgs, chiefFolders, factoryMachine, intoTopic, isChiefSpace, chiefMenu,
   chiefSession, chiefRunning, canResume, resumeArgv } from './mods/sympp/chief.js';
 
 test('the machine defaults to the factory: this computer for loopback, else the machine its address names or reaches', async () => {
@@ -93,7 +93,7 @@ test('the chief is told its topic is its domain, then the person\'s words, in ea
   const brief = chiefBrief('Kraken', '  Start with the open review.  ');
   assert.match(brief, /chief for the "Kraken" topic/);
   assert.match(brief, /sympp skill/);
-  assert.match(brief, /register_chief, using "Kraken" as the domain/);
+  assert.deepEqual(chiefLabelArgs('build/t7', 'Kraken'), ['label', 'build/t7', 'sympp.role=chief', 'sympp.domain=Kraken']);
   assert.ok(brief.endsWith('\n\nStart with the open review.'));
   assert.equal(chiefBrief('Kraken', ' '), chiefBrief('Kraken'));
   assert.deepEqual(chiefArgv({ key: 'codex', run: ['codex'] }, 'go'), ['codex', 'go']);

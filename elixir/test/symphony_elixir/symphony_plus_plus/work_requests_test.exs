@@ -4,14 +4,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
   import Ecto.Query, only: [from: 2]
 
   alias Ecto.Adapters.SQL
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
-  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
-  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service, as: ClaimLeaseService
   alias SymphonyElixir.SymphonyPlusPlus.OperationalLineage
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
@@ -41,8 +37,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
   setup %{repo: repo} do
     repo.delete_all(AgentRun)
     repo.delete_all(ProgressEvent)
-    repo.delete_all(ClaimLease)
-    repo.delete_all(AccessGrant)
+    repo.delete_all(WorkedOn)
     repo.delete_all(WorkPackageDelivery)
     repo.delete_all(WorkPackage)
     repo.delete_all(ClarificationQuestion)
@@ -170,23 +165,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert %DateTime{} = restored.restored_at
     assert phase!(repo, request.id) == "done"
     assert {:ok, ^restored} = Service.restore(repo, request.id)
-  end
-
-  test "a worker left running on an archived WorkRequest can still be released, and only through the trusted path", %{repo: repo} do
-    request = request_with_packages!(repo, "WR-ARCHIVED-RUNNING", [:dispatched])
-    [package] = repo.all(from(package in WorkPackage, where: package.work_request_id == ^request.id))
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    assert {:ok, _completed} = Service.complete(repo, request.id)
-    assert {:ok, _archived} = Service.archive(repo, request.id)
-
-    release = %{"summary" => "Worker claim released", "status" => "worker_claim_released", "idempotency_key" => "release-after-archive"}
-
-    assert {:error, :work_request_archived} = PlanningRepository.append_progress_event(repo, Map.put(release, "work_package_id", package.id))
-    assert {:error, :work_request_archived} = PlanningRepository.append_audit_progress_event_for_work_package(repo, assignment, package.id, release)
-
-    assert {:ok, %ProgressEvent{status: "worker_claim_released"}} =
-             PlanningRepository.append_audit_progress_event_for_work_package(repo, assignment, package.id, release, allow_archived: true)
   end
 
   test "the operator archives only done or unresolved work, and completes any work", %{repo: repo} do
@@ -338,7 +316,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     end
   end
 
-  test "retention deletes expired archived work requests and their grant scopes", %{repo: repo} do
+  test "retention deletes expired archived work requests and their worked-on rows", %{repo: repo} do
     now = utc_usec(~U[2026-05-23 12:00:00Z])
     stale_at = utc_usec(~U[2026-05-20 12:00:00Z])
     recent_at = utc_usec(~U[2026-05-22 12:00:00Z])
@@ -350,10 +328,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
 
     active = completed_delivered_request!(repo, "WR-RETENTION-DELETE-ACTIVE", recent_at)
 
-    scope_owner = create_activity_work_package!(repo, "WP-RETENTION-SCOPE-OWNER", status: "ended")
-    grant = insert_claimed_activity_grant!(repo, scope_owner, "worker", "retention-worker")
-    insert_grant_scope!(repo, grant.id, "work_request", expired.id)
-    insert_grant_scope!(repo, grant.id, "work_package", expired_slice_id)
+    insert_worked_on!(repo, "work_request", expired.id, "finished")
+    insert_worked_on!(repo, "work_package", expired_slice_id, "finished")
+    insert_worked_on!(repo, "work_request", active.id, "live")
 
     completed = completed_delivered_request!(repo, "WR-RETENTION-DELETE-COMPLETED", stale_at)
     assert {:ok, open} = Repository.create(repo, attrs(id: "WR-RETENTION-DELETE-OPEN"))
@@ -372,10 +349,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert summary.deleted_ids == [expired.id]
     assert summary.deleted_count == 1
     assert {:error, :not_found} = Service.get(repo, expired.id)
-    assert grant_scope_count(repo, "work_request", expired.id) == 0
-    assert grant_scope_count(repo, "work_package", expired_slice_id) == 0
+    assert worked_on_count(repo, expired.id) == 0
+    assert worked_on_count(repo, expired_slice_id) == 0
 
     assert {:ok, ^active} = Service.get(repo, active.id)
+    assert worked_on_count(repo, active.id) == 1
     assert {:ok, ^completed} = Service.get(repo, completed.id)
     assert {:ok, ^open} = Service.get(repo, open.id)
     assert {:ok, ^recent_archived} = Service.get(repo, recent_archived.id)
@@ -447,46 +425,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert phase!(repo, request.id) == "done"
   end
 
-  test "activity context derives active stale recycled and terminal runtime state", %{repo: repo} do
+  test "activity context derives active, stale, idle and terminal runtime state from agent runs", %{repo: repo} do
     now = DateTime.utc_now(:microsecond)
-    stale_seen_at = DateTime.add(now, -10, :second)
 
     active_package = create_activity_work_package!(repo, "WP-ACTIVITY-ACTIVE", status: "dispatched")
-    stale_package = create_activity_work_package!(repo, "WP-ACTIVITY-STALE", status: "dispatched")
-    mixed_package = create_activity_work_package!(repo, "WP-ACTIVITY-MIXED", status: "dispatched")
-    recycled_package = create_activity_work_package!(repo, "WP-ACTIVITY-RECYCLED", status: "dispatched")
     ready_package = create_activity_work_package!(repo, "WP-ACTIVITY-READY", status: "ready")
     terminal_package = create_activity_work_package!(repo, "WP-ACTIVITY-TERMINAL", status: "dispatched")
     agent_package = create_activity_work_package!(repo, "WP-ACTIVITY-AGENT-STALE", status: "dispatched")
 
-    assert {:ok, _active_lease} =
-             ClaimLeaseService.claim(repo, active_package.id, activity_actor("active-worker"), stale_after_ms: 60_000)
-
-    insert_claimed_activity_grant!(repo, active_package, "architect", "active-architect")
-
-    assert {:ok, _stale_lease} =
-             ClaimLeaseService.claim(repo, stale_package.id, activity_actor("stale-worker"), now: stale_seen_at, stale_after_ms: 1)
-
-    assert {:ok, _mixed_stale_lease} =
-             ClaimLeaseService.claim(repo, mixed_package.id, activity_actor("mixed-worker"), now: stale_seen_at, stale_after_ms: 1)
-
-    insert_claimed_activity_grant!(repo, mixed_package, "architect", "mixed-architect")
-
-    assert {:ok, _reclaimed_lease} =
-             ClaimLeaseService.claim(repo, recycled_package.id, activity_actor("old-worker"), now: stale_seen_at, stale_after_ms: 1)
-
-    assert {:ok, replacement_lease} =
-             ClaimLeaseService.reclaim_stale(repo, recycled_package.id, activity_actor("replacement-worker"),
-               reason: "worker_recycled",
-               stale_after_ms: 60_000
-             )
-
-    insert_claimed_activity_grant!(repo, ready_package, "worker", "ready-worker")
-
-    assert {:ok, ready_lease} =
-             ClaimLeaseService.claim(repo, ready_package.id, activity_actor("ready-worker"), stale_after_ms: 60_000)
-
-    assert {:ok, _released_ready_lease} = ClaimLeaseService.release(repo, ready_lease.id, reason: "worker finished")
+    assert {:ok, active_run} =
+             AgentRunRepository.start_run(repo, %{work_package_id: active_package.id, status: "running", started_at: now, last_seen_at: now})
 
     assert {:ok, _completed_ready_run} =
              AgentRunRepository.start_run(repo, %{
@@ -504,11 +452,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
                last_seen_at: DateTime.add(now, -301, :second)
              })
 
-    assert {:ok, _terminal_lease} =
-             ClaimLeaseService.claim(repo, terminal_package.id, activity_actor("terminal-worker"), now: stale_seen_at, stale_after_ms: 1)
-
-    insert_claimed_activity_grant!(repo, terminal_package, "architect", "terminal-architect")
-
     assert {:ok, _terminal_run} =
              AgentRunRepository.start_run(repo, %{
                work_package_id: terminal_package.id,
@@ -518,40 +461,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
 
     terminal_package = set_work_package_status!(repo, terminal_package, "ended")
 
-    contexts =
-      WorkPackageActivity.contexts(repo, [
-        active_package.id,
-        stale_package.id,
-        mixed_package.id,
-        recycled_package.id,
-        ready_package.id,
-        terminal_package.id,
-        agent_package.id
-      ])
+    contexts = WorkPackageActivity.contexts(repo, [active_package.id, ready_package.id, terminal_package.id, agent_package.id])
 
-    assert get_in(contexts, [active_package.id, :runtime_state, :lifecycle_state]) == "active"
-    assert get_in(contexts, [active_package.id, :runtime_state, :reason_codes]) == ["claim_lease_active", "architect_grant_active"]
-
-    stale_runtime = get_in(contexts, [stale_package.id, :runtime_state])
-    assert stale_runtime.active? == true
-    assert stale_runtime.stale? == true
-    assert "claim_lease_stale" in stale_runtime.reason_codes
-    assert DateTime.compare(stale_runtime.latest_gate_at, DateTime.add(stale_seen_at, 1, :millisecond)) == :eq
-
-    mixed_runtime = get_in(contexts, [mixed_package.id, :runtime_state])
-    assert mixed_runtime.active? == true
-    assert mixed_runtime.stale? == true
-    assert mixed_runtime.lifecycle_state == "stale"
-    assert "claim_lease_stale" in mixed_runtime.reason_codes
-    assert "architect_grant_active" in mixed_runtime.reason_codes
-
-    recycled_runtime = get_in(contexts, [recycled_package.id, :runtime_state])
-    assert recycled_runtime.active? == true
-    assert recycled_runtime.recycled? == true
-    assert recycled_runtime.lifecycle_state == "active"
-    assert "worker_recycled" in recycled_runtime.reason_codes
-    assert DateTime.compare(recycled_runtime.latest_gate_at, DateTime.add(stale_seen_at, 1, :millisecond)) == :gt
-    assert get_in(contexts, [recycled_package.id, :worker_signal, :active_since]) == replacement_lease.lease_started_at
+    active_runtime = get_in(contexts, [active_package.id, :runtime_state])
+    assert active_runtime.lifecycle_state == "active"
+    assert active_runtime.reason_codes == ["agent_run_active"]
+    assert active_runtime.active_agent_run_ids == [active_run.id]
+    assert get_in(contexts, [active_package.id, :worker_signal, :status]) == "active"
 
     ready_context = contexts[ready_package.id]
     assert ready_context.runtime_state.active? == false
@@ -559,14 +475,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert ready_context.worker_signal.status == "idle"
 
     terminal_runtime = get_in(contexts, [terminal_package.id, :runtime_state])
-    assert terminal_runtime.active? == true
     assert terminal_runtime.stale? == true
     assert terminal_runtime.terminal? == true
     assert terminal_runtime.lifecycle_state == "stale"
-    assert "claim_lease_stale" in terminal_runtime.reason_codes
     assert "agent_run_stale" in terminal_runtime.reason_codes
-    assert "architect_grant_active" in terminal_runtime.reason_codes
     assert "package_terminal" in terminal_runtime.reason_codes
+    assert get_in(contexts, [terminal_package.id, :current_worker_session]) == nil
 
     agent_runtime = get_in(contexts, [agent_package.id, :runtime_state])
     assert agent_runtime.active? == false
@@ -713,59 +627,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     work_package
   end
 
-  defp activity_actor(name) do
-    %{
-      "actor_kind" => "agent",
-      "actor_id" => "agent:#{name}",
-      "actor_display_name" => name
-    }
-  end
-
-  defp insert_claimed_activity_grant!(repo, work_package, role, claimed_by) do
-    suffix = System.unique_integer([:positive]) |> Integer.to_string(36)
-
-    assert {:ok, grant} =
-             AccessGrantRepository.create(repo, %{
-               id: "grant-#{work_package.id}-#{suffix}",
-               work_package_id: work_package.id,
-               display_key: suffix |> String.pad_leading(4, "0") |> String.slice(-4, 4),
-               secret_hash: :crypto.hash(:sha256, "activity-#{work_package.id}-#{suffix}") |> Base.encode16(case: :lower),
-               grant_role: role,
-               capabilities: []
-             })
-
+  defp insert_worked_on!(repo, subject_kind, subject_id, state) do
     now = DateTime.utc_now(:microsecond)
 
-    grant
-    |> Ecto.Changeset.change(claimed_at: now, claimed_by: claimed_by, updated_at: now)
-    |> repo.update!()
+    repo.insert!(%WorkedOn{
+      id: "wo_#{System.unique_integer([:positive])}",
+      subject_kind: subject_kind,
+      subject_id: subject_id,
+      terminal_key: "core/t1",
+      display_address: "box/t1",
+      role: "architect",
+      state: state,
+      started_at: now,
+      finished_at: if(state == "finished", do: now)
+    })
   end
 
-  defp insert_grant_scope!(repo, access_grant_id, scope_type, scope_id) do
-    now = DateTime.utc_now(:microsecond)
-
-    assert {1, _rows} =
-             repo.insert_all("sympp_access_grant_scopes", [
-               %{
-                 id: "ags-retention-#{access_grant_id}-#{scope_type}",
-                 access_grant_id: access_grant_id,
-                 scope_type: scope_type,
-                 scope_key: "#{scope_type}:#{scope_id}",
-                 scope_id: scope_id,
-                 inserted_at: now,
-                 updated_at: now
-               }
-             ])
-  end
-
-  defp grant_scope_count(repo, scope_type, scope_id) do
-    %{rows: [[count]]} =
-      SQL.query!(
-        repo,
-        "SELECT COUNT(*) FROM sympp_access_grant_scopes WHERE scope_type = ? AND scope_id = ?",
-        [scope_type, scope_id]
-      )
-
+  defp worked_on_count(repo, subject_id) do
+    %{rows: [[count]]} = SQL.query!(repo, "SELECT COUNT(*) FROM sympp_worked_on WHERE subject_id = ?", [subject_id])
     count
   end
 

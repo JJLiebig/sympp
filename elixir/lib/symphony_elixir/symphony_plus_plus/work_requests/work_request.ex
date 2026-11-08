@@ -44,6 +44,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest do
           creator_name: String.t() | nil,
           created_via: String.t() | nil,
           operator_completed_at: DateTime.t() | nil,
+          report: map() | nil,
           archived_at: DateTime.t() | nil,
           archive_reason: String.t() | nil,
           restored_at: DateTime.t() | nil,
@@ -64,6 +65,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest do
     field(:created_via, :string)
     field(:dispatched_by, :map)
     field(:operator_completed_at, :utc_datetime_usec)
+    field(:report, :map)
     field(:archived_at, :utc_datetime_usec)
     field(:archive_reason, :string)
     field(:restored_at, :utc_datetime_usec)
@@ -98,7 +100,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest do
   def update_changeset(%__MODULE__{} = work_request, attrs) do
     attrs = normalize_keys(attrs)
 
-    changeset(work_request, Map.drop(attrs, ["id", "dispatched_by", "operator_completed_at", "archived_at", "archive_reason", "restored_at", "inserted_at", "updated_at", "created_at"]))
+    changeset(work_request, Map.drop(attrs, ["id", "dispatched_by", "report", "operator_completed_at", "archived_at", "archive_reason", "restored_at", "inserted_at", "updated_at", "created_at"]))
   end
 
   @spec changeset(t(), map()) :: Ecto.Changeset.t()

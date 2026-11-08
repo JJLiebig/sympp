@@ -10,11 +10,9 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
-  alias SymphonyElixirWeb.SymppDashboardApi.Runtime, as: DashboardRuntime
 
   import Ecto.Query, only: [from: 2]
 
@@ -264,13 +262,4 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
   end
 
   def github_sync_opts(_params), do: []
-
-  @spec architect_handoff_opts(module()) :: keyword()
-  def architect_handoff_opts(repo) do
-    [
-      database: DashboardRuntime.dashboard_ledger_database(repo),
-      claimed_by: ArchitectHandoff.claimed_by(),
-      local_architect_claim?: true
-    ]
-  end
 end

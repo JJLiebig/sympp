@@ -30,7 +30,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent do
           idempotency_scope: String.t() | nil,
           actor_id: String.t() | nil,
           actor_type: String.t() | nil,
-          access_grant_id: String.t() | nil,
           agent_run_id: String.t() | nil,
           payload: map() | nil,
           created_at: DateTime.t() | nil,
@@ -48,7 +47,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent do
     field(:idempotency_scope, :string, default: "direct")
     field(:actor_id, :string)
     field(:actor_type, :string)
-    field(:access_grant_id, :string)
     field(:agent_run_id, :string)
     field(:payload, :map, default: %{})
     field(:created_at, :utc_datetime_usec)
@@ -66,7 +64,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent do
       |> put_new_value("payload", %{})
       |> redact_payload()
       |> normalize_idempotency_key()
-      |> put_idempotency_scope()
+      |> put_idempotency_scope(Keyword.get(opts, :trusted_audit_metadata, false))
       |> put_new_value("created_at", DateTime.utc_now(:microsecond))
 
     audit_fields = if Keyword.get(opts, :trusted_audit_metadata, false), do: audit_fields(), else: []
@@ -79,7 +77,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent do
     |> validate_required([:idempotency_scope])
     |> validate_nonblank_optional(:actor_id)
     |> validate_nonblank_optional(:actor_type)
-    |> validate_nonblank_optional(:access_grant_id)
     |> validate_nonblank_optional(:agent_run_id)
     |> unique_constraint(:id, name: :sympp_progress_events_id_unique_index)
     |> unique_constraint(:idempotency_key, name: :sympp_progress_events_scoped_idempotency_key_unique_index)
@@ -102,7 +99,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent do
   end
 
   defp audit_fields do
-    [:actor_id, :actor_type, :access_grant_id, :agent_run_id]
+    [:actor_id, :actor_type, :agent_run_id]
   end
 
   defp normalize_keys(attrs) when is_map(attrs) do
@@ -185,10 +182,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent do
     end)
   end
 
-  defp put_idempotency_scope(attrs) do
+  # Terminal-authored events dedupe idempotency keys per terminal; everything
+  # else shares the "direct" scope.
+  defp put_idempotency_scope(attrs, trusted?) do
     scope =
-      case Map.get(attrs, "access_grant_id") do
-        value when is_binary(value) and value != "" -> value
+      case Map.get(attrs, "idempotency_scope") do
+        value when trusted? and is_binary(value) and value != "" -> value
         _value -> "direct"
       end
 

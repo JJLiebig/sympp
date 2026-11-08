@@ -247,10 +247,13 @@ function Invoke-McpBridge([string]$FilePath, [string[]]$Arguments, [hashtable]$E
           [IO.Path]::GetFullPath($healthPath) -ine [IO.Path]::GetFullPath($Environment.SYMPP_DATABASE)) { throw 'MCP health did not confirm the selected verified runtime and ledger.' }
     }
     if ($CreateMarker) {
-      $attached = Send-BridgeRequest $process @{ jsonrpc = "2.0"; id = 3; method = "tools/call"; params = @{ name = "solo_attach"; arguments = @{ repo = "fixture/packaged-ledger"; base_branch = "beta"; workspace_path = $tempRoot; caller_id = "artifact-smoke"; title = "Disposable persistence marker" } } }
+      # Writes need a Herdr terminal. Outside Herdr the bridge forwards the request
+      # unchanged, so the smoke asserts the terminal the bridge would send.
+      $terminal = @{ herdr = @{ core_id = "artifact-smoke-core"; terminal_id = "t1" } }
+      $attached = Send-BridgeRequest $process @{ jsonrpc = "2.0"; id = 3; method = "tools/call"; params = @{ name = "solo_attach"; arguments = @{ repo = "fixture/packaged-ledger"; base_branch = "beta"; workspace_path = $tempRoot; caller_id = "artifact-smoke"; title = "Disposable persistence marker" }; _meta = $terminal } }
       $MarkerSessionId = [string]$attached.result.structuredContent.solo_session.id
       if (-not $MarkerSessionId) { throw "Missing marker session identity." }
-      [void](Send-BridgeRequest $process @{ jsonrpc = "2.0"; id = 4; method = "tools/call"; params = @{ name = "solo_append_progress"; arguments = @{ session_id = $MarkerSessionId; summary = "packaged database persistence marker"; idempotency_key = "artifact-persistence-marker" } } })
+      [void](Send-BridgeRequest $process @{ jsonrpc = "2.0"; id = 4; method = "tools/call"; params = @{ name = "solo_append_progress"; arguments = @{ session_id = $MarkerSessionId; summary = "packaged database persistence marker"; idempotency_key = "artifact-persistence-marker" }; _meta = $terminal } })
     }
     if ($RecoverBackend) {
       $ownedState = Get-Content -LiteralPath $Environment.SYMPP_RUNTIME_FILE -Raw | ConvertFrom-Json

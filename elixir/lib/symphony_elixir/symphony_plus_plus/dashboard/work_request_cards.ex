@@ -1,9 +1,6 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
-  alias SymphonyElixir.SymphonyPlusPlus.Chiefs
-
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
     DeliveryWorkPackageProjection,
     OperationalProjection,
@@ -166,7 +163,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
 
       with {:ok, delivery_boards} <-
              card_delivery_boards(repo, work_requests, work_packages_by_request, work_package_contexts) do
-        delivery_state_opts = delivery_state_opts(opts)
+        delivery_state_opts = []
 
         card_summaries(
           work_requests,
@@ -252,33 +249,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     ]
   end
 
-  defp delivery_state_opts(opts) do
-    case Keyword.get(opts, :grant) do
-      %AccessGrant{} -> [include_package_fields?: false]
-      _other -> []
-    end
-  end
-
-  defp card_work_package_contexts(repo, work_packages, opts) do
-    case Keyword.get(opts, :grant) do
-      %AccessGrant{} = grant -> work_package_work_package_contexts_for_grant(repo, work_packages, grant)
-      _grant -> Dashboard.work_package_work_package_contexts(repo, work_packages)
-    end
-  end
-
-  defp work_package_work_package_contexts_for_grant(repo, work_packages, %AccessGrant{} = grant) do
-    with {:ok, filters} <- Dashboard.work_request_filters_for_grant(repo, grant),
-         {:ok, work_package_contexts} <- Dashboard.work_package_work_package_contexts(repo, work_packages) do
-      {:ok,
-       Map.filter(work_package_contexts, fn
-         {_work_package_id, %{work_package: %WorkPackage{} = work_package}} ->
-           Dashboard.phase_work_package_matches_filters?(work_package, filters)
-
-         _context ->
-           false
-       end)}
-    end
-  end
+  defp card_work_package_contexts(repo, work_packages, _opts), do: Dashboard.work_package_work_package_contexts(repo, work_packages)
 
   defp visible_work_packages_by_request(work_requests, work_packages_by_request, delivery_boards) do
     Map.new(work_requests, fn %WorkRequest{} = work_request ->
@@ -379,7 +350,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
       inserted_at: timestamp(work_request.inserted_at),
       updated_at: timestamp(work_request.updated_at)
     })
-    |> Chiefs.put_attribution(:dispatched_by, work_request.dispatched_by)
+    |> Dashboard.put_attribution(:dispatched_by, work_request.dispatched_by)
     |> put_repo_identity_fields(repo_identity_catalog, work_request.repo)
   end
 
@@ -397,7 +368,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
       inserted_at: timestamp(work_request.inserted_at),
       updated_at: timestamp(work_request.updated_at)
     }
-    |> Chiefs.put_attribution(:dispatched_by, work_request.dispatched_by)
+    |> Dashboard.put_attribution(:dispatched_by, work_request.dispatched_by)
     |> put_repo_identity_fields(repo_identity_catalog, work_request.repo)
   end
 

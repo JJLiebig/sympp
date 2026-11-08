@@ -164,7 +164,7 @@ include legacy Herdr assumptions. They are not the Herdr-next adapter.
 The read-only native hydrated-board endpoint is
 `GET /api/v1/sympp/herdr/dashboard`, reusing the existing projection and native
 consumer authorization. It does not migrate a ledger, register a dashboard
-opener, change claims or weaken operator mutation authorization.
+opener, change ownership or weaken operator mutation authorization.
 
 Do not spoof browser headers to call browser-authorized operator routes.
 Native intake and question answers have a separate deliberate local

@@ -28,12 +28,12 @@ Windows process qualification remain separate gates.
 
 Factory journeys start the candidate cockpit on an ephemeral loopback port with
 a separate disposable SQLite ledger. They use real HTTP MCP clients for request
-creation, architect claims, clarification, decisions, plan edits, grouping,
+creation, ownership, clarification, decisions, plan edits, grouping,
 repository scope, dependency refusal, ordinary dispatch, and explicit blockers.
 Human choice validation also exercises the public operator answer route with its
 required same-origin header and reads persisted answers through MCP. The cockpit
 uses a dashboard origin without opening a browser or building UI assets. No worker
-process, worker MCP claim, live provider, or model is required for dispatch proof.
+process, worker MCP call, live provider, or model is required for dispatch proof.
 Each candidate retains a separate process log and exits before its temporary
 ledger/home is removed.
 
@@ -46,17 +46,16 @@ are supplied. MCP drives dispatch, dependency selection and reconciliation;
 public operator reads observe stored qualification and request completion.
 Provider and MCP receipts accompany the process logs, including failed calls.
 
-Authority and recovery journeys use two real candidate clients for claim
-contention, scoped requests, reconnects, revocation, terminal delivery, and an
-actual backend restart. Candidate MCP worker claims are synthetic test clients;
-they start no managed worker agents. Offline denial uses the supported snapshot
+Authority and recovery journeys use real candidate clients that assert distinct
+synthetic Herdr terminal identities for ownership contention, read-only access
+without an identity, operator Release, reconnects, terminal delivery, and an
+actual backend restart. They start no managed worker agents. Offline denial uses the supported snapshot
 operation on the disposable ledger. Diagnostic checks opt into failed-call
 capture through operator settings and inspect redacted responses, process output,
 and aggregates before disabling capture again.
 
-Grant expiry cannot be configured through these public routes. Keep its precise
-lower-level security checks, along with stored authority and transaction
-qualifications. A repository-backed
+Keep precise lower-level checks for ownership races and herdr-core liveness,
+along with stored authority and transaction qualifications. A repository-backed
 failed-call journey does not qualify health calls that lack the selected ledger
 context. Report that diagnostic limitation separately.
 
@@ -72,8 +71,8 @@ Remove implementation-shape assertions and same-guarantee duplicates only with
 their owning conversion.
 
 Keep mixed authority, historical storage, concurrency, and delivery suites when
-they prove distinct boundaries. Sequential authorized clients do not prove grant
-denial matrices, SQLite contention or historical migrations. Preserve those
+they prove distinct boundaries. Sequential authorized clients do not prove
+ownership races, SQLite contention or historical migrations. Preserve those
 distinctions in the per-definition conversion evidence.
 
 Retain `.e2e/report.json`, traces, process logs, checkout/head/base revisions,
@@ -108,7 +107,7 @@ still run; same-contract cross-revision refresh needs a compatible published bas
 
 Retention journeys use public operator settings and lifecycle actions against
 disposable candidate ledgers. Age fixtures stop the candidate before changing
-timestamps; they never manufacture completion, archive, claims or dispatch.
+timestamps; they never manufacture completion, archive, ownership or dispatch.
 Solo journeys exercise persistent entries, lifecycle, redaction and inactivity.
 Exact time boundaries, historical migrations and precise contention remain
 separate hosted storage checks.

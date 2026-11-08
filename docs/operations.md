@@ -32,10 +32,11 @@ The header says whether you are needed and names each open question; the tab
 title and icon repeat it. A line under the header sums up what changed since
 you last looked, and each figure on it takes you to the goals behind it.
 
-A session icon on a package or a goal shows where that agent was last seen.
-Click it to bring the session to the front in Herdr; a note says what happened
-or why it could not be opened. See
-[session locations](operator-board-api.md#session-locations).
+Each goal is worked on by at most one Herdr terminal. The board API reports that
+terminal and whether it is live, unknown or finished; if an owner crashed on a
+machine the factory can't see, release it with the operator Release route so
+another terminal can take the goal. See
+[worked on by](operator-board-api.md#worked-on-by).
 
 A goal can be marked done, archived or deleted from its menu, and a shelf can
 be archived in one go. None of these stops a running worker or merges a pull
@@ -81,18 +82,18 @@ Install the optional Herdr plugin from the repository root:
 herdr plugin install JJLiebig/sympp --ref main --yes
 ```
 
-When a Herdr tab contains a bound sympp architect or coordinator, one
-execution inspector opens to its right. It follows that tab's focused bound
+When a Herdr tab contains an sympp architect that has written to a WorkRequest it
+owns, one execution inspector opens to its right. It follows that tab's focused
 agent and stays compact for a trivial WorkRequest. Larger or branching work
 shows its execution frontier.
 
 - `Up`/`Down` or `k`/`j`: select a WorkPackage.
 - `Enter`: focus the one live Codex pane whose session exactly owns it.
 - `p`: pin or unpin the current WorkRequest.
-- `q`: close the inspector. It stays closed until the binding changes.
+- `q`: close the inspector. It stays closed until the owned WorkRequest changes.
 
-The board and inspector detail API carry the accountable ledger owner separately
-from the current observed claim or run. Activity includes the actual stage,
+The board and inspector detail API carry the owning terminal separately from the
+current observed run. Activity includes the actual stage,
 native review progress and next action, dependency waits, latest update, and
 current, stale, or unknown observation state. Review elapsed time is
 available only when the provider supplies a start time; missing timing stays
@@ -124,8 +125,10 @@ output.
 
 ## WorkRequest Flow
 
-1. Create a WorkRequest in a trusted local MCP session.
-2. Give an architect the returned WorkRequest claim.
+1. Create a WorkRequest from a Herdr terminal (`own: false` when handing it to
+   an architect).
+2. Give an architect the WorkRequest id; its first plan write makes its terminal
+   the owner.
 3. Answer material clarification questions.
 4. Let the architect create optional Groups, WorkPackages, and dependencies.
 5. Dispatch dependency-ready WorkPackages to isolated workers.

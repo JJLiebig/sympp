@@ -4,7 +4,8 @@ One Linux factory owns the ledger. Agents and Herdr on the owner's devices conne
 over HTTP on a private tailnet. The service listens on both `127.0.0.1:19998` and
 the configured tailnet IPv4 address. The board is readable without a token from the tailnet; all other remote requests require the factory token;
 loopback access keeps the existing local trust rules. The token grants the same
-operator access as a local client. Assignment grants and scope checks still apply.
+operator access as a local client. Writes still need a Herdr terminal identity and
+WorkRequest ownership.
 
 Install Git, mise, Python 3, iproute2 (`ss`), a C/C++ build toolchain and the system libraries needed
 by Erlang/Elixir. The installer uses `elixir/mise.toml` for Node, Erlang and Elixir.

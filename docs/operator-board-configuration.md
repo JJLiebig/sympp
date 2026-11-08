@@ -31,7 +31,7 @@ Machine keys must exactly match the `worker_host` already observed on an active
 worker agent run. Labels are free text; kind is `desktop`, `laptop`, or `server`.
 The backend does not discover or guess a host or kind. A missing host, session
 ID or valid machine mapping leaves `session_location` absent. Stale and finished
-runs, paused workers and terminal packages have no session location. Labels do
+runs and terminal packages have no session location. Labels do
 not affect package state, blockers, delivery or completion.
 
 The hydrated dashboard returns:

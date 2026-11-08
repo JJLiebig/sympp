@@ -17,7 +17,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun do
   @type t :: %__MODULE__{
           id: String.t() | nil,
           work_package_id: String.t() | nil,
-          access_grant_id: String.t() | nil,
           actor_id: String.t() | nil,
           status: String.t() | nil,
           attempt: non_neg_integer() | nil,
@@ -39,7 +38,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun do
 
   schema "sympp_agent_runs" do
     field(:work_package_id, :string)
-    field(:access_grant_id, :string)
     field(:actor_id, :string)
     field(:status, :string)
     field(:attempt, :integer, default: 0)
@@ -86,7 +84,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun do
     |> cast(attrs, [
       :id,
       :work_package_id,
-      :access_grant_id,
       :actor_id,
       :status,
       :attempt,
@@ -113,14 +110,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun do
     |> unique_constraint(:id, name: :sympp_agent_runs_id_unique_index)
     |> unique_constraint(:work_package_id, name: :sympp_agent_runs_one_active_per_work_package_index)
     |> foreign_key_constraint(:work_package_id)
-    |> foreign_key_constraint(:access_grant_id)
   end
 
   @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
   def update_changeset(%__MODULE__{} = agent_run, attrs) do
     agent_run
     |> cast(normalize_keys(attrs), [
-      :access_grant_id,
       :actor_id,
       :status,
       :worker_host,
@@ -140,7 +135,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun do
     |> validate_number(:codex_total_tokens, greater_than_or_equal_to: 0)
     |> validate_number(:turn_count, greater_than_or_equal_to: 0)
     |> validate_inclusion(:status, @statuses)
-    |> foreign_key_constraint(:access_grant_id)
   end
 
   defp normalize_keys(attrs) when is_map(attrs) do

@@ -1,69 +1,104 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport do
-  @moduledoc false
+  @moduledoc """
+  The architect's operator report, stored on `sympp_work_requests.report`.
 
-  import Ecto.Query, only: [from: 2]
+  `set_report` patches `brief`, `eta` and `parking`; `null` clears a field.
+  Parking keeps its interval: clearing it records `resumed_at`. A
+  `pending_ask` carried over from the old human escalation is shown as
+  `human_escalation` until asks replace it.
+  """
 
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{CurrentWorkRequest, Session, WorkRequestScope}
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.Planning.{ProgressEvent, Redactor}
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{ArchitectHandoff, WorkRequest}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @type repo :: module()
-  @fields ["brief", "eta", "parking", "human_escalation"]
-  @event_type "architect_operator_report"
+  @fields ["brief", "eta", "parking"]
 
-  @spec authorized_payload(repo(), Session.t(), map()) ::
-          {:ok, String.t(), map()} | {:error, term()} | {:tool_error, String.t()}
-  def authorized_payload(repo, %Session{assignment: %{grant_role: "architect"}} = session, arguments) do
-    with {:ok, work_request_id} <- CurrentWorkRequest.id_argument(%{}, session),
-         {:ok, work_request, _filters, _scope} <-
-           WorkRequestScope.authorized_work_request_scope(repo, session, work_request_id, :progress_append, "append_progress"),
-         anchor_id = ArchitectHandoff.anchor_id_for_work_request(work_request),
-         true <- Map.get(arguments, "work_package_id") == anchor_id and Session.work_package_id(session) == anchor_id,
-         {:ok, patch} <- normalize_patch(Map.fetch!(arguments, "payload")) do
-      {:ok, anchor_id, Map.merge(patch, %{"type" => @event_type, "source_tool" => @event_type})}
-    else
-      false -> {:error, :forbidden}
-      error -> error
+  @doc "Applies a report patch to a WorkRequest and returns the stored report."
+  @spec set(repo(), String.t(), map()) :: {:ok, WorkRequest.t()} | {:error, term()} | {:tool_error, String.t()}
+  def set(repo, work_request_id, arguments) when is_map(arguments) do
+    with {:ok, patch} <- normalize_patch(arguments) do
+      repo.transaction(fn -> store_patch(repo, work_request_id, patch) end, mode: :immediate)
+      |> DashboardPubSub.broadcast_changed_on_success()
     end
   end
 
-  def authorized_payload(_repo, %Session{}, _arguments), do: {:error, :forbidden}
+  defp store_patch(repo, work_request_id, patch) do
+    case repo.get(WorkRequest, work_request_id) do
+      nil ->
+        repo.rollback(:not_found)
 
-  @spec load_many(repo(), [WorkRequest.t()]) :: {:ok, %{String.t() => map() | nil}} | {:error, term()}
-  def load_many(_repo, []), do: {:ok, %{}}
+      %WorkRequest{archived_at: %DateTime{}} ->
+        repo.rollback(:work_request_archived)
 
-  def load_many(repo, work_requests) do
-    anchors = Map.new(work_requests, &{&1.id, ArchitectHandoff.anchor_id_for_work_request(&1)})
-
-    events_by_anchor =
-      anchors
-      |> Map.values()
-      |> Enum.chunk_every(500)
-      |> Enum.flat_map(fn anchor_ids ->
-        repo.all(
-          from(event in ProgressEvent,
-            where: event.work_package_id in ^anchor_ids,
-            where: event.actor_type == "architect" and not is_nil(event.access_grant_id),
-            order_by: [asc: event.sequence]
-          )
-        )
-      end)
-      |> Enum.group_by(& &1.work_package_id)
-
-    {:ok, Map.new(anchors, fn {id, anchor_id} -> {id, project(Map.get(events_by_anchor, anchor_id, []))} end)}
-  rescue
-    error in Exqlite.Error -> {:error, {:storage_failed, Exception.message(error)}}
+      %WorkRequest{} = work_request ->
+        now = DateTime.utc_now(:microsecond) |> DateTime.to_iso8601()
+        repo.update!(Ecto.Changeset.change(work_request, report: apply_patch(work_request.report || %{}, patch, now)))
+    end
   end
 
-  defp normalize_patch(payload) do
-    payload
+  @doc "Public reports by WorkRequest id."
+  @spec load_many(repo(), [WorkRequest.t()]) :: {:ok, %{String.t() => map() | nil}}
+  def load_many(_repo, work_requests), do: {:ok, Map.new(work_requests, &{&1.id, public(&1.report)})}
+
+  @spec public(map() | nil) :: map() | nil
+  def public(nil), do: nil
+
+  def public(report) when is_map(report) do
+    report
     |> Map.take(@fields)
-    |> Enum.reduce_while({:ok, %{}}, fn {field, value}, {:ok, patch} ->
-      case normalize_field(field, value) do
-        {:ok, normalized} -> {:cont, {:ok, Map.put(patch, field, normalized)}}
-        :error -> {:halt, {:tool_error, "invalid_operator_report_#{field}"}}
+    |> maybe_put_escalation(report["pending_ask"])
+    |> case do
+      empty when map_size(empty) == 0 -> nil
+      public -> Redactor.redact_output(public)
+    end
+  end
+
+  defp maybe_put_escalation(report, %{"question" => question, "raised_at" => raised_at}),
+    do: Map.put(report, "human_escalation", %{"question" => question, "raised_at" => raised_at, "resolved_at" => nil})
+
+  defp maybe_put_escalation(report, _pending_ask), do: report
+
+  defp apply_patch(report, patch, now) do
+    patch
+    |> Enum.reduce(report, fn {field, value}, acc -> apply_field(acc, field, value, now) end)
+    |> Map.put("updated_at", now)
+  end
+
+  defp apply_field(report, field, nil, _now) when field in ["brief", "eta"], do: Map.delete(report, field)
+  defp apply_field(report, field, text, now) when field in ["brief", "eta"], do: Map.put(report, field, %{"text" => text, "written_at" => now})
+
+  defp apply_field(report, "parking", nil, now) do
+    case report["parking"] do
+      %{"resumed_at" => nil} = parking -> Map.put(report, "parking", %{parking | "resumed_at" => now})
+      _closed_or_missing -> report
+    end
+  end
+
+  defp apply_field(report, "parking", %{"reason" => reason}, now) do
+    parked_at =
+      case report["parking"] do
+        %{"resumed_at" => nil, "parked_at" => parked_at} -> parked_at
+        _closed_or_missing -> now
       end
-    end)
+
+    Map.put(report, "parking", %{"reason" => reason, "parked_at" => parked_at, "resumed_at" => nil})
+  end
+
+  defp normalize_patch(arguments) do
+    patch = Map.take(arguments, @fields)
+
+    if map_size(patch) == 0,
+      do: {:tool_error, "empty_operator_report"},
+      else: Enum.reduce_while(patch, {:ok, %{}}, &normalize_entry/2)
+  end
+
+  defp normalize_entry({field, value}, {:ok, acc}) do
+    case normalize_field(field, value) do
+      {:ok, normalized} -> {:cont, {:ok, Map.put(acc, field, normalized)}}
+      :error -> {:halt, {:tool_error, "invalid_operator_report_#{field}"}}
+    end
   end
 
   defp normalize_field(_field, nil), do: {:ok, nil}
@@ -73,74 +108,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport do
     with {:ok, reason} <- normalize_text(reason), do: {:ok, %{"reason" => reason}}
   end
 
-  defp normalize_field("human_escalation", %{"question" => question}) do
-    with {:ok, question} <- normalize_text(question), do: {:ok, %{"question" => question}}
-  end
-
   defp normalize_field(_field, _value), do: :error
 
   defp normalize_text(text) when is_binary(text) do
-    text = String.trim(text)
+    text = text |> String.trim() |> Redactor.redact_text()
 
-    if text != "" and String.length(text) <= ProgressEvent.payload_string_limit() do
-      {:ok, text}
-    else
-      :error
-    end
+    if text != "" and String.length(text) <= ProgressEvent.payload_string_limit(), do: {:ok, text}, else: :error
   end
 
   defp normalize_text(_text), do: :error
-
-  defp project(events) do
-    events
-    |> Enum.filter(&report_event?/1)
-    |> Enum.reduce(%{}, fn event, report ->
-      written_at = DateTime.to_iso8601(event.created_at)
-
-      event.payload
-      |> Map.take(@fields)
-      |> Enum.reduce(report, fn {field, value}, acc ->
-        Map.put(acc, field, apply_field(field, value, Map.get(acc, field), written_at))
-      end)
-    end)
-    |> case do
-      report when map_size(report) == 0 -> nil
-      report -> Redactor.redact_output(report)
-    end
-  end
-
-  defp report_event?(%ProgressEvent{
-         actor_type: "architect",
-         access_grant_id: grant_id,
-         created_at: %DateTime{},
-         payload: %{"type" => @event_type, "source_tool" => @event_type} = payload
-       })
-       when is_binary(grant_id) and grant_id != "" do
-    match?({:ok, _patch}, normalize_patch(payload))
-  end
-
-  defp report_event?(_event), do: false
-
-  defp apply_field(field, text, _previous, written_at) when field in ["brief", "eta"] do
-    %{"text" => text, "written_at" => written_at}
-  end
-
-  defp apply_field("parking", value, previous, written_at) do
-    apply_interval(value, previous, written_at, "reason", "parked_at", "resumed_at")
-  end
-
-  defp apply_field("human_escalation", value, previous, written_at) do
-    apply_interval(value, previous, written_at, "question", "raised_at", "resolved_at")
-  end
-
-  defp apply_interval(nil, nil, _written_at, _text_key, _opened_key, _closed_key), do: nil
-
-  defp apply_interval(nil, previous, written_at, _text_key, _opened_key, closed_key) do
-    Map.put(previous, closed_key, Map.get(previous, closed_key) || written_at)
-  end
-
-  defp apply_interval(value, previous, written_at, text_key, opened_key, closed_key) do
-    opened_at = if previous && is_nil(previous[closed_key]), do: previous[opened_key], else: written_at
-    %{text_key => value[text_key], opened_key => opened_at, closed_key => nil}
-  end
 end

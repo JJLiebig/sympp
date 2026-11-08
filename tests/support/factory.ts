@@ -34,8 +34,10 @@ export class Factory extends Candidate {
     });
   }
 
-  async client() {
-    const client = new Client(await this.endpoint, this.receipt);
+  // Each client is its own Herdr terminal unless told otherwise; `null` is a
+  // caller outside Herdr, which can only read.
+  async client(terminal: string | null = nextTerminal(), labels: Record<string, string> = {}) {
+    const client = new Client(await this.endpoint, this.receipt, terminal, labels);
     const initialized = await client.rpc('initialize', {
       protocolVersion: '2025-03-26', capabilities: {},
       clientInfo: { name: 'factory-acceptance', version: '1.0.0' },
@@ -49,16 +51,38 @@ export class Factory extends Candidate {
   }
 }
 
+let terminalCount = 0;
+export const nextTerminal = () => `t${++terminalCount}`;
+
+// The identity a verified sympp bridge sends for its Herdr terminal.
+export const herdr = (terminal: string, labels: Record<string, string> = {}) => ({
+  core_id: 'acceptance-core', core_name: 'acceptance', terminal_id: terminal, labels,
+});
+
+// Writes that name only a WorkRequest; the client passes the request it works on.
+const requestScoped = new Set(['slice_work_request', 'upsert_group', 'delete_group', 'upsert_dependency', 'delete_dependency', 'read_delivery_board', 'reconcile_work_request', 'set_report']);
+
 export class Client {
   private sequence = 0;
   private session?: string;
+  workRequest?: string;
 
-  constructor(private endpoint: string, private receipt?: string) {}
+  constructor(private endpoint: string, private receipt?: string, readonly terminal: string | null = null, readonly labels: Record<string, string> = {}) {}
 
+  get address() { return this.terminal ? `acceptance/${this.terminal}` : null; }
+
+  // Reconnecting (for example after a restart) keeps the same terminal.
   reconnect(endpoint: string) {
-    const client = new Client(endpoint, this.receipt);
+    const client = new Client(endpoint, this.receipt, this.terminal, this.labels);
     client.session = this.session;
+    client.workRequest = this.workRequest;
     return client;
+  }
+
+  toolParams(name: string, args: object) {
+    const scoped = requestScoped.has(name) && this.workRequest && !('work_request_id' in args) && !('work_package_id' in args)
+      ? { work_request_id: this.workRequest, ...args } : args;
+    return { name, arguments: scoped, ...(this.terminal ? { _meta: { herdr: herdr(this.terminal, this.labels) } } : {}) };
   }
 
   private async record(entry: object) {
@@ -115,7 +139,8 @@ export class Client {
     }
   }
 
-  async rpc(method: string, params: object = {}) {
+  async rpc(method: string, params: any = {}) {
+    if (method === 'tools/call' && this.terminal && !params._meta) params = { ...params, _meta: { herdr: herdr(this.terminal, this.labels) } };
     const { status, body } = await this.raw({ jsonrpc: '2.0', id: ++this.sequence, method, params });
     expect(status).toBe(200);
     return body;
@@ -134,14 +159,18 @@ export class Client {
   }
 
   async call(name: string, args: object = {}) {
-    const response = await this.rpc('tools/call', { name, arguments: args });
+    const response = await this.rpc('tools/call', this.toolParams(name, args));
     expect(response.error, `${name}: ${JSON.stringify(response.error)}`).toBeUndefined();
     expect(response.result.isError).not.toBe(true);
     return response.result.structuredContent;
   }
 
+  async tool(name: string, args: object = {}) {
+    return this.rpc('tools/call', this.toolParams(name, args));
+  }
+
   async reject(name: string, args: object, reason: string) {
-    const response = await this.rpc('tools/call', { name, arguments: args });
+    const response = await this.tool(name, args);
     expect(response.error?.data?.reason).toBe(reason);
     return response.error.data;
   }
@@ -166,18 +195,17 @@ export class Client {
     const created = await this.call('create_work_request', {
       repo, base_branch: baseBranch, title,
       description: 'Synthetic acceptance request; no external work is executed.',
-      request_kind: 'feature', claimed_by: 'acceptance-architect',
+      request_kind: 'feature',
       repo_scopes: [{ repo: 'example/client', base_branch: 'integration' }, ...extraScopes],
     });
     expect(created.status).toBe('created');
-    expect(created.work_request.creator).toEqual({ kind: 'agent', name: 'acceptance-architect', via: 'mcp' });
+    // Creating a WorkRequest makes this terminal its owner and its creator.
+    expect(created.worked_on.address).toBe(this.address);
     const id = created.work_request.id;
-    const unclaimed = await this.call('read_work_request', { work_request_id: id });
-    expect(unclaimed.work_request.phase).toBe('intake');
-    const claimed = await this.call('claim_local_architect_assignment', {
-      work_request_id: id, claimed_by: 'acceptance-architect',
-    });
-    expect(claimed.assignment.grant_role).toBe('architect');
+    const read = await this.call('read_work_request', { detail: 'full', work_request_id: id });
+    expect(read.work_request.phase).toBe('intake');
+    expect(read.work_request.creator).toEqual({ kind: 'agent', name: this.address, via: 'mcp' });
+    this.workRequest = id;
     return id;
   }
 }

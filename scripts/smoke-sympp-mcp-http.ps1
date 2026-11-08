@@ -2,8 +2,7 @@ param(
   [string]$Url = "http://127.0.0.1:19998/mcp",
   [switch]$Json,
   [switch]$Bound,
-  [string]$WorkPackageId,
-  [string]$ClaimedBy,
+  [string]$TerminalId,
   [string]$RepoRoot,
   [string]$ExpectedSourceRevision,
   [switch]$SkipUnboundTools,
@@ -25,47 +24,45 @@ function Get-ContractStringList($Value) {
 $contractRoot = if ([string]::IsNullOrWhiteSpace($RepoRoot)) { Join-Path $PSScriptRoot ".." } else { $RepoRoot }
 $contractPath = Join-Path ([System.IO.Path]::GetFullPath($contractRoot)) "elixir/priv/symphony_plus_plus/mcp_contract.json"
 $ToolSets = (Get-Content -LiteralPath $contractPath -Raw | ConvertFrom-Json).tool_sets
-$UnboundContractTools = Get-ContractStringList $ToolSets.unbound_tools
-$ExpectedHttpUnboundTools = Get-ContractStringList $ToolSets.trusted_local_http_extra_tools
-$WorkerTools = Get-ContractStringList $ToolSets.worker_tools
-$ArchitectTools = Get-ContractStringList $ToolSets.architect_tools
-$ExpectedBoundWorkerTools = @("sympp.health", "release_current_assignment") + $WorkerTools
-$ExpectedUnboundTools = @($UnboundContractTools + $ExpectedHttpUnboundTools + $WorkerTools + $ArchitectTools | Sort-Object -Unique)
-$ArchitectOnlyTools = @($ArchitectTools)
-$UnboundOnlyTools = @($ExpectedUnboundTools | Where-Object { $ExpectedBoundWorkerTools -notcontains $_ })
-$ForbiddenUnboundTools = @()
-$ForbiddenBoundWorkerTools =
-  @($ArchitectOnlyTools + $UnboundOnlyTools |
-    Where-Object { $_ -ne "sympp.health" } |
-    Sort-Object -Unique)
+# Trusted local HTTP lists exactly the contract's tools; reads need no Herdr
+# identity, writes do, and owner-gated writes also need ownership.
+$ExpectedTools = @(Get-ContractStringList $ToolSets.tools | Sort-Object -Unique)
+$ReadTools = Get-ContractStringList $ToolSets.read_tools
+$OwnerGatedTools = Get-ContractStringList $ToolSets.owner_gated_tools
 
-$ExpectedPreClaimGatedCalls = @(
+# Writes without `_meta.herdr` are refused before any target lookup, so these
+# calls change nothing even against a live ledger.
+$ExpectedOutsideHerdrWriteCalls = @(
   @{
     name = "dispatch_work_package"
     arguments = @{
-      work_request_id = "WR-SMOKE-PRECLAIM"
-      work_package_id = "WP-SMOKE-PRECLAIM"
-      claimed_by = "sympp-http-smoke"
+      work_request_id = "WR-SMOKE-READ-ONLY"
+      work_package_id = "WP-SMOKE-READ-ONLY"
     }
   },
   @{
-    name = "read_context"
-    arguments = @{}
+    name = "set_report"
+    arguments = @{
+      work_request_id = "WR-SMOKE-READ-ONLY"
+      brief = "HTTP smoke"
+    }
   }
 )
 
-$ExpectedTrustedLocalPreClaimReadCalls = @(
+$ExpectedOutsideHerdrWriteReason = "read_only_outside_herdr"
+
+$ExpectedReadCalls = @(
   @{
     name = "read_work_request"
     arguments = @{
-      work_request_id = "WR-SMOKE-PRECLAIM-READ"
+      work_request_id = "WR-SMOKE-MISSING-READ"
     }
     allowedReasons = @("not_found")
   },
   @{
     name = "read_plan"
     arguments = @{
-      work_request_id = "WR-SMOKE-PRECLAIM-READ"
+      work_request_id = "WR-SMOKE-MISSING-READ"
       view = "groups_with_work_package_refs"
     }
     allowedReasons = @("not_found")
@@ -73,26 +70,10 @@ $ExpectedTrustedLocalPreClaimReadCalls = @(
   @{
     name = "read_delivery_board"
     arguments = @{
-      work_request_id = "WR-SMOKE-PRECLAIM-READ"
+      work_request_id = "WR-SMOKE-MISSING-READ"
     }
     allowedReasons = @("not_found")
   }
-)
-
-$ExpectedPreClaimGateReasons = @(
-  "claim_required",
-  "insufficient_capability",
-  "insufficient_role"
-)
-
-$ExpectedWorkerResourceFiles = @(
-  "context.md",
-  "task_plan.md",
-  "findings.md",
-  "progress.md",
-  "acceptance.md",
-  "review_suite.md",
-  "handoff.md"
 )
 
 $RedactedValue = "<redacted>"
@@ -282,35 +263,32 @@ function New-ToolsListRequest {
   }
 }
 
-function New-ToolCallRequest([string]$Id, [string]$Name, [hashtable]$Arguments) {
+function New-ToolCallRequest([string]$Id, [string]$Name, [hashtable]$Arguments, [hashtable]$Herdr = $null) {
+  $params = @{
+    name = $Name
+    arguments = $Arguments
+  }
+
+  # The bridge sends a verified Herdr terminal as `_meta.herdr`; without it a
+  # caller is read-only.
+  if ($null -ne $Herdr) {
+    $params["_meta"] = @{ herdr = $Herdr }
+  }
+
   return @{
     jsonrpc = "2.0"
     id = $Id
     method = "tools/call"
-    params = @{
-      name = $Name
-      arguments = $Arguments
-    }
+    params = $params
   }
 }
 
-function New-ResourcesListRequest {
+function New-SmokeHerdrTerminal([string]$CoreId, [string]$TerminalAddress) {
   return @{
-    jsonrpc = "2.0"
-    id = "sympp-http-smoke-resources"
-    method = "resources/list"
-    params = @{}
-  }
-}
-
-function New-ResourcesReadRequest([string]$Uri) {
-  return @{
-    jsonrpc = "2.0"
-    id = "sympp-http-smoke-resource"
-    method = "resources/read"
-    params = @{
-      uri = $Uri
-    }
+    core_id = $CoreId
+    core_name = "sympp-http-smoke"
+    terminal_id = $TerminalAddress
+    labels = @{}
   }
 }
 
@@ -618,62 +596,6 @@ function Get-ToolNames($ToolsPayload) {
   return @($tools | ForEach-Object { [string]$_.name } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object)
 }
 
-function Get-ResourceUris($ResourcesPayload) {
-  $resources = $ResourcesPayload.result.resources
-  if ($null -eq $resources) {
-    return @()
-  }
-
-  return @($resources | ForEach-Object { [string]$_.uri } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object)
-}
-
-function Get-ResourceContentByMimeType($Payload, [string]$MimeType) {
-  if ($null -eq $Payload -or -not $Payload.PSObject.Properties["result"]) {
-    return $null
-  }
-
-  $normalizedMimeType = Normalize-MimeType $MimeType
-  $contents = @($Payload.result.contents)
-  foreach ($content in $contents) {
-    if ($null -ne $content -and $content.PSObject.Properties["mimeType"] -and (Normalize-MimeType ([string]$content.mimeType)) -eq $normalizedMimeType) {
-      return $content
-    }
-  }
-
-  return $null
-}
-
-function Normalize-MimeType([string]$MimeType) {
-  if ([string]::IsNullOrWhiteSpace($MimeType)) {
-    return ""
-  }
-
-  return (($MimeType -split ";", 2)[0]).Trim().ToLowerInvariant()
-}
-
-function Get-AssignmentWorkPackageId($Payload) {
-  if ($null -eq $Payload -or -not $Payload.PSObject.Properties["result"]) {
-    return $null
-  }
-
-  $structuredContent = $Payload.result.structuredContent
-  if ($null -eq $structuredContent -or -not $structuredContent.PSObject.Properties["assignment"]) {
-    return $null
-  }
-
-  $assignment = $structuredContent.assignment
-  if ($null -eq $assignment -or -not $assignment.PSObject.Properties["work_package_id"]) {
-    return $null
-  }
-
-  $workPackageId = [string]$assignment.work_package_id
-  if ([string]::IsNullOrWhiteSpace($workPackageId)) {
-    return $null
-  }
-
-  return $workPackageId
-}
-
 function Get-HealthSourceRevision($Payload) {
   if ($null -eq $Payload -or -not $Payload.PSObject.Properties["result"]) {
     return $null
@@ -694,6 +616,24 @@ function Get-HealthSourceRevision($Payload) {
   } catch {
     return $null
   }
+}
+
+function Get-HealthCallerAccess($Payload) {
+  if ($null -eq $Payload -or -not $Payload.PSObject.Properties["result"]) {
+    return $null
+  }
+
+  $structuredContent = $Payload.result.structuredContent
+  if ($null -eq $structuredContent -or -not $structuredContent.PSObject.Properties["caller"]) {
+    return $null
+  }
+
+  $caller = $structuredContent.caller
+  if ($null -eq $caller -or -not $caller.PSObject.Properties["access"]) {
+    return $null
+  }
+
+  return [string]$caller.access
 }
 
 function Test-NonEmptyString($Value) {
@@ -787,6 +727,15 @@ function Invoke-HealthSmoke([string]$SessionId, [string]$ExpectedRevision) {
     }
   }
 
+  $callerAccess = Get-HealthCallerAccess $healthPayload
+  if ($callerAccess -ne "read_only") {
+    $actual = if ([string]::IsNullOrWhiteSpace($callerAccess)) { "<missing>" } else { $callerAccess }
+    return [pscustomobject]@{
+      ok = $false
+      result = New-SmokeResult "health_caller_access_unexpected" "MCP sympp.health without a Herdr terminal must report caller.access=read_only; got $actual."
+    }
+  }
+
   return [pscustomobject]@{
     ok = $true
     sourceRevision = $actualRevision
@@ -839,61 +788,24 @@ function Test-ResponseSessionHeader($Response, [string]$ExpectedSessionId, [stri
   return [pscustomobject]@{ ok = $true }
 }
 
-function Get-ResourceJsonPayload($Payload, [string]$Stage) {
-  if ($null -eq $Payload -or -not $Payload.PSObject.Properties["result"]) {
-    throw "$Stage returned no result."
-  }
-
-  $contents = @($Payload.result.contents)
-  $jsonContent = Get-ResourceContentByMimeType $Payload "application/json"
-  $content = if ($null -ne $jsonContent) { $jsonContent } elseif ($contents.Count -gt 0) { $contents[0] } else { $null }
-  if ($null -eq $content -or $null -eq $content.text) {
-    throw "$Stage returned no text content."
-  }
-
-  try {
-    $text = [string]$content.text
-    return ($text | ConvertFrom-Json)
-  }
-  catch {
-    throw "$Stage returned non-JSON resource text: $($_.Exception.Message)"
-  }
-}
-
-function Resolve-BoundSmokeConfig([bool]$UseBound, [string]$PackageId, [string]$Owner) {
+function Resolve-BoundSmokeConfig([bool]$UseBound, [string]$Terminal) {
   if (-not $UseBound) {
-    if (-not [string]::IsNullOrWhiteSpace($PackageId) -or -not [string]::IsNullOrWhiteSpace($Owner)) {
+    if (-not [string]::IsNullOrWhiteSpace($Terminal)) {
       return [pscustomobject]@{
         ok = $false
-        result = New-SmokeResult "invalid_arguments" "Bound smoke package/owner arguments require -Bound. Run without -Bound for the unbound health smoke."
+        result = New-SmokeResult "invalid_arguments" "-TerminalId requires -Bound. Run without -Bound for the read-only smoke."
       }
     }
 
     return [pscustomobject]@{ ok = $true; bound = $false }
   }
 
-  if ([string]::IsNullOrWhiteSpace($PackageId)) {
-    return [pscustomobject]@{
-      ok = $false
-      result = New-SmokeResult "invalid_arguments" "Bound smoke requires -WorkPackageId <work-package-id>."
-    }
-  }
-
-  $packageId = $PackageId.Trim()
-  if ($packageId -eq "") {
-    return [pscustomobject]@{
-      ok = $false
-      result = New-SmokeResult "invalid_arguments" "Bound smoke requires a non-empty -WorkPackageId value."
-    }
-  }
-
-  $owner = if ([string]::IsNullOrWhiteSpace($Owner)) { "sympp-http-smoke" } else { $Owner.Trim() }
+  $terminal = if ([string]::IsNullOrWhiteSpace($Terminal)) { "sympp-http-smoke" } else { $Terminal.Trim() }
 
   return [pscustomobject]@{
     ok = $true
     bound = $true
-    workPackageId = $packageId
-    claimedBy = $owner
+    terminalId = $terminal
   }
 }
 
@@ -953,18 +865,18 @@ function Invoke-InitializeSession([bool]$RedactSessionId) {
   }
 }
 
-function Invoke-ToolsListSmoke([string]$SessionId, [string[]]$Expected, [string]$SurfaceName, [string[]]$Forbidden = @()) {
+function Invoke-ToolsListSmoke([string]$SessionId, [string[]]$Expected) {
   $toolsResponse = Invoke-McpPost $Url (New-ToolsListRequest) $SessionId
   if (-not $toolsResponse.ok) {
     $reason = if ($toolsResponse.statusCode) { "HTTP $($toolsResponse.statusCode)" } else { "request failed" }
     $detail = Get-ResponseErrorDetail $toolsResponse $toolsResponse.error
     return [pscustomobject]@{
       ok = $false
-      result = New-SmokeResult "tools_list_failed" "MCP tools/list failed for $SurfaceName ($reason): $detail"
+      result = New-SmokeResult "tools_list_failed" "MCP tools/list failed ($reason): $detail"
     }
   }
 
-  $sessionCheck = Test-ResponseSessionHeader $toolsResponse $SessionId "tools/list for $SurfaceName"
+  $sessionCheck = Test-ResponseSessionHeader $toolsResponse $SessionId "tools/list"
   if (-not $sessionCheck.ok) {
     return $sessionCheck
   }
@@ -974,7 +886,7 @@ function Invoke-ToolsListSmoke([string]$SessionId, [string[]]$Expected, [string]
   if ($toolsError) {
     return [pscustomobject]@{
       ok = $false
-      result = New-SmokeResult "tools_list_failed" "MCP tools/list returned JSON-RPC error for $SurfaceName`: $toolsError"
+      result = New-SmokeResult "tools_list_failed" "MCP tools/list returned JSON-RPC error: $toolsError"
     }
   }
 
@@ -983,18 +895,18 @@ function Invoke-ToolsListSmoke([string]$SessionId, [string[]]$Expected, [string]
   if ($missingTools.Count -gt 0) {
     return [pscustomobject]@{
       ok = $false
-      result = New-SmokeResult "missing_expected_tools" "MCP tools/list is missing expected $SurfaceName tools: $($missingTools -join ', ')." @{
+      result = New-SmokeResult "missing_expected_tools" "MCP tools/list is missing contract tools: $($missingTools -join ', ')." @{
         tools = $toolNames
         missingTools = $missingTools
       }
     }
   }
 
-  $unexpectedTools = @($Forbidden | Where-Object { $toolNames -contains $_ })
+  $unexpectedTools = @($toolNames | Where-Object { $Expected -notcontains $_ })
   if ($unexpectedTools.Count -gt 0) {
     return [pscustomobject]@{
       ok = $false
-      result = New-SmokeResult "unexpected_tools" "MCP tools/list exposed tools that must not appear for $SurfaceName`: $($unexpectedTools -join ', ')." @{
+      result = New-SmokeResult "unexpected_tools" "MCP tools/list exposed tools outside the published contract: $($unexpectedTools -join ', ')." @{
         tools = $toolNames
         unexpectedTools = $unexpectedTools
       }
@@ -1008,78 +920,76 @@ function Invoke-ToolsListSmoke([string]$SessionId, [string[]]$Expected, [string]
   }
 }
 
-function Invoke-PreClaimGateSmoke([string]$SessionId) {
-  $gatedTools = @()
-  foreach ($call in $ExpectedPreClaimGatedCalls) {
+function Invoke-SmokeToolCall([string]$SessionId, [string]$Id, [string]$Name, [hashtable]$Arguments, [hashtable]$Herdr, [string]$Stage) {
+  $response = Invoke-McpPost $Url (New-ToolCallRequest $Id $Name $Arguments $Herdr) $SessionId
+  if (-not $response.ok) {
+    $reason = if ($response.statusCode) { "HTTP $($response.statusCode)" } else { "request failed" }
+    $detail = Get-ResponseErrorDetail $response $response.error
+    return [pscustomobject]@{
+      ok = $false
+      result = New-SmokeResult "tool_call_failed" "MCP $Stage failed transport validation ($reason): $detail"
+    }
+  }
+
+  $sessionCheck = Test-ResponseSessionHeader $response $SessionId $Stage
+  if (-not $sessionCheck.ok) {
+    return $sessionCheck
+  }
+
+  $payload = ConvertFrom-JsonResponse $response.content $Stage
+  return [pscustomobject]@{
+    ok = $true
+    payload = $payload
+    reason = Get-JsonRpcErrorReason $payload
+    error = Get-JsonRpcErrorMessage $payload
+  }
+}
+
+function Invoke-OutsideHerdrWriteSmoke([string]$SessionId) {
+  $refusedTools = @()
+  foreach ($call in $ExpectedOutsideHerdrWriteCalls) {
     $toolName = [string]$call.name
-    $gateResponse = Invoke-McpPost $Url (New-ToolCallRequest "sympp-http-smoke-preclaim-$toolName" $toolName $call.arguments) $SessionId
-    if (-not $gateResponse.ok) {
-      $reason = if ($gateResponse.statusCode) { "HTTP $($gateResponse.statusCode)" } else { "request failed" }
-      $detail = Get-ResponseErrorDetail $gateResponse $gateResponse.error
-      return [pscustomobject]@{
-        ok = $false
-        result = New-SmokeResult "preclaim_gate_failed" "MCP pre-claim $toolName failed transport validation ($reason): $detail"
-      }
+    $stage = "write $toolName without a Herdr terminal"
+    $result = Invoke-SmokeToolCall $SessionId "sympp-http-smoke-read-only-$toolName" $toolName $call.arguments $null $stage
+    if (-not $result.ok) {
+      return $result
     }
 
-    $sessionCheck = Test-ResponseSessionHeader $gateResponse $SessionId "pre-claim $toolName"
-    if (-not $sessionCheck.ok) {
-      return $sessionCheck
-    }
-
-    $gatePayload = ConvertFrom-JsonResponse $gateResponse.content "pre-claim $toolName"
-    $gateReason = Get-JsonRpcErrorReason $gatePayload
-    if ($ExpectedPreClaimGateReasons -notcontains $gateReason) {
-      $detail = Get-JsonRpcErrorMessage $gatePayload
-      if ([string]::IsNullOrWhiteSpace($detail)) {
-        $detail = "call unexpectedly succeeded"
-      }
-
+    if ($result.reason -ne $ExpectedOutsideHerdrWriteReason) {
+      $detail = if ([string]::IsNullOrWhiteSpace($result.error)) { "call unexpectedly succeeded" } else { $result.error }
       return [pscustomobject]@{
         ok = $false
-        result = New-SmokeResult "preclaim_gate_failed" "MCP pre-claim $toolName was not claim/permission gated: $detail" @{
+        result = New-SmokeResult "outside_herdr_write_not_refused" "MCP $stage was not refused as read-only: $detail" @{
           tool = $toolName
-          reason = $gateReason
+          reason = $result.reason
         }
       }
     }
 
-    $gatedTools += $toolName
+    $refusedTools += $toolName
   }
 
   return [pscustomobject]@{
     ok = $true
-    gatedTools = $gatedTools
+    refusedTools = $refusedTools
   }
 }
 
-function Invoke-PreClaimReadSmoke([string]$SessionId) {
+function Invoke-ReadSmoke([string]$SessionId) {
   $readTools = @()
-  foreach ($call in $ExpectedTrustedLocalPreClaimReadCalls) {
+  foreach ($call in $ExpectedReadCalls) {
     $toolName = [string]$call.name
-    $readResponse = Invoke-McpPost $Url (New-ToolCallRequest "sympp-http-smoke-preclaim-read-$toolName" $toolName $call.arguments) $SessionId
-    if (-not $readResponse.ok) {
-      $reason = if ($readResponse.statusCode) { "HTTP $($readResponse.statusCode)" } else { "request failed" }
-      $detail = Get-ResponseErrorDetail $readResponse $readResponse.error
-      return [pscustomobject]@{
-        ok = $false
-        result = New-SmokeResult "preclaim_read_failed" "MCP trusted-local pre-claim read $toolName failed transport validation ($reason): $detail"
-      }
+    $stage = "read $toolName"
+    $result = Invoke-SmokeToolCall $SessionId "sympp-http-smoke-read-$toolName" $toolName $call.arguments $null $stage
+    if (-not $result.ok) {
+      return $result
     }
 
-    $sessionCheck = Test-ResponseSessionHeader $readResponse $SessionId "trusted-local pre-claim read $toolName"
-    if (-not $sessionCheck.ok) {
-      return $sessionCheck
-    }
-
-    $readPayload = ConvertFrom-JsonResponse $readResponse.content "trusted-local pre-claim read $toolName"
-    $readReason = Get-JsonRpcErrorReason $readPayload
-    $readError = Get-JsonRpcErrorMessage $readPayload
-    if ([string]::IsNullOrWhiteSpace($readReason)) {
-      if (-not [string]::IsNullOrWhiteSpace($readError)) {
+    if ([string]::IsNullOrWhiteSpace($result.reason)) {
+      if (-not [string]::IsNullOrWhiteSpace($result.error)) {
         return [pscustomobject]@{
           ok = $false
-          result = New-SmokeResult "preclaim_read_failed" "MCP trusted-local pre-claim read $toolName returned a JSON-RPC error without a reason: $readError" @{
+          result = New-SmokeResult "read_failed" "MCP $stage returned a JSON-RPC error without a reason: $($result.error)" @{
             tool = $toolName
             reason = $null
           }
@@ -1090,27 +1000,17 @@ function Invoke-PreClaimReadSmoke([string]$SessionId) {
       continue
     }
 
-    if ($ExpectedPreClaimGateReasons -contains $readReason) {
-      return [pscustomobject]@{
-        ok = $false
-        result = New-SmokeResult "preclaim_read_claim_gated" "MCP trusted-local pre-claim read $toolName was still claim/permission gated: $readError" @{
-          tool = $toolName
-          reason = $readReason
-        }
-      }
-    }
-
     $allowedReasons = @($call.allowedReasons)
-    if ($allowedReasons -contains $readReason) {
-      $readTools += "${toolName}:$readReason"
+    if ($allowedReasons -contains $result.reason) {
+      $readTools += "${toolName}:$($result.reason)"
       continue
     }
 
     return [pscustomobject]@{
       ok = $false
-      result = New-SmokeResult "preclaim_read_failed" "MCP trusted-local pre-claim read $toolName returned an unexpected error: $readError" @{
+      result = New-SmokeResult "read_failed" "MCP $stage returned an unexpected error: $($result.error)" @{
         tool = $toolName
-        reason = $readReason
+        reason = $result.reason
       }
     }
   }
@@ -1136,197 +1036,140 @@ function Invoke-McpSmoke {
     }
   }
 
-  $toolsCheck = Invoke-ToolsListSmoke $session.sessionId $ExpectedUnboundTools "unbound" $ForbiddenUnboundTools
+  $toolsCheck = Invoke-ToolsListSmoke $session.sessionId $ExpectedTools
   if (-not $toolsCheck.ok) {
     return $toolsCheck.result
   }
 
-  $preClaimRead = Invoke-PreClaimReadSmoke $session.sessionId
-  if (-not $preClaimRead.ok) {
-    return $preClaimRead.result
+  $reads = Invoke-ReadSmoke $session.sessionId
+  if (-not $reads.ok) {
+    return $reads.result
   }
 
-  $preClaimGate = Invoke-PreClaimGateSmoke $session.sessionId
-  if (-not $preClaimGate.ok) {
-    return $preClaimGate.result
+  $outsideHerdr = Invoke-OutsideHerdrWriteSmoke $session.sessionId
+  if (-not $outsideHerdr.ok) {
+    return $outsideHerdr.result
   }
 
-  return New-SmokeResult "ok" "Local sympp HTTP MCP daemon is initialized and exposes the expected unbound tools." @{
+  return New-SmokeResult "ok" "Local sympp HTTP MCP daemon is initialized, lists the contract tools, serves reads and refuses writes outside Herdr." @{
     sessionId = $session.sessionId
     daemonSourceRevision = $session.sourceRevision
     expectedSourceRevision = $session.expectedRevision
     tools = $toolsCheck.tools
-    preClaimReadTools = $preClaimRead.readTools
-    preClaimGatedTools = $preClaimGate.gatedTools
+    readTools = $reads.readTools
+    outsideHerdrRefusedTools = $outsideHerdr.refusedTools
   }
 }
 
+# Writes to the target ledger: creates one smoke WorkRequest owned by a fake
+# Herdr terminal on a core the factory cannot see, then checks that a second
+# terminal is refused and the owner can keep writing.
 function Invoke-BoundMcpSmoke($Config) {
   $session = Initialize-HealthyMcpSession $true
   if (-not $session.ok) {
     return $session.result
   }
 
-  $unboundTools = @()
-  $preClaimReadTools = @()
-  $preClaimGatedTools = @()
+  $tools = @()
+  $readTools = @()
+  $refusedTools = @()
   if (-not $SkipUnboundTools) {
-    $unbound = Invoke-ToolsListSmoke $session.sessionId $ExpectedUnboundTools "unbound pre-claim" $ForbiddenUnboundTools
-    if (-not $unbound.ok) {
-      return $unbound.result
+    $toolsCheck = Invoke-ToolsListSmoke $session.sessionId $ExpectedTools
+    if (-not $toolsCheck.ok) {
+      return $toolsCheck.result
     }
 
-    $unboundTools = $unbound.tools
-
-    $preClaimRead = Invoke-PreClaimReadSmoke $session.sessionId
-    if (-not $preClaimRead.ok) {
-      return $preClaimRead.result
+    $reads = Invoke-ReadSmoke $session.sessionId
+    if (-not $reads.ok) {
+      return $reads.result
     }
 
-    $preClaimGate = Invoke-PreClaimGateSmoke $session.sessionId
-    if (-not $preClaimGate.ok) {
-      return $preClaimGate.result
+    $outsideHerdr = Invoke-OutsideHerdrWriteSmoke $session.sessionId
+    if (-not $outsideHerdr.ok) {
+      return $outsideHerdr.result
     }
 
-    $preClaimReadTools = $preClaimRead.readTools
-    $preClaimGatedTools = $preClaimGate.gatedTools
+    $tools = $toolsCheck.tools
+    $readTools = $reads.readTools
+    $refusedTools = $outsideHerdr.refusedTools
   }
 
-  $claimResponse = Invoke-McpPost $Url (New-ToolCallRequest "sympp-http-smoke-claim" "claim_local_assignment" @{
-      work_package_id = $Config.workPackageId
-      claimed_by = $Config.claimedBy
-    }) $session.sessionId
+  $coreId = "sympp-http-smoke-" + [guid]::NewGuid().ToString("N")
+  $owner = New-SmokeHerdrTerminal $coreId $Config.terminalId
+  $other = New-SmokeHerdrTerminal $coreId ($Config.terminalId + "-other")
 
-  if (-not $claimResponse.ok) {
-    $reason = if ($claimResponse.statusCode) { "HTTP $($claimResponse.statusCode)" } else { "request failed" }
-    $detail = Get-ResponseErrorDetail $claimResponse $claimResponse.error
-    return New-SmokeResult "claim_failed" "MCP claim_local_assignment failed ($reason): $detail"
+  $create = Invoke-SmokeToolCall $session.sessionId "sympp-http-smoke-create" "create_work_request" @{
+    repo = "nextide/sympp-http-smoke"
+    base_branch = "main"
+    title = "HTTP smoke ownership"
+    request_kind = "investigation"
+    description = "Created by the sympp HTTP smoke to check Herdr ownership."
+  } $owner "create_work_request as a Herdr terminal"
+  if (-not $create.ok) {
+    return $create.result
   }
 
-  $claimedSessionId = Get-ResponseHeaderValue $claimResponse.headers "Mcp-Session-Id"
-  Add-SensitiveValue $claimedSessionId
-  if ([string]::IsNullOrWhiteSpace($claimedSessionId)) {
-    return New-SmokeResult "missing_claimed_session_id" "MCP claim_local_assignment succeeded but did not return Mcp-Session-Id."
+  if ($create.error) {
+    return New-SmokeResult "create_work_request_failed" "MCP create_work_request as a Herdr terminal returned JSON-RPC error: $($create.error)"
   }
 
-  if ($claimedSessionId -ne $session.sessionId) {
-    return New-SmokeResult "session_id_mismatch" "MCP claim_local_assignment did not preserve the initialized Mcp-Session-Id."
+  $workRequestId = [string]$create.payload.result.structuredContent.work_request.id
+  $workedOn = $create.payload.result.structuredContent.worked_on
+  if ([string]::IsNullOrWhiteSpace($workRequestId) -or $null -eq $workedOn) {
+    return New-SmokeResult "create_work_request_not_owned" "MCP create_work_request did not return the new WorkRequest with the caller as its owner."
   }
 
-  $claimPayload = ConvertFrom-JsonResponse $claimResponse.content "claim_local_assignment"
-  $claimError = Get-JsonRpcErrorMessage $claimPayload
-  if ($claimError) {
-    return New-SmokeResult "claim_failed" "MCP claim_local_assignment returned JSON-RPC error: $claimError"
+  $refused = Invoke-SmokeToolCall $session.sessionId "sympp-http-smoke-other-terminal" "set_report" @{
+    work_request_id = $workRequestId
+    brief = "Second terminal"
+  } $other "set_report from a second Herdr terminal"
+  if (-not $refused.ok) {
+    return $refused.result
   }
 
-  $workPackageId = Get-AssignmentWorkPackageId $claimPayload
-  if ([string]::IsNullOrWhiteSpace($workPackageId)) {
-    return New-SmokeResult "claim_assignment_missing" "MCP claim_local_assignment response did not include assignment.work_package_id."
-  }
-
-  $boundTools = Invoke-ToolsListSmoke $claimedSessionId $ExpectedBoundWorkerTools "bound worker" $ForbiddenBoundWorkerTools
-  if (-not $boundTools.ok) {
-    return $boundTools.result
-  }
-
-  $assignmentToolResponse = Invoke-McpPost $Url (New-ToolCallRequest "sympp-http-smoke-assignment" "get_current_assignment" @{}) $claimedSessionId
-  if (-not $assignmentToolResponse.ok) {
-    $reason = if ($assignmentToolResponse.statusCode) { "HTTP $($assignmentToolResponse.statusCode)" } else { "request failed" }
-    $detail = Get-ResponseErrorDetail $assignmentToolResponse $assignmentToolResponse.error
-    return New-SmokeResult "assignment_tool_failed" "MCP get_current_assignment failed with claimed session ($reason): $detail"
-  }
-
-  $sessionCheck = Test-ResponseSessionHeader $assignmentToolResponse $claimedSessionId "get_current_assignment"
-  if (-not $sessionCheck.ok) {
-    return $sessionCheck.result
-  }
-
-  $assignmentToolPayload = ConvertFrom-JsonResponse $assignmentToolResponse.content "get_current_assignment"
-  $assignmentToolError = Get-JsonRpcErrorMessage $assignmentToolPayload
-  if ($assignmentToolError) {
-    return New-SmokeResult "assignment_tool_failed" "MCP get_current_assignment returned JSON-RPC error: $assignmentToolError"
-  }
-
-  $assignmentToolWorkPackageId = Get-AssignmentWorkPackageId $assignmentToolPayload
-  if ($assignmentToolWorkPackageId -ne $workPackageId) {
-    return New-SmokeResult "assignment_mismatch" "MCP get_current_assignment returned a different WorkPackage id than claim_local_assignment."
-  }
-
-  $assignmentResourceResponse = Invoke-McpPost $Url (New-ResourcesReadRequest "sympp://assignment/current") $claimedSessionId
-  if (-not $assignmentResourceResponse.ok) {
-    $reason = if ($assignmentResourceResponse.statusCode) { "HTTP $($assignmentResourceResponse.statusCode)" } else { "request failed" }
-    $detail = Get-ResponseErrorDetail $assignmentResourceResponse $assignmentResourceResponse.error
-    return New-SmokeResult "assignment_resource_failed" "MCP resources/read sympp://assignment/current failed with claimed session ($reason): $detail"
-  }
-
-  $sessionCheck = Test-ResponseSessionHeader $assignmentResourceResponse $claimedSessionId "resources/read sympp://assignment/current"
-  if (-not $sessionCheck.ok) {
-    return $sessionCheck.result
-  }
-
-  $assignmentResourcePayload = ConvertFrom-JsonResponse $assignmentResourceResponse.content "resources/read"
-  $assignmentResourceError = Get-JsonRpcErrorMessage $assignmentResourcePayload
-  if ($assignmentResourceError) {
-    return New-SmokeResult "assignment_resource_failed" "MCP resources/read sympp://assignment/current returned JSON-RPC error: $assignmentResourceError"
-  }
-
-  $assignmentResource = Get-ResourceJsonPayload $assignmentResourcePayload "resources/read sympp://assignment/current"
-  if ([string]$assignmentResource.work_package_id -ne $workPackageId) {
-    return New-SmokeResult "assignment_resource_mismatch" "MCP assignment resource returned a different WorkPackage id than claim_local_assignment."
-  }
-
-  $resourcesResponse = Invoke-McpPost $Url (New-ResourcesListRequest) $claimedSessionId
-  if (-not $resourcesResponse.ok) {
-    $reason = if ($resourcesResponse.statusCode) { "HTTP $($resourcesResponse.statusCode)" } else { "request failed" }
-    $detail = Get-ResponseErrorDetail $resourcesResponse $resourcesResponse.error
-    return New-SmokeResult "resources_list_failed" "MCP resources/list failed with claimed session ($reason): $detail"
-  }
-
-  $sessionCheck = Test-ResponseSessionHeader $resourcesResponse $claimedSessionId "resources/list"
-  if (-not $sessionCheck.ok) {
-    return $sessionCheck.result
-  }
-
-  $resourcesPayload = ConvertFrom-JsonResponse $resourcesResponse.content "resources/list"
-  $resourcesError = Get-JsonRpcErrorMessage $resourcesPayload
-  if ($resourcesError) {
-    return New-SmokeResult "resources_list_failed" "MCP resources/list returned JSON-RPC error: $resourcesError"
-  }
-
-  $resourceUris = Get-ResourceUris $resourcesPayload
-  $expectedResources = @("sympp://assignment/current")
-  foreach ($fileName in $ExpectedWorkerResourceFiles) {
-    $expectedResources += "sympp://work-packages/$workPackageId/$fileName"
-  }
-
-  $missingResources = @($expectedResources | Where-Object { $resourceUris -notcontains $_ })
-  if ($missingResources.Count -gt 0) {
-    return New-SmokeResult "missing_expected_resources" "MCP resources/list is missing expected bound worker resources: $($missingResources -join ', ')." @{
-      resources = $resourceUris
-      missingResources = $missingResources
+  if ($refused.reason -ne "owned_by_other_terminal") {
+    $detail = if ([string]::IsNullOrWhiteSpace($refused.error)) { "call unexpectedly succeeded" } else { $refused.error }
+    return New-SmokeResult "second_terminal_not_refused" "MCP set_report from a second terminal was not refused as owned_by_other_terminal: $detail" @{
+      reason = $refused.reason
     }
+  }
+
+  $refusedData = $refused.payload.error.data
+  if ([string]::IsNullOrWhiteSpace([string]$refusedData.owner.address) -or [string]::IsNullOrWhiteSpace([string]$refusedData.next_action)) {
+    return New-SmokeResult "ownership_refusal_incomplete" "MCP owned_by_other_terminal did not name the owner address and next action."
+  }
+
+  $ownerWrite = Invoke-SmokeToolCall $session.sessionId "sympp-http-smoke-owner-write" "set_report" @{
+    work_request_id = $workRequestId
+    brief = "HTTP smoke owner write"
+  } $owner "set_report from the owner"
+  if (-not $ownerWrite.ok) {
+    return $ownerWrite.result
+  }
+
+  if ($ownerWrite.error) {
+    return New-SmokeResult "owner_write_failed" "MCP set_report from the owning terminal returned JSON-RPC error: $($ownerWrite.error)"
   }
 
   $data = @{
-    mode = "bound_worker"
-    claimedBy = $Config.claimedBy
-    requestedWorkPackageId = $Config.workPackageId
+    mode = "herdr_ownership"
+    terminalId = $Config.terminalId
     sessionId = $RedactedValue
     sessionIdRedacted = $true
     daemonSourceRevision = $session.sourceRevision
     expectedSourceRevision = $session.expectedRevision
-    workPackageId = $workPackageId
-    tools = $boundTools.tools
-    resources = $resourceUris
+    workRequestId = $workRequestId
+    owner = [string]$workedOn.address
+    refusedOwnerAddress = [string]$refusedData.owner.address
   }
 
   if (-not $SkipUnboundTools) {
-    $data["unboundTools"] = $unboundTools
-    $data["preClaimReadTools"] = $preClaimReadTools
-    $data["preClaimGatedTools"] = $preClaimGatedTools
+    $data["tools"] = $tools
+    $data["readTools"] = $readTools
+    $data["outsideHerdrRefusedTools"] = $refusedTools
   }
 
-  return New-SmokeResult "ok" "Local sympp HTTP MCP daemon claimed the WorkPackage and exposes the expected bound worker tools/resources." $data
+  return New-SmokeResult "ok" "Local sympp HTTP MCP daemon gave the smoke WorkRequest to its creating terminal and refused a second terminal." $data
 }
 
 function Invoke-SelfTest {
@@ -1374,58 +1217,40 @@ function Invoke-SelfTest {
     throw "Expected mismatched session header to fail continuity validation."
   }
 
-  if ($ExpectedUnboundTools -notcontains "claim_local_assignment" -or $ExpectedUnboundTools -notcontains "claim_local_architect_assignment") {
-    throw "Expected unbound discovery to include local HTTP claim tools."
+  foreach ($tool in @("sympp.health", "create_work_request", "set_report", "read_work_request", "dispatch_work_package")) {
+    if ($ExpectedTools -notcontains $tool) {
+      throw "Expected the published contract to list $tool."
+    }
   }
 
-  if ($ExpectedHttpUnboundTools -notcontains "create_work_request") {
-    throw "Expected trusted local HTTP unbound discovery to include safe bootstrap tools."
+  if ($ReadTools -notcontains "read_work_request" -or $ReadTools -contains "set_report") {
+    throw "Expected the contract's read tools to include reads and exclude writes."
   }
 
-  if ($ExpectedHttpUnboundTools -notcontains "record_work_request_operator_decision") {
-    throw "Expected trusted local HTTP unbound discovery to require the safe operator decision tool."
+  foreach ($call in $ExpectedOutsideHerdrWriteCalls) {
+    if ($ReadTools -contains [string]$call.name -or $ExpectedTools -notcontains [string]$call.name) {
+      throw "Expected outside-Herdr write smoke calls to be listed write tools."
+    }
   }
 
-  if ($ForbiddenUnboundTools -contains "record_work_request_operator_decision") {
-    throw "Expected unbound forbidden tools to allow the trusted local operator decision tool."
+  foreach ($call in $ExpectedReadCalls) {
+    if ($ReadTools -notcontains [string]$call.name) {
+      throw "Expected read smoke calls to be contract read tools."
+    }
   }
 
-  if ($ExpectedUnboundTools -notcontains "append_progress" -or $ExpectedUnboundTools -notcontains "get_current_assignment") {
-    throw "Expected unbound discovery to include worker scoped schemas."
+  if ($OwnerGatedTools -notcontains "set_report" -or $OwnerGatedTools -contains "create_work_request") {
+    throw "Expected set_report to be owner-gated and create_work_request not."
   }
 
-  if ($ExpectedUnboundTools -notcontains "read_work_request" -or $ExpectedUnboundTools -notcontains "read_plan" -or $ExpectedUnboundTools -notcontains "dispatch_work_package" -or $ExpectedUnboundTools -notcontains "read_delivery_board") {
-    throw "Expected unbound discovery to include architect scoped schemas."
+  $request = New-ToolCallRequest "self-test" "set_report" @{ work_request_id = "WR" } (New-SmokeHerdrTerminal "core" "t1")
+  if ($request.params._meta.herdr.terminal_id -ne "t1" -or $request.params._meta.herdr.core_id -ne "core") {
+    throw "Expected Herdr smoke calls to carry _meta.herdr."
   }
 
-  if ($ForbiddenUnboundTools.Count -ne 0) {
-    throw "Expected unbound discovery to treat schema visibility as authorization-neutral."
-  }
-
-  if ($ForbiddenUnboundTools -contains "claim_local_assignment" -or $ForbiddenUnboundTools -contains "sympp.health") {
-    throw "Expected unbound forbidden tools to keep health and local claim tools allowed."
-  }
-
-  $preClaimReadNames = @($ExpectedTrustedLocalPreClaimReadCalls | ForEach-Object { [string]$_.name })
-  if ($preClaimReadNames -notcontains "read_work_request" -or $preClaimReadNames -notcontains "read_plan" -or $preClaimReadNames -notcontains "read_delivery_board") {
-    throw "Expected trusted-local pre-claim smoke to verify read-only WorkRequest calls."
-  }
-
-  $preClaimGateNames = @($ExpectedPreClaimGatedCalls | ForEach-Object { [string]$_.name })
-  if ($preClaimGateNames -contains "read_work_request") {
-    throw "Expected pre-claim smoke to treat read_work_request as trusted-local read validation, not a claim-gated call."
-  }
-
-  if ($preClaimGateNames -notcontains "dispatch_work_package" -or $preClaimGateNames -notcontains "read_context") {
-    throw "Expected pre-claim smoke to verify mutation and worker context calls remain gated."
-  }
-
-  if ($ForbiddenBoundWorkerTools -notcontains "list_work_requests" -or $ForbiddenBoundWorkerTools -notcontains "dispatch_work_package") {
-    throw "Expected bound worker forbidden tools to include architect-only tools."
-  }
-
-  if ($ForbiddenBoundWorkerTools -notcontains "claim_local_assignment") {
-    throw "Expected bound worker forbidden tools to include unbound claim tools."
+  $anonymous = New-ToolCallRequest "self-test" "read_work_request" @{ work_request_id = "WR" }
+  if ($anonymous.params.ContainsKey("_meta")) {
+    throw "Expected calls outside Herdr to carry no _meta."
   }
 
   $healthPayload = @{
@@ -1434,6 +1259,9 @@ function Invoke-SelfTest {
         source = @{
           revision = "ABCDEF1234567890ABCDEF1234567890ABCDEF12"
         }
+        caller = @{
+          access = "read_only"
+        }
       }
     }
   } | ConvertTo-Json -Depth 8 | ConvertFrom-Json
@@ -1441,9 +1269,17 @@ function Invoke-SelfTest {
     throw "Expected health source revision extraction to normalize daemon revisions."
   }
 
+  if ((Get-HealthCallerAccess $healthPayload) -ne "read_only") {
+    throw "Expected health caller access extraction to read caller.access."
+  }
+
   $missingSourcePayload = @{ result = @{ structuredContent = @{} } } | ConvertTo-Json -Depth 8 | ConvertFrom-Json
   if ($null -ne (Get-HealthSourceRevision $missingSourcePayload)) {
     throw "Expected missing health source revision to normalize to null."
+  }
+
+  if ($null -ne (Get-HealthCallerAccess $missingSourcePayload)) {
+    throw "Expected missing health caller to normalize to null."
   }
 
   $jsonRpcErrorWithoutReason = @{
@@ -1456,27 +1292,6 @@ function Invoke-SelfTest {
   }
   if ((Get-JsonRpcErrorMessage $jsonRpcErrorWithoutReason) -ne "synthetic bridge error") {
     throw "Expected JSON-RPC errors without data.reason to preserve their message."
-  }
-
-  $resourcePayload = @{
-    result = @{
-      contents = @(
-        @{
-          uri = "sympp://assignment/current"
-          mimeType = "text/vnd.toon"
-          text = "work_package_id: wp_toon"
-        },
-        @{
-          uri = "sympp://assignment/current"
-          mimeType = "Application/JSON; charset=utf-8"
-          text = '{"work_package_id":"wp_json"}'
-        }
-      )
-    }
-  } | ConvertTo-Json -Depth 8 | ConvertFrom-Json
-  $resourceJson = Get-ResourceJsonPayload $resourcePayload "resources/read self-test"
-  if ([string]$resourceJson.work_package_id -ne "wp_json") {
-    throw "Expected resource JSON parsing to prefer application/json over TOON presentation text."
   }
 
   if ((Normalize-SourceRevision "0123456789ABCDEF0123456789ABCDEF01234567") -ne "0123456789abcdef0123456789abcdef01234567") {
@@ -1495,48 +1310,43 @@ function Invoke-SelfTest {
 
   $script:SensitiveValues.Clear()
   Add-SensitiveValue "secret-value-for-self-test"
-  Add-SensitiveValue "claimed-session-for-self-test"
-  $redactedJson = ConvertTo-RedactedJson (New-SmokeResult "ok" "secret-value-for-self-test claimed-session-for-self-test" @{
+  Add-SensitiveValue "session-for-self-test"
+  $redactedJson = ConvertTo-RedactedJson (New-SmokeResult "ok" "secret-value-for-self-test session-for-self-test" @{
       secret = "secret-value-for-self-test"
-      sessionId = "claimed-session-for-self-test"
+      sessionId = "session-for-self-test"
     })
-  if ($redactedJson -match "secret-value-for-self-test" -or $redactedJson -match "claimed-session-for-self-test") {
-    throw "Expected JSON smoke output redaction to remove raw secret and claimed session values."
+  if ($redactedJson -match "secret-value-for-self-test" -or $redactedJson -match "session-for-self-test") {
+    throw "Expected JSON smoke output redaction to remove raw secret and session values."
   }
 
   if ($redactedJson -notmatch [regex]::Escape($RedactedValue)) {
     throw "Expected JSON smoke output redaction marker to be present."
   }
 
-  $resolved = Resolve-BoundSmokeConfig $true "WP-SMOKE-SELFTEST" "worker-self-test"
-  if (-not $resolved.ok -or $resolved.workPackageId -ne "WP-SMOKE-SELFTEST" -or $resolved.claimedBy -ne "worker-self-test") {
-    throw "Expected bound smoke argument resolution to accept a WorkPackage id and owner."
+  $resolved = Resolve-BoundSmokeConfig $true "t-self-test"
+  if (-not $resolved.ok -or $resolved.terminalId -ne "t-self-test") {
+    throw "Expected bound smoke argument resolution to accept a terminal id."
   }
 
-  $defaultOwner = Resolve-BoundSmokeConfig $true "WP-SMOKE-SELFTEST" ""
-  if (-not $defaultOwner.ok -or $defaultOwner.claimedBy -ne "sympp-http-smoke") {
-    throw "Expected bound smoke argument resolution to default the claimed_by owner."
+  $defaultTerminal = Resolve-BoundSmokeConfig $true ""
+  if (-not $defaultTerminal.ok -or $defaultTerminal.terminalId -ne "sympp-http-smoke") {
+    throw "Expected bound smoke argument resolution to default the terminal id."
   }
 
   $script:SkipUnboundTools = $true
   try {
-    $unboundSkip = Resolve-BoundSmokeConfig $false "" ""
+    $unboundSkip = Resolve-BoundSmokeConfig $false ""
     if (-not $unboundSkip.ok -or $unboundSkip.bound) {
-      throw "Expected -SkipUnboundTools without -Bound to remain a valid unbound health/source smoke."
+      throw "Expected -SkipUnboundTools without -Bound to remain a valid health/source smoke."
     }
   }
   finally {
     $script:SkipUnboundTools = $false
   }
 
-  $missingPackage = Resolve-BoundSmokeConfig $true "" "worker-self-test"
-  if ($missingPackage.ok -or $missingPackage.result.status -ne "invalid_arguments") {
-    throw "Expected missing WorkPackage id to fail bound smoke validation."
-  }
-
-  $unexpectedBoundArgument = Resolve-BoundSmokeConfig $false "WP-SMOKE-SELFTEST" ""
+  $unexpectedBoundArgument = Resolve-BoundSmokeConfig $false "t-self-test"
   if ($unexpectedBoundArgument.ok -or $unexpectedBoundArgument.result.status -ne "invalid_arguments") {
-    throw "Expected bound arguments without -Bound to fail validation."
+    throw "Expected -TerminalId without -Bound to fail validation."
   }
 
   return New-SmokeResult "ok" "PowerShell header normalization, source revision, redaction, and bound argument validation self-test passed."
@@ -1552,7 +1362,7 @@ try {
     Write-SmokeResult (Invoke-SelfTest) 0
   }
 
-  $config = Resolve-BoundSmokeConfig ([bool]($Bound -and -not $SkipBound)) $WorkPackageId $ClaimedBy
+  $config = Resolve-BoundSmokeConfig ([bool]($Bound -and -not $SkipBound)) $TerminalId
   if (-not $config.ok) {
     Write-SmokeResult $config.result 1
   }

@@ -10,7 +10,7 @@
 import { div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input, Button } from "gpui-base";
 import { theme, props, closeOverlay, openOverlay, knownAgents, machines, spaces, terminals, panes, shared, setShared, exec, hc, home, layout, run, settings } from "herdr";
-import { chiefBrief, chiefArgv, chiefSpaceName, factoryMachine, chiefFolders, intoTopic, isChiefSpace, CHIEF_SPACES, chiefMenu,
+import { chiefBrief, chiefArgv, chiefLabelArgs, chiefSpaceName, factoryMachine, chiefFolders, intoTopic, isChiefSpace, CHIEF_SPACES, chiefMenu,
   CHIEF_SESSIONS, FACTORY_ROOT, canResume, chiefRunning, machineOf, resumeArgv } from "./chief.js";
 
 const W = 560;
@@ -157,13 +157,15 @@ export class ChiefStart {
     const made = own
       ? await app("tab.new", { space: own.id, name: "chief", argv, ...(folder ? { folder } : {}) })
       : await app("space.new", { name: chiefSpaceName(this.name), tab: "chief", argv, ...(folder ? { folder } : {}), machine: machine ?? "" });
+    // Its labels make it the topic's chief for sympp. Without them it still runs, unattributed.
+    await hc(chiefLabelArgs(made.terminal, this.name)).catch(() => {});
     if (!own) {
       const next = intoTopic(shared("desk.topics"), this.topic, made.space);
       if (next) setShared("desk.topics", next);
     }
     setShared(CHIEF_SPACES, { ...shared(CHIEF_SPACES), [own?.id ?? made.space]: this.topic });
     setShared(CHIEF_SESSIONS, { ...shared(CHIEF_SESSIONS), [this.topic]: { ...record, terminal: made.terminal, started: Date.now() } });
-    // It is the topic's chief from now on: the mark lights and leads to it before it registers.
+    // It is the topic's chief from now on: the mark lights and leads to it before its agent starts.
     setShared(CHIEFS, { ...shared(CHIEFS), [this.topic]: [{ domain: this.name, terminal: made.terminal }] });
     // A desk shows its spaces' tabs in its workspace view.
     if (find(layout(), "desk-views")) run("layout.select", { stack: "desk-views", child: "desk-workspace" });

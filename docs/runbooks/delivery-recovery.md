@@ -23,10 +23,8 @@ matching `evidence.pr_merged` object.
 - `superseded`: successor WorkPackage id and reason.
 - `abandoned`: rationale explaining why the package will not be delivered.
 
-Record the terminal outcome directly. Successful closeout revokes live worker
-grants and releases current claim leases. Use
-`cleanup_work_request_work_package_runtime` only to recycle runtime without
-terminal closeout or to clear recoverable worker MCP bindings explicitly.
+Record the terminal outcome directly from the terminal that owns the WorkRequest.
+Ending a package resolves its blockers and queues its worktree cleanup.
 
 ## Rules
 

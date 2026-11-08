@@ -7,6 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   @health_tool "sympp.health"
   @mcp_contract_schema_version "sympp-mcp-contract.v1"
   @mcp_contract_health_fields [
+    "caller.access",
     "factory_owned_worktrees",
     "ledger",
     "mode",
@@ -17,76 +18,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "version"
   ]
   @solo_tools SoloTools.tool_names()
-  @assignment_release_tool "release_current_assignment"
-  @bootstrap_tools ["create_work_request", "register_chief"]
+  @bootstrap_tools ["create_work_request"]
   @local_operator_tools ["record_work_request_operator_decision", "summarize_failed_mcp_calls"]
   @blocker_closeout_decisions ["resolved", "still_active"]
-  @local_assignment_claim_tool "claim_local_assignment"
-  @local_architect_assignment_claim_tool "claim_local_architect_assignment"
-  @session_claim_tools [@local_assignment_claim_tool, @local_architect_assignment_claim_tool]
-  @local_assignment_claim_hidden_worker_arguments ["repo", "base_branch", "work_request_id", "branch", "worktree_path", "caller_id"]
-  @session_scoped_worker_tools [
-    "update_task_plan",
-    "append_finding",
-    "append_progress",
-    "attach_branch",
-    "attach_pr",
-    "sync_pr"
-  ]
-  @worker_tools [
-    "get_current_assignment",
-    "read_context",
-    "read_work_package_document",
-    "read_task_plan",
-    "update_task_plan",
-    "append_finding",
-    "append_progress",
-    "attach_branch",
-    "attach_pr",
-    "sync_pr",
-    "mark_ready"
-  ]
-  @architect_planning_tools ["read_task_plan", "update_task_plan", "append_finding", "append_progress"]
-  @architect_tools ["list_work_requests", "read_work_request", "read_plan"] ++
-                     @architect_planning_tools ++
-                     [
-                       "resolve_blocker",
-                       "read_delivery_board",
-                       "attach_branch",
-                       "sync_pr",
-                       "reconcile_work_request",
-                       "cleanup_work_request_work_package_runtime",
-                       "record_work_package_delivery",
-                       "revoke_work_package_worker_key",
-                       "force_release_work_package_claim",
-                       "ask_question",
-                       "answer_question",
-                       "answer_question_and_record_decision",
-                       "close_question",
-                       "record_decision",
-                       "slice_work_request",
-                       "update_work_package",
-                       "upsert_group",
-                       "delete_group",
-                       "upsert_dependency",
-                       "delete_dependency",
-                       "skip_work_package",
-                       "dispatch_work_package",
-                       "prepare_work_package_worktree"
-                     ]
-  @known_tools Enum.uniq(
-                 [@health_tool, @assignment_release_tool] ++
-                   @solo_tools ++
-                   @bootstrap_tools ++
-                   @local_operator_tools ++
-                   @session_claim_tools ++
-                   @worker_tools ++ @architect_tools
-               )
-  @work_request_policy_tools [
+  @architect_tools [
     "list_work_requests",
     "read_work_request",
     "read_plan",
     "read_delivery_board",
+    "read_task_plan",
+    "update_task_plan",
+    "append_finding",
+    "append_progress",
+    "resolve_blocker",
+    "attach_branch",
+    "sync_pr",
+    "reconcile_work_request",
+    "record_work_package_delivery",
+    "set_report",
     "ask_question",
     "answer_question",
     "answer_question_and_record_decision",
@@ -99,53 +48,45 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "upsert_dependency",
     "delete_dependency",
     "skip_work_package",
-    "dispatch_work_package"
+    "dispatch_work_package",
+    "prepare_work_package_worktree"
   ]
-  @current_work_request_write_tools [
+  @known_tools Enum.uniq([@health_tool] ++ @solo_tools ++ @bootstrap_tools ++ @local_operator_tools ++ @architect_tools)
+  @work_request_product_tree_views ["groups_only", "groups_with_work_package_refs", "groups_with_work_packages"]
+  # Every tool is a write unless listed here. Writes need a Herdr terminal
+  # identity; the same split drives the MCP readOnlyHint annotation.
+  @read_tools [
+    @health_tool,
+    "list_work_requests",
+    "read_work_request",
+    "read_plan",
+    "read_delivery_board",
+    "read_task_plan",
+    "solo_list",
+    "solo_show",
+    "summarize_failed_mcp_calls"
+  ]
+  # Writes that take or confirm ownership of the target WorkRequest. Decisions,
+  # questions, WorkRequest creation and Solo stay open to any Herdr terminal.
+  @owner_gated_tools [
+    "update_task_plan",
+    "append_finding",
+    "append_progress",
+    "resolve_blocker",
+    "attach_branch",
+    "sync_pr",
+    "reconcile_work_request",
+    "record_work_package_delivery",
+    "set_report",
     "slice_work_request",
     "update_work_package",
     "upsert_group",
     "delete_group",
     "upsert_dependency",
     "delete_dependency",
-    "skip_work_package"
-  ]
-  @current_work_request_tools @current_work_request_write_tools ++
-                                [
-                                  "read_delivery_board",
-                                  "attach_branch",
-                                  "sync_pr",
-                                  "reconcile_work_request",
-                                  "cleanup_work_request_work_package_runtime",
-                                  "record_work_package_delivery",
-                                  "revoke_work_package_worker_key",
-                                  "dispatch_work_package"
-                                ]
-  @delivery_policy_tools [
-    "attach_branch",
-    "sync_pr",
-    "reconcile_work_request",
-    "cleanup_work_request_work_package_runtime",
-    "record_work_package_delivery",
-    "revoke_work_package_worker_key"
-  ]
-  @work_request_product_tree_views ["groups_only", "groups_with_work_package_refs", "groups_with_work_packages"]
-  # Every tool is a write unless listed here. Only write calls may claim an
-  # assignment, set session role labels or record a session location; the same
-  # split drives the MCP readOnlyHint annotation.
-  @read_tools [
-    @health_tool,
-    "get_current_assignment",
-    "list_work_requests",
-    "read_work_request",
-    "read_plan",
-    "read_delivery_board",
-    "read_context",
-    "read_work_package_document",
-    "read_task_plan",
-    "solo_list",
-    "solo_show",
-    "summarize_failed_mcp_calls"
+    "skip_work_package",
+    "dispatch_work_package",
+    "prepare_work_package_worktree"
   ]
   @type tool_name :: String.t()
   @type input_schema :: map()
@@ -163,9 +104,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   @spec solo_tools() :: [tool_name()]
   def solo_tools, do: @solo_tools
 
-  @spec assignment_release_tool() :: tool_name()
-  def assignment_release_tool, do: @assignment_release_tool
-
   @spec bootstrap_tools() :: [tool_name()]
   def bootstrap_tools, do: @bootstrap_tools
 
@@ -174,38 +112,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   @spec blocker_closeout_decisions() :: [String.t()]
   def blocker_closeout_decisions, do: @blocker_closeout_decisions
-
-  @spec local_assignment_claim_tool() :: tool_name()
-  def local_assignment_claim_tool, do: @local_assignment_claim_tool
-
-  @spec local_architect_assignment_claim_tool() :: tool_name()
-  def local_architect_assignment_claim_tool, do: @local_architect_assignment_claim_tool
-
-  @spec session_claim_tools() :: [tool_name()]
-  def session_claim_tools, do: @session_claim_tools
-
-  @spec worker_tools() :: [tool_name()]
-  def worker_tools, do: @worker_tools
-
-  @spec contract_unbound_tools() :: [tool_name()]
-  def contract_unbound_tools, do: [@health_tool, @assignment_release_tool] ++ @solo_tools ++ @session_claim_tools
-
-  @spec contract_trusted_local_http_extra_tools() :: [tool_name()]
-  def contract_trusted_local_http_extra_tools, do: @bootstrap_tools ++ @local_operator_tools
-
-  @spec contract_bound_worker_tools() :: [tool_name()]
-  def contract_bound_worker_tools, do: [@health_tool, @assignment_release_tool] ++ @worker_tools
-
-  @spec contract_bound_architect_tools() :: [tool_name()]
-  def contract_bound_architect_tools, do: [@health_tool, @assignment_release_tool, "get_current_assignment"] ++ @architect_tools
-
-  @spec hidden_worker_argument_keys(tool_name()) :: [String.t()]
-  def hidden_worker_argument_keys(@local_assignment_claim_tool), do: @local_assignment_claim_hidden_worker_arguments
-  def hidden_worker_argument_keys(name) when name in @session_scoped_worker_tools, do: ["work_package_id"]
-  def hidden_worker_argument_keys(_name), do: []
-
-  @spec architect_planning_tools() :: [tool_name()]
-  def architect_planning_tools, do: @architect_planning_tools
 
   @spec architect_tools() :: [tool_name()]
   def architect_tools, do: @architect_tools
@@ -222,24 +128,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   def read_call?("reconcile_work_request", arguments) when is_map(arguments), do: Map.get(arguments, "apply") != true
   def read_call?(name, _arguments), do: tool_access(name) == :read
 
+  @doc """
+  Whether one call must own the target WorkRequest. Any chief or architect may
+  end a package as `finished` without owning it.
+  """
+  @spec owner_gated_call?(tool_name(), map()) :: boolean()
+  def owner_gated_call?("record_work_package_delivery", %{"outcome" => "finished"}), do: false
+  def owner_gated_call?(name, arguments) when is_map(arguments), do: name in @owner_gated_tools and not read_call?(name, arguments)
+
   @spec known_tool?(term()) :: boolean()
   def known_tool?(name), do: name in @known_tools
 
   @spec known_tools() :: [tool_name()]
   def known_tools, do: @known_tools
 
-  @spec work_request_policy_tools() :: [tool_name()]
-  def work_request_policy_tools, do: @work_request_policy_tools
-
-  @spec delivery_policy_tools() :: [tool_name()]
-  def delivery_policy_tools, do: @delivery_policy_tools
-
   @spec work_request_product_tree_views() :: [String.t()]
   def work_request_product_tree_views, do: @work_request_product_tree_views
-
-  @doc false
-  @spec current_work_request_tool?(tool_name()) :: boolean()
-  def current_work_request_tool?(name), do: name in @current_work_request_tools
 
   @spec solo_tool_input_schema(tool_name()) :: input_schema()
   defdelegate solo_tool_input_schema(name), to: InputSchemas
@@ -250,38 +154,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   @spec local_operator_tool_input_schema(tool_name()) :: input_schema()
   defdelegate local_operator_tool_input_schema(name), to: InputSchemas
 
-  @spec local_architect_assignment_claim_tool_input_schema() :: input_schema()
-  defdelegate local_architect_assignment_claim_tool_input_schema(), to: InputSchemas
-
-  @spec assignment_release_tool_input_schema() :: input_schema()
-  defdelegate assignment_release_tool_input_schema(), to: InputSchemas
-
-  @spec worker_tool_input_schema(tool_name()) :: input_schema()
-  defdelegate worker_tool_input_schema(name), to: InputSchemas
-
   @spec architect_tool_input_schema(tool_name()) :: input_schema()
   defdelegate architect_tool_input_schema(name), to: InputSchemas
 
-  @spec claimable_tool_specs(Config.t()) :: [tool_spec()]
-  defdelegate claimable_tool_specs(config), to: SurfaceSpecs
-
-  @spec callable_claim_tool_specs(Config.t()) :: [tool_spec()]
-  defdelegate callable_claim_tool_specs(config), to: SurfaceSpecs
-
-  @spec unbound_tool_specs_for_config(Config.t()) :: [tool_spec()]
-  defdelegate unbound_tool_specs_for_config(config), to: SurfaceSpecs
-
-  @spec callable_unbound_tool_specs_for_config(Config.t()) :: [tool_spec()]
-  defdelegate callable_unbound_tool_specs_for_config(config), to: SurfaceSpecs
-
   @spec startup_tool_specs(:full | :worker | :architect | :coordinator | :solo, Config.t()) :: [tool_spec()]
   defdelegate startup_tool_specs(profile, config), to: SurfaceSpecs
-
-  @spec architect_session_tool_specs(keyword()) :: [tool_spec()]
-  def architect_session_tool_specs(opts \\ []), do: SurfaceSpecs.architect_session_tool_specs(opts)
-
-  @spec worker_session_tool_specs() :: [tool_spec()]
-  defdelegate worker_session_tool_specs(), to: SurfaceSpecs
 
   @spec lean_tool_specs([tool_spec()]) :: [tool_spec()]
   defdelegate lean_tool_specs(specs), to: SurfaceSpecs

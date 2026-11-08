@@ -2,7 +2,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   @moduledoc false
 
   alias Ecto.Changeset
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer
@@ -15,7 +14,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   @type request :: map()
   @type creation :: %{
           work_package: WorkPackage.t(),
-          worker_grant: map(),
           virtual_files: %{String.t() => String.t()},
           policy: Templates.template()
         }
@@ -39,7 +37,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
           | Changeset.t()
           | WorkPackageRepository.error()
           | PlanningRepository.error()
-          | AccessGrantService.error()
           | Renderer.error()
 
   @spec activate(module(), WorkPackage.t()) :: {:ok, creation()} | {:error, error()}
@@ -75,11 +72,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
 
     with {:ok, activated} <- Lifecycle.transition(repo, work_package, :dispatch, expected_contract_revision: revision),
          {:ok, _scope_node} <- append_scope_plan_node(repo, activated),
-         {:ok, minted} <- mint_worker_grant(repo, activated.id, policy),
          {:ok, virtual_files} <- Renderer.render_all(repo, activated.id) do
       %{
         work_package: activated,
-        worker_grant: worker_grant_payload(minted),
         virtual_files: virtual_files,
         policy: policy
       }
@@ -89,12 +84,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   end
 
   @spec response_payload(creation(), keyword()) :: map()
-  def response_payload(%{work_package: work_package, worker_grant: worker_grant, virtual_files: virtual_files, policy: policy}, opts \\ []) do
+  def response_payload(%{work_package: work_package, virtual_files: virtual_files, policy: policy}, opts \\ []) do
     worker_bootstrap = Keyword.get(opts, :worker_bootstrap)
 
     %{
       work_package: work_package_payload(work_package),
-      worker_grant: worker_grant_payload_for_response(worker_grant),
       policy: policy_payload(policy),
       virtual_files: virtual_files
     }
@@ -140,40 +134,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   end
 
   defp nonblank_or(_value, fallback), do: fallback
-
-  defp mint_worker_grant(repo, work_package_id, _policy) do
-    AccessGrantService.mint_worker_grant(repo, work_package_id)
-  end
-
-  defp worker_grant_payload(%{grant: grant}) do
-    %{
-      id: grant.id,
-      role: grant.grant_role,
-      capabilities: grant.capabilities,
-      expires_at: timestamp(grant.expires_at)
-    }
-  end
-
-  defp timestamp(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
-  defp timestamp(nil), do: nil
-
-  defp worker_grant_payload_for_response(nil), do: nil
-
-  defp worker_grant_payload_for_response(worker_grant) do
-    worker_grant
-    |> Map.delete(:display_key)
-    |> Map.delete("display_key")
-    |> Map.delete(:secret)
-    |> Map.delete("secret")
-    |> redact_worker_grant_verifier_material()
-    |> Map.put(:secret_in_response, false)
-  end
-
-  defp redact_worker_grant_verifier_material(worker_grant) when is_map(worker_grant) do
-    worker_grant
-    |> Map.delete(:secret_hash)
-    |> Map.delete("secret_hash")
-  end
 
   defp maybe_put_worker_bootstrap(payload, nil), do: payload
   defp maybe_put_worker_bootstrap(payload, bootstrap), do: Map.put(payload, :worker_bootstrap, redacted_worker_bootstrap(bootstrap))

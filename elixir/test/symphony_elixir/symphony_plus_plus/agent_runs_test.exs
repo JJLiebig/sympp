@@ -2,8 +2,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
   use ExUnit.Case, async: false
 
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Service
@@ -60,25 +58,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
   setup %{repo: repo} do
     repo.delete_all(AgentRun)
-    repo.delete_all(AccessGrant)
     repo.delete_all(WorkPackage)
     :ok
-  end
-
-  test "binds AgentRun to the grant for the issue assignee when multiple worker grants are claimed", %{repo: repo} do
-    assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-ASSIGNEE", status: "dispatched"))
-
-    assert {:ok, other_grant} = AccessGrantService.mint_worker_grant(repo, work_package.id)
-    assert {:ok, _other_assignment} = AccessGrantService.claim(repo, other_grant.work_key.secret, claimed_by: "agent-2")
-
-    assert {:ok, assigned_grant} = AccessGrantService.mint_worker_grant(repo, work_package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, assigned_grant.work_key.secret, claimed_by: "agent-1")
-
-    assert {:ok, run} = Service.start_dispatch(repo, issue(work_package.id))
-
-    assert run.access_grant_id == assignment.grant_id
-    assert run.actor_id == "agent-1"
   end
 
   test "terminal work package start race rejects atomically and retires the previous retry reservation", %{repo: repo} do
@@ -199,32 +180,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
     assert {:error, :work_package_terminal} = Service.mark_running(repo, run.id, "worker task started")
     assert {:ok, %AgentRun{status: "starting"}} = Repository.get(repo, run.id)
-  end
-
-  test "unassigned AgentRun does not bind an arbitrary claimed worker grant", %{repo: repo} do
-    assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-UNASSIGNED", status: "dispatched"))
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, work_package.id)
-    assert {:ok, _assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "agent-1")
-
-    assert {:ok, run} = Service.start_dispatch(repo, unassigned_issue(work_package.id))
-
-    assert run.access_grant_id == nil
-    assert run.actor_id == nil
-  end
-
-  test "AgentRun grant binding requires worker assignment source of truth", %{repo: repo} do
-    assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-NON-WORKER", status: "dispatched"))
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, work_package.id)
-    assert {:ok, _assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "agent-1")
-
-    assert {:ok, run} = Service.start_dispatch(repo, non_worker_assigned_issue(work_package.id))
-
-    assert run.access_grant_id == nil
-    assert run.actor_id == nil
   end
 
   test "failed start does not orphan an active AgentRun", %{repo: repo} do
@@ -374,8 +329,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
                repo,
                %{
                  work_package_id: work_package.id,
-                 access_grant_id: "missing-grant",
-                 status: "running",
+                 status: "not-a-status",
                  attempt: 2
                },
                replace_agent_run_id: run.id
@@ -395,29 +349,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
       state: "dispatched",
       assignee_id: "agent-1",
       assigned_to_worker: true
-    }
-  end
-
-  defp unassigned_issue(id) do
-    %Issue{
-      id: id,
-      identifier: id,
-      title: "Run package",
-      description: "Dispatch package",
-      state: "dispatched",
-      assigned_to_worker: false
-    }
-  end
-
-  defp non_worker_assigned_issue(id) do
-    %Issue{
-      id: id,
-      identifier: id,
-      title: "Run package",
-      description: "Dispatch package",
-      state: "dispatched",
-      assignee_id: "agent-1",
-      assigned_to_worker: false
     }
   end
 end

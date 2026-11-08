@@ -3,119 +3,6 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  test "session grant validation accepts nil expiry and rejects inactive or unclaimed grants" do
-    now = ~U[2026-05-04 12:00:00Z]
-
-    grant = %AccessGrant{
-      id: "grant-1",
-      work_package_id: "SYMPP-SESSION-GRANT",
-      display_key: "ABCD",
-      grant_role: "worker",
-      capabilities: ["read:own"],
-      expires_at: DateTime.add(now, 60, :second),
-      claimed_at: now,
-      claimed_by: "worker-1"
-    }
-
-    scopes = [Scope.work_package(grant.work_package_id)]
-
-    assert {:ok, session} = Session.from_grant(grant, now, proof_hash: "proof", scopes: scopes)
-    assert session.assignment.work_package_id == "SYMPP-SESSION-GRANT"
-    assert session.assignment.scopes == scopes
-
-    assert Session.from_grant(grant, now, proof_hash: "proof") == {:error, :missing_grant_scopes}
-    assert Session.from_grant(%{grant | revoked_at: now}, now, scopes: scopes) == {:error, :revoked}
-    assert Session.from_grant(%{grant | expires_at: now}, now, scopes: scopes) == {:error, :expired}
-    assert {:ok, nil_expiry_session} = Session.from_grant(%{grant | expires_at: nil}, now, scopes: scopes)
-    assert nil_expiry_session.assignment.grant_id == grant.id
-    assert Session.from_grant(%{grant | claimed_at: nil}, now, scopes: scopes) == {:error, :unclaimed}
-    assert Session.from_grant(%{grant | claimed_by: " "}, now, scopes: scopes) == {:error, :missing_claim_identity}
-  end
-
-  test "auth helpers reject missing invalid and mismatched sessions" do
-    session =
-      Session.new(%Assignment{
-        grant_id: "grant-1",
-        work_package_id: "SYMPP-AUTH",
-        display_key: "ABCD",
-        grant_role: "worker",
-        capabilities: [],
-        claimed_at: ~U[2026-05-04 12:00:00Z],
-        claimed_by: "worker-1"
-      })
-
-    assert Auth.require_work_package(session, "SYMPP-OTHER", UnexpectedAuthRepo) ==
-             {:error, {:service_unavailable, {:unexpected_grant_lookup_result, :tuple}}}
-  end
-
-  test "direct raw-proof session validation retires terminal worker authority", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-AUTH-TERMINAL", kind: "mcp", status: "dispatched"))
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    package |> Ecto.Changeset.change(status: "ended") |> repo.update!()
-
-    assert Auth.require_session(session, repo) == {:error, {:unauthorized, :work_package_terminal}}
-  end
-
-  test "direct phase architect proof retires with its anchor while WorkRequest handoff authority is separate", %{repo: repo} do
-    {package, session, _grant} = create_phase_architect_session(repo, "SYMPP-AUTH-ARCH-TERMINAL", ["read:phase"])
-
-    assert {:ok, _live_session} = Auth.require_session(session, repo)
-
-    package |> Ecto.Changeset.change(status: "ended") |> repo.update!()
-
-    assert Auth.require_session(session, repo) == {:error, {:unauthorized, :work_package_terminal}}
-  end
-
-  test "WorkRequest architect sessions follow handoff authority instead of anchor terminality", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-AUTH-ARCH-HANDOFF")
-
-    {anchor, session, grant} =
-      create_work_request_handoff_architect_session(repo, work_request, ArchitectHandoff.capabilities())
-
-    anchor |> Ecto.Changeset.change(status: "ended") |> repo.update!()
-    assert {:ok, live_session} = Auth.require_session(session, repo)
-    assert live_session.assignment.grant_id == grant.id
-
-    completed_at = DateTime.utc_now(:microsecond)
-
-    assert {1, nil} =
-             repo.update_all(
-               from(request in WorkRequest, where: request.id == ^work_request.id),
-               set: [operator_completed_at: completed_at]
-             )
-
-    assert Auth.require_session(session, repo) ==
-             {:error, {:unauthorized, {:work_request_terminal, :completed}}}
-
-    assert {1, nil} =
-             repo.update_all(
-               from(request in WorkRequest, where: request.id == ^work_request.id),
-               set: [operator_completed_at: nil]
-             )
-
-    assert {1, nil} =
-             repo.update_all(
-               from(access_grant in AccessGrant, where: access_grant.id == ^grant.id),
-               set: [expires_at: DateTime.add(completed_at, -1, :second)]
-             )
-
-    assert Auth.require_session(session, repo) == {:error, {:unauthorized, :expired}}
-
-    assert {1, nil} =
-             repo.update_all(
-               from(access_grant in AccessGrant, where: access_grant.id == ^grant.id),
-               set: [expires_at: nil]
-             )
-
-    assert {:ok, _revoked} = AccessGrantService.revoke(repo, grant.id)
-    assert Auth.require_session(session, repo) == {:error, {:unauthorized, :revoked}}
-  end
-
   test "database-scoped repo binding reaches the requested ledger while the default repo is running" do
     database_path = WorkPackageFactory.database_path()
     original_repo = Repo.get_dynamic_repo()
@@ -447,25 +334,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
                  WorkPackageFactory.attrs(id: "SYMPP-P3-001", status: "dispatched")
                )
 
-      assert {:ok, _minted} = AccessGrantService.mint_worker_grant(Repo, package.id)
-
       input =
         [
           Jason.encode!(%{"jsonrpc" => "2.0", "id" => "init", "method" => "initialize", "params" => initialize_params()}),
           Jason.encode!(%{
             "jsonrpc" => "2.0",
-            "id" => "claim",
-            "method" => "tools/call",
-            "params" => %{
-              "name" => "claim_local_assignment",
-              "arguments" => %{"work_package_id" => package.id, "claimed_by" => "worker-1"}
-            }
-          }),
-          Jason.encode!(%{
-            "jsonrpc" => "2.0",
             "id" => 1,
             "method" => "resources/read",
-            "params" => %{"uri" => "sympp://assignment/current"}
+            "params" => %{"uri" => "sympp://work-packages/#{package.id}/context.md"}
           })
         ]
         |> Enum.join("\n")
@@ -476,10 +352,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
           McpTask.run([])
         end)
 
-      [_init_response, _claim_response, response] = decode_json_lines(output)
+      [_init_response, response] = decode_json_lines(output)
       text = get_in(response, ["result", "contents", Access.at(0), "text"])
 
-      assert Jason.decode!(text)["work_package_id"] == "SYMPP-P3-001"
+      assert text =~ package.title
       assert Repo.get_dynamic_repo() == pid
     after
       Repo.put_dynamic_repo(original_repo)
@@ -506,55 +382,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
       assert usage =~ "Usage: mix sympp.mcp"
     after
       System.delete_env(env_var)
-    end
-  end
-
-  test "mix task migrates legacy access grant expiry before serving a database-scoped session" do
-    database_path = WorkPackageFactory.database_path()
-    original_repo = Repo.get_dynamic_repo()
-
-    {:ok, pid} =
-      Repo.start_link(database: database_path, name: Repo.process_name(database_path), pool_size: 1, log: false)
-
-    try do
-      Repo.put_dynamic_repo(pid)
-      assert :ok = WorkPackageRepository.migrate(Repo)
-      assert {:ok, package} = WorkPackageRepository.create(Repo, WorkPackageFactory.attrs(id: "SYMPP-MCP-LEGACY-ENV"))
-
-      assert {:ok, _minted} =
-               AccessGrantService.mint_worker_grant(Repo, package.id, expires_at: ~U[2030-01-01 00:00:00Z])
-
-      rebuild_access_grants_with_not_null_expiry!(pid)
-      remove_null_expiry_migration_version!(pid)
-      assert access_grant_expiry_not_null?(pid)
-
-      input =
-        [
-          Jason.encode!(%{"jsonrpc" => "2.0", "id" => "init", "method" => "initialize", "params" => initialize_params()}),
-          Jason.encode!(%{
-            "jsonrpc" => "2.0",
-            "id" => "health",
-            "method" => "tools/call",
-            "params" => %{"name" => "sympp.health", "arguments" => %{}}
-          })
-        ]
-        |> Enum.join("\n")
-        |> Kernel.<>("\n")
-
-      output =
-        capture_io(input, fn ->
-          McpTask.run(["--database", database_path])
-        end)
-
-      [_init_response, response] = decode_json_lines(output)
-
-      assert get_in(response, ["result", "structuredContent", "ledger", "reachable"]) == true
-      refute access_grant_expiry_not_null?(pid)
-      assert schema_migration_recorded?(pid, 20_260_519_120_000)
-    after
-      Repo.put_dynamic_repo(original_repo)
-      GenServer.stop(pid)
-      File.rm(database_path)
     end
   end
 
@@ -646,7 +473,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
 
       assert {:ok, %{rows: [[1]]}} =
                Repo.query(
-                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sympp_mcp_session_bindings'",
+                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sympp_worked_on'",
                  [],
                  log: false
                )

@@ -3,7 +3,9 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerAndLocalOperatorToolsTest do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  test "architect resolve_blocker clears explicit and default-scope descendant blockers", %{repo: repo} do
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
+
+  test "architect resolve_blocker clears a package blocker", %{repo: repo} do
     work_request =
       create_work_request!(
         repo,
@@ -21,14 +23,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerAndLocalOperatorToolsTest d
 
     work_package = repo.update!(Ecto.Changeset.change(work_package, status: "dispatched"))
 
-    {_handoff_anchor, handoff_session, _handoff_grant} =
-      create_work_request_handoff_architect_session(repo, work_request, [
-        "read:work_request",
-        "write:work_request"
-      ])
-
     assert {:ok, _blocker_event} =
-             PlanningRepository.append_audit_progress_event_for_work_package(repo, handoff_session.assignment, work_package.id, %{
+             PlanningRepository.append_audit_progress_event_for_work_package(repo, Actor.from_terminal(test_terminal("t1")), work_package.id, %{
                "summary" => "Waiting for architect",
                "idempotency_key" => "arch-policy-blocker",
                "payload" => %{
@@ -40,7 +36,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerAndLocalOperatorToolsTest d
              })
 
     resolve_blocker_response =
-      mcp_tool(repo, handoff_session, "resolve_blocker", %{
+      mcp_tool(repo, "t1", "resolve_blocker", %{
         "work_package_id" => work_package.id,
         "blocker_id" => "arch-policy-blocker",
         "resolution" => "Architect supplied the missing decision.",
@@ -48,77 +44,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerAndLocalOperatorToolsTest d
         "idempotency_key" => "arch-policy-blocker-resolved"
       })
 
+    assert get_in(resolve_blocker_response, ["result", "structuredContent", "progress_event", "idempotency_key"]) ==
+             "resolve_blocker:#{work_package.id}:arch-policy-blocker-resolved"
+
     resolve_event_id = get_in(resolve_blocker_response, ["result", "structuredContent", "progress_event", "id"])
     refute Map.has_key?(get_in(resolve_blocker_response, ["result", "structuredContent", "progress_event"]), "payload")
-    assert repo.get!(ProgressEvent, resolve_event_id).payload["active"] == false
+    event = repo.get!(ProgressEvent, resolve_event_id)
+    assert event.payload["active"] == false
+    assert {event.actor_id, event.actor_type} == {"testbox/t1", "architect"}
     assert repo.get!(WorkPackage, work_package.id).status == "dispatched"
-
-    anchor_blocker_id = "arch-policy-anchor-blocker"
-
-    assert {:ok, _anchor_blocker_event} =
-             PlanningRepository.append_audit_progress_event_for_work_package(
-               repo,
-               handoff_session.assignment,
-               handoff_session.assignment.work_package_id,
-               %{
-                 "summary" => "Waiting for anchor decision",
-                 "idempotency_key" => anchor_blocker_id,
-                 "payload" => %{
-                   "type" => "blocker",
-                   "source_tool" => "report_blocker",
-                   "blocker_id" => anchor_blocker_id,
-                   "active" => true
-                 }
-               }
-             )
-
-    default_scope_response =
-      mcp_tool(repo, handoff_session, "resolve_blocker", %{
-        "blocker_id" => anchor_blocker_id,
-        "resolution" => "Architect supplied the anchor decision.",
-        "summary" => "Cleared anchor blocker",
-        "idempotency_key" => "arch-policy-anchor-blocker-resolved"
-      })
-
-    assert get_in(default_scope_response, ["result", "structuredContent", "progress_event", "idempotency_key"]) ==
-             ["resolve_blocker", handoff_session.assignment.work_package_id, "arch-policy-anchor-blocker-resolved"] |> Enum.join(":")
-
-    default_scope_event_id = get_in(default_scope_response, ["result", "structuredContent", "progress_event", "id"])
-    refute Map.has_key?(get_in(default_scope_response, ["result", "structuredContent", "progress_event"]), "payload")
-    assert repo.get!(ProgressEvent, default_scope_event_id).payload["active"] == false
   end
 
-  test "unclaimed WorkRequest reads require trusted local HTTP with explicit state", %{repo: repo} do
+  test "HTTP WorkRequest reads require a trusted local connection with explicit state", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-MCP-LOCAL-READ-DENIED")
     arguments = %{"work_request_id" => work_request.id}
-
-    stdio_response =
-      Server.handle(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "stdio-work-request-read-denied",
-          "method" => "tools/call",
-          "params" => %{"name" => "read_work_request", "arguments" => arguments}
-        },
-        Server.new(Config.default(repo: repo), initialized: true)
-      )
-
-    assert get_in(stdio_response, ["error", "code"]) == -32_001
-    assert get_in(stdio_response, ["error", "data", "reason"]) == "local_mcp_required"
-
-    stdio_list_response =
-      Server.handle(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "stdio-work-request-list-denied",
-          "method" => "tools/call",
-          "params" => %{"name" => "list_work_requests", "arguments" => %{}}
-        },
-        Server.new(Config.default(repo: repo), initialized: true)
-      )
-
-    assert get_in(stdio_list_response, ["error", "code"]) == -32_001
-    assert get_in(stdio_list_response, ["error", "data", "reason"]) == "local_mcp_required"
 
     implicit_state_response =
       Server.handle(
@@ -167,7 +106,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerAndLocalOperatorToolsTest d
     refute inspect(remote_list_response) =~ "ghp_localreadsecret"
   end
 
-  test "local operator decision tool rejects nonlocal and remote database modes", %{repo: repo} do
+  test "local operator decision tool rejects remote and in-memory database modes", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-MCP-LOCAL-OPERATOR-NOTES-DENIED")
 
     arguments = %{
@@ -177,20 +116,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerAndLocalOperatorToolsTest d
       "scope_impact" => "None",
       "created_by" => "operator"
     }
-
-    stdio_response =
-      Server.handle(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "stdio-local-operator-denied",
-          "method" => "tools/call",
-          "params" => %{"name" => "record_work_request_operator_decision", "arguments" => arguments}
-        },
-        Server.new(Config.default(repo: repo), initialized: true)
-      )
-
-    assert get_in(stdio_response, ["error", "code"]) == -32_001
-    assert get_in(stdio_response, ["error", "data", "reason"]) == "local_mcp_required"
 
     remote_config = %{local_mcp_config(repo) | database: "https://ledger.example.test/mcp?token=ghp_remoteoperatorsecret"}
 

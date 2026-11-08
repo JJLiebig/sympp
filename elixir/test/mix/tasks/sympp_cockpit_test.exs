@@ -99,7 +99,7 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
         assert Req.post!(path <> "/archive", json: %{}, headers: browser_api_headers()).status == 200
         assert Req.post!(path <> "/delete", json: %{}, headers: browser_api_headers()).status == 200
         assert Repo.get(WorkRequest, request.id) == nil
-        assert Req.post!(path <> "/architect-handoff", json: %{}, headers: browser_api_headers()).status == 403
+        assert Req.post!(origin <> "/api/v1/sympp/operator/github/sync-prs", json: %{}, headers: browser_api_headers()).status == 403
 
         server = Server.new(Config.default())
         response = Stdio.handle_payload(%{"jsonrpc" => "2.0", "id" => 1, "method" => "initialize"}, server)

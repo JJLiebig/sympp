@@ -123,20 +123,20 @@ test('package-only manual worker sessions match their canonical package without 
   assert.equal(M.checkedBinding(worker, result, [{ ...term, labels:{ ...term.labels, 'sympp.session_work_package_id':'other-package' } }]), false);
 });
 
-test('register-only chiefs match their recorded session and keep verified focus checks', () => {
+test('labelled chiefs match the chief session in their own terminal and keep verified focus checks', () => {
   const term = { address: 't8', pid: 123, state: 'live', labels: {
     'sympp.session_id': 'chief-client', 'sympp.session_core_id': 'core-1', 'sympp.session_pid': '123',
     'sympp.session_process_id': '456', 'sympp.session_receipt': 'C:\\private\\chief.json', 'sympp.session_role': 'chief',
   } };
-  const chief = { session: { clientId: 'chief-client', coreId: 'core-1' } };
+  const chief = { terminal: 't8' };
   const bindings = M.discoverBindings({ local: host }, [term]);
   const [binding] = M.chiefBindings(bindings, chief);
   assert.ok(binding?.available);
   assert.equal(binding.jobId, null);
   assert.equal(binding.pkgId, null);
   assert.deepEqual(M.bindingsFor(bindings, 'unrelated-job'), []);
-  assert.deepEqual(M.chiefBindings(bindings, { session: { ...chief.session, clientId: 'another-client' } }), []);
-  assert.deepEqual(M.chiefBindings(bindings, { session: { ...chief.session, coreId: 'another-core' } }), []);
+  assert.deepEqual(M.chiefBindings(bindings, { terminal: 't9' }), []);
+  assert.deepEqual(M.chiefBindings(bindings, {}), []);
   const receipt = { kind: 'session', state: 'live', core_id: 'core-1', terminal_id: 't8',
     pid: 123, process_id: 456, launch_id: 'chief-client', role: 'chief', work_request_id: null, work_package_id: null };
   const result = { code: 0, stdout: JSON.stringify(receipt) };

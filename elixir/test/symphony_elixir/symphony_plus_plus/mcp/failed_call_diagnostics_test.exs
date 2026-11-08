@@ -114,7 +114,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
       "jsonrpc" => "2.0",
       "id" => "unauthorized",
       "method" => "tools/call",
-      "params" => %{"name" => "read_context", "arguments" => %{}}
+      "params" => %{"name" => "set_report", "arguments" => %{"work_request_id" => "WR-OUTSIDE-HERDR", "brief" => "Read-only caller"}}
     }
 
     {unauthorized_response, unauthorized_log} =
@@ -122,7 +122,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
 
     assert unauthorized_response["error"]["code"] == -32_001
     assert unauthorized_log =~ ~s("error_classification":"unauthorized")
-    assert unauthorized_log =~ ~s("tool_name":"read_context")
+    assert unauthorized_log =~ ~s("tool_name":"set_report")
 
     missing_session_id = "secret-session-value"
 

@@ -2,66 +2,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext
-  alias SymphonyElixir.SymphonyPlusPlus.Authorization.ActorResolver
-  alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
-  alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
-
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{
-    Auth,
-    Config,
-    CurrentWorkRequest,
-    LocalTrustedTools,
-    Response,
-    Session,
-    ToolCatalog,
-    WorkRequestScope
-  }
-
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, Response, ToolCatalog}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer, as: PlanningRenderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
-  @agent_text_mime_type "text/vnd.toon"
-  @assignment_resource "sympp://assignment/current"
+
   @version_resource "sympp://health/version"
+  @agent_text_mime_type "text/vnd.toon"
 
-  @spec tool_specs_for_server(map()) :: {:ok, [map()]} | {:error, term()}
-  def tool_specs_for_server(%{
-        config: %Config{surface_profile: :full} = config,
-        session: %Session{assignment: %{grant_role: "architect"}}
-      }) do
-    architect_tools =
-      ToolCatalog.startup_tool_specs(:architect, config)
-      |> Map.new(&{&1["name"], &1})
+  @doc "The tools this server lists for its surface profile."
+  @spec tool_specs(Config.t()) :: [map()]
+  def tool_specs(%Config{} = config), do: ToolCatalog.startup_tool_specs(config.surface_profile, config)
 
-    worker_only_tools = ToolCatalog.worker_tools() -- (["get_current_assignment"] ++ ToolCatalog.architect_tools())
-    rejected_tools = ToolCatalog.solo_tools() ++ [ToolCatalog.local_assignment_claim_tool()] ++ worker_only_tools
-    architect_schema_overrides = ["attach_branch", "sync_pr"] ++ ToolCatalog.architect_planning_tools()
+  @spec tool_names(Config.t()) :: [String.t()]
+  def tool_names(%Config{} = config), do: Enum.map(tool_specs(config), & &1["name"])
 
-    tools =
-      :full
-      |> ToolCatalog.startup_tool_specs(config)
-      |> Enum.reject(&(&1["name"] in rejected_tools))
-      |> Enum.map(fn %{"name" => name} = tool ->
-        if name in architect_schema_overrides, do: Map.get(architect_tools, name, tool), else: tool
-      end)
-
-    {:ok, tools}
-  end
-
-  def tool_specs_for_server(%{config: %Config{} = config}),
-    do: {:ok, ToolCatalog.startup_tool_specs(config.surface_profile, config)}
-
-  @spec local_trusted_tools_enabled?(map()) :: boolean()
-  def local_trusted_tools_enabled?(server), do: LocalTrustedTools.enabled?(server)
-
-  @spec resource_specs_for_session(Session.t() | nil | term(), module()) ::
-          {:ok, [map()]} | {:error, integer(), String.t(), map()}
-  def resource_specs_for_session(session, repo) do
-    with {:ok, resources} <- assignment_resources(session, repo) do
-      {:ok, base_resource_specs() ++ resources}
-    end
+  @spec resource_specs() :: [map()]
+  def resource_specs do
+    [%{"uri" => @version_resource, "name" => "sympp version", "mimeType" => "application/json"}]
   end
 
   @spec work_package_resource_id(binary()) :: {:ok, String.t(), String.t()} | :error
@@ -79,49 +37,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
     end
   end
 
-  @spec read_work_package_virtual_resource(
-          module(),
-          Session.t() | nil | term(),
-          String.t(),
-          String.t(),
-          String.t()
-        ) ::
+  @doc "Reads a WorkPackage's rendered document or its worker bootstrap."
+  @spec read_work_package_virtual_resource(module(), String.t(), String.t(), String.t()) ::
           {:ok, map()} | {:error, integer(), String.t(), map()}
-  def read_work_package_virtual_resource(repo, session, work_package_id, "worker-bootstrap.json", uri) do
-    with {:ok, state, _session} <- read_work_package_document_state(repo, session, work_package_id, "context.md", nil),
+  def read_work_package_virtual_resource(repo, work_package_id, "worker-bootstrap.json", uri) do
+    with {:ok, state} <- render_state(repo, work_package_id, "context.md", uri),
          {:ok, bootstrap} <- WorkPackageDispatch.bootstrap(repo, state.work_package, true) do
       {:ok, Response.json_resource(uri, bootstrap)}
     else
-      {:error, code, message, data} -> {:error, code, message, data}
-      {:error, reason} -> service_error(reason, uri)
+      {:error, _code, _message, _data} = error -> error
+      {:error, _reason} -> service_error(uri)
     end
   end
 
-  def read_work_package_virtual_resource(repo, session, work_package_id, file_name, uri) do
-    with {:ok, state, session} <- read_work_package_document_state(repo, session, work_package_id, file_name, nil) do
-      virtual_resource_result(uri, state, file_name, worker_session?(session))
+  # Any trusted caller can read these, so they use the agent encoding, which
+  # redacts secret-shaped keys and values.
+  def read_work_package_virtual_resource(repo, work_package_id, file_name, uri) do
+    with {:ok, state} <- render_state(repo, work_package_id, file_name, uri),
+         {:ok, toon} <- WorkerContext.encode_virtual_file(state, file_name, uri: uri) do
+      {:ok, Response.text_resource(uri, toon, @agent_text_mime_type)}
+    else
+      {:error, _code, _message, _data} = error -> error
+      {:error, _reason} -> service_error(uri)
     end
   end
 
-  @spec read_work_package_document_state(module(), term(), String.t(), String.t(), pos_integer() | nil) ::
-          {:ok, struct(), Session.t()} | {:error, integer(), String.t(), map()}
-  def read_work_package_document_state(repo, session, work_package_id, file_name, before_sequence) do
-    uri = "sympp://work-packages/#{work_package_id}/#{file_name}"
-    resource_type = resource_type_for_virtual_file(file_name)
-    action = action_for_virtual_file(file_name)
-
-    with {:ok, session} <- Auth.require_session(session, repo),
-         {:ok, actor} <- actor_for_package_resource(repo, session, resource_type, work_package_id),
-         :ok <- PlanningService.authorize_package_action(repo, actor, action, work_package_id, resource_type),
-         true <- file_name in PlanningRenderer.virtual_files() do
-      case PlanningRepository.get_render_state(repo, work_package_id, file_name, before_sequence) do
-        {:ok, state} -> {:ok, state, session}
-        {:error, reason} -> service_error(reason, uri)
+  defp render_state(repo, work_package_id, file_name, uri) do
+    if file_name in PlanningRenderer.virtual_files() do
+      case PlanningRepository.get_render_state(repo, work_package_id, file_name, nil) do
+        {:ok, state} -> {:ok, state}
+        {:error, :not_found} -> {:error, -32_004, "Not found", %{"resource" => uri, "reason" => "not_found"}}
+        {:error, _reason} -> service_error(uri)
       end
     else
-      false -> {:error, -32_601, "Method not found", %{"resource" => uri, "reason" => "unknown_virtual_file"}}
-      {:error, {:authorization_policy_denied, %Decision{} = decision}} -> MCPError.from_decision(decision, uri)
-      {:error, reason} -> auth_error(reason, uri)
+      {:error, -32_601, "Method not found", %{"resource" => uri, "reason" => "unknown_virtual_file"}}
     end
   end
 
@@ -129,145 +78,5 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
     String.trim(resource_path) != "" and not String.contains?(resource_path, "/")
   end
 
-  defp assignment_resources(nil, _repo), do: {:ok, []}
-
-  defp assignment_resources(%Session{} = session, repo) do
-    case Auth.require_session(session, repo) do
-      {:ok, %Session{} = session} ->
-        assignment_resources_for_session(session, repo)
-
-      {:error, {:service_unavailable, reason}} ->
-        service_error(reason, @assignment_resource)
-
-      {:error, _reason} ->
-        {:ok, []}
-    end
-  end
-
-  defp assignment_resources(_session, _repo), do: {:ok, []}
-
-  defp assignment_resources_for_session(%Session{assignment: %{grant_role: "worker"}} = session, _repo) do
-    case require_worker_assignment(session.assignment) do
-      :ok -> listed_assignment_resources(session)
-      {:error, _reason} -> {:ok, []}
-    end
-  end
-
-  defp assignment_resources_for_session(%Session{assignment: %{grant_role: "architect"}} = session, repo) do
-    case require_assignment_introspection(session.assignment) do
-      :ok -> listed_architect_resources(repo, session)
-      {:error, _reason} -> {:ok, []}
-    end
-  end
-
-  defp assignment_resources_for_session(%Session{}, _repo), do: {:ok, []}
-
-  defp listed_architect_resources(repo, %Session{} = session) do
-    with {:ok, work_request_id} <- CurrentWorkRequest.id_argument(%{}, session),
-         {:ok, _work_request, _filters, _scope} <-
-           WorkRequestScope.authorized_work_request_scope(repo, session, work_request_id, :work_request_read, "resources/list"),
-         {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request_id),
-         {:ok, current} <- listed_current_assignment_resource(session) do
-      {:ok, current ++ Enum.flat_map(work_packages, &work_package_resources(&1.id))}
-    else
-      {:error, {:service_unavailable, _reason} = reason} -> service_error(reason, @assignment_resource)
-      {:error, :database_busy = reason} -> service_error(reason, @assignment_resource)
-      {:error, {:storage_failed, _reason} = reason} -> service_error(reason, @assignment_resource)
-      _reason -> listed_current_assignment_resource(session)
-    end
-  end
-
-  defp listed_assignment_resources(%Session{} = session) do
-    work_package_id = Session.work_package_id(session)
-
-    with {:ok, assignment_resources} <- listed_current_assignment_resource(session) do
-      {:ok, assignment_resources ++ work_package_resources(work_package_id, @agent_text_mime_type)}
-    end
-  end
-
-  defp listed_current_assignment_resource(%Session{}) do
-    {:ok, current_assignment_resource_specs()}
-  end
-
-  defp work_package_resources(work_package_id, mime_type \\ "text/markdown") do
-    Enum.map(PlanningRenderer.virtual_files(), fn file_name ->
-      %{
-        "uri" => "sympp://work-packages/#{work_package_id}/#{file_name}",
-        "name" => file_name,
-        "mimeType" => mime_type
-      }
-    end)
-  end
-
-  defp base_resource_specs do
-    [
-      %{
-        "uri" => @version_resource,
-        "name" => "sympp version",
-        "mimeType" => "application/json"
-      }
-    ]
-  end
-
-  defp current_assignment_resource_specs do
-    [
-      %{
-        "uri" => @assignment_resource,
-        "name" => "Current sympp assignment",
-        "mimeType" => "application/json"
-      }
-    ]
-  end
-
-  defp virtual_resource_result(uri, state, file_name, agent_text?) do
-    if agent_text? do
-      with {:ok, toon} <- WorkerContext.encode_virtual_file(state, file_name, uri: uri) do
-        {:ok, Response.text_resource(uri, toon, @agent_text_mime_type)}
-      end
-    else
-      with {:ok, markdown} <- PlanningRenderer.render_state(state, file_name) do
-        {:ok, Response.text_resource(uri, markdown, "text/markdown")}
-      end
-    end
-  end
-
-  defp actor_for_package_resource(repo, %Session{} = session, resource_type, work_package_id) do
-    with {:ok, target} <- PlanningService.package_resource_target(repo, work_package_id, resource_type) do
-      ActorResolver.from_session(session, PlanningService.package_surface_actor_opts(session.assignment, target))
-    end
-  end
-
-  defp action_for_virtual_file("task_plan.md"), do: :task_plan_read
-  defp action_for_virtual_file(_file_name), do: :work_package_read
-
-  defp resource_type_for_virtual_file("task_plan.md"), do: :task_plan
-  defp resource_type_for_virtual_file("findings.md"), do: :finding
-  defp resource_type_for_virtual_file("progress.md"), do: :progress
-  defp resource_type_for_virtual_file("review.md"), do: :review_evidence
-  defp resource_type_for_virtual_file(_file_name), do: :work_package
-
-  defp worker_session?(%Session{assignment: %{grant_role: "worker"}}), do: true
-  defp worker_session?(%Session{}), do: false
-
-  defp require_worker_assignment(%{grant_role: "worker"}), do: :ok
-  defp require_worker_assignment(_assignment), do: {:error, :worker_grant_required}
-
-  defp require_assignment_introspection(%{grant_role: role}) when role in ["worker", "architect"], do: :ok
-  defp require_assignment_introspection(_assignment), do: {:error, :unsupported_grant_role}
-
-  defp auth_error(:unauthorized, resource) do
-    {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => "missing_session"}}
-  end
-
-  defp auth_error({:unauthorized, reason}, resource) do
-    {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => reason_text(reason)}}
-  end
-
-  defp auth_error({:service_unavailable, reason}, resource), do: service_error(reason, resource)
-
-  defp service_error(_reason, resource) do
-    {:error, -32_000, "Server error", %{"resource" => resource, "reason" => "ledger_unavailable"}}
-  end
-
-  defp reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp service_error(resource), do: {:error, -32_000, "Server error", %{"resource" => resource, "reason" => "ledger_unavailable"}}
 end

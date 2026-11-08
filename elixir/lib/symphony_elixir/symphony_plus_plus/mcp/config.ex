@@ -15,7 +15,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Config do
     :source_revision,
     :database,
     :repo_root,
-    :claimed_by,
     surface_profile: :full,
     health_ledger_mode: :live,
     local_daemon_trusted: false
@@ -28,7 +27,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Config do
           source_revision: String.t() | nil,
           database: String.t() | nil,
           repo_root: String.t() | nil,
-          claimed_by: String.t() | nil,
           surface_profile: :full | :worker | :architect | :coordinator | :solo,
           health_ledger_mode: :live | :configured_identity,
           local_daemon_trusted: boolean()
@@ -38,7 +36,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Config do
     database: :string,
     mode: :string,
     repo_root: :string,
-    claimed_by: :string,
     surface_profile: :string,
     help: :boolean
   ]
@@ -52,7 +49,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Config do
       source_revision: Keyword.get_lazy(opts, :source_revision, &source_revision/0),
       database: Keyword.get(opts, :database),
       repo_root: Keyword.get(opts, :repo_root),
-      claimed_by: Keyword.get(opts, :claimed_by),
       surface_profile: surface_profile!(Keyword.get(opts, :surface_profile, System.get_env("SYMPP_MCP_SURFACE_PROFILE"))),
       health_ledger_mode: Keyword.get(opts, :health_ledger_mode, :live),
       local_daemon_trusted: Keyword.get(opts, :local_daemon_trusted, false)
@@ -91,7 +87,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Config do
   @spec usage() :: String.t()
   def usage do
     [
-      "Usage: mix sympp.mcp [--mode stdio] [--database <sqlite-path>] [--repo-root <path>] [--claimed-by <agent-id>] [--surface-profile <full|worker|architect|coordinator|solo>]",
+      "Usage: mix sympp.mcp [--mode stdio] [--database <sqlite-path>] [--repo-root <path>] [--surface-profile <full|worker|architect|coordinator|solo>]",
       Repo.default_database_help_text()
     ]
     |> Enum.join("\n")
@@ -100,14 +96,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Config do
   defp parse_options(opts) do
     with {:ok, mode} <- parse_mode(Keyword.get(opts, :mode, "stdio")),
          {:ok, repo_root} <- optional_nonblank(opts, :repo_root),
-         {:ok, claimed_by} <- optional_nonblank(opts, :claimed_by),
          {:ok, surface_profile} <- parse_surface_profile(Keyword.get(opts, :surface_profile, System.get_env("SYMPP_MCP_SURFACE_PROFILE"))) do
       {:ok,
        default(
          mode: mode,
          database: Keyword.get(opts, :database),
          repo_root: expand_optional_path(repo_root),
-         claimed_by: claimed_by,
          surface_profile: surface_profile
        )}
     end

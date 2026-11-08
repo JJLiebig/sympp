@@ -60,18 +60,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert get_in(memory_response, ["error", "data", "reason"]) == "file_backed_database_required"
   end
 
-  test "architect WorkRequest read tools are scoped, filtered, redacted, and read-only", %{repo: repo} do
-    {anchor, session, _grant} =
-      create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-READ", [
-        "read:work_request"
-      ])
-
+  test "WorkRequest read tools list every WorkRequest, redact output and never write", %{repo: repo} do
     in_scope =
       create_work_request!(repo,
         id: "WR-MCP-WR-IN",
         title: "Read WorkRequests",
-        repo: anchor.repo,
-        base_branch: anchor.base_branch,
+        repo: "nextide/symphony-plus-plus",
+        base_branch: "symphony-plus-plus/beta",
         human_description: "Use Bearer raw-secret-value for validation",
         constraints: %{"safe" => "visible", "token" => "raw-secret-value"}
       )
@@ -80,21 +75,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
       create_work_request!(repo,
         id: "WR-MCP-WR-OTHER-REPO",
         repo: "nextide/other",
-        base_branch: anchor.base_branch
-      )
-
-    other_branch =
-      create_work_request!(repo,
-        id: "WR-MCP-WR-OTHER-BRANCH",
-        repo: anchor.repo,
-        base_branch: "main"
+        base_branch: "symphony-plus-plus/beta"
       )
 
     _other_phase =
       create_work_request!(repo,
         id: "WR-MCP-WR-OTHER-PHASE",
-        repo: anchor.repo,
-        base_branch: anchor.base_branch
+        repo: "nextide/symphony-plus-plus",
+        base_branch: "symphony-plus-plus/beta"
       )
 
     assert {:ok, _open_question} =
@@ -130,15 +118,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     counts_before = {
       repo.aggregate(WorkRequest, :count),
       repo.aggregate(WorkPackage, :count),
-      repo.aggregate(AccessGrant, :count),
+      repo.aggregate(WorkedOn, :count),
       repo.aggregate(ProgressEvent, :count),
       repo.aggregate(Artifact, :count)
     }
 
-    list_response = mcp_tool(repo, session, "list_work_requests", %{"phase" => "planned"})
+    list_response = mcp_tool(repo, nil, "list_work_requests", %{"phase" => "planned"})
     list_payload = get_in(list_response, ["result", "structuredContent"])
 
-    assert list_payload["scope"] == %{"repo" => anchor.repo, "base_branch" => anchor.base_branch}
     assert list_payload["filters"] == %{"phase" => "planned"}
     assert list_payload["total_count"] == 1
 
@@ -147,7 +134,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
                "id" => "WR-MCP-WR-IN",
                "title" => "Read WorkRequests",
                "repo" => "nextide/symphony-plus-plus",
-               "base_branch" => "symphony-plus-plus/beta"
+               "base_branch" => "symphony-plus-plus/beta",
+               "phase" => "planned"
              } = listed_work_request
            ] = list_payload["work_requests"]
 
@@ -155,7 +143,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     refute Map.has_key?(listed_work_request, "decision_count")
     refute Map.has_key?(listed_work_request, "work_package_count")
 
-    read_response = mcp_tool(repo, session, "read_work_request", %{"detail" => "full", "work_request_id" => in_scope.id})
+    read_response = mcp_tool(repo, nil, "read_work_request", %{"detail" => "full", "work_request_id" => in_scope.id})
     read_payload = get_in(read_response, ["result", "structuredContent"])
 
     assert read_payload["work_request"]["id"] == in_scope.id
@@ -185,177 +173,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
              "ended_work_package_count" => 1
            }
 
-    refute inspect(list_response) =~ "WR-MCP-WR-OTHER-REPO"
     refute inspect(read_response) =~ "raw-secret-value"
 
-    out_of_scope_response = mcp_tool(repo, session, "read_work_request", %{"detail" => "full", "work_request_id" => other_branch.id})
-
-    assert get_in(out_of_scope_response, ["error", "code"]) == -32_004
-    assert get_in(out_of_scope_response, ["error", "data", "reason"]) == "not_found"
-    refute inspect(out_of_scope_response) =~ other_branch.id
+    missing_response = mcp_tool(repo, nil, "read_work_request", %{"detail" => "full", "work_request_id" => "WR-MCP-WR-MISSING"})
+    assert get_in(missing_response, ["error", "code"]) == -32_004
+    assert get_in(missing_response, ["error", "data", "reason"]) == "not_found"
 
     assert {
              repo.aggregate(WorkRequest, :count),
              repo.aggregate(WorkPackage, :count),
-             repo.aggregate(AccessGrant, :count),
+             repo.aggregate(WorkedOn, :count),
              repo.aggregate(ProgressEvent, :count),
              repo.aggregate(Artifact, :count)
            } == counts_before
   end
 
-  test "WorkRequest MCP reads require dedicated capability and fixed scope arguments", %{repo: repo} do
-    {insufficient_anchor, insufficient_session, _grant} =
-      create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-AUTHZ", ["read:phase"])
-
-    insufficient_target =
-      create_work_request!(repo,
-        id: "WR-MCP-WR-AUTHZ",
-        repo: insufficient_anchor.repo,
-        base_branch: insufficient_anchor.base_branch
-      )
-
-    list_denied = mcp_tool(repo, insufficient_session, "list_work_requests", %{})
-    assert get_in(list_denied, ["error", "code"]) == -32_003
-    assert get_in(list_denied, ["error", "data", "reason"]) == "insufficient_capability"
-    assert get_in(list_denied, ["error", "data", "reason_code"]) == "insufficient_capability"
-
-    read_denied = mcp_tool(repo, insufficient_session, "read_work_request", %{"detail" => "full", "work_request_id" => insufficient_target.id})
-    assert get_in(read_denied, ["error", "code"]) == -32_003
-    assert get_in(read_denied, ["error", "data", "reason"]) == "insufficient_capability"
-    assert get_in(read_denied, ["error", "data", "reason_code"]) == "insufficient_capability"
-
-    missing_read_denied = mcp_tool(repo, insufficient_session, "read_work_request", %{"detail" => "full", "work_request_id" => "WR-MCP-WR-AUTHZ-MISSING"})
-    assert get_in(missing_read_denied, ["error", "code"]) == -32_003
-    assert get_in(missing_read_denied, ["error", "data", "reason"]) == "insufficient_capability"
-    assert get_in(missing_read_denied, ["error", "data", "reason_code"]) == "insufficient_capability"
-
-    board_denied =
-      mcp_tool(repo, insufficient_session, "read_delivery_board", %{"work_request_id" => insufficient_target.id})
-
-    assert get_in(board_denied, ["error", "code"]) == -32_003
-    assert get_in(board_denied, ["error", "data", "reason"]) == "insufficient_capability"
-    assert get_in(board_denied, ["error", "data", "reason_code"]) == "insufficient_capability"
-
-    missing_board_denied =
-      mcp_tool(repo, insufficient_session, "read_delivery_board", %{"work_request_id" => "WR-MCP-WR-AUTHZ-MISSING"})
-
-    assert get_in(missing_board_denied, ["error", "code"]) == -32_003
-    assert get_in(missing_board_denied, ["error", "data", "reason"]) == "insufficient_capability"
-    assert get_in(missing_board_denied, ["error", "data", "reason_code"]) == "insufficient_capability"
-
-    {_package, session, _grant} =
-      create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-STRICT", ["read:work_request"])
-
-    repo_argument_response = mcp_tool(repo, session, "list_work_requests", %{"repo" => "nextide/other"})
+  test "WorkRequest list rejects repository scope arguments and unknown statuses", %{repo: repo} do
+    repo_argument_response = mcp_tool(repo, nil, "list_work_requests", %{"repo" => "nextide/other"})
     assert get_in(repo_argument_response, ["error", "data", "reason"]) == "unexpected_argument"
     assert get_in(repo_argument_response, ["error", "data", "arguments"]) == ["repo"]
 
-    branch_argument_response = mcp_tool(repo, session, "list_work_requests", %{"base_branch" => "other"})
+    branch_argument_response = mcp_tool(repo, nil, "list_work_requests", %{"base_branch" => "other"})
     assert get_in(branch_argument_response, ["error", "data", "reason"]) == "unexpected_argument"
     assert get_in(branch_argument_response, ["error", "data", "arguments"]) == ["base_branch"]
 
-    invalid_phase_response = mcp_tool(repo, session, "list_work_requests", %{"phase" => "merged"})
+    invalid_phase_response = mcp_tool(repo, nil, "list_work_requests", %{"phase" => "merged"})
     assert get_in(invalid_phase_response, ["error", "data", "reason"]) == "invalid_phase"
-  end
-
-  test "WorkRequest MCP list narrows to explicit WorkRequest read scopes", %{repo: repo} do
-    {anchor, session, _grant} =
-      create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-LIST-SCOPED", [
-        "read:work_request"
-      ])
-
-    visible =
-      create_work_request!(repo,
-        id: "WR-MCP-WR-LIST-SCOPED",
-        repo: anchor.repo,
-        base_branch: anchor.base_branch
-      )
-
-    hidden =
-      create_work_request!(repo,
-        id: "WR-MCP-WR-LIST-HIDDEN",
-        repo: anchor.repo,
-        base_branch: anchor.base_branch
-      )
-
-    grant_work_request_scope!(repo, session, visible.id)
-    remove_grant_scope_type!(repo, session, "repo")
-
-    list_response = mcp_tool(repo, session, "list_work_requests", %{})
-    list_payload = get_in(list_response, ["result", "structuredContent"])
-
-    assert Enum.map(list_payload["work_requests"], & &1["id"]) == [visible.id]
-    refute inspect(list_response) =~ hidden.id
-
-    hidden_read_response = mcp_tool(repo, session, "read_work_request", %{"detail" => "full", "work_request_id" => hidden.id})
-    assert get_in(hidden_read_response, ["error", "code"]) == -32_004
-    assert get_in(hidden_read_response, ["error", "data", "reason"]) == "not_found"
-    refute inspect(hidden_read_response) =~ hidden.id
-
-    hidden_board_response = mcp_tool(repo, session, "read_delivery_board", %{"work_request_id" => hidden.id})
-    assert get_in(hidden_board_response, ["error", "code"]) == -32_004
-    assert get_in(hidden_board_response, ["error", "data", "reason"]) == "not_found"
-    refute inspect(hidden_board_response) =~ hidden.id
-  end
-
-  test "WorkRequest architect grants require phase scope before MCP use", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-ARCHITECT-WR-LEGACY", kind: "mcp"))
-
-    assert {:error, %Ecto.Changeset{} = changeset} = create_architect_work_key(repo, package.id, ["read:work_request"])
-    assert {"architect phase-scoped grants require phase scope", []} in Keyword.get_values(changeset.errors, :phase_id)
-  end
-
-  test "WorkRequest MCP reads fail closed when architect scope snapshot is missing", %{repo: repo} do
-    {_anchor, session, grant} =
-      create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-MISSING-SCOPE", [
-        "read:work_request"
-      ])
-
-    repo.update_all(
-      from(access_grant in AccessGrant, where: access_grant.id == ^grant.id),
-      set: [scope_base_branch: nil]
-    )
-
-    list_response = mcp_tool(repo, session, "list_work_requests", %{})
-    assert get_in(list_response, ["error", "code"]) == -32_003
-    assert get_in(list_response, ["error", "data", "reason"]) == "outside_session_scope"
-
-    read_response = mcp_tool(repo, session, "read_work_request", %{"detail" => "full", "work_request_id" => "WR-MCP-WR-IN"})
-    assert get_in(read_response, ["error", "code"]) == -32_003
-    assert get_in(read_response, ["error", "data", "reason"]) == "outside_session_scope"
-  end
-
-  test "WorkRequest MCP reads reject drifted architect scope snapshots", %{repo: repo} do
-    {anchor, session, grant} =
-      create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-DRIFTED-SCOPE", [
-        "read:work_request"
-      ])
-
-    sibling =
-      create_work_request!(repo,
-        id: "WR-MCP-WR-DRIFTED-SIBLING",
-        repo: "nextide/other",
-        base_branch: anchor.base_branch
-      )
-
-    repo.update_all(
-      from(access_grant in AccessGrant, where: access_grant.id == ^grant.id),
-      set: [scope_repo: sibling.repo]
-    )
-
-    list_response = mcp_tool(repo, session, "list_work_requests", %{})
-    assert get_in(list_response, ["error", "code"]) == -32_003
-    assert get_in(list_response, ["error", "data", "reason"]) == "outside_session_scope"
-    refute inspect(list_response) =~ sibling.id
-
-    read_response = mcp_tool(repo, session, "read_work_request", %{"detail" => "full", "work_request_id" => sibling.id})
-    assert get_in(read_response, ["error", "code"]) == -32_003
-    assert get_in(read_response, ["error", "data", "reason"]) == "outside_session_scope"
-    refute inspect(read_response) =~ sibling.id
-
-    missing_read_response = mcp_tool(repo, session, "read_work_request", %{"detail" => "full", "work_request_id" => "WR-MCP-WR-DRIFTED-MISSING"})
-    assert get_in(missing_read_response, ["error", "code"]) == -32_003
-    assert get_in(missing_read_response, ["error", "data", "reason"]) == "outside_session_scope"
   end
 end

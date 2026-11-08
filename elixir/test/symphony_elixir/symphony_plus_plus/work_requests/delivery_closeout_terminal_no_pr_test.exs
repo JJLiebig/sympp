@@ -1,12 +1,9 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalNoPrTest do
   use ExUnit.Case, async: false
 
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
-  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
-  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service, as: ClaimLeaseService
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
@@ -34,8 +31,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
 
   setup %{repo: repo} do
     repo.delete_all(AgentRun)
-    repo.delete_all(ClaimLease)
-    repo.delete_all(AccessGrant)
+    repo.delete_all(WorkedOn)
     repo.delete_all(ProgressEvent)
     repo.delete_all(WorkPackageDelivery)
     repo.delete_all(WorkPackage)
@@ -44,25 +40,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
     :ok
   end
 
-  test "superseded closeout retires unclaimed worker authority and stale claim lease", %{repo: repo} do
+  test "superseded closeout ends the package and the terminal working on it", %{repo: repo} do
     {work_request, work_package, linked_package} = linked_slice!(repo, status: "dispatched")
     successor_slice = create_work_package!(repo, work_request, id: "WRS-DELIVERY-UNCLAIMED-SUCCESSOR")
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
-    assert {:ok, _whitespace_claim_metadata} = minted.grant |> AccessGrant.changeset(%{claimed_by: "   "}) |> repo.update()
-
-    assert {:ok, claim_lease} =
-             ClaimLeaseService.claim(
-               repo,
-               linked_package.id,
-               %{
-                 "actor_kind" => "agent",
-                 "actor_id" => "local:stale-superseded-claim",
-                 "actor_display_name" => "stale-worker"
-               },
-               now: DateTime.add(DateTime.utc_now(:microsecond), -10, :second),
-               stale_after_ms: 1
-             )
+    worker_row = insert_worker_row!(repo, linked_package.id)
 
     assert {:ok, delivery} =
              Service.record_work_package_delivery(
@@ -79,14 +60,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
 
     assert delivery.outcome == "superseded"
     assert repo.get!(WorkPackage, linked_package.id).status == "ended"
-    assert %AccessGrant{revoked_at: %DateTime{}, claimed_at: nil} = repo.get!(AccessGrant, minted.grant.id)
-    assert %ClaimLease{status: "released", release_reason: "superseded_delivery_closeout"} = repo.get!(ClaimLease, claim_lease.id)
+    assert %WorkedOn{state: "finished", finish_reason: "subject_ended"} = repo.get!(WorkedOn, worker_row.id)
 
     events = repo.all(ProgressEvent)
-    closeout_event = Enum.find(events, &(&1.payload["type"] == "work_request_delivery_closeout"))
-    assert closeout_event.payload["retired_worker_grant_ids"] == [minted.grant.id]
-    assert closeout_event.payload["retired_claim_lease_ids"] == [claim_lease.id]
-    assert "claim_lease_stale" in closeout_event.payload["runtime_reason_codes_before_closeout"]
+    assert Enum.any?(events, &(&1.payload["type"] == "work_request_delivery_closeout"))
 
     assert {:ok, %{counts: %{"superseded" => 1}, work_packages: [slice, _successor]}} = DeliveryBoard.project(repo, work_request.id)
     assert slice.operational_state.key == "superseded"
@@ -122,21 +99,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
 
       File.rm_rf!(prepared.worktree_path)
 
-      assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
-
-      assert {:ok, claim_lease} =
-               ClaimLeaseService.claim(
-                 repo,
-                 linked_package.id,
-                 %{
-                   "actor_kind" => "agent",
-                   "actor_id" => "local:stale-abandoned-claim",
-                   "actor_display_name" => "stale-abandoned-worker"
-                 },
-                 now: DateTime.add(DateTime.utc_now(:microsecond), -10, :second),
-                 stale_after_ms: 1
-               )
-
       assert {:ok, agent_run} =
                AgentRunRepository.start_run(repo, %{
                  work_package_id: linked_package.id,
@@ -156,47 +118,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
       assert repo.get!(WorkPackage, linked_package.id).status == "ended"
       assert :ok = WorktreeCleanupQueue.reconcile(repo, codex_home: codex_home)
       assert repo.get!(WorkPackage, linked_package.id).worktree_path == nil
-      assert %AccessGrant{revoked_at: %DateTime{}, claimed_at: nil} = repo.get!(AccessGrant, minted.grant.id)
-      assert %ClaimLease{status: "released", release_reason: "abandoned_delivery_closeout"} = repo.get!(ClaimLease, claim_lease.id)
 
       events = repo.all(ProgressEvent)
       closeout_event = Enum.find(events, &(&1.payload["type"] == "work_request_delivery_closeout"))
-      assert closeout_event.payload["retired_worker_grant_ids"] == [minted.grant.id]
-      assert closeout_event.payload["retired_claim_lease_ids"] == [claim_lease.id]
       assert closeout_event.payload["ignored_stale_agent_run_ids"] == [agent_run.id]
-      assert "claim_lease_stale" in closeout_event.payload["runtime_reason_codes_before_closeout"]
       assert "agent_run_stale" in closeout_event.payload["runtime_reason_codes_before_closeout"]
     after
       restore_env("CODEX_HOME", previous_codex_home)
     end
-  end
-
-  test "abandoned closeout retires claimed worker authority", %{repo: repo} do
-    {work_request, work_package, linked_package} =
-      linked_slice!(
-        repo,
-        work_request_id: "WR-DELIVERY-ABANDONED-CLAIMED-WORKER",
-        status: "dispatched"
-      )
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
-    assert {:ok, _assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "active-worker")
-
-    assert {:ok, delivery} =
-             Service.record_work_package_delivery(
-               repo,
-               work_request.id,
-               work_package.id,
-               delivery_attrs(%{
-                 outcome: "abandoned",
-                 idempotency_key: "delivery-abandoned-claimed-worker",
-                 abandoned_rationale: "No code was produced; the architect is retiring the worker authority."
-               })
-             )
-
-    assert delivery.outcome == "abandoned"
-    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
-    assert %AccessGrant{revoked_at: %DateTime{}} = repo.get!(AccessGrant, minted.grant.id)
   end
 
   test "abandoned closeout is refused for planned packages, which are skipped instead", %{repo: repo} do
@@ -245,6 +174,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
     assert {:ok, dispatched_slice} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", work_package.id)
 
     {work_request, dispatched_slice, work_package}
+  end
+
+  defp insert_worker_row!(repo, work_package_id) do
+    now = DateTime.utc_now(:microsecond)
+
+    repo.insert!(%WorkedOn{
+      id: "wo_#{System.unique_integer([:positive])}",
+      subject_kind: "work_package",
+      subject_id: work_package_id,
+      terminal_key: "core/t9",
+      display_address: "box/t9",
+      role: "worker",
+      state: "live",
+      started_at: now
+    })
   end
 
   defp create_work_request!(repo, overrides) do
