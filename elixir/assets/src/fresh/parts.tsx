@@ -1,4 +1,4 @@
-import { Check, CircleDashed, X } from "lucide-react";
+import { Check, CircleDashed, ScanSearch, X } from "lucide-react";
 
 import { GoalActions, ShelfCleanup } from "./actions";
 import { areaLabel } from "./areas";
@@ -53,13 +53,13 @@ const CI: Record<Ci, { label: string; tone: string; icon: typeof Check }> = {
 };
 
 function reviewLabel(review: Review): { text: string; tone: string } {
-  if (review.mode === "none") return { text: "no review", tone: "text-faint" };
+  if (review.mode === "none") return { text: "none", tone: "text-faint" };
   const round = review.round > 1 ? ` · round ${review.round}` : "";
-  if (review.state === "running") return { text: `${review.mode} review${round}`, tone: "text-review" };
-  if (review.state === "findings") return { text: `${review.mode} review · findings`, tone: "text-checks" };
-  if (review.state === "done") return { text: `${review.mode} review done`, tone: "text-merge/80" };
-  if (review.state === "unknown") return { text: `${review.mode} review · unknown`, tone: "text-faint" };
-  return { text: `${review.mode} review`, tone: "text-faint" };
+  if (review.state === "running") return { text: `${review.mode}${round}`, tone: "text-review" };
+  if (review.state === "findings") return { text: `${review.mode} · findings`, tone: "text-checks" };
+  if (review.state === "done") return { text: `${review.mode} · done`, tone: "text-merge/80" };
+  if (review.state === "unknown") return { text: `${review.mode} · unknown`, tone: "text-faint" };
+  return { text: review.mode, tone: "text-faint" };
 }
 
 // The PR's checks and its Review Suite state, shown once there is something to check.
@@ -76,7 +76,13 @@ export function Gates({ ci, review }: { ci: Ci | null; review: Review | null }) 
           {check.label}
         </span>
       ) : null}
-      {words ? <span className={`truncate ${words.tone}`}>{words.text}</span> : null}
+      {words ? (
+        <span className={`flex min-w-0 items-center gap-1 ${words.tone}`} title={`Review: ${words.text}`}>
+          <ScanSearch aria-hidden className="size-3 shrink-0" />
+          <span className="sr-only">Review </span>
+          <span className="truncate">{words.text}</span>
+        </span>
+      ) : null}
     </span>
   );
 }

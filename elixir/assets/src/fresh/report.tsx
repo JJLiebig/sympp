@@ -23,7 +23,7 @@ export type Level = "closed" | "now" | "full";
 export type PhaseControl = { all: boolean; isOpen: (state: PhaseState) => boolean; open: (state: PhaseState) => void; setAll: (all: boolean) => void; toggle: (state: PhaseState) => void };
 
 const FOLD_AFTER = 2;
-const ROW = "grid grid-cols-[10px_minmax(0,1fr)_190px_170px_130px_160px_52px] items-center gap-3 rounded px-2 py-1 odd:bg-white/[0.035]";
+const ROW = "grid grid-cols-[10px_minmax(0,1fr)_220px_170px_150px_170px_52px] items-center gap-3 rounded px-2 py-1 odd:bg-white/[0.035]";
 
 export const PHASE: Record<GoalPhase | "parked", { label: string; text: string; dot: string }> = {
   intake: { label: "Intake", text: "text-faint", dot: "border border-faint" },
