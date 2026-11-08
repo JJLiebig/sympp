@@ -187,6 +187,10 @@ test('factory updates skip current and procedure-only revisions but rebuild unkn
   git('add', '.'); git('commit', '-qm', 'procedure');
   assert.match((await update()).stdout, /runtime unchanged/);
   assert.equal(fs.existsSync(receipt), false);
+  env.LISTENER_PID = '0';
+  await assert.rejects(update(), /belongs to another process/);
+  assert.equal(fs.existsSync(receipt), false);
+  env.LISTENER_PID = String(process.pid);
   fs.writeFileSync(path.join(upstream, 'unknown-runtime'), 'new runtime input');
   git('add', '.'); git('commit', '-qm', 'runtime');
   await update();

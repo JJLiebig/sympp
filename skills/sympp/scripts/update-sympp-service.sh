@@ -43,6 +43,8 @@ try:
     pid = subprocess.check_output(['systemctl', '--user', 'show', unit, '-p', 'MainPID', '--value'], text=True).strip()
     sockets = subprocess.check_output(['ss', '-H', '-ltnp', 'sport = :' + values.get('SYMPP_BACKEND_PORT', '19998')], text=True)
     owns_listener = pid != '0' and any('pid=' + pid + ',' in line and line.split()[3] == '127.0.0.1:' + values.get('SYMPP_BACKEND_PORT', '19998') for line in sockets.splitlines())
+    if not owns_listener and any(line.split()[3] == '127.0.0.1:' + values.get('SYMPP_BACKEND_PORT', '19998') for line in sockets.splitlines()):
+        raise SystemExit('Saved factory endpoint belongs to another process. Rerun setup with its service name.')
     running = health.get('source', {}).get('revision') if owns_listener and health.get('status') == 'ok' and health.get('ledger', {}).get('reachable') is True else None
 except (OSError, ValueError, subprocess.CalledProcessError):
     running = None
