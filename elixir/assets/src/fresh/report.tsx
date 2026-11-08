@@ -5,7 +5,7 @@ import { ActButton } from "./actions";
 import { span, waitsOnOthers, type Goal, type Phase as GoalPhase, type GoalView, type Pkg, type PkgView, type Stage } from "./model";
 import { GLOW, NUDGE, smoothly, spotlight, useFlash } from "./motion";
 import { Owner } from "./owner";
-import { Gates, OUTCOME, Pip, PrLink, Track } from "./parts";
+import { CiCell, OUTCOME, Pip, PKG_GRID, PrLink, ReviewCell, StageLabel, StageSteps, StageTime } from "./parts";
 import { sampleReport } from "./samples";
 
 // What a goal says when asked "is this coming along?". The architect owns the words and the ETA;
@@ -23,7 +23,7 @@ export type Level = "closed" | "now" | "full";
 export type PhaseControl = { all: boolean; isOpen: (state: PhaseState) => boolean; open: (state: PhaseState) => void; setAll: (all: boolean) => void; toggle: (state: PhaseState) => void };
 
 const FOLD_AFTER = 2;
-const ROW = "grid grid-cols-[10px_minmax(0,1fr)_220px_170px_150px_170px_52px] items-center gap-3 rounded px-2 py-1 odd:bg-white/[0.035]";
+const ROW = `${PKG_GRID} rounded px-2 py-1 odd:bg-white/[0.035]`;
 
 export const PHASE: Record<GoalPhase | "parked", { label: string; text: string; dot: string }> = {
   intake: { label: "Intake", text: "text-faint", dot: "border border-faint" },
@@ -368,8 +368,11 @@ export function PkgLine({ at, view }: { at: number; view: PkgView }) {
     <div ref={ref} className={ROW}>
       <Pip stage={view.stage} failed={view.failed} />
       <span className="truncate text-sm">{pkg.title}</span>
-      <Gates ci={pkg.ci} review={pkg.review} />
-      <Track at={at} view={view} />
+      <CiCell ci={pkg.ci} />
+      <ReviewCell review={pkg.review} />
+      <StageSteps view={view} />
+      <StageLabel view={view} />
+      <StageTime at={at} view={view} />
       <PrLink pr={pkg.pr} repo={pkg.goalRepo} />
       <Owner owner={pkg.owner} subject={{ pkgId: pkg.id }} />
       {waitsOnOthers(pkg) ? <ActButton action={{ kind: "finish", pkgId: pkg.id }} confirm="Finish?" label="Finish" tone="text-ink" /> : <span />}
@@ -384,7 +387,9 @@ function RestLine({ pkg }: { pkg: Pkg }) {
       <Pip stage={outcome ? "ended" : "planned"} />
       <span className={`truncate text-sm ${outcome ? "text-faint line-through decoration-faint/60" : "text-dim"}`}>{pkg.title}</span>
       <span />
-      <span className={`truncate font-mono text-[11px] ${outcome?.tone ?? "text-faint"}`}>{outcome?.label ?? "Planned"}</span>
+      <span />
+      {/* The outcome starts where the stage would: the steps column where it shows, the stage column otherwise. */}
+      <span className={`col-span-2 truncate font-mono text-[11px] min-[1280px]:col-span-3 ${outcome?.tone ?? "text-faint"}`}>{outcome?.label ?? "Planned"}</span>
       <PrLink pr={pkg.pr} repo={pkg.goalRepo} />
       <span />
       <span />

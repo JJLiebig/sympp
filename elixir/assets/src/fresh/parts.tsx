@@ -26,24 +26,32 @@ export const OUTCOME: Record<Outcome, { label: string; tone: string }> = {
 
 const STEPS: Stage[] = ["launching", "implementing", "review_ci", "ready"];
 
-// Where a moving package is: four steps from launch to ready, and the current one with how long it has been there.
-export function Track({ at, view }: { at: number; view: PkgView }) {
-  const position = STEPS.indexOf(view.stage);
-  const tone = view.failed ? "text-fail" : STAGE[view.stage].text;
+// Package and card rows are fixed column grids, so every column starts at the same x on every row,
+// whatever is in it. Below 1280px the step bars are left out and the PR and owner columns narrow.
+// Package: pip, title, CI, review, [steps], stage, time, PR, owner, action.
+export const PKG_GRID = "grid grid-cols-[10px_minmax(0,1fr)_88px_128px_88px_48px_110px_150px_52px] items-center gap-x-2.5 min-[1280px]:grid-cols-[10px_minmax(0,1fr)_88px_128px_48px_88px_48px_150px_170px_52px]";
+// Card: pip, task, repo and branch, CI, review, PR, state, owner, dismiss.
+export const CARD_GRID = "grid grid-cols-[10px_minmax(0,1fr)_150px_88px_128px_64px_72px_150px_24px] items-center gap-x-2.5 min-[1280px]:grid-cols-[10px_minmax(0,1fr)_200px_88px_128px_64px_72px_170px_24px]";
 
+// Four steps from launch to ready. Hidden with its column on narrow screens; the stage label says the same.
+export function StageSteps({ view }: { view: PkgView }) {
+  const position = STEPS.indexOf(view.stage);
   return (
-    <span className="flex items-center gap-2 whitespace-nowrap font-mono text-[11px]">
-      <span aria-hidden className="flex gap-0.5">
-        {STEPS.map((step, index) => (
-          <span key={step} className={`h-1 w-2.5 rounded-full ${index < position ? "bg-dim" : index === position ? (view.failed ? "bg-fail" : STAGE[step].bar) : "bg-line"}`} />
-        ))}
-      </span>
-      <span className={`font-semibold ${tone}`}>
-        {STAGE[view.stage].label}
-        {view.untimed ? "" : <span className="font-normal text-dim"> · {span(at - view.since)}</span>}
-      </span>
+    <span aria-hidden className="hidden gap-0.5 min-[1280px]:flex">
+      {STEPS.map((step, index) => (
+        <span key={step} className={`h-1 w-2.5 rounded-full ${index < position ? "bg-dim" : index === position ? (view.failed ? "bg-fail" : STAGE[step].bar) : "bg-line"}`} />
+      ))}
     </span>
   );
+}
+
+export function StageLabel({ view }: { view: PkgView }) {
+  return <span className={`truncate whitespace-nowrap font-mono text-[11px] font-semibold ${view.failed ? "text-fail" : STAGE[view.stage].text}`}>{STAGE[view.stage].label}</span>;
+}
+
+// How long the package has been in its stage, right-aligned with tabular figures so the times line up.
+export function StageTime({ at, view }: { at: number; view: PkgView }) {
+  return <span className="text-right font-mono text-[11px] tabular-nums text-dim">{view.untimed ? "" : span(at - view.since)}</span>;
 }
 
 const CI: Record<Ci, { label: string; tone: string; icon: typeof Check }> = {
@@ -62,27 +70,27 @@ function reviewLabel(review: Review): { text: string; tone: string } {
   return { text: review.mode, tone: "text-faint" };
 }
 
-// The PR's checks and its Review Suite state, shown once there is something to check.
-export function Gates({ ci, review }: { ci: Ci | null; review: Review | null }) {
-  if (!ci && !review) return <span />;
-  const check = ci ? CI[ci] : null;
-  const words = review ? reviewLabel(review) : null;
-
+// The PR's checks. An empty cell keeps its column.
+export function CiCell({ ci }: { ci: Ci | null }) {
+  if (!ci) return <span />;
+  const check = CI[ci];
   return (
-    <span className="flex min-w-0 items-center gap-3 whitespace-nowrap font-mono text-[11px]">
-      {check ? (
-        <span className={`flex items-center gap-1 ${check.tone}`}>
-          <check.icon aria-hidden className="size-3" />
-          {check.label}
-        </span>
-      ) : null}
-      {words ? (
-        <span className={`flex min-w-0 items-center gap-1 ${words.tone}`} title={`Review: ${words.text}`}>
-          <ScanSearch aria-hidden className="size-3 shrink-0" />
-          <span className="sr-only">Review </span>
-          <span className="truncate">{words.text}</span>
-        </span>
-      ) : null}
+    <span className={`flex min-w-0 items-center gap-1 whitespace-nowrap font-mono text-[11px] ${check.tone}`}>
+      <check.icon aria-hidden className="size-3 shrink-0" />
+      <span className="truncate">{check.label}</span>
+    </span>
+  );
+}
+
+// The Review Suite mode and state for the PR's current head. An empty cell keeps its column.
+export function ReviewCell({ review }: { review: Review | null }) {
+  if (!review) return <span />;
+  const words = reviewLabel(review);
+  return (
+    <span className={`flex min-w-0 items-center gap-1 whitespace-nowrap font-mono text-[11px] ${words.tone}`} title={`Review: ${words.text}`}>
+      <ScanSearch aria-hidden className="size-3 shrink-0" />
+      <span className="sr-only">Review </span>
+      <span className="truncate">{words.text}</span>
     </span>
   );
 }
