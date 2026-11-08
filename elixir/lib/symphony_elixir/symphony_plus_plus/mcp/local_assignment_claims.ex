@@ -334,13 +334,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
   defp append_local_assignment_claim_event(repo, %Session{} = session, claim, %ClaimLease{} = lease, :reclaimed) do
     payload = local_assignment_claim_reclaim_payload(claim, lease)
 
-    PlanningRepository.append_audit_progress_event_for_work_package(repo, session.assignment, claim.work_package_id, %{
-      "summary" => "Local assignment claim lease reclaimed",
-      "body" => "Local assignment claim lease was reclaimed for #{claim.claimed_by}.",
-      "status" => "claim_lease_reclaimed",
-      "idempotency_key" => metadata_idempotency_key(payload),
-      "payload" => payload
-    })
+    PlanningRepository.append_audit_progress_event_for_work_package(
+      repo,
+      session.assignment,
+      claim.work_package_id,
+      %{
+        "summary" => "Local assignment claim lease reclaimed",
+        "body" => "Local assignment claim lease was reclaimed for #{claim.claimed_by}.",
+        "status" => "claim_lease_reclaimed",
+        "idempotency_key" => metadata_idempotency_key(payload),
+        "payload" => payload
+      },
+      runtime_authority: true
+    )
   end
 
   defp local_assignment_claim_reclaim_payload(claim, %ClaimLease{} = lease) do
@@ -711,7 +717,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
         "status" => "claim_lease_reclaimed",
         "idempotency_key" => metadata_idempotency_key(payload),
         "payload" => payload
-      }
+      },
+      runtime_authority: true
     )
   end
 

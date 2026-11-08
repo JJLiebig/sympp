@@ -16,12 +16,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase, as: WorkRequestPhase
 
-  @runtime_authority_statuses [
-    "claim_lease_reclaimed",
-    "worker_claim_released",
-    "work_package_worker_key_revoked",
-    "work_request_runtime_cleanup"
-  ]
   @default_append_retry_attempts 200
   @default_state_read_retry_attempts 50
   @state_item_limit 100
@@ -118,7 +112,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
                repo,
                attrs,
                &ProgressEvent.create_changeset(&1, trusted_audit_metadata: true),
-               trusted_audit_metadata: true
+               trusted_audit_metadata: true,
+               runtime_authority: Keyword.get(opts, :runtime_authority, false)
              ),
            :ok <- validate_replayed_event_scope(assignment, event) do
         event
@@ -141,8 +136,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
     end
   end
 
+  # Callers hold a transaction, so the archive check and the insert are atomic.
+  # Audits of releasing, revoking or reclaiming runtime authority
+  # (`runtime_authority: true`, set only by those trusted paths) stay possible,
+  # so a worker left running on an archived WorkRequest can still be stopped.
   defp append_progress_event_in_transaction(repo, attrs, changeset_fun, opts) do
-    with {:ok, attrs} <- normalize_append_attrs(attrs, Keyword.fetch!(opts, :trusted_audit_metadata)),
+    with :ok <- require_writable_progress(repo, attrs, Keyword.get(opts, :runtime_authority, false)),
+         {:ok, attrs} <- normalize_append_attrs(attrs, Keyword.fetch!(opts, :trusted_audit_metadata)),
          :not_found <-
            existing_progress_event_by_idempotency_key_with_retry(repo, attrs, append_retry_attempts()) do
       repo
@@ -283,13 +283,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   end
 
   # Planning records belong to a package, and an archived WorkRequest takes no new
-  # ones. Audits of releasing or revoking runtime authority stay possible, so a
-  # worker left running on an archived WorkRequest can still be stopped.
-  defp require_writable_insert(_repo, ProgressEvent, %{"status" => status}) when status in @runtime_authority_statuses,
-    do: :ok
+  # ones. Progress events are checked by `append_progress_event_in_transaction/4`.
+  defp require_writable_insert(_repo, ProgressEvent, _attrs), do: :ok
 
   defp require_writable_insert(repo, _schema, attrs),
     do: WorkRequestPhase.require_writable_package(repo, Map.get(attrs, "work_package_id"))
+
+  defp require_writable_progress(_repo, _attrs, true), do: :ok
+
+  defp require_writable_progress(repo, attrs, false) do
+    attrs = normalize_keys(attrs)
+    WorkRequestPhase.require_writable_package(repo, Map.get(attrs, "work_package_id"))
+  end
 
   defp update_writable_plan_node(repo, %PlanNode{} = plan_node, changeset) do
     repo.transaction(fn ->

@@ -6,6 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
   alias Ecto.Adapters.SQL
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
+  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
@@ -156,15 +157,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:error, :work_request_archived} =
              PlanningRepository.append_progress_event(repo, %{work_package_id: package.id, summary: "Late note", status: "recorded", idempotency_key: "late"})
 
-    # Stopping a worker that is still running stays possible and audited.
-    assert {:ok, _audit} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: package.id,
-               summary: "Worker claim released",
-               status: "worker_claim_released",
-               idempotency_key: "release-after-archive"
-             })
-
     assert {:error, :work_request_archived} = Repository.slice_work_request(repo, request.id, [work_package_attrs(id: "WRS-ARCHIVED-NEW")])
     assert {:error, :work_request_archived} = Service.complete(repo, request.id)
     assert {:ok, ^archived} = Repository.get(repo, request.id)
@@ -178,6 +170,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert %DateTime{} = restored.restored_at
     assert phase!(repo, request.id) == "done"
     assert {:ok, ^restored} = Service.restore(repo, request.id)
+  end
+
+  test "a worker left running on an archived WorkRequest can still be released, and only through the trusted path", %{repo: repo} do
+    request = request_with_packages!(repo, "WR-ARCHIVED-RUNNING", [:dispatched])
+    [package] = repo.all(from(package in WorkPackage, where: package.work_request_id == ^request.id))
+    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
+    assert {:ok, _completed} = Service.complete(repo, request.id)
+    assert {:ok, _archived} = Service.archive(repo, request.id)
+
+    release = %{"summary" => "Worker claim released", "status" => "worker_claim_released", "idempotency_key" => "release-after-archive"}
+
+    assert {:error, :work_request_archived} = PlanningRepository.append_progress_event(repo, Map.put(release, "work_package_id", package.id))
+    assert {:error, :work_request_archived} = PlanningRepository.append_audit_progress_event_for_work_package(repo, assignment, package.id, release)
+
+    assert {:ok, %ProgressEvent{status: "worker_claim_released"}} =
+             PlanningRepository.append_audit_progress_event_for_work_package(repo, assignment, package.id, release, runtime_authority: true)
   end
 
   test "the operator archives only done or unresolved work, and completes any work", %{repo: repo} do

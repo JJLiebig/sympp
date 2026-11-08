@@ -185,13 +185,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.RuntimeCleanup do
   end
 
   defp append_runtime_cleanup_event(repo, %Assignment{} = assignment, work_package_id, payload, reason) do
-    PlanningRepository.append_audit_progress_event_for_work_package(repo, assignment, work_package_id, %{
-      "summary" => "WorkRequest work-package runtime cleaned up",
-      "body" => "Cleanup reason: #{reason}; WorkRequest: #{payload["work_request_id"]}; WorkPackage: #{payload["work_package_id"]}",
-      "status" => "work_request_runtime_cleanup",
-      "idempotency_key" => metadata_idempotency_key(payload),
-      "payload" => payload
-    })
+    PlanningRepository.append_audit_progress_event_for_work_package(
+      repo,
+      assignment,
+      work_package_id,
+      %{
+        "summary" => "WorkRequest work-package runtime cleaned up",
+        "body" => "Cleanup reason: #{reason}; WorkRequest: #{payload["work_request_id"]}; WorkPackage: #{payload["work_package_id"]}",
+        "status" => "work_request_runtime_cleanup",
+        "idempotency_key" => metadata_idempotency_key(payload),
+        "payload" => payload
+      },
+      runtime_authority: true
+    )
   end
 
   defp runtime_cleanup_payload(context) do
