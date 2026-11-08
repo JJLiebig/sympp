@@ -230,9 +230,6 @@ defmodule SymphonyElixir.TestSupport do
     tracker_assignee = Keyword.get(config, :tracker_assignee)
     tracker_active_states = Keyword.get(config, :tracker_active_states)
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
-    tracker_filter_repos = Keyword.get(config, :tracker_filter_repos)
-    tracker_filter_base_branches = Keyword.get(config, :tracker_filter_base_branches)
-    tracker_filter_work_kinds = Keyword.get(config, :tracker_filter_work_kinds)
     poll_interval_ms = Keyword.get(config, :poll_interval_ms)
     workspace_root = Keyword.get(config, :workspace_root)
     worker_ssh_hosts = Keyword.get(config, :worker_ssh_hosts)
@@ -271,10 +268,6 @@ defmodule SymphonyElixir.TestSupport do
         "  assignee: #{yaml_value(tracker_assignee)}",
         "  active_states: #{yaml_value(tracker_active_states)}",
         "  terminal_states: #{yaml_value(tracker_terminal_states)}",
-        "  filters:",
-        "    repos: #{yaml_value(tracker_filter_repos)}",
-        "    base_branches: #{yaml_value(tracker_filter_base_branches)}",
-        "    work_kinds: #{yaml_value(tracker_filter_work_kinds)}",
         "polling:",
         "  interval_ms: #{yaml_value(poll_interval_ms)}",
         "workspace:",

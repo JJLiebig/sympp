@@ -589,7 +589,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
 
       lock_task =
         Task.async(fn ->
-          TrackerAdapter.migration_file_lock_for_test(database_path, fn ->
+          MigrationFileLock.run(database_path, fn ->
             send(parent, :migration_file_lock_acquired)
 
             receive do

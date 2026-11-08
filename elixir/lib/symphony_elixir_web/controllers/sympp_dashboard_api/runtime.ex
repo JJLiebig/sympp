@@ -3,7 +3,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.Runtime do
 
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
-  alias SymphonyElixir.SymphonyPlusPlus.TrackerAdapter
+  alias SymphonyElixir.SymphonyPlusPlus.Repo.MigrationFileLock
   alias SymphonyElixirWeb.Endpoint
 
   @spec dashboard_ledger_database(module()) :: term()
@@ -377,7 +377,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.Runtime do
   end
 
   defp migrate_with_lock(repo, pid, database_path, database_key) do
-    TrackerAdapter.run_with_migration_file_lock(database_path, fn ->
+    MigrationFileLock.run(database_path, fn ->
       migrate_if_needed(repo, pid, database_key)
     end)
   end

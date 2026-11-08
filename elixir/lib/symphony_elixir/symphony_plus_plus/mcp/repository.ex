@@ -3,7 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Repository do
 
   alias Ecto.Adapters.SQL
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
-  alias SymphonyElixir.SymphonyPlusPlus.TrackerAdapter
+  alias SymphonyElixir.SymphonyPlusPlus.Repo.MigrationFileLock
 
   @cache_table __MODULE__
   @cache_owner SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore
@@ -49,7 +49,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Repository do
 
   defp with_migration_lock(database_path, fun) when is_binary(database_path) and database_path != "" do
     database_path
-    |> TrackerAdapter.run_with_migration_file_lock(fun)
+    |> MigrationFileLock.run(fun)
     |> normalize_lock_result()
   end
 

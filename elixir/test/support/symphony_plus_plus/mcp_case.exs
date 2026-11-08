@@ -223,7 +223,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
       alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Repository, as: SoloSessionRepository
       alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession
       alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry
-      alias SymphonyElixir.SymphonyPlusPlus.TrackerAdapter
+      alias SymphonyElixir.SymphonyPlusPlus.Repo.MigrationFileLock
       alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
       alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
       alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff

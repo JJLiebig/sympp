@@ -34,7 +34,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
   alias SymphonyElixir.SymphonyPlusPlus.SessionLocations
   alias SymphonyElixir.SymphonyPlusPlus.SessionLocations.Location
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Repository, as: SoloSessionRepository
-  alias SymphonyElixir.SymphonyPlusPlus.TrackerAdapter
+  alias SymphonyElixir.SymphonyPlusPlus.Repo.MigrationFileLock
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
@@ -1042,7 +1042,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     database_path = WorkPackageFactory.database_path()
     workspace_path = solo_workspace_path("startup-migration")
     original_repo_config = Application.get_env(:symphony_elixir, LazyHTTPRepo)
-    observer_key = :sympp_tracker_adapter_lock_wait_observer
+    observer_key = :sympp_migration_lock_wait_observer
     original_observer = Application.get_env(:symphony_elixir, observer_key)
     Application.put_env(:symphony_elixir, LazyHTTPRepo, database: database_path)
     Application.put_env(:symphony_elixir, observer_key, self())
@@ -1059,7 +1059,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
     lock_task =
       Task.async(fn ->
-        TrackerAdapter.migration_file_lock_for_test(database_path, fn ->
+        MigrationFileLock.run(database_path, fn ->
           send(parent, :migration_lock_held)
           receive do: (:release_migration_lock -> :ok)
         end)
@@ -1074,7 +1074,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
         [session_id] = get_resp_header(init, "mcp-session-id")
         assert json_response(post_json(tools_list_request("tools"), [{"mcp-session-id", session_id}]), 200)["result"]
         queue_pid = start_supervised!({WorktreeCleanupQueue, repo: LazyHTTPRepo, name: nil})
-        assert_receive {:tracker_adapter_lock_wait, :migration_file_lock, queue_lock_path, ^queue_pid}, 5_000
+        assert_receive {:migration_lock_wait, queue_lock_path, ^queue_pid}, 5_000
         assert Repo.same_database_path?(queue_lock_path, lock_path)
 
         request =
@@ -1091,7 +1091,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
           end)
 
         request_pid = request.pid
-        assert_receive {:tracker_adapter_lock_wait, :migration_file_lock, request_lock_path, ^request_pid}, 5_000
+        assert_receive {:migration_lock_wait, request_lock_path, ^request_pid}, 5_000
         assert Repo.same_database_path?(request_lock_path, lock_path)
         send(lock_task.pid, :release_migration_lock)
         assert :ok = Task.await(lock_task)
