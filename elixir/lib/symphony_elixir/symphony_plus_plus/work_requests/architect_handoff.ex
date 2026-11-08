@@ -27,9 +27,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
     "read:phase",
     "read:work_request",
     "write:work_request",
-    "dispatch:work_request",
-    "read:guidance_request",
-    "write:guidance_request"
+    "dispatch:work_request"
   ]
   @phase_id_prefix "phase-wr-architect-"
   @anchor_id_prefix "SYMPP-WR-ARCH-"
@@ -691,7 +689,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
         "Architect anchor for WorkRequest #{work_request.id}. Launch with opt-in sympp MCP loaded, then use the installed sympp skill, its references/symphony-architect/procedure.md, and WorkRequest MCP tools before slicing.",
       acceptance_criteria: [
         "Architect agent can read and update the scoped WorkRequest.",
-        "Architect agent can answer or escalate scoped guidance requests.",
         "WorkPackage dispatch remains explicit and scoped."
       ],
       status: "planning",

@@ -569,7 +569,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   defp live_runtime_reason?(reason),
     do:
       reason in [
-        "claim_lease_paused",
         "claim_lease_active",
         "agent_run_active",
         "worker_grant_active",

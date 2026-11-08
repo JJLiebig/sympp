@@ -31,8 +31,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
   defp agent_payload(payload, :work_request_delivery_board),
     do: delivery_board_agent_payload(payload)
 
-  defp agent_payload(payload, :guidance_request_list), do: guidance_request_list_payload(payload)
-
   defp agent_payload(payload, :create_work_request_handoff),
     do: create_work_request_handoff_payload(payload)
 
@@ -81,16 +79,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
       "scope" => payload |> map_value("scope") |> primitive_map(),
       "counts" => board |> map_value("counts") |> primitive_map(),
       "work_packages" => board |> map_value("work_packages") |> list_rows(&delivery_work_package_row/1)
-    }
-  end
-
-  defp guidance_request_list_payload(payload) do
-    %{
-      "agent_context" => "guidance_request_list",
-      "total_count" => map_value(payload, "total_count"),
-      "scope" => payload |> map_value("scope") |> primitive_map(),
-      "filters" => payload |> map_value("filters") |> primitive_map(),
-      "guidance_requests" => payload |> map_value("guidance_requests") |> list_rows(&guidance_request_row/1)
     }
   end
 
@@ -324,18 +312,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
       "status" => text_value(map_value(work_package, "status"))
     }
     |> reject_nil_values()
-  end
-
-  defp guidance_request_row(%{} = request) do
-    %{
-      "id" => text_value(map_value(request, "id")),
-      "work_package_id" => text_value(map_value(request, "work_package_id")),
-      "summary" => text_value(map_value(request, "summary")),
-      "status" => text_value(map_value(request, "status")),
-      "requested_by" => text_value(map_value(request, "requested_by")),
-      "answered_by" => text_value(map_value(request, "answered_by")),
-      "blocker_id" => text_value(map_value(request, "blocker_id"))
-    }
   end
 
   defp claim_row(nil), do: %{}

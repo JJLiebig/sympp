@@ -1,7 +1,6 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.Comments.Service, as: CommentService
   alias SymphonyElixir.SymphonyPlusPlus.OperationalLineage
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings
@@ -657,7 +656,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
 
   defp delete_work_request_dependents(repo, work_request_ids, work_package_ids) do
     with :ok <- preserve_archived_work_package_hides(repo, work_package_ids),
-         :ok <- delete_archived_comments(repo, work_request_ids, work_package_ids),
          :ok <- SessionLocations.delete_for_targets(repo, "work_request", work_request_ids),
          :ok <- SessionLocations.delete_for_targets(repo, "work_package", work_package_ids) do
       delete_archived_grant_scopes(repo, work_request_ids, work_package_ids)
@@ -678,17 +676,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
 
       {:error, reason} ->
         {:error, reason}
-    end
-  end
-
-  defp delete_archived_comments(repo, work_request_ids, work_package_ids) do
-    targets =
-      Enum.map(work_request_ids, &{"work_request", &1}) ++
-        Enum.map(work_package_ids, &{"work_package", &1})
-
-    case CommentService.delete_for_targets(repo, targets) do
-      {:ok, _deleted_count} -> :ok
-      {:error, reason} -> {:error, reason}
     end
   end
 

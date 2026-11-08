@@ -23,12 +23,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Service do
           {:ok, WorktreeLifecycle.lifecycle_result()} | {:error, error()}
   def prepare_worktree(repo, id, attrs), do: WorktreeLifecycle.prepare(repo, id, attrs)
 
-  @spec cleanup_worktree(Repository.repo(), String.t()) ::
-          {:ok, WorktreeLifecycle.lifecycle_result()} | {:error, error()}
-  @spec cleanup_worktree(Repository.repo(), String.t(), keyword()) ::
-          {:ok, WorktreeLifecycle.lifecycle_result()} | {:error, error()}
-  def cleanup_worktree(repo, id, opts \\ []), do: WorktreeLifecycle.cleanup(repo, id, opts)
-
   @spec validate_worktree_cleanup(Repository.repo(), String.t()) ::
           {:ok, WorktreeLifecycle.lifecycle_result()} | {:error, error()}
   @spec validate_worktree_cleanup(Repository.repo(), String.t(), keyword()) ::

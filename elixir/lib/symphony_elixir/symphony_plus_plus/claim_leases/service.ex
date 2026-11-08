@@ -27,20 +27,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service do
     retry_database_busy(fn -> Repository.heartbeat(repo, claim_lease_id, lease_attrs(opts), opts) end)
   end
 
-  @spec pause(Repository.repo(), String.t(), map(), keyword()) :: {:ok, ClaimLease.t()} | {:error, error()}
-  def pause(repo, claim_lease_id, actor, opts \\ [])
-      when is_atom(repo) and is_binary(claim_lease_id) and is_map(actor) and is_list(opts) do
-    Repository.pause(
-      repo,
-      claim_lease_id,
-      %{
-        paused_by_actor_id: actor_id(actor),
-        pause_reason: Keyword.get(opts, :reason)
-      },
-      opts
-    )
-  end
-
   @spec release(Repository.repo(), String.t(), keyword()) :: {:ok, ClaimLease.t()} | {:error, error()}
   def release(repo, claim_lease_id, opts \\ []) when is_atom(repo) and is_binary(claim_lease_id) and is_list(opts) do
     Repository.release(repo, claim_lease_id, %{release_reason: Keyword.get(opts, :reason)}, opts)
@@ -89,8 +75,4 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service do
   end
 
   defp normalize_keys(attrs), do: Map.new(attrs, fn {key, value} -> {to_string(key), value} end)
-
-  defp actor_id(%{actor_id: actor_id}), do: actor_id
-  defp actor_id(%{"actor_id" => actor_id}), do: actor_id
-  defp actor_id(_actor), do: nil
 end

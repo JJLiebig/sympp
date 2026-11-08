@@ -28,7 +28,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReadyStatusMigrationTest do
       claim_before = rows!("SELECT * FROM sympp_claim_leases WHERE id = 'CLAIM-READY-STATUS'")
       delivery_before = rows!("SELECT * FROM sympp_work_package_deliveries WHERE id = 'DELIVERY-READY-STATUS'")
 
-      assert @migration_version in Ecto.Migrator.run(Repo, Migrations.all(), :up, all: true, log: false)
+      assert @migration_version in Ecto.Migrator.run(Repo, Migrations.all(), :up, to: @migration_version, log: false)
 
       assert [["ready_for_merge"]] = rows!("SELECT status FROM sympp_work_packages WHERE id = 'WP-READY-STATUS'")
       assert claim_before == rows!("SELECT * FROM sympp_claim_leases WHERE id = 'CLAIM-READY-STATUS'")

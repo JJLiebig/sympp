@@ -26,23 +26,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeaseReleaseTest do
     :ok
   end
 
-  test "release allows stale paused claim leases for operator recovery", %{repo: repo} do
-    package = create_work_package!(repo, "SYMPP-CLAIM-STALE-PAUSED-RELEASE")
-
-    assert {:ok, lease} = ClaimLeaseService.claim(repo, package.id, actor("worker"), stale_after_ms: 60_000)
-    assert {:ok, paused} = ClaimLeaseService.pause(repo, lease.id, actor("operator"), reason: "operator pause")
-
-    stale_seen_at = DateTime.add(DateTime.utc_now(:microsecond), -10, :second)
-
-    paused
-    |> ClaimLease.update_changeset(%{last_seen_at: stale_seen_at, stale_after_ms: 1})
-    |> repo.update!()
-
-    assert {:ok, released} = ClaimLeaseService.release(repo, paused.id, reason: "operator recovery")
-    assert released.status == "released"
-    assert released.release_reason == "operator recovery"
-  end
-
   test "release still rejects stale active claim leases", %{repo: repo} do
     package = create_work_package!(repo, "SYMPP-CLAIM-STALE-ACTIVE-RELEASE")
 

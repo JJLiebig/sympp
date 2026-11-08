@@ -9,7 +9,7 @@ import { CLEAR, MONO, icon, tint, cap, button, field, mark } from "./ui.js";
 
 export function questionRow(v, t, question, first = false) {
   const draft = v.answers[question.key];
-  const open = question.status === "open" || question.status === "human_info_needed";
+  const open = question.status === "open";
   const prompt = question.prompt;
   const option = (id, label, description, pros = [], cons = [], answer = null) => Button.new(`choice-${question.key}-${id}`)
     .flex().w_full().min_w(0).px(10).py(8).rounded(6).border(1).border_color(draft?.choice === id ? t.accent : t.input)

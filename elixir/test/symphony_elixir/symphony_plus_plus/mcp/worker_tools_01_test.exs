@@ -311,58 +311,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
     assert verbose_branch_payload["branch"] == branch
     assert verbose_branch_payload["head_sha"] == "verbose-head"
 
-    compact_comment_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "compact-comment", "method" => "tools/call", "params" => %{"name" => "add_comment", "arguments" => %{"body" => "Compact package note"}}},
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(compact_comment_response, ["result", "structuredContent", "comment", "target_kind"]) == "work_package"
-    assert get_in(compact_comment_response, ["result", "structuredContent", "comment", "target_id"]) == package.id
-
-    verbose_comment_response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "verbose-comment",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "add_comment",
-            "arguments" => %{"target_kind" => "work_package", "target_id" => package.id, "body" => "Verbose package note"}
-          }
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(verbose_comment_response, ["result", "structuredContent", "comment", "target_id"]) == package.id
-
-    compact_list_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "compact-list-comments", "method" => "tools/call", "params" => %{"name" => "list_comments"}},
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(compact_list_response, ["result", "structuredContent", "target"]) == %{"kind" => "work_package", "id" => package.id}
-    compact_bodies = compact_list_response |> get_in(["result", "structuredContent", "comments"]) |> Enum.map(& &1["body"])
-    assert Enum.sort(compact_bodies) == ["Compact package note", "Verbose package note"]
-
-    verbose_list_response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "verbose-list-comments",
-          "method" => "tools/call",
-          "params" => %{"name" => "list_comments", "arguments" => %{"target_kind" => "work_package", "target_id" => package.id}}
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert verbose_list_response |> get_in(["result", "structuredContent", "comments"]) |> length() == 2
-
     repo.update_all(
       from(work_package in WorkPackage, where: work_package.id == ^package.id),
       set: [branch_pattern: "legacy/*"]

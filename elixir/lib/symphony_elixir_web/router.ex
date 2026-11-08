@@ -33,15 +33,8 @@ defmodule SymphonyElixirWeb.Router do
       :herdr_answer_question
     )
 
-    post(
-      "/api/v1/sympp/herdr/work-packages/:work_package_id/guidance/:guidance_request_id/answer",
-      SymppDashboardApiController,
-      :herdr_answer_guidance
-    )
-
     match(:*, "/api/v1/sympp/herdr/work-requests", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/herdr/work-requests/:work_request_id/questions/:question_id/answer", ObservabilityApiController, :method_not_allowed)
-    match(:*, "/api/v1/sympp/herdr/work-packages/:work_package_id/guidance/:guidance_request_id/answer", ObservabilityApiController, :method_not_allowed)
   end
 
   scope "/", SymphonyElixirWeb do
@@ -72,19 +65,11 @@ defmodule SymphonyElixirWeb.Router do
     post("/api/v1/sympp/operator/work-packages/:work_package_id/state", SymppDashboardApiController, :operator_update_work_package_state)
     post("/api/v1/sympp/operator/work-packages/:work_package_id/blockers/:blocker_id/clear", SymppDashboardApiController, :operator_clear_work_package_blocker)
     post("/api/v1/sympp/operator/work-packages/:work_package_id/archive", SymppDashboardApiController, :operator_archive_work_package)
-    post("/api/v1/sympp/operator/comments", SymppDashboardApiController, :operator_create_comment)
-    post("/api/v1/sympp/operator/comments/:comment_id/resolve", SymppDashboardApiController, :operator_resolve_comment)
 
     post(
       "/api/v1/sympp/operator/work-requests/:work_request_id/questions/:question_id/answer",
       SymppDashboardApiController,
       :operator_answer_question
-    )
-
-    post(
-      "/api/v1/sympp/operator/work-packages/:work_package_id/guidance/:guidance_request_id/answer",
-      SymppDashboardApiController,
-      :operator_answer_guidance
     )
 
     post(
@@ -129,8 +114,6 @@ defmodule SymphonyElixirWeb.Router do
     match(:*, "/api/v1/sympp/operator/work-requests/:work_request_id/archive", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-requests/:work_request_id/delete", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-requests/:work_request_id/restore", ObservabilityApiController, :method_not_allowed)
-    match(:*, "/api/v1/sympp/operator/comments", ObservabilityApiController, :method_not_allowed)
-    match(:*, "/api/v1/sympp/operator/comments/:comment_id/resolve", ObservabilityApiController, :method_not_allowed)
 
     post("/api/v1/refresh", ObservabilityApiController, :refresh)
     match(:*, "/api/v1/refresh", ObservabilityApiController, :method_not_allowed)

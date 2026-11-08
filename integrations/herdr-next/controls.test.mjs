@@ -15,8 +15,8 @@ const detail = (id, repo, packages = []) => ({
   work_request: { id, title: id, repo, inserted_at: '2026-10-25T12:00:00Z' },
   work_packages: packages.map((pkg) => ({ id: pkg.id, title: pkg.id, repo: pkg.repo, ...pkg })),
 });
-const board = (details, guidance = []) => M.parseBoard({
-  generated_at: '2026-10-25T13:00:00Z', work_request_details: details, guidance_requests: { guidance_requests: guidance }, extra: 'tolerated',
+const board = (details) => M.parseBoard({
+  generated_at: '2026-10-25T13:00:00Z', work_request_details: details, extra: 'tolerated',
 });
 
 test('native origins reject embedded credentials and paths, while dashboard links may have a path', () => {
@@ -30,21 +30,20 @@ test('native origins reject embedded credentials and paths, while dashboard link
   assert.equal(M.dashboardUrl('http://localhost:4000', 'http://user:private@localhost:4000/sympp'), 'http://localhost:4000/sympp');
 });
 
-test('open questions are answerable detail, while explicit escalation and actual guidance need the operator', () => {
+test('open questions are answerable detail, while explicit escalation needs the operator', () => {
   const ordinary = detail('wr1', 'owner/web');
   ordinary.clarification_questions = [{ id: 'q1', question: 'Which order?', status: 'open', decision_prompt: prompt }];
-  const escalated = detail('wr2', 'owner/api', [{ id: 'wp2', repo: 'owner/api', activity_signal: { next_actor: 'human' } }]);
+  const escalated = detail('wr2', 'owner/api', [{ id: 'wp2', repo: 'owner/api' }]);
   escalated.work_request.operator_report = { human_escalation: { question: 'Budget decision?', raised_at: '2026-10-25T12:30:00Z' } };
-  const [normal, urgent] = board([ordinary, escalated], [{ id: 'g2', work_package_id: 'wp2', question: 'API contract?', status: 'human_info_needed', decision_prompt: prompt }]).jobs;
+  const [normal, urgent] = board([ordinary, escalated]).jobs;
   assert.equal(normal.needs[0].text, "Which order?");
   assert.equal(normal.questions[0].id, 'q1');
   assert.deepEqual(C.answerBody(normal.questions[0], 'api_first', ''), { answer_choice: 'api_first' });
-  assert.equal(urgent.needs.length, 2);
+  assert.equal(C.answerPath(normal.questions[0]), '/api/v1/sympp/herdr/work-requests/wr1/questions/q1/answer');
+  assert.equal(C.answerPath({ ...normal.questions[0], route: '/api/v1/sympp/herdr/work-requests/w/questions/q/answer' }), '/api/v1/sympp/herdr/work-requests/w/questions/q/answer', 'an ask the board routes answers through its own route');
+  assert.equal(urgent.needs.length, 1);
   assert.equal(urgent.needs[0].id, undefined, 'escalation text must not become a postable question');
-  assert.equal(urgent.guidance[0].id, 'g2');
-  assert.equal(C.answerPath(urgent.guidance[0]), '/api/v1/sympp/herdr/work-packages/wp2/guidance/g2/answer');
-  assert.equal(C.answerPath({ ...urgent.guidance[0], route: '/api/v1/sympp/herdr/work-requests/w/questions/q/answer' }), '/api/v1/sympp/herdr/work-requests/w/questions/q/answer', 'an ask the board routes answers through its own route');
-  assert.equal(L.needsQueue([normal, urgent]).length, 3, 'guidance and its human activity signal must not duplicate');
+  assert.equal(L.needsQueue([normal, urgent]).length, 2);
 });
 
 const host = { node: 'C:\\Program Files\\nodejs\\node.exe', helper: 'C:\\Herdr Home\\tools\\sympp-herdr.js', session: 'scratch' };

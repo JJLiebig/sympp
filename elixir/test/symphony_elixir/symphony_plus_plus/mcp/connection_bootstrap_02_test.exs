@@ -19,7 +19,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
     assert Map.fetch!(tool_sets, "trusted_local_http_extra_tools") == ToolCatalog.contract_trusted_local_http_extra_tools()
     assert Map.fetch!(tool_sets, "worker_tools") == ToolCatalog.worker_tools()
     assert Map.fetch!(tool_sets, "architect_tools") == ToolCatalog.architect_tools()
-    assert Map.fetch!(tool_sets, "shared_worker_architect_tools") == ToolCatalog.shared_worker_architect_tools()
   end
 
   test "mix task reuses an already-started repo for the exact SQLite URI" do

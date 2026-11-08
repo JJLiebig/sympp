@@ -48,11 +48,9 @@ several domains, attribution uses its most recent still-current registration.
    Worker sessions cannot become architects implicitly. For
    `phase_scope_not_available` or `work_request_terminal`, follow
    [bootstrap recovery](references/operations.md#bootstrap-recovery).
-2. For WorkRequest lanes, read `read_work_request(work_request_id)`,
-   `read_plan(work_request_id, view?, detail?)`, and
-   `list_guidance_requests(work_request_id?)` before planning WorkPackages or rearranging
-   Groups. The WorkRequest guidance filter requires the usual
-   `read:work_request` grant.
+2. For WorkRequest lanes, read `read_work_request(work_request_id)` and
+   `read_plan(work_request_id, view?, detail?)` before planning WorkPackages or
+   rearranging Groups.
 3. If MCP/session/scope state is unavailable, record/report the blocker. Do not
    invent state.
 
@@ -86,8 +84,7 @@ truth. `read_plan` also defaults to compact package references; use
   `source_type`: `human`, `architect`, `operator`, `ask_pro_advisory`.
 - Route product or scope questions that approved intent and available evidence
   cannot answer to the chief when present; the chief applies existing user decisions and escalates
-  only what it cannot settle. Without a chief, ask the user. Optional
-  `human_info_needed` guidance records do not declare blockers. Do not choose
+  only what it cannot settle. Without a chief, ask the user. Do not choose
   product behavior just to keep work moving.
 - Once open questions are answered or closed, continue straight to
   `read_work_request` and `slice_work_request`; no separate
@@ -219,7 +216,6 @@ escalations or blockers. No report cadence or extra checklist is required.
   Asking, escalation, and answering do not create or clear these blockers.
 - Optional Herdr/OSC observations augment last-known state. Missing observation
   means unknown and never blocks work or grants takeover authority.
-- Escalate with `escalate_guidance_request` when human product input is needed.
 - Write every human question so it stands alone in plain English: avoid jargon
   or briefly explain a necessary term, and focus on what users see and the
   product consequences, not implementation detail. State the current situation,
@@ -266,7 +262,7 @@ closeout payloads, read
 
 Do not infer delivery from prose decisions or chat. A successful terminal
 closeout revokes live worker grants and releases
-current claim leases, including paused leases; do not require a separate worker
+current claim leases; do not require a separate worker
 or runtime-cleanup step first. Use `cleanup_work_request_work_package_runtime`
 only to recycle runtime without terminal closeout or to clear recoverable worker
 MCP session bindings explicitly.
@@ -285,5 +281,5 @@ retire obsolete scope but cannot satisfy dependencies or deliver an all-skipped 
 After required delivery and WR acceptance, optional sanity checks create follow-up
 work; they are not another completion gate.
 
-Human attention is **Needs you**, raised only by the chief or architect with one sentence stating the action: a human question or product/policy approval, access only the human can grant, or recovery exhausted after the system tried. Use `human_escalation:{question}` in the architect report, or `escalate_guidance_request` to `human_info_needed` for a recorded guidance question.
-Read `read_delivery_board` for stale workers (`next_actor: architect`, `inspect_runtime`), blockers and validation evidence; handle silent workers, failing checks and quiet tasks before escalating exhausted recovery. Review rounds, running CI, dependencies, queues, architect-routed guidance and worker-parent questions never need human attention by themselves.
+Human attention is **Needs you**, raised only by the chief or architect with one sentence stating the action: a human question or product/policy approval, access only the human can grant, or recovery exhausted after the system tried. Use `human_escalation:{question}` in the architect report.
+Read `read_delivery_board` for stale workers (`next_actor: architect`, `inspect_runtime`), blockers and validation evidence; handle silent workers, failing checks and quiet tasks before escalating exhausted recovery. Review rounds, running CI, dependencies, queues and worker-parent questions never need human attention by themselves.

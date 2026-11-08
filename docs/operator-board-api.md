@@ -6,24 +6,20 @@ canonical product tree, attention, package/delivery signals and sanitized sessio
 locations; locations remain last observed addresses, not proof of live agents.
 The normal standalone web board and its authorization are unchanged.
 
-Each `work_request_details[]` includes `asks`, the outstanding clarification,
-guidance and architect questions plus packages waiting for a human. Each ask has
-`{id, kind, text, work_package_id, answer_route}`. `kind` is `clarification`,
-`guidance`, `architect`, or `human_wait`. IDs remain stable while the ask is open;
-a reopened architect escalation has a new ID. `text` is `null` when no question
-was recorded. Request-level asks have `work_package_id: null`. `answer_route`
-is the existing native POST path, accepting `{answer: "..."}` and the other
-answer fields documented below. Only clarification and human-escalated guidance
-are answerable there. Ordinary open guidance belongs to the architect and has
-`answer_route: null`; architect escalations and unrecorded questions also have
-no native answer route. Send those to the topic's chief. Answered/resolved asks
-leave the list on the next read. No new answer endpoint is introduced.
+Each `work_request_details[]` includes `asks`, the outstanding clarification and
+architect questions. Each ask has `{id, kind, text, work_package_id,
+answer_route}`. `kind` is `clarification` or `architect`. IDs remain stable while
+the ask is open; a reopened architect escalation has a new ID. Asks have
+`work_package_id: null`. `answer_route` is the existing native POST path,
+accepting `{answer: "..."}` and the other answer fields documented below. Only
+clarification questions are answerable there; architect escalations have
+`answer_route: null`. Send those to the topic's chief. Answered/resolved asks
+leave the list on the next read.
 
 Package `activity_signal.observation_state` distinguishes `queued` (planned,
 created or prepared, without a current worker observation), `current` (current
-agent run or claim), and `stale` (expired worker heartbeat/claim). `paused` and
-`unknown` remain available for paused workers and packages without conclusive
-runtime evidence. A prepared grant alone is not a live worker. Worker freshness
+agent run or claim), and `stale` (expired worker heartbeat/claim). `unknown`
+remains available for packages without conclusive runtime evidence. A prepared grant alone is not a live worker. Worker freshness
 uses the existing runtime heartbeat policy, independent of actor display labels;
 package edits and dispatch timestamps do not prove a fresh worker.
 
@@ -64,7 +60,7 @@ session locations, or writing claims, audit or business state. Subscribe to
 
 `GET /api/v1/sympp/herdr/work-requests/:work_request_id` uses the same native
 read authority and never runs ledger migrations. It returns the request's
-clarification questions, comments, packages, product tree, execution graph,
+clarification questions, packages, product tree, execution graph,
 attention keys and current worker sessions. `decision_logs` contains every
 decision for that request, newest first, with the existing decision entry shape;
 `summary.decision_count` remains the total. Browser detail enrichment still
@@ -82,7 +78,6 @@ services, response shapes and dashboard invalidation as their operator siblings:
 | --- | --- |
 | `/work-requests` | Intake fields below; HTTP 201 with `{ok:true, work_request:<request detail>, refresh:{dashboard:true, work_request_id}}`. The new id is `work_request.work_request.id`. |
 | `/work-requests/:id/questions/:question_id/answer` | Answer fields below; HTTP 200 with `{ok:true, work_request_id, question_id, refresh:{dashboard:true, work_request_id}}`. |
-| `/work-packages/:id/guidance/:guidance_request_id/answer` | Answer fields below; HTTP 200 with `{ok:true, guidance_request_id, refresh:{dashboard:true, work_package_id}}`. |
 
 Native human authority means a trusted direct local process, not an authenticated
 Herdr application identity. Requests require a loopback peer and local Host,
@@ -104,11 +99,7 @@ claims work nor starts an agent. Unknown request fields are ignored.
 Read persisted questions from
 `work_request_details[].clarification_questions[]`: `id`, `work_request_id`,
 `question`, `why_needed`, `decision_prompt`, `status`, `answer`, `answered_by`
-and `answered_at`. Only `status: "open"` is answerable. Package guidance is in
-`guidance_requests.guidance_requests[]`, with `id`, `work_package_id`, `summary`,
-`question`, `context`, `decision_prompt` and `status`, plus recorded answer
-metadata. Only guidance escalated to `human_info_needed` is human-answerable;
-ordinary open guidance remains the architect's responsibility.
+and `answered_at`. Only `status: "open"` is answerable.
 
 A structured `decision_prompt` has `tl_dr`, `details`, 1–4 `options` with `id`,
 `label` and `answer` (optional `description`, `pros` and `cons`), and an optional
@@ -120,12 +111,10 @@ requires a nonblank `answer_note`. Without a structured prompt, submit
 answer author; a successful answer does not automatically resume or unblock work.
 
 Refetch the native board after success or its event-stream invalidation. Errors
-use `{error:{code,message}}`: malformed input/choice or wrong guidance status
-returns HTTP 422, absent/wrong-scope targets return HTTP 404, and an already
-answered/closed clarification question returns HTTP 409. Wrong-package guidance
-answers now return HTTP 404 on both native and browser routes; previously the
-browser refusal incorrectly returned HTTP 500. No draft-edit, deletion, dispatch
-or claim mutation is exposed by these native routes.
+use `{error:{code,message}}`: malformed input/choice returns HTTP 422,
+absent/wrong-scope targets return HTTP 404, and an already answered/closed
+clarification question returns HTTP 409. No draft-edit, deletion, dispatch or
+claim mutation is exposed by these native routes.
 
 ## Hydrated board
 
@@ -300,10 +289,10 @@ These existing POST routes require local operator authorization:
 | --- | --- |
 | `/state` with `{"state":"completed"}` | Operator override; no delivery or inactive-worker precondition. Marks the goal complete, clears its archive state and open questions, clears package attention and queues terminal package worktree cleanup. Does not stop workers or merge PRs. Confirm the override when work is still running. |
 | `/archive` | Requires completion after refreshing current evidence; otherwise returns `not_completed`. Hides the goal and queues terminal package worktree cleanup. History remains. |
-| `/delete` | Requires only that the goal exists; archive and completion are **not** backend prerequisites. Permanently removes the goal and dependent ledger history/comments/grant scopes and queues linked worktree cleanup, including nonterminal packages. Confirm deletion and finish or stop active work first; it is not a safe unconditional one-click action. |
+| `/delete` | Requires only that the goal exists; archive and completion are **not** backend prerequisites. Permanently removes the goal and dependent ledger history/grant scopes and queues linked worktree cleanup, including nonterminal packages. Confirm deletion and finish or stop active work first; it is not a safe unconditional one-click action. |
 | `/restore` | Requires an existing goal. Clears archive state. A never-started archive gets a new threshold window without completion; a still-completed archive resets `completed_at`. Does not restore deleted worktrees or undo queued cleanup. |
 
-Worktree cleanup runs asynchronously and defers active or paused workers while
+Worktree cleanup runs asynchronously and defers active workers while
 their package records exist. Deleting those records removes that activity check,
 so deletion must not be treated as a way to stop a running worker.
 

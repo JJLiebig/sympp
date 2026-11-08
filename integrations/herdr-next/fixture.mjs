@@ -24,9 +24,6 @@ export function boardPayload() {
       { domain: 'Live', repos: [], registered_at: at(100), session_location: null },
     ],
     work_packages: [{ id: 'wp-build', active_agent_run: { attempt: 2, last_seen_at: at(3), stale: false } }],
-    guidance_requests: { guidance_requests: [
-      { id: 'g-web', work_package_id: 'x-web', status: 'human_info_needed', question: 'Which theme tokens?', updated_at: at(900) },
-    ] },
     work_request_details: [
       {
         work_request: {
@@ -58,7 +55,7 @@ export function boardPayload() {
                 { number: 3, lane: 'review_t1', step: 'base-signoff', status: 'decision-pending', started_at: at(40), finished_at: null, outcome: null, findings: null },
               ],
             },
-            activity_signal: { current_actor: { role: 'worker', name: 'opus-lens' }, observation_state: 'stale', waiting_reason: 'review_in_progress', next_actor: 'human', next_action: 'answer_guidance', last_update_at: at(25) },
+            activity_signal: { current_actor: { role: 'worker', name: 'opus-lens' }, observation_state: 'stale', waiting_reason: 'review_in_progress', next_actor: 'worker', next_action: 'address_findings', last_update_at: at(25) },
           }),
           // Landed a day before the rest started: a long stretch nobody acted in.
           pkg('wp-done', 'Module split', 1, { stage: 'done', track: 'pr', delivered: true, entered_at: at(1800) }, {
@@ -180,7 +177,6 @@ export function variantPayload(variant) {
   ];
   board.work_request_details[3].asks = quiet ? [] : [
     { id: 'esc-1', kind: 'architect', text: 'Ship tokens before the API?', work_package_id: null, answer_route: null },
-    { id: 'g-web', kind: 'guidance', text: 'Which theme tokens?', work_package_id: 'x-web', answer_route: '/api/v1/sympp/herdr/work-packages/x-web/guidance/g-web/answer' },
   ];
   for (const detail of board.work_request_details) {
     for (const p of detail.work_packages ?? []) p.repo_signal = { has_ci: CI[p.repo] };
@@ -188,7 +184,6 @@ export function variantPayload(variant) {
   const tokenApi = board.work_request_details[3].work_packages.find((p) => p.id === 'x-api');
   tokenApi.activity_signal = { observation_state: 'current' };
   if (quiet) {
-    board.guidance_requests.guidance_requests = [];
     board.work_request_details[0].clarification_questions = [];
     const review = board.work_request_details[0].work_packages.find((p) => p.id === 'wp-review');
     review.activity_signal = { current_actor: { role: 'worker', name: 'opus-lens' }, observation_state: 'current', next_actor: 'worker', next_action: 'address_findings' };

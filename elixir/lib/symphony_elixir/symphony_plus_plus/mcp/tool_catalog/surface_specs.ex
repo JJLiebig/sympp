@@ -177,10 +177,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
     }
   end
 
-  defp local_operator_tool_description("add_work_request_comment") do
-    "Append a redacted local-operator comment to a WorkRequest by id. Requires an unbound trusted local HTTP MCP session with an explicit state key and a file-backed local ledger; grants no dispatch or lifecycle authority."
-  end
-
   defp local_operator_tool_description("record_work_request_operator_decision") do
     "Record a redacted local-operator decision on a WorkRequest by id. Requires an unbound trusted local HTTP MCP session with an explicit state key and a file-backed local ledger; does not require ownership of that WorkRequest."
   end
@@ -190,11 +186,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   end
 
   defp unbound_scoped_tool_specs do
-    shared = ToolCatalog.shared_worker_architect_tools()
-
     Enum.map(ToolCatalog.architect_tools() -- ToolCatalog.worker_tools(), &explicit_work_request_architect_tool_spec/1) ++
-      Enum.map(ToolCatalog.worker_tools() -- shared, &unbound_worker_tool_spec/1) ++
-      Enum.map(shared, &architect_tool_spec/1)
+      Enum.map(ToolCatalog.worker_tools(), &unbound_worker_tool_spec/1)
   end
 
   defp architect_tool_spec(name, true), do: architect_tool_spec(name)
@@ -257,14 +250,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp architect_tool_description("append_progress"),
     do: "Append an idempotent progress event to an explicit descendant WorkPackage."
 
-  defp architect_tool_description("add_comment"), do: "Add a policy-scoped comment to a claimed WorkRequest descendant package surface, or a narrow external comment to a visible WorkRequest."
-  defp architect_tool_description("list_comments"), do: "List comments attached to a scoped WorkRequest or WorkPackage."
-  defp architect_tool_description("resolve_comment"), do: "Resolve a policy-scoped comment attached to a claimed WorkRequest descendant package surface."
   defp architect_tool_description("resolve_blocker"), do: "Resolve a blocker event for a policy-scoped descendant WorkPackage."
 
   defp architect_tool_description("force_release_work_package_claim"),
     do:
-      "Force-release a WorkPackage's worker claim, including active or paused leases and reservations left after release. Any authenticated architect may target any WorkRequest. Invalidates previous worker sessions and records an audit reason; leaves package status and delivery unchanged."
+      "Force-release a WorkPackage's worker claim, including active leases and reservations left after release. Any authenticated architect may target any WorkRequest. Invalidates previous worker sessions and records an audit reason; leaves package status and delivery unchanged."
 
   defp architect_tool_description("read_delivery_board"), do: "Read a compact scoped WorkRequest delivery board; detail: full includes complete package and closeout evidence."
   defp architect_tool_description("attach_branch"), do: "Update canonical branch metadata for an explicit descendant WorkPackage."
@@ -281,10 +271,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp architect_tool_description(tool) when tool in ["cleanup_work_request_work_package_runtime", "revoke_work_package_worker_key"],
     do: delivery_runtime_tool_description(tool)
 
-  defp architect_tool_description("list_guidance_requests"), do: "List package-scoped guidance requests visible to the architect grant's phase, repo, and base branch."
-  defp architect_tool_description("read_guidance_request"), do: "Read one package-scoped guidance request visible to the architect grant."
-  defp architect_tool_description("answer_guidance_request"), do: "Answer an open package-scoped guidance request."
-  defp architect_tool_description("escalate_guidance_request"), do: "Route an open guidance request to a human decision without changing package blockers."
   defp architect_tool_description("set_work_request_status"), do: "Move a scoped WorkRequest between valid statuses with optimistic current-status checking."
   defp architect_tool_description("ask_question"), do: "Add a clarification question to a scoped WorkRequest."
   defp architect_tool_description("answer_question"), do: "Answer an open clarification question that belongs to a scoped WorkRequest."
@@ -314,11 +300,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
     do: "Activate one planned WorkPackage and return ids, status, workspace and assignment_uri. Read that resource for the worker bootstrap, or request detail: full inline."
 
   defp architect_tool_description("prepare_work_package_worktree"), do: "Prepare a scoped WorkPackage git worktree and record only its worktree_path."
-  defp architect_tool_description("cleanup_work_package_worktree"), do: "Clean up a scoped WorkPackage git worktree after validating the recorded path and dirty state."
 
   defp delivery_runtime_tool_description("cleanup_work_request_work_package_runtime"),
     do:
-      "Recycle stale or superseded runtime authority for the WorkPackage linked to a scoped WorkRequest WorkPackage after superseded or abandoned delivery evidence is supplied. Revokes linked worker grants, releases non-paused local claim leases, clears recoverable worker MCP session bindings, and records audit evidence before delivery closeout."
+      "Recycle stale or superseded runtime authority for the WorkPackage linked to a scoped WorkRequest WorkPackage after superseded or abandoned delivery evidence is supplied. Revokes linked worker grants, releases local claim leases, clears recoverable worker MCP session bindings, and records audit evidence before delivery closeout."
 
   defp delivery_runtime_tool_description("revoke_work_package_worker_key"),
     do: "Revoke one live worker grant for the WorkPackage linked to a scoped WorkRequest WorkPackage during in-progress recycle or delivery closeout cleanup."

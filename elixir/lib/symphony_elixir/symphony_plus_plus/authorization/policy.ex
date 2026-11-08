@@ -12,8 +12,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Policy do
     :work_request_read,
     :work_package_read,
     :task_plan_read,
-    :comment_list,
-    :guidance_request_read,
     :delivery_board_read,
     :dashboard_read
   ]
@@ -25,12 +23,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Policy do
     :task_plan_update,
     :progress_append,
     :finding_append,
-    :review_evidence_append,
-    :comment_add,
-    :comment_list,
-    :comment_resolve,
-    :guidance_request_create,
-    :guidance_request_read
+    :review_evidence_append
   ]
 
   @work_package_actions [
@@ -60,14 +53,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Policy do
     :finding_append,
     :review_evidence_append,
     :blocker_resolve,
-    :comment_add,
-    :comment_list,
-    :comment_resolve,
-    :external_comment_add,
-    :guidance_request_create,
-    :guidance_request_read,
-    :guidance_request_answer,
-    :guidance_request_escalate,
     :delivery_board_read,
     :delivery_reconcile_dry_run,
     :delivery_reconcile_apply,
@@ -148,7 +133,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Policy do
   end
 
   defp architect_scope_types(action) when action in @read_actions, do: [:work_request, :work_package, :repo, :phase]
-  defp architect_scope_types(:external_comment_add), do: [:work_request, :repo, :phase]
   defp architect_scope_types(:blocker_resolve), do: [:work_request, :work_package]
   defp architect_scope_types(action) when action in @work_package_actions, do: [:work_request, :work_package]
   defp architect_scope_types(action) when action in @worker_package_actions, do: [:work_request, :work_package]
@@ -166,8 +150,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Policy do
 
   defp architect_capability(:work_package_dispatch), do: "dispatch:work_request"
   defp architect_capability(:delivery_reconcile_dry_run), do: "read:work_request"
-  defp architect_capability(:guidance_request_read), do: "read:guidance_request"
-  defp architect_capability(action) when action in [:guidance_request_answer, :guidance_request_escalate], do: "write:guidance_request"
   defp architect_capability(action) when action in @read_actions, do: "read:work_request"
   defp architect_capability(_action), do: "write:work_request"
 

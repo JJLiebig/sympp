@@ -24,9 +24,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     "update_task_plan",
     "append_finding",
     "append_progress",
-    "add_comment",
-    "list_comments",
-    "resolve_comment",
     "resolve_blocker",
     "read_delivery_board",
     "attach_branch",
@@ -36,10 +33,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     "record_work_package_delivery",
     "revoke_work_package_worker_key",
     "force_release_work_package_claim",
-    "list_guidance_requests",
-    "read_guidance_request",
-    "answer_guidance_request",
-    "escalate_guidance_request",
     "set_work_request_status",
     "ask_question",
     "answer_question",
@@ -54,8 +47,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     "delete_dependency",
     "skip_work_package",
     "dispatch_work_package",
-    "prepare_work_package_worktree",
-    "cleanup_work_package_worktree"
+    "prepare_work_package_worktree"
   ]
   @worker_tool_names [
     "get_current_assignment",
@@ -65,11 +57,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     "update_task_plan",
     "append_finding",
     "append_progress",
-    "abandon",
-    "add_comment",
-    "list_comments",
-    "resolve_comment",
-    "read_guidance_request",
     "attach_branch",
     "attach_pr",
     "sync_pr",
@@ -216,9 +203,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
       alias SymphonyElixir.SymphonyPlusPlus.Authorization.Scope
       alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
       alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service, as: ClaimLeaseService
-      alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
-      alias SymphonyElixir.SymphonyPlusPlus.Comments.Service, as: CommentService
-      alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
       alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine
       alias SymphonyElixir.SymphonyPlusPlus.MCP.Auth
       alias SymphonyElixir.SymphonyPlusPlus.MCP.Config
@@ -293,10 +277,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
         repo.delete_all(PlanNode)
         repo.delete_all(SoloSessionEntry)
         repo.delete_all(SoloSession)
-        repo.delete_all(Comment)
         repo.delete_all(ClaimLease)
         repo.delete_all(GrantScope)
-        repo.delete_all(GuidanceRequest)
         repo.delete_all(AccessGrant)
         repo.delete_all(WorkRequest)
         repo.delete_all(WorkPackage)

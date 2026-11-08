@@ -45,7 +45,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewObservationTest do
         qualified = %{package | status: "ready_for_merge"}
         eligibility = %{eligible: true, reason_codes: [], next_action: "verify_native_checks_and_review_then_merge"}
         summary = %{review_signal: signal, merge_eligibility: eligibility}
-        activity = Signals.activity(qualified, summary, %{key: "merge_ready"}, [], [])
+        activity = Signals.activity(qualified, summary, %{key: "merge_ready"}, [])
         assert activity["next_actor"] == "architect"
         assert activity["next_action"] == "inspect_changed_since_review"
         assert Signals.board_state(qualified, summary, nil).stage == "merge"

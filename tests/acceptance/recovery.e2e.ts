@@ -64,7 +64,7 @@ test('a supported disposable offline snapshot denies MCP and dispatch without ch
   for (const payload of [
     { jsonrpc: '2.0', id: 1, method: 'initialize', params: initialize },
     tool('claim_local_assignment', { work_package_id: wp }),
-    tool('add_work_request_comment', { work_request_id: request, body: 'Must not write', created_by: 'offline' }),
+    tool('record_work_request_operator_decision', { work_request_id: request, decision: 'Must not write', rationale: 'Offline', scope_impact: 'None', created_by: 'offline' }),
   ]) {
     const refused = await client.raw(payload);
     expect(refused.status).toBe(403);
@@ -74,7 +74,7 @@ test('a supported disposable offline snapshot denies MCP and dispatch without ch
   const restarted = processes.factory();
   const original = architect.reconnect(await restarted.endpoint);
   expect((await original.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages[0].status).toBe('ready_for_worker');
-  expect((await original.call('list_comments', { target_kind: 'work_request', target_id: request })).comments).toEqual([]);
+  expect((await original.call('read_work_request', { detail: 'full', work_request_id: request })).decision_log_entries).toEqual([]);
 });
 
 test('independent architect clients preserve the owner through release reconnect and rejected scope rebinding', async ({ processes }) => {
@@ -234,9 +234,11 @@ test('STDIO initialization refuses unbound protected calls and cannot impersonat
   expect(reconnected[0].result.structuredContent.local_claim.mode).toBe('stdio');
   expect(reconnected[0].result.structuredContent.assignment.claimed_by).toBe(claimed.structuredContent.assignment.claimed_by);
   expect((await peer.request('tools/call', { name: 'get_current_assignment', arguments: {} })).structuredContent.assignment.work_package_id).toBe(wp);
-  const note = await candidate.rawRequest('tools/call', { name: 'add_work_request_comment', arguments: { work_request_id: request, body: 'Untrusted operator', created_by: 'stdio-worker' } });
+  const note = await candidate.rawRequest('tools/call', { name: 'record_work_request_operator_decision', arguments: {
+    work_request_id: request, decision: 'Untrusted operator', rationale: 'STDIO', scope_impact: 'None', created_by: 'stdio-worker',
+  } });
   expect(note.error).toBeTruthy();
-  expect((await architect.call('list_comments', { target_kind: 'work_request', target_id: request })).comments).toEqual([]);
+  expect((await architect.call('read_work_request', { detail: 'full', work_request_id: request })).decision_log_entries).toEqual([]);
 });
 
 test('STDIO protocol errors and batches cannot smuggle authority across requests', async ({ processes }) => {
@@ -286,7 +288,7 @@ test('STDIO protocol errors and batches cannot smuggle authority across requests
     batchTool(921, 'append_progress', { summary: 'Before claim', idempotency_key: 'batch-before' }),
     batchTool(922, 'claim_local_assignment', { work_package_id: first, claimed_by: 'batch-owner' }),
     batchTool(923, 'append_progress', { summary: 'After claim in same batch', idempotency_key: 'batch-after' }),
-    batchTool(924, 'list_guidance_requests', { work_request_id: 'foreign' }),
+    batchTool(924, 'reconcile_work_request', { work_request_id: 'foreign' }),
   ]);
   expect(denied[0].error.data.reason).toBe('request_must_be_object');
   expect(denied[1].error.data.reason).toBe('unexpected_argument');
@@ -327,7 +329,7 @@ test('failed worker rebinding preserves its current authority and successful reb
   const client = await workerFactory.client();
   const catalog = await client.rpc('tools/list');
   const names = catalog.result.tools.map((entry: any) => entry.name);
-  for (const name of ['read_work_request', 'update_work_package', 'record_work_package_delivery', 'create_work_request', 'add_work_request_comment', 'claim_local_architect_assignment']) expect(names).not.toContain(name);
+  for (const name of ['read_work_request', 'update_work_package', 'record_work_package_delivery', 'create_work_request', 'record_work_request_operator_decision', 'claim_local_architect_assignment']) expect(names).not.toContain(name);
   const unbound = await client.call('get_current_assignment');
   expect(unbound.assignment).toBeNull();
   expect(unbound.binding.state).toBe('unbound');
@@ -408,7 +410,9 @@ test('HTTP location metadata follows successful authority and cannot be refreshe
   expect(creator.role).toBe('coordinator');
   expect(creator.machine_id).toBe(location.machine_id);
   expect(await packageLocation()).toEqual(location);
-  await client.call('add_work_request_comment', { work_request_id: followup, body: 'Keep coordinator attribution.' });
+  await client.call('record_work_request_operator_decision', {
+    work_request_id: followup, decision: 'Keep coordinator attribution.', rationale: 'Location refresh', scope_impact: 'None',
+  });
   const refreshed = (await detail(followup)).work_request.architect_session_location;
   expect(refreshed.role).toBe('coordinator');
   expect(refreshed.last_seen_at > creator.last_seen_at).toBe(true);

@@ -24,8 +24,8 @@ write authority.
   for example `"Terminal window: widget implementation"`. Do not add an MCP
   call just to report a location.
 - Reuse the returned assignment. Recheck binding with `get_current_assignment`
-  only after reconnect, denial, or conflicting identity. A paused or different
-  owner requires the parent; never bypass a denial or mint a replacement.
+  only after reconnect, denial, or conflicting identity. A different owner
+  requires the parent; never bypass a denial or mint a replacement.
 - `read_context` and `read_work_package_document` read current scoped state.
   The latter supports `context.md`, `acceptance.md`, `review.md`, `handoff.md`,
   `findings.md`, `progress.md`, and `task_plan.md`. Histories may have older pages;
@@ -34,7 +34,7 @@ write authority.
   Use `detail: "full"` with the same document and cursor for the complete page,
   including evidence bodies. Other documents and resource reads keep their full
   payloads.
-- Optional task-plan, finding, progress, comment, branch/PR, and readiness tools
+- Optional task-plan, finding, progress, branch/PR, and readiness tools
   remain available to authenticated workers. Do not call them just to repeat
   native GitHub, review, or conversational evidence.
 - While watching your PR's CI, call `sync_pr` when checks start, pass, fail,

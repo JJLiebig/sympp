@@ -95,18 +95,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackageWorkerRevokeTest do
     assert {:error, _reason} = Auth.require_session(old_session, repo)
   end
 
-  test "force release clears paused claims and denies workers without changing their authority", %{repo: repo} do
+  test "force release clears active claims and denies workers without changing their authority", %{repo: repo} do
     {work_request, _slice, package} = linked_slice!(repo, "active")
     session = create_work_request_architect_session(repo, work_request)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    {claim, worker} = claim_worker(repo, package, "paused-worker")
+    {claim, worker} = claim_worker(repo, package, "current-worker")
     lease_id = get_in(claim, ["result", "structuredContent", "local_claim", "claim_lease_id"])
-    args = %{"work_package_id" => package.id, "reason" => "replace paused worker"}
+    args = %{"work_package_id" => package.id, "reason" => "replace current worker"}
     denied = mcp_tool(repo, worker.session, "force_release_work_package_claim", args)
     assert denied["error"]
     assert {:ok, _session} = Auth.require_session(worker.session, repo)
-    assert repo.get!(AccessGrant, minted.grant.id).claimed_by == "paused-worker"
-    assert {:ok, _lease} = ClaimLeaseService.pause(repo, lease_id, local_worker_actor("paused-worker"), reason: "paused")
+    assert repo.get!(AccessGrant, minted.grant.id).claimed_by == "current-worker"
 
     response = mcp_tool(repo, session, "force_release_work_package_claim", args)
     assert get_in(response, ["result", "structuredContent", "released_claim_lease_ids"]) == [lease_id]
@@ -214,31 +213,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackageWorkerRevokeTest do
 
     assert get_in(abandoned_response, ["result", "structuredContent", "work_package_delivery", "outcome"]) == "abandoned"
     assert repo.get!(WorkPackage, linked_package.id).status == "abandoned"
-  end
-
-  test "architect cleanup rejects paused claim leases without mutating runtime", %{repo: repo} do
-    {work_request, work_package, linked_package} = linked_slice!(repo, "implementing")
-    successor_slice = create_work_package!(repo, work_request, "WRS-MCP-DELIVERY-PAUSED-SUCCESSOR")
-    session = create_work_request_architect_session(repo, work_request)
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
-    assert {:ok, _assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "paused-worker")
-
-    assert {:ok, claim_lease} =
-             ClaimLeaseService.claim(repo, linked_package.id, local_worker_actor("paused-worker"),
-               access_grant_id: minted.grant.id,
-               stale_after_ms: 60_000
-             )
-
-    assert {:ok, paused_lease} = ClaimLeaseService.pause(repo, claim_lease.id, local_worker_actor("architect"), reason: "operator pause")
-
-    response = mcp_tool(repo, session, "cleanup_work_request_work_package_runtime", cleanup_args(work_request, work_package, successor_slice.id))
-
-    assert get_in(response, ["error", "code"]) == -32_009
-    assert get_in(response, ["error", "data", "reason"]) == "active_runtime"
-    refute repo.get!(AccessGrant, minted.grant.id).revoked_at
-    assert %ClaimLease{status: "paused"} = repo.get!(ClaimLease, paused_lease.id)
-    refute Enum.any?(repo.all(ProgressEvent), &(&1.payload["source_tool"] == "cleanup_work_request_work_package_runtime"))
   end
 
   test "architect cleanup rejects fresh active AgentRun evidence without mutating runtime", %{repo: repo} do

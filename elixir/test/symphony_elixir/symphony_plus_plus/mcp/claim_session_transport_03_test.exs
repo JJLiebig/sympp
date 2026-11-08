@@ -419,7 +419,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
           "jsonrpc" => "2.0",
           "id" => "old-architect-handle-must-not-adopt-replacement",
           "method" => "tools/call",
-          "params" => %{"name" => "list_guidance_requests", "arguments" => %{}}
+          "params" => %{"name" => "reconcile_work_request", "arguments" => %{}}
         },
         claimed_server
       )

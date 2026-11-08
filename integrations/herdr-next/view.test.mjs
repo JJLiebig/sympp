@@ -31,10 +31,8 @@ test('the factory ranks what needs you and gives one row per Herdr topic', skip,
   for (const id of ['lens-overview', 'breadcrumb', 'crumb-factory', 'factory-main', 'factory-aside', 'needs-queue', 'topic-rows',
     'topic-t-herdr', 'topic-t-tools', 'topic-t-live', 'topic-unsorted', 'need-wr-cross:ask', 'unblocks-wr-cross:ask'])
     assert.ok(view.has(id), id);
-  const at = (id) => view.out.indexOf(`:id[Str("${id}")]`);
-  assert.ok(at('need-wr-cross:ask') < at('need-guidance:g-web'), 'what unblocks most comes first');
   assert.ok(view.text('Unblocks 2') && view.text('web · shares 1 job with Personal Tools') && view.text('Quiet'));
-  assert.ok(view.text('1 needs you') && view.text('2 need you'));
+  assert.ok(view.text('1 needs you'));
   assert.ok(view.text("You're needed in 2"));
   assert.equal(view.has('topic-nowhere'), false, 'no row for an empty catch-all');
   const narrow = await render(t, { props: { role: 'panel' }, width: 1400 });
@@ -45,7 +43,7 @@ test('a topic puts each question first with one action; other tasks carry only t
   const view = await render(t, { props: { role: 'panel' }, width: 1400, board: 'busy', path: { topic: 't-herdr' } });
   const at = (id) => view.out.indexOf(`:id[Str("${id}")]`);
   assert.ok(at('group-wr-pr') < at('group-wr-docs') && at('group-wr-cross') < at('group-wr-restore'), 'what asks the person comes first');
-  assert.ok(view.has('answer-ask:q1') && view.has('answer-ask:g-web'), 'a question with an answer route is answered here');
+  assert.ok(view.has('answer-ask:q1'), 'a question with an answer route is answered here');
   assert.ok(view.has('chief-ask:esc-1'), 'one without a route goes to the topic chief');
   assert.equal(view.has('ask-ask:wait-wp-review'), false, 'an unrecorded wait is not repeated beside a real question');
   assert.ok(!view.text('Stuck') && !view.text('Checks failing') && !view.text('No recent report'));
@@ -60,7 +58,7 @@ test('a topic puts each question first with one action; other tasks carry only t
 
 test('a space shows only the tasks on its repository, drawn as its topic draws them', skip, async (t) => {
   const space = await render(t, { props: {}, width: 700, board: 'busy', path: { topic: 't-tools', space: 'vps/s-api' } });
-  assert.ok(space.text('api') && space.has('task-wr-cross') && space.has('task-wr-restore') && space.has('answer-ask:g-web'));
+  assert.ok(space.text('api') && space.has('task-wr-cross') && space.has('task-wr-restore'));
   assert.ok(space.has('filter-all') && space.has('filter-vps/s-api'), 'back to the whole topic, or on to another space');
   assert.equal(space.has('task-wr-pr') || space.has('task-wr-theme'), false);
   const empty = await render(t, { props: {}, width: 1400, path: { topic: 'unsorted', space: 's-home' } });

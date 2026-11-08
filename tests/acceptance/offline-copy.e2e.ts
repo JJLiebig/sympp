@@ -67,13 +67,13 @@ if (process.env.SYMPP_OFFLINE_ACCEPTANCE === '1') {
     expect((await architect.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages).toEqual(before.work_packages);
     await offline.stop();
 
-    await architect.call('add_work_request_comment', { work_request_id: request, body: 'Only the explicit refresh sees this', created_by: 'acceptance' });
+    await architect.call('record_work_request_operator_decision', { work_request_id: request, decision: 'Only the explicit refresh sees this', rationale: 'Offline copy', scope_impact: 'None', created_by: 'acceptance' });
     expect((await copy.snapshot(source)).code).toBe(1);
     expect((await copy.snapshot(source, true)).code).toBe(0);
     const refreshed = new DatabaseSync(copy.database, { readOnly: true });
     try {
-      expect(refreshed.prepare('SELECT body FROM sympp_comments WHERE target_id = ?').all(request)
-        .map(row => row.body)).toContain('Only the explicit refresh sees this');
+      expect(refreshed.prepare('SELECT decision FROM sympp_work_request_decision_logs WHERE work_request_id = ?').all(request)
+        .map(row => row.decision)).toContain('Only the explicit refresh sees this');
     } finally { refreshed.close(); }
     expect((await readdir(copy.home)).some(name => name.startsWith('.offline-snapshot-'))).toBe(false);
     expect(existsSync(copy.commands)).toBe(false);

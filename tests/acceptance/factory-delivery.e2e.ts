@@ -35,7 +35,7 @@ test('deployment observations cover every delivered revision and preserve comple
   }
   expect((await architect.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.completed_at).toBeNull();
   expect((await hydrated()).deployments['example/service'].dev.reason).toBe('unfinished');
-  await architect.call('close_question', { work_request_id: request, question_id: question, current_status: 'open' });
+  await architect.call('close_question', { work_request_id: request, question_id: question, expected_question_status: 'open' });
   const completed = (await hydrated()).completed_at;
   expect(completed).toBeTruthy();
   const run = (id: number, sha: string, conclusion: string | null, hour = 11, patch: object = {}) => ({
@@ -358,7 +358,7 @@ test('typed no-PR closeout resolves blockers once and terminal packages cannot r
     await architect.call('resolve_blocker', { work_package_id: id, blocker_id: 'prerequisite', resolution: 'Closeout accepted.', summary: 'Already resolved.', idempotency_key: `terminal-resolution-${id}` });
     expect((await row(architect, request, id)).raw_status).toBe(status);
     await architect.reject('update_work_package', { work_package_id: id, expected_contract_revision: 1, patch: { title: 'Reactivate' } }, 'work_package_terminal');
-    await architect.reject('skip_work_package', { work_package_id: id, current_status: status }, 'work_package_terminal');
+    await architect.reject('skip_work_package', { work_package_id: id }, 'work_package_terminal');
     expect((await row(architect, request, id)).delivery).toEqual(before.delivery);
   }
   await close(architect, remaining);

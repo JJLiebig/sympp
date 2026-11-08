@@ -40,20 +40,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope do
     end
   end
 
-  @spec cleanup_target_repo_root(String.t() | nil, WorkPackage.t(), Config.t()) :: target_repo_root_result()
-  def cleanup_target_repo_root(target_repo_root, %WorkPackage{}, %Config{}) when is_binary(target_repo_root),
-    do: {:ok, target_repo_root}
-
-  def cleanup_target_repo_root(nil, %WorkPackage{worktree_path: nil}, %Config{}), do: {:ok, nil}
-
-  def cleanup_target_repo_root(nil, %WorkPackage{worktree_target_repo_root: target_repo_root}, %Config{})
-      when is_binary(target_repo_root),
-      do: {:ok, target_repo_root}
-
-  def cleanup_target_repo_root(nil, %WorkPackage{} = work_package, %Config{} = config) do
-    resolve_target_repo_root(nil, work_package, config)
-  end
-
   @spec prepare_target_repo_root(String.t() | nil, WorkPackage.t(), Config.t()) ::
           target_repo_root_result() | {:tool_error, String.t(), map()}
   def prepare_target_repo_root(explicit_root, %WorkPackage{} = work_package, %Config{} = config) do
@@ -150,13 +136,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope do
       {:error, _reason} -> {:error, :invalid_target_repo_root}
     end
   end
-
-  @spec require_cleanup_target_repo_root_scope(String.t() | nil, WorkPackage.t(), Config.t()) :: scope_result()
-  def require_cleanup_target_repo_root_scope(nil, %WorkPackage{}, %Config{}), do: :ok
-  def require_cleanup_target_repo_root_scope(_target_repo_root, %WorkPackage{worktree_path: nil}, %Config{}), do: :ok
-
-  def require_cleanup_target_repo_root_scope(target_repo_root, %WorkPackage{} = work_package, %Config{} = config),
-    do: require_target_repo_root_scope(target_repo_root, work_package, config)
 
   @spec require_live_review_head(WorkPackage.t(), Config.t(), String.t(), String.t()) :: scope_result()
   def require_live_review_head(

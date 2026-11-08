@@ -11,9 +11,7 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
   const uninitialized = await fresh.raw(tool('create_work_request', {}));
   expect(uninitialized.status).toBe(400);
   expect(uninitialized.body.error.data.reason).toBe('missing_session_id');
-  for (const name of ['add_work_request_comment', 'record_work_request_operator_decision']) {
-    expect((await fresh.raw(tool(name, {}))).body.error.data.reason).toBe('missing_session_id');
-  }
+  expect((await fresh.raw(tool('record_work_request_operator_decision', {}))).body.error.data.reason).toBe('missing_session_id');
   const init = { jsonrpc: '2.0', id: 1, method: 'initialize', params: initialize };
   const list = { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} };
   const concurrent = Array.from({ length: 20 }, () => new Client(endpoint, factory.receipt));
@@ -88,7 +86,6 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
   const nativeActions = [
     '/api/v1/sympp/herdr/work-requests',
     `/api/v1/sympp/herdr/work-requests/${id}/questions/missing/answer`,
-    `/api/v1/sympp/herdr/work-packages/${nativePackage}/guidance/missing/answer`,
   ];
   for (const action of nativeActions) {
     for (const headers of [
@@ -126,10 +123,10 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
   expect(JSON.stringify(omittedHealthArgs)).not.toContain(id);
   expect((await fresh.rpc('tools/call', { name: 'sympp.health', arguments: { unexpected: true } })).error.data.reason).toBe('invalid_tool_arguments');
   for (const headers of [{ origin: 'https://example.invalid' }, { 'x-forwarded-for': '127.0.0.1' }]) {
-    expect((await fresh.raw(tool('add_work_request_comment', { work_request_id: id, body: 'Denied ambient note', created_by: 'attacker' }), headers)).status).toBe(403);
+    const ambient = { work_request_id: id, decision: 'Denied ambient decision', rationale: 'Ambient', scope_impact: 'None', created_by: 'attacker' };
+    expect((await fresh.raw(tool('record_work_request_operator_decision', ambient), headers)).status).toBe(403);
   }
-  const comments = await fresh.call('list_comments', { target_kind: 'work_request', target_id: id });
-  expect(comments.comments).toEqual([]);
+  expect((await fresh.call('read_work_request', { detail: 'full', work_request_id: id })).decision_log_entries).toEqual([]);
   for (const batch of [[], [list], [init, list]]) {
     expect((await fresh.raw(batch)).body.error.data.reason).toBe('batch_not_supported');
   }
@@ -185,13 +182,13 @@ test('architect scope separates same-repository discovery from foreign writes an
     ['close_question', {}],
   ] as const) {
     const denied = await architect.reject(name, {
-      work_request_id: own, question_id: question.id, current_status: 'open', ...fields,
+      work_request_id: own, question_id: question.id, expected_question_status: 'open', ...fields,
     }, 'not_found');
     expect(JSON.stringify(denied)).not.toContain(other);
   }
   for (const [name, args] of [
     ['update_work_package', { expected_contract_revision: 1, patch: { title: 'Stolen' } }],
-    ['skip_work_package', { current_status: 'planned' }],
+    ['skip_work_package', {}],
   ] as const) {
     await architect.reject(name, { work_request_id: own, work_package_id: otherWp, ...args }, 'not_found');
   }
@@ -383,14 +380,14 @@ test('plan views preserve complete authoring and confine partial readers to visi
   }
 });
 
-test('worker mutations and resources remain confined to its package while explicit local notes preserve provenance', async ({ processes }) => {
+test('worker mutations and resources remain confined to its package while explicit local decisions preserve provenance', async ({ processes }) => {
   const factory = processes.factory();
   const architect = await factory.client();
   const request = await architect.request('Worker isolation');
   const [own, sibling] = await packages(architect, ['Own worker work', 'Confidential sibling']);
   const client = await worker(factory, own);
   const peer = await worker(factory, sibling, 'peer-worker');
-  const siblingComment = (await peer.call('add_comment', { body: 'Private sibling note' })).comment;
+  await peer.call('append_progress', { summary: 'Private sibling note', idempotency_key: 'sibling-note' });
   for (const [name, args] of [
     ['read_work_package_document', { detail: 'full', document: 'progress.md' }],
     ['append_progress', { summary: 'Stolen', idempotency_key: 'stolen-progress' }],
@@ -398,9 +395,6 @@ test('worker mutations and resources remain confined to its package while explic
     ['attach_branch', { branch: 'feature/authority', head_sha: 'a'.repeat(40) }],
     ['attach_pr', { url: 'https://github.com/example/service/pull/1' }],
   ] as const) await client.reject(name, { work_package_id: sibling, ...args }, 'outside_session_scope');
-  await client.reject('list_comments', { target_kind: 'work_package', target_id: sibling }, 'outside_session_scope');
-  await client.reject('resolve_comment', { comment_id: siblingComment.id }, 'not_found');
-  await client.reject('add_comment', { target_kind: 'work_request', target_id: request, body: 'Wrong capability' }, 'outside_session_scope');
   for (const [name, args] of [
     ['record_work_package_delivery', { work_package_id: own, outcome: 'completed_no_pr', idempotency_key: 'worker-close', evidence: { completed_no_pr: { no_pr_evidence: 'Unapproved completion' } } }],
     ['reconcile_work_request', { work_request_id: request, apply: true }],
@@ -419,23 +413,13 @@ test('worker mutations and resources remain confined to its package while explic
   await client.reject('read_task_plan', { work_package_id: sibling }, 'unexpected_argument');
   expect(JSON.stringify(ownContext)).not.toContain('Confidential sibling');
   expect(JSON.stringify(ownContext)).not.toContain('Private sibling note');
-  const overlong = await client.rpc('tools/call', { name: 'add_comment', arguments: { body: 'x'.repeat(4001) } });
-  expect(overlong.error.data.reason).toContain('body');
-  expect((await client.call('list_comments')).comments).toEqual([]);
-  const comment = (await client.call('add_comment', { body: 'Review sk-synthetic-secret before completion' })).comment;
-  expect(comment.body).toContain('[REDACTED]');
-  expect(comment.body).not.toContain('sk-synthetic-secret');
-  const resolved = (await client.call('resolve_comment', { comment_id: comment.id, resolution_note: 'Addressed' })).comment;
-  expect(resolved.status).toBe('resolved');
-  expect(resolved.source_type).toBe('worker');
-  expect(resolved.author_name).toBe('acceptance-worker');
-  expect(resolved.resolved_by).toBe('acceptance-worker');
-  expect(resolved.resolved_source_type).toBe('worker');
-  const note = await client.call('add_work_request_comment', { work_request_id: request, body: 'An explicit local operator note' });
-  expect(note.comment.body).toBe('An explicit local operator note');
-  expect(note.comment.author_name).toBe('acceptance-worker');
-  expect((await peer.call('list_comments')).comments[0].status).toBe('open');
-  expect((await peer.call('read_work_package_document', { detail: 'full', document: 'progress.md' })).progress_events).toEqual([]);
+  const note = await client.call('record_work_request_operator_decision', {
+    work_request_id: request, decision: 'An explicit local operator decision', rationale: 'Recorded from a worker session', scope_impact: 'None',
+  });
+  expect(note.decision_log_entry.decision).toBe('An explicit local operator decision');
+  expect(note.decision_log_entry.created_by).toBe('acceptance-worker');
+  const siblingProgress = (await peer.call('read_work_package_document', { detail: 'full', document: 'progress.md' })).progress_events;
+  expect(siblingProgress.map((event: any) => event.summary)).toEqual(['Private sibling note']);
 });
 
 test('force release rotates worker authority without changing delivery and allows a new owner', async ({ processes }) => {
@@ -508,7 +492,7 @@ test('explicit revocation retires live worker calls resources and persisted reco
   const restarted = processes.factory();
   const retired = client.reconnect(await restarted.endpoint);
   expect((await retired.raw(tool('read_context'))).body.error).toBeTruthy();
-  await retired.reject('list_guidance_requests', { work_request_id: request }, 'claim_required');
+  await retired.reject('reconcile_work_request', { work_request_id: request }, 'claim_required');
   expect((await retired.rpc('resources/read', { uri: 'sympp://assignment/current' })).error.data.reason).toBe('missing_session');
   expect((await peer.reconnect(await restarted.endpoint).call('get_current_assignment')).assignment.work_package_id).toBe(sibling);
   const recoveredArchitect = architect.reconnect(await restarted.endpoint);
@@ -988,26 +972,21 @@ deliveryTest('worker metadata replay and short-head matching preserve distinct r
   expect((await shortRepoArchitect.inspect(`/api/v1/sympp/operator/work-packages/${shortWp}`)).metadata.pr.number).toBe(310);
 });
 
-test('docs and investigation workers become ready with truthful evidence and abandon cannot keep mutation authority', async ({ processes }) => {
+test('docs and investigation workers become ready with truthful evidence', async ({ processes }) => {
   const factory = processes.factory();
   const architect = await factory.client();
   const request = await architect.request('Non-code readiness');
   const ids = (await architect.call('slice_work_request', { work_packages: [
-    contract('Document the decision', { kind: 'docs' }), contract('Investigate behavior', { kind: 'investigation' }), contract('Abandon obsolete work'),
+    contract('Document the decision', { kind: 'docs' }), contract('Investigate behavior', { kind: 'investigation' }),
   ] })).work_package_ids;
   for (const id of ids) await architect.call('dispatch_work_package', { work_package_id: id });
   const docs = await worker(factory, ids[0], 'docs-worker');
   const investigation = await worker(factory, ids[1], 'investigation-worker');
-  const abandoned = await worker(factory, ids[2], 'abandoned-worker');
   expect((await docs.call('mark_ready')).work_package.status).toBe('ready_for_merge');
   const missing = await investigation.reject('mark_ready', {}, 'readiness_failed');
   expect(missing.missing).toContain('findings_documented');
   await investigation.call('append_finding', { title: 'Cause found', body: 'No code change is necessary.', idempotency_key: 'research' });
   expect((await investigation.call('mark_ready')).work_package.status).toBe('ready_for_merge');
-  expect((await abandoned.call('abandon', { reason: 'Scope no longer needed' })).work_package.status).toBe('abandoned');
-  expect((await abandoned.rpc('tools/call', { name: 'append_progress', arguments: { summary: 'Must not reactivate', idempotency_key: 'after-abandon' } })).error).toBeTruthy();
-  await close(architect, ids[2], 'abandoned', { abandoned_rationale: 'The scope was explicitly dropped; no code was changed.' });
-  expect((await row(architect, request, ids[2])).delivery_outcome).toBe('abandoned');
 });
 
 test('claim scope hints reject different repository branch and request before granting worker authority', async ({ processes }) => {
@@ -1174,7 +1153,7 @@ test('architect question and decision mutations preserve provenance and redact c
   const closing = (await architect.call('ask_question', { work_request_id: request, category: 'acceptance',
     question: 'Can the obsolete alternative be closed?', why_needed: 'Retire an unused choice.',
   })).clarification_question.id;
-  expect((await architect.call('close_question', { work_request_id: request, question_id: closing, current_status: 'open' })).clarification_question.status).toBe('closed');
+  expect((await architect.call('close_question', { work_request_id: request, question_id: closing, expected_question_status: 'open' })).clarification_question.status).toBe('closed');
   const deciding = (await architect.call('ask_question', { work_request_id: request, category: 'product',
     question: 'Keep this scope bounded?', why_needed: 'The answer must become decision provenance.',
   })).clarification_question.id;
@@ -1226,7 +1205,7 @@ test('worker context exposes selected decisions and direct dependencies without 
   for (const value of [sibling, hidden.id, 'Private sibling implementation notes', 'Confidential sibling-only decision.']) expect(JSON.stringify(context)).not.toContain(value);
 });
 
-test('explicit trusted local notes remain independent of stale worker authority and guidance capabilities stay scoped', async ({ processes }) => {
+test('explicit trusted local decisions remain independent of stale worker authority', async ({ processes }) => {
   const factory = processes.factory();
   const architect = await factory.client();
   const request = await architect.request('Local operator notes');
@@ -1240,34 +1219,18 @@ test('explicit trusted local notes remain independent of stale worker authority 
   expect(note.decision_log_entry.created_by).toBe('acceptance-worker');
   expect(note.decision_log_entry.decision).toBe('Use [REDACTED]');
   expect(JSON.stringify(note)).not.toContain('sk-synthetic');
-  const packageNote = (await client.call('add_comment', { body: 'Existing package note' })).comment;
   const observer = await factory.client();
-  const localNote = await observer.call('add_work_request_comment', { work_request_id: request,
-    body: 'Coordinate ghp_syntheticcomment before slicing', created_by: 'operator sk-synthetic-author',
-  });
-  expect(localNote.comment.body).toBe('Coordinate [REDACTED] before slicing');
-  expect(localNote.comment.source_type).toBe('operator');
-  expect(localNote.comment.author_name).toBe('operator [REDACTED]');
-  expect(localNote.provenance.created_by).toBe('operator [REDACTED]');
   const localDecision = await observer.call('record_work_request_operator_decision', {
     ...decisionArgs, source_id: 'ghp_syntheticdecision', created_by: 'operator sk-synthetic-decision-author',
   });
   expect(localDecision.decision_log_entry.source_id).toBe('[REDACTED]');
   expect(localDecision.decision_log_entry.created_by).toBe('operator [REDACTED]');
-  expect((await observer.call('list_comments', { target_kind: 'work_request', target_id: request })).comments.map((entry: any) => entry.id)).toContain(localNote.comment.id);
-  expect((await observer.call('list_comments', { target_kind: 'work_package', target_id: wp })).comments.map((entry: any) => entry.id)).toContain(packageNote.id);
-  await observer.reject('list_comments', { target_kind: 'work_request', target_id: 'missing-request' }, 'not_found');
+  await observer.reject('record_work_request_operator_decision', { ...decisionArgs, work_request_id: 'missing-request', created_by: 'operator' }, 'not_found');
   expect((await observer.call('get_current_assignment')).assignment).toBeNull();
-  await client.reject('list_guidance_requests', {}, 'architect_grant_required');
-  expect((await architect.call('list_guidance_requests')).guidance_requests).toEqual([]);
-  await client.reject('answer_guidance_request', { guidance_request_id: 'missing-guidance', answer: 'Cannot promote authority' }, 'architect_grant_required');
-  await client.reject('read_guidance_request', { guidance_request_id: 'missing-guidance' }, 'not_found');
-  await architect.reject('read_guidance_request', { guidance_request_id: 'missing-guidance' }, 'not_found');
-  await architect.reject('answer_guidance_request', { guidance_request_id: 'missing-guidance', answer: 'No historical fixture' }, 'not_found');
   await architect.call('revoke_work_package_worker_key', { work_package_id: wp, grant_id: assignment.grant_id, reason: 'Retire worker authority' });
-  const comment = await client.call('add_work_request_comment', { work_request_id: request, body: 'Explicit local note after revocation', created_by: 'operator sk-synthetic-note-author' });
-  expect(comment.comment.source_type).toBe('operator');
-  expect(comment.comment.author_name).toBe('operator [REDACTED]');
+  const revokedDecision = await client.call('record_work_request_operator_decision', { ...decisionArgs, created_by: 'operator sk-synthetic-note-author' });
+  expect(revokedDecision.decision_log_entry.source_type).toBe('operator');
+  expect(revokedDecision.decision_log_entry.created_by).toBe('operator [REDACTED]');
   expect((await client.rpc('tools/call', { name: 'append_progress', arguments: { summary: 'Still denied', idempotency_key: 'revoked-note' } })).error).toBeTruthy();
   const persisted = await architect.call('read_work_request', { detail: 'full', work_request_id: request });
   const stored = persisted.decision_log_entries.find((entry: any) => entry.id === note.decision_log_entry.id);
@@ -1275,7 +1238,7 @@ test('explicit trusted local notes remain independent of stale worker authority 
   expect(stored.rationale).toBe('Context [REDACTED]');
   expect(stored.scope_impact).toBe('Bounded [REDACTED]');
   expect(JSON.stringify(stored)).not.toContain('sk-synthetic');
-  expect((await architect.call('list_comments', { target_kind: 'work_request', target_id: request })).comments.map((entry: any) => entry.id)).toContain(comment.comment.id);
+  expect(persisted.decision_log_entries.map((entry: any) => entry.id)).toContain(revokedDecision.decision_log_entry.id);
 });
 
 test('architect descendant planning stays scoped through terminal closeout and request archive', async ({ processes }) => {

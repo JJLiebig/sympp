@@ -150,29 +150,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
     refute "work_package_active_after_delivery" in after_closeout.attention_reason_codes
   end
 
-  test "PR merged recovery closeout releases paused claim lease", %{repo: repo} do
+  test "PR merged recovery closeout releases the current claim lease", %{repo: repo} do
     {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready_for_worker")
 
     assert {:ok, claim_lease} =
              ClaimLeaseService.claim(
                repo,
                linked_package.id,
-               %{"actor_kind" => "agent", "actor_id" => "local:paused-pr-recovery", "actor_display_name" => "paused-worker"},
+               %{"actor_kind" => "agent", "actor_id" => "local:pr-recovery", "actor_display_name" => "current-worker"},
                stale_after_ms: 60_000
-             )
-
-    assert {:ok, _paused_lease} =
-             ClaimLeaseService.pause(
-               repo,
-               claim_lease.id,
-               %{"actor_kind" => "operator", "actor_id" => "operator:pause"},
-               reason: "operator paused the worker"
              )
 
     attrs =
       delivery_attrs(%{
         outcome: "pr_merged",
-        idempotency_key: "delivery-pr-merged-paused-claim-lease",
+        idempotency_key: "delivery-pr-merged-current-claim-lease",
         pr_url: "https://github.com/nextide/symphony-plus-plus/pull/130",
         pr_number: 130,
         pr_repository: "nextide/symphony-plus-plus",

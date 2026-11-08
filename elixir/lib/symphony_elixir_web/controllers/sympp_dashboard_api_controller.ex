@@ -7,11 +7,9 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   alias Plug.Conn
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Target
-  alias SymphonyElixir.SymphonyPlusPlus.Comments.Service, as: CommentService
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler
-  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.Service, as: GuidanceRequestService
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
   alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
@@ -522,41 +520,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     )
   end
 
-  @spec operator_create_comment(Conn.t(), map()) :: Conn.t()
-  def operator_create_comment(conn, params) do
-    send_local_operator_response(conn, :comment_add, comment_target(params), :operator_create_comment, fn repo ->
-      with {:ok, comment} <- CommentService.create(repo, LocalOperatorActions.local_operator_comment_attrs(params)) do
-        refresh = %{comment_target_kind: comment.target_kind, comment_target_id: comment.target_id}
-
-        conn
-        |> put_status(201)
-        |> json(mutation_success_payload(%{comment: LocalOperatorActions.comment_payload(comment)}, refresh))
-      end
-    end)
-  end
-
-  @spec operator_resolve_comment(Conn.t(), map()) :: Conn.t()
-  def operator_resolve_comment(conn, %{"comment_id" => comment_id} = params) do
-    send_local_operator_response(
-      conn,
-      :comment_resolve,
-      Target.new(:comment, comment_id),
-      :operator_resolve_comment,
-      fn repo ->
-        with {:ok, comment} <-
-               CommentService.resolve(
-                 repo,
-                 comment_id,
-                 LocalOperatorActions.local_operator_comment_resolution_attrs(params)
-               ) do
-          refresh = %{comment_target_kind: comment.target_kind, comment_target_id: comment.target_id}
-
-          json(conn, mutation_success_payload(%{comment: LocalOperatorActions.comment_payload(comment)}, refresh))
-        end
-      end
-    )
-  end
-
   @spec operator_answer_question(Conn.t(), map()) :: Conn.t()
   def operator_answer_question(conn, %{"work_request_id" => work_request_id} = params) do
     send_local_operator_response(
@@ -585,37 +548,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
          {:ok, attrs} <- LocalOperatorActions.local_operator_question_answer_attrs(question, params),
          {:ok, _answered} <- WorkRequestService.answer_question(repo, question.id, question.status, attrs) do
       json(conn, mutation_success_payload(%{work_request_id: work_request_id, question_id: question.id}, %{work_request_id: work_request_id}))
-    end
-  end
-
-  @spec operator_answer_guidance(Conn.t(), map()) :: Conn.t()
-  def operator_answer_guidance(conn, %{"work_package_id" => work_package_id, "guidance_request_id" => guidance_request_id} = params) do
-    send_local_operator_response(
-      conn,
-      :guidance_request_answer,
-      guidance_request_target(work_package_id, guidance_request_id),
-      :operator_answer_guidance,
-      &answer_guidance_response(&1, conn, params)
-    )
-  end
-
-  @spec herdr_answer_guidance(Conn.t(), map()) :: Conn.t()
-  def herdr_answer_guidance(conn, %{"work_package_id" => work_package_id, "guidance_request_id" => guidance_request_id} = params) do
-    send_native_operator_response(
-      conn,
-      :guidance_request_answer,
-      guidance_request_target(work_package_id, guidance_request_id),
-      :operator_answer_guidance,
-      &answer_guidance_response(&1, conn, params)
-    )
-  end
-
-  defp answer_guidance_response(repo, conn, %{"work_package_id" => package_id, "guidance_request_id" => id} = params) do
-    attrs = Map.put(params, "work_package_id", package_id)
-
-    with {:ok, result} <-
-           GuidanceRequestService.answer_human_info_needed_for_local_operator(repo, :local_operator, id, attrs) do
-      json(conn, mutation_success_payload(%{guidance_request_id: result.guidance_request.id}, %{work_package_id: package_id}))
     end
   end
 
@@ -832,14 +764,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   defp work_package_target(work_request_id, work_package_id), do: Target.work_package(work_package_id, work_request_id)
 
-  defp guidance_request_target(work_package_id, guidance_request_id),
-    do: Target.package_resource(:guidance_request, work_package_id, id: guidance_request_id)
-
-  defp comment_target(params) do
-    target_id = LocalOperatorActions.text_param(params, "target_id")
-    Target.new(:comment, target_id)
-  end
-
   defp operator_runtime_config(conn) do
     %{
       apiBase: prefixed_path(conn, "/api/v1/sympp/operator"),
@@ -874,11 +798,9 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp error_response(conn, :database_busy), do: error_response(conn, 503, "database_busy", "Dashboard ledger is busy")
   defp error_response(conn, :already_answered), do: error_response(conn, 409, "already_answered", "Question is already answered")
   defp error_response(conn, :already_closed), do: error_response(conn, 409, "already_closed", "Question is already closed")
-  defp error_response(conn, :already_resolved), do: error_response(conn, 409, "already_resolved", "Comment is already resolved")
   defp error_response(conn, :invalid_answer_choice), do: error_response(conn, 422, "invalid_answer_choice", "Answer choice is invalid")
   defp error_response(conn, :invalid_archive_after_days), do: error_response(conn, 422, "invalid_archive_after_days", "Archive cutoff is invalid")
   defp error_response(conn, :missing_answer), do: error_response(conn, 422, "missing_answer", "Answer is required")
-  defp error_response(conn, :invalid_target), do: error_response(conn, 422, "invalid_target", "Comment target is invalid")
   defp error_response(conn, :not_completed), do: error_response(conn, 422, "not_completed", "WorkRequest is not complete")
   defp error_response(conn, :not_delivered), do: error_response(conn, 422, "not_delivered", "WorkPackage is not delivered")
   defp error_response(conn, :work_request_package), do: error_response(conn, 422, "work_request_package", "WorkRequest WorkPackages cannot be archived independently")

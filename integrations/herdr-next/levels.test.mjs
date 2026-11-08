@@ -50,8 +50,7 @@ test('needs-you ranks by downstream packages unblocked, then by the longest wait
   assert.deepEqual(queue.map((n) => [n.job.id, n.pkgId, n.unblocks]), [
     ['wr-pr', null, 3],
     ['wr-cross', null, 2],
-    ['wr-cross', 'x-web', 0],
-  ], 'an ask holds every unfinished package of its job; guidance holds what comes after it');
+  ], 'an ask holds every unfinished package of its job');
   const pr = byId(jobs, 'wr-pr');
   assert.equal(L.unblocks(pr, 'wp-done'), 2, 'transitive dependents count once each');
   const finished = { ...pr, packages: pr.packages.map((pkg) => (pkg.id === 'wp-queued' ? { ...pkg, stage: 'done' } : pkg)) };
@@ -100,10 +99,10 @@ test('a toast is due only for a need that appeared between two successful reads,
   assert.deepEqual(start.fresh, [], 'the first read only records');
   assert.deepEqual(L.newNeeds(start.seen, first).fresh, [], 'a repaint or unchanged read says nothing');
   const payload = boardPayload();
-  payload.guidance_requests.guidance_requests.push({ id: 'g-new', work_package_id: 'np-2', status: 'human_info_needed', question: 'Publish where?', updated_at: new Date(NOW).toISOString() });
+  payload.work_request_details.find((d) => d.work_request.id === 'wr-nopr').clarification_questions = [{ id: 'q-new', question: 'Publish where?', status: 'open', inserted_at: new Date(NOW).toISOString() }];
   const next = M.parseBoard(payload);
   const { fresh } = L.newNeeds(start.seen, next);
-  assert.deepEqual(fresh.map((n) => [n.key, n.job.id]), [['guidance:g-new', 'wr-nopr']]);
+  assert.deepEqual(fresh.map((n) => [n.key, n.job.id]), [['question:q-new', 'wr-nopr']]);
   assert.deepEqual(L.newNeeds(start.seen, { ...next, offline: true }).fresh, [], 'an offline copy never announces');
   assert.notEqual(L.toastId(fresh[0]), L.toastId({ ...fresh[0], since: NOW + 1 }), 'a need raised again later is a new item');
 

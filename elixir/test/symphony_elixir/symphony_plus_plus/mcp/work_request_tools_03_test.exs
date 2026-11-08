@@ -493,8 +493,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     skip_response =
       mcp_tool(repo, session, "skip_work_package", %{
         "work_request_id" => work_request.id,
-        "work_package_id" => work_package.id,
-        "current_status" => "planned"
+        "work_package_id" => work_package.id
       })
 
     assert get_in(skip_response, ["error", "code"]) == -32_009

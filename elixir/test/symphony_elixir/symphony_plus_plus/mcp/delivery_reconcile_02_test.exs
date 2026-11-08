@@ -4,10 +4,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle
 
   @moduletag :ci_slow
 
-  test "WorkPackage worktree MCP tools fail closed for direct phase packages", %{repo: repo} do
+  test "WorkPackage worktree MCP prepare fails closed for direct phase packages", %{repo: repo} do
     {_anchor, session, _grant} =
       create_phase_architect_session(repo, "SYMPP-ARCHITECT-WORKTREE-SCOPE", [
         "dispatch:work_request"
@@ -27,15 +28,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
 
     assert get_in(prepare_response, ["error", "code"]) == -32_004
     assert get_in(prepare_response, ["error", "data", "reason"]) == "not_found"
-
-    cleanup_response =
-      mcp_tool(repo, session, "cleanup_work_package_worktree", %{
-        "work_package_id" => unlinked_package.id,
-        "target_repo_root" => test_repo_root()
-      })
-
-    assert get_in(cleanup_response, ["error", "code"]) == -32_004
-    assert get_in(cleanup_response, ["error", "data", "reason"]) == "not_found"
   end
 
   test "WorkPackage worktree MCP prepare accepts linked package delivery base different from WorkRequest base", %{repo: repo} do
@@ -160,19 +152,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
       assert comparable_path(prepare_payload["worktree"]["target_repo_root"]) == comparable_path(fixture.repo_root)
       assert File.dir?(prepare_payload["worktree"]["path"])
 
-      cleanup_response =
-        mcp_tool(
-          repo,
-          session,
-          "cleanup_work_package_worktree",
-          %{
-            "work_package_id" => package.id
-          },
-          config: config
-        )
-
-      cleanup_payload = get_in(cleanup_response, ["result", "structuredContent"])
-      assert cleanup_payload["worktree"]["status"] == "cleaned"
+      assert {:ok, %{status: "cleaned"}} = WorktreeLifecycle.cleanup(repo, package.id)
       refute File.exists?(prepare_payload["worktree"]["path"])
 
       assert {:ok, package} = WorkPackageRepository.update(repo, package.id, %{branch_pattern: nil})
@@ -220,10 +200,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
       assert {:ok, dashed_branch} = WorktreeScope.prepare_branch(%{package | id: "foo-bar"}, nil)
       refute spaced_branch == dashed_branch
 
-      default_cleanup_response =
-        mcp_tool(repo, session, "cleanup_work_package_worktree", %{"work_package_id" => package.id}, config: config)
-
-      assert get_in(default_cleanup_response, ["result", "structuredContent", "worktree", "status"]) == "cleaned"
+      assert {:ok, %{status: "cleaned"}} = WorktreeLifecycle.cleanup(repo, package.id)
     after
       restore_env("CODEX_HOME", previous_codex_home)
     end
@@ -330,17 +307,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
       assert {:ok, other_shared_branch} = WorktreeScope.prepare_branch(%{shared_template | id: "#{package.id}-OTHER"}, nil)
       refute shared_branch == other_shared_branch
 
-      cleanup_response =
-        mcp_tool(
-          repo,
-          session,
-          "cleanup_work_package_worktree",
-          %{"work_package_id" => package.id},
-          config: config
-        )
-
-      cleanup_payload = get_in(cleanup_response, ["result", "structuredContent"])
-      assert cleanup_payload["worktree"]["status"] == "cleaned"
+      assert {:ok, %{status: "cleaned"}} = WorktreeLifecycle.cleanup(repo, package.id)
     after
       restore_env("CODEX_HOME", previous_codex_home)
     end
@@ -547,19 +514,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
       prepare_payload = get_in(prepare_response, ["result", "structuredContent"])
       assert prepare_payload["worktree"]["status"] == "prepared"
 
-      cleanup_response =
-        mcp_tool(
-          repo,
-          session,
-          "cleanup_work_package_worktree",
-          %{
-            "work_package_id" => package.id
-          },
-          config: config
-        )
-
-      cleanup_payload = get_in(cleanup_response, ["result", "structuredContent"])
-      assert cleanup_payload["worktree"]["status"] == "cleaned"
+      assert {:ok, %{status: "cleaned"}} = WorktreeLifecycle.cleanup(repo, package.id)
 
       other_owner_response =
         mcp_tool(

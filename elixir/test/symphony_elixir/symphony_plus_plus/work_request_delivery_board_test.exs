@@ -67,7 +67,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     context = WorkPackageActivity.project_context([grant], [run], [], [], package)
     assert context.worker_signal == nil
     assert context.runtime_state.active?
-    activity = Signals.activity(package, context, %{key: "active"}, [], [])
+    activity = Signals.activity(package, context, %{key: "active"}, [])
     assert activity["current_actor"]["id"] == "live-architect"
     assert activity["current_actor"]["role"] == "architect"
     assert activity["accountable_owner"]["id"] == "accountable-owner"

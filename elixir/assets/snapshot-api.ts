@@ -9,7 +9,7 @@ import type { Plugin } from "vite";
 
 const API_BASE = "/api/v1/sympp/operator";
 const SUMMARY_KEYS = ["settings", "ledger", "work_requests", "generated_at", "linked_work_package_ids"];
-const DEFERRED_KEYS = ["work_packages", "active_blocking_edges", "work_request_details", "guidance_requests", "generated_at"];
+const DEFERRED_KEYS = ["work_packages", "active_blocking_edges", "work_request_details", "generated_at"];
 
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 type Snapshot = { dir: string; manifest: Json; hydrated: Json; archived: Json; solo: Json };

@@ -19,12 +19,9 @@ export function answerBody(question, choice, text) {
   return { answer_choice: choice, ...(note ? { answer_note: note } : {}) };
 }
 
-// The board's own answer route for an ask it reports, else the route for the question's kind.
+// The board's own answer route for an ask it reports, else the clarification question's route.
 export function answerPath(question) {
-  if (question.route) return question.route;
-  return question.kind === "guidance"
-    ? `/api/v1/sympp/herdr/work-packages/${encodeURIComponent(question.pkgId)}/guidance/${encodeURIComponent(question.id)}/answer`
-    : `/api/v1/sympp/herdr/work-requests/${encodeURIComponent(question.jobId)}/questions/${encodeURIComponent(question.id)}/answer`;
+  return question.route ?? `/api/v1/sympp/herdr/work-requests/${encodeURIComponent(question.jobId)}/questions/${encodeURIComponent(question.id)}/answer`;
 }
 
 export async function postAction(endpoint, path, body, fetcher = fetch) {
