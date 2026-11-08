@@ -541,7 +541,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   defp architect_error(reason, tool),
     do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
-  defp attach_branch_error({:tool_error, reason}), do: invalid_params_error("attach_branch", reason)
+  defp attach_branch_error({:tool_error, reason}), do: ErrorDetails.invalid_params_error("attach_branch", reason)
   defp attach_branch_error({:error, :not_found}), do: not_found_error("attach_branch")
   defp attach_branch_error({:error, reason}), do: architect_error(reason, "attach_branch")
 

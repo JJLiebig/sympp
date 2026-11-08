@@ -4,18 +4,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
   import Phoenix.ConnTest
   import Plug.Conn, only: [put_req_header: 3]
 
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
   alias SymphonyElixir.SymphonyPlusPlus.OperatorConfig
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.SessionLocations.Location
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
@@ -24,7 +24,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.WorkPackageFactory
 
@@ -53,7 +52,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
 
   setup %{repo: repo} do
     repo.delete_all(OperatorAudit)
-    repo.delete_all(Location)
+    repo.delete_all(WorkedOn)
     repo.delete_all(AgentRun)
     repo.delete_all(Artifact)
     repo.delete_all(ProgressEvent)
@@ -61,9 +60,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
     repo.delete_all(PlanNode)
     repo.delete_all(SoloSessionEntry)
     repo.delete_all(SoloSession)
-    repo.delete_all(AccessGrant)
     repo.delete_all(WorkPackageDelivery)
-    repo.delete_all(WorkPackage)
     repo.delete_all(WorkPackage)
     repo.delete_all(Phase)
     repo.delete_all(DecisionLogEntry)
@@ -159,54 +156,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
     end)
   end
 
-  test "hydrated locations discover machines, allow renames, and hide private addresses", %{repo: repo} do
+  test "browser and Herdr payloads show which terminal works on each WorkRequest", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       request = create_work_request!(repo, repo: "example-org/widget-service", status: "sliced")
-      package = create_dispatched_package!(repo, request, slice_id: "WRS-LOCATION", package_id: "WP-LOCATION", status: "dispatched")
-      observed_at = ~U[2026-10-01 09:00:00.000000Z]
-
-      for {kind, id, role} <- [{"work_request", request.id, "coordinator"}, {"work_request", request.id, "architect"}, {"work_package", package.id, "worker"}] do
-        repo.insert!(%Location{
-          id: Ecto.UUID.generate(),
-          target_kind: kind,
-          target_id: id,
-          role: role,
-          client_id: "private-client",
-          machine_id: "build-desk",
-          machine_label: "Build-Desk",
-          source: "herdr",
-          last_seen_at: observed_at,
-          herdr: %{
-            "workspace_id" => "w1",
-            "workspace_label" => "Widget Service",
-            "tab_id" => "w1:t2",
-            "tab_label" => "Implementation",
-            "pane_id" => "w1:p3",
-            "socket_path" => "private-selector",
-            "session" => "private-session",
-            "native_session_id" => "private-native-id",
-            "future_secret" => "not-public"
-          }
-        })
-      end
-
-      config_path = Path.join(System.tmp_dir!(), "operator-location-#{System.unique_integer([:positive])}.json")
-      original = System.get_env("SYMPP_OPERATOR_CONFIG")
-      System.put_env("SYMPP_OPERATOR_CONFIG", config_path)
-
-      on_exit(fn ->
-        if original, do: System.put_env("SYMPP_OPERATOR_CONFIG", original), else: System.delete_env("SYMPP_OPERATOR_CONFIG")
-        File.rm(config_path)
-      end)
+      package = create_dispatched_package!(repo, request, slice_id: "WRS-OWNED", package_id: "WP-OWNED", status: "dispatched")
+      unowned = create_work_request!(repo, id: "WR-UNOWNED", repo: "example-org/widget-service", status: "sliced")
+      _unowned_package = create_dispatched_package!(repo, unowned, slice_id: "WRS-UNOWNED", package_id: "WP-UNOWNED", status: "dispatched")
+      assert {:ok, _row, :acquired} = Ownership.acquire(repo, request.id, terminal("t8"))
 
       browser_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/hydrated"), 200)
-
-      payload =
-        build_conn()
-        |> Map.put(:host, "localhost")
-        |> Map.put(:remote_ip, {127, 0, 0, 1})
-        |> get("/api/v1/sympp/herdr/dashboard")
-        |> json_response(200)
+      payload = native_dashboard()
 
       assert Enum.map(payload["work_request_details"], & &1["work_request"]["id"]) ==
                Enum.map(browser_payload["work_request_details"], & &1["work_request"]["id"])
@@ -214,63 +173,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
       assert payload["work_packages"] ==
                Enum.map(browser_payload["work_packages"], &Map.take(&1, ["id", "active_agent_run"]))
 
-      refute Map.has_key?(payload, "work_requests")
-      refute Map.has_key?(payload, "active_blocking_edges")
-      refute Map.has_key?(browser_payload, "chiefs")
-      detail = work_request_detail(payload, request.id)
-      architect = detail["work_request"]["architect_session_location"]
-      worker = Enum.find(detail["work_packages"], &(&1["id"] == package.id))["session_location"]
+      expected = %{"address" => "build-desk/t8", "role" => "architect", "liveness" => "unknown"}
       card = Enum.find(browser_payload["work_requests"]["work_requests"], &(&1["id"] == request.id))
-      assert architect["role"] == "architect"
-      assert card["architect_session_location"] == architect
-      assert worker["role"] == "worker"
-      assert worker["label"] == "Build-Desk"
-      assert worker["kind"] == nil
-      assert worker["herdr"]["workspace_label"] == "Widget Service"
-      refute inspect(payload) =~ "private-"
-      refute inspect(payload) =~ "future_secret"
 
-      File.write!(config_path, Jason.encode!(%{"machines" => %{"build-desk" => %{"label" => "Workshop", "kind" => "desktop"}}}))
-      renamed = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/hydrated"), 200)
-      renamed_location = work_request_detail(renamed, request.id)["work_request"]["architect_session_location"]
-      assert renamed_location["label"] == "Workshop"
-      assert renamed_location["machine_id"] == "build-desk"
-      assert renamed_location["last_seen_at"] == DateTime.to_iso8601(observed_at)
-      assert repo.all(Location) |> Enum.all?(&(&1.last_seen_at == observed_at))
-
-      for location <- repo.all(Location) do
-        native = %{
-          "core_id" => "core-one",
-          "terminal_id" => "t8",
-          "pid" => 123,
-          "process_id" => 456,
-          "client_id" => "client-native",
-          "socket_path" => "private-native-selector",
-          "process_liveness_token" => "private-token"
-        }
-
-        location |> Ecto.Changeset.change(source: "herdr_next", herdr: native) |> repo.update!()
+      for owner <- [work_request_detail(payload, request.id)["work_request"]["worked_on"], card["worked_on"]] do
+        assert Map.take(owner, ["address", "role", "liveness"]) == expected
+        assert is_binary(owner["since"])
       end
 
-      native_payload =
-        build_conn()
-        |> Map.put(:host, "localhost")
-        |> Map.put(:remote_ip, {127, 0, 0, 1})
-        |> get("/api/v1/sympp/herdr/dashboard")
-        |> json_response(200)
+      refute Map.has_key?(work_request_detail(payload, unowned.id)["work_request"], "worked_on")
+      assert Enum.find(work_request_detail(payload, request.id)["work_packages"], &(&1["id"] == package.id))
+    end)
+  end
 
-      native_detail = work_request_detail(native_payload, request.id)
-      native_architect = native_detail["work_request"]["architect_session_location"]
-      native_worker = Enum.find(native_detail["work_packages"], &(&1["id"] == package.id))["session_location"]
+  test "operator Release ends ownership so another terminal can take the WorkRequest", %{repo: repo} do
+    request = create_work_request!(repo, status: "sliced")
+    assert {:ok, _row, :acquired} = Ownership.acquire(repo, request.id, terminal("t8"))
+    path = "/api/v1/sympp/operator/work-requests/#{request.id}/release"
 
-      for observed <- [native_architect, native_worker] do
-        assert observed["source"] == "herdr_next"
-        assert observed["herdr"] == %{"core_id" => "core-one", "terminal_id" => "t8", "pid" => 123, "process_id" => 456, "client_id" => "client-native"}
-      end
+    with_local_operator_endpoint(fn ->
+      assert json_response(post(remote_conn(), path), 401)
+      assert Ownership.owner(repo, request.id)
 
-      refute inspect(native_payload) =~ "private-"
-      assert {:ok, _deleted} = WorkRequestService.delete(repo, request.id)
-      assert repo.all(Location) == []
+      released = json_response(post(local_operator_conn(), path), 200)
+      assert get_in(released, ["released", "address"]) == "build-desk/t8"
+      assert Ownership.owner(repo, request.id) == nil
+      assert [%OperatorAudit{action: "dangerous_override", target_work_request_id: work_request_id}] = repo.all(OperatorAudit)
+      assert work_request_id == request.id
+
+      assert %{"error" => "not_owned"} = json_response(post(local_operator_conn(), path), 409)
+      assert {:ok, _row, :acquired} = Ownership.acquire(repo, request.id, terminal("t9"))
     end)
   end
 
@@ -514,6 +446,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
     dashboard
     |> Map.get("work_packages", [])
     |> Enum.map(& &1["id"])
+  end
+
+  defp terminal(address),
+    do: Terminal.from_meta(%{"core_id" => "core-one", "core_name" => "build-desk", "terminal_id" => address})
+
+  defp native_dashboard do
+    build_conn()
+    |> Map.put(:host, "localhost")
+    |> Map.put(:remote_ip, {127, 0, 0, 1})
+    |> get("/api/v1/sympp/herdr/dashboard")
+    |> json_response(200)
+  end
+
+  defp remote_conn do
+    build_conn()
+    |> Map.put(:host, "factory.example.test")
+    |> Map.put(:remote_ip, {203, 0, 113, 7})
   end
 
   defp local_operator_conn do

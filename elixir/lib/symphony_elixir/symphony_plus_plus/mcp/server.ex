@@ -406,6 +406,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp ownership_result({:error, :work_request_archived}, name),
     do: {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "work_request_archived", "state" => "archived", "next_action" => "restore"}}
 
+  defp ownership_result({:error, :database_busy}, name),
+    do: {:error, -32_000, "Ledger busy", %{"tool" => name, "reason" => "database_busy", "remediation" => "Another ledger writer held the lock. Retry the call."}}
+
   defp ownership_result({:error, reason}, name) when is_atom(reason) or is_tuple(reason), do: service_error(name)
   defp ownership_result(result, _name), do: result
 

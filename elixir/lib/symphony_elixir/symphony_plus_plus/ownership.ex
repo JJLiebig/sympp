@@ -59,12 +59,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
   @spec acquire(repo(), String.t(), Terminal.t()) ::
           {:ok, WorkedOn.t(), :held | :acquired} | {:error, {:owned_by_other_terminal, owner()}} | {:error, term()}
   def acquire(repo, work_request_id, %Terminal{} = terminal) when is_binary(work_request_id) do
+    # The common case, a terminal writing to a WorkRequest it already owns,
+    # needs no write lock.
+    case held_unchanged(repo, work_request_id, terminal) do
+      %WorkedOn{} = row -> {:ok, row, :held}
+      nil -> acquire_with_lock(repo, work_request_id, terminal)
+    end
+  end
+
+  defp held_unchanged(repo, work_request_id, %Terminal{} = terminal) do
+    with %WorkRequest{archived_at: nil} <- repo.get(WorkRequest, work_request_id),
+         %WorkedOn{terminal_key: key, role: role, domain: domain, display_address: address} = row
+         when key == terminal.key and role == terminal.role and domain == terminal.domain and address == terminal.display_address <-
+           live_row(repo, @subject, work_request_id) do
+      row
+    else
+      _other -> nil
+    end
+  end
+
+  defp acquire_with_lock(repo, work_request_id, terminal) do
     repo.transaction(fn -> acquire_in_transaction(repo, work_request_id, terminal) end, mode: :immediate)
     |> case do
       {:ok, {:error, reason}} -> {:error, reason}
       {:ok, {:ok, row, how}} -> notify_acquired({:ok, row, how})
       {:error, reason} -> {:error, reason}
     end
+  rescue
+    error in Exqlite.Error ->
+      message = String.downcase(Exception.message(error))
+      if String.contains?(message, ["locked", "busy"]), do: {:error, :database_busy}, else: reraise(error, __STACKTRACE__)
   end
 
   defp acquire_in_transaction(repo, work_request_id, terminal) do

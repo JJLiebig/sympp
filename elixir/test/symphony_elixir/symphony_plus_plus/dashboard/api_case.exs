@@ -5,11 +5,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.ApiCase do
 
   using do
     quote do
-      alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
       alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
       alias SymphonyElixir.SymphonyPlusPlus.Dashboard
       alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
       alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
+      alias SymphonyElixir.SymphonyPlusPlus.Ownership
+      alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
       alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
       alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
       alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
@@ -61,9 +62,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.ApiCase do
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession)
-    repo.delete_all(SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant)
+    repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery)
-    repo.delete_all(SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Phases.Phase)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry)

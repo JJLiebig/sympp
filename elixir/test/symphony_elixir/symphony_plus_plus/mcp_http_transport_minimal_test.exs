@@ -3,26 +3,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.{AccessGrant, Assignment}
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
-
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     Config,
     FailedCall,
     HTTPStateStore,
     HTTPTransport,
     LedgerNamespace,
-    Server,
-    Session,
-    SessionBinding
+    Server
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.SessionLocations
-  alias SymphonyElixir.SymphonyPlusPlus.SessionLocations.Location
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Repository, as: SoloSessionRepository
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry
@@ -47,11 +39,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
     reset_server_response_state()
     HTTPStateStore.reset!()
 
-    config.repo.delete_all(Location)
     config.repo.delete_all(SoloSessionEntry)
     config.repo.delete_all(SoloSession)
     config.repo.delete_all(OperatorSettings)
-    config.repo.delete_all(AccessGrant)
     config.repo.delete_all(WorkPackage)
     FailedCall.reset()
 
@@ -66,148 +56,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
 
     assert {:ok, trusted} = HTTPTransport.handle(trusted_config, initialize_request("trusted-init"), client_key: "trusted-client")
     assert %Server{local_daemon_trusted: true} = HTTPStateStore.get(trusted_config, "trusted-client", trusted.state_key)
-  end
-
-  test "batched local claim persists rehydration metadata", %{config: config} do
-    trusted_config = %{config | local_daemon_trusted: true}
-    package_id = "SYMPP-HTTP-BATCH-LOCAL"
-
-    assert {:ok, work_package} =
-             WorkPackageRepository.create(
-               trusted_config.repo,
-               WorkPackageFactory.attrs(
-                 id: package_id,
-                 kind: "mcp",
-                 repo: "nextide/symphony-plus-plus",
-                 base_branch: "main",
-                 branch_pattern: "agent/#{package_id}/worker",
-                 worktree_path: local_claim_worktree_path(package_id),
-                 status: "dispatched"
-               )
-             )
-
-    assert {:ok, _minted} = AccessGrantService.mint_worker_grant(trusted_config.repo, work_package.id)
-    {:ok, init} = HTTPTransport.handle(trusted_config, initialize_request("batch-local-init"), client_key: "batch-local-client")
-
-    assert {:ok, batch} =
-             HTTPTransport.handle(
-               trusted_config,
-               [
-                 tool_call_request(
-                   "batch-local-claim",
-                   "claim_local_assignment",
-                   Map.put(local_assignment_claim_args(work_package), "session_description", "Terminal window: widget implementation")
-                 ),
-                 tools_list_request("batch-local-tools")
-               ],
-               client_key: "batch-local-client",
-               state_key: init.state_key
-             )
-
-    assert batch.state_key == init.state_key
-    assert is_list(batch.response)
-
-    assert Enum.any?(batch.response, fn response ->
-             get_in(response, ["result", "structuredContent", "assignment", "work_package_id"]) == work_package.id
-           end)
-
-    location = SessionLocations.get(Repo, "work_package", work_package.id)
-    assert location.description == "Terminal window: widget implementation"
-
-    assert {:ok, failed_batch} =
-             HTTPTransport.handle(
-               trusted_config,
-               [tool_call_request("batch-location-failed", "not_a_tool", %{"session_description" => "Wrong window"})],
-               client_key: "batch-local-client",
-               state_key: init.state_key
-             )
-
-    assert [%{"error" => _error}] = failed_batch.response
-    assert SessionLocations.get(Repo, "work_package", work_package.id) == location
-
-    assert {:ok, refreshed_batch} =
-             HTTPTransport.handle(
-               trusted_config,
-               [get_current_assignment_request()],
-               client_key: "batch-local-client",
-               state_key: init.state_key
-             )
-
-    assert [%{"result" => _result}] = refreshed_batch.response
-    refreshed = SessionLocations.get(Repo, "work_package", work_package.id)
-    assert refreshed.description == location.description
-    assert DateTime.compare(refreshed.last_seen_at, location.last_seen_at) == :gt
-
-    HTTPStateStore.reset!()
-    reset_server_response_state()
-
-    assert {:ok, assignment} =
-             HTTPTransport.handle(
-               trusted_config,
-               get_current_assignment_request(),
-               client_key: "batch-local-client",
-               state_key: init.state_key
-             )
-
-    assert get_in(assignment.response, ["result", "structuredContent", "assignment", "work_package_id"]) == work_package.id
-  end
-
-  test "batched failed local-claim notification does not shadow later local claim recovery", %{config: config} do
-    trusted_config = %{config | local_daemon_trusted: true}
-    package_id = "SYMPP-HTTP-BATCH-SHADOW"
-    client_key = "batch-shadow-client"
-
-    assert {:ok, work_package} =
-             WorkPackageRepository.create(
-               trusted_config.repo,
-               WorkPackageFactory.attrs(
-                 id: package_id,
-                 kind: "mcp",
-                 repo: "nextide/symphony-plus-plus",
-                 base_branch: "main",
-                 branch_pattern: "agent/#{package_id}/worker",
-                 worktree_path: local_claim_worktree_path(package_id),
-                 status: "dispatched"
-               )
-             )
-
-    assert {:ok, _minted} = AccessGrantService.mint_worker_grant(trusted_config.repo, work_package.id)
-    {:ok, init} = HTTPTransport.handle(trusted_config, initialize_request("batch-shadow-init"), client_key: client_key)
-
-    failed_local_notification =
-      tool_call_request("failed-local-shadow", "claim_local_assignment", %{"work_package_id" => "missing-package"})
-      |> Map.delete("id")
-
-    assert {:ok, batch} =
-             HTTPTransport.handle(
-               trusted_config,
-               [
-                 failed_local_notification,
-                 tool_call_request("batch-shadow-local-claim", "claim_local_assignment", local_assignment_claim_args(work_package))
-               ],
-               client_key: client_key,
-               state_key: init.state_key
-             )
-
-    assert Enum.any?(batch.response, fn response ->
-             get_in(response, ["result", "structuredContent", "assignment", "work_package_id"]) == work_package.id
-           end)
-
-    binding_id = SessionBinding.binding_id(client_key, init.state_key)
-    assert Repo.get!(SessionBinding, binding_id).recoverable
-
-    HTTPStateStore.reset!()
-    reset_server_response_state()
-
-    assert {:ok, assignment} =
-             HTTPTransport.handle(
-               trusted_config,
-               get_current_assignment_request(),
-               client_key: client_key,
-               state_key: init.state_key
-             )
-
-    assert get_in(assignment.response, ["result", "structuredContent", "assignment", "work_package_id"]) == work_package.id
   end
 
   test "live repo policy stays in transport for state-local and repo-backed followups", %{config: config} do
@@ -250,64 +98,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
              )
 
     assert_receive {:live_handle_called, ^ref}
-  end
-
-  test "resources/list routes from the locked session state", %{config: config} do
-    {:ok, init} = HTTPTransport.handle(config, initialize_request("init"), client_key: "client-a")
-    parent = self()
-
-    holder =
-      Task.async(fn ->
-        HTTPStateStore.update_with_status(
-          config,
-          "client-a",
-          init.state_key,
-          default_server_fun(config, init.state_key),
-          fn server ->
-            send(parent, {:holding_unbound_state, self()})
-
-            receive do
-              :bind_session ->
-                assignment =
-                  %Assignment{
-                    grant_id: "grant-a",
-                    work_package_id: "package-a",
-                    display_key: "package-a",
-                    grant_role: "worker",
-                    capabilities: [],
-                    claimed_at: DateTime.utc_now(),
-                    claimed_by: "worker-a"
-                  }
-
-                {:bound, %{server | session: Session.new(assignment)}}
-            end
-          end
-        )
-      end)
-
-    assert_receive {:holding_unbound_state, holder_pid}
-    resources = resources_list_request("resources")
-
-    live_handle = fn _payload, _client_key, _state_key ->
-      send(parent, :live_handle_called)
-      {:error, :repo_unavailable}
-    end
-
-    request =
-      Task.async(fn ->
-        HTTPTransport.handle(config, resources,
-          client_key: "client-a",
-          state_key: init.state_key,
-          live_handle: live_handle
-        )
-      end)
-
-    wait_for_queued_lock(config, "client-a", init.state_key, 1)
-    send(holder_pid, :bind_session)
-
-    assert Task.await(holder) == {:bound, :stored}
-    assert {:error, :ledger_unavailable, ^resources} = Task.await(request)
-    assert_receive :live_handle_called
   end
 
   test "a second client cannot reuse initialized state from a state key", %{config: config} do
@@ -408,42 +198,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
     assert HTTPStateStore.get(config, "client-a", init.state_key) == nil
   end
 
-  test "cached HTTP claim retains only credential proof and never the raw WorkKey", %{config: config} do
-    assert {:ok, work_package} =
-             WorkPackageRepository.create(
-               config.repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-HTTP-MINIMAL-CLAIM",
-                 kind: "mcp",
-                 repo: "nextide/symphony-plus-plus",
-                 base_branch: "main",
-                 branch_pattern: "agent/SYMPP-HTTP-MINIMAL-CLAIM/worker",
-                 worktree_path: local_claim_worktree_path("SYMPP-HTTP-MINIMAL-CLAIM"),
-                 status: "dispatched"
-               )
-             )
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(config.repo, work_package.id)
-    local_config = %{config | mode: :http, local_daemon_trusted: true}
-    {:ok, init} = HTTPTransport.handle(local_config, initialize_request("init"), client_key: "client-a")
-
-    assert {:ok, claim} =
-             HTTPTransport.handle(
-               local_config,
-               tool_call_request("claim", "claim_local_assignment", local_assignment_claim_args(work_package, %{"claimed_by" => "worker-a"})),
-               client_key: "client-a",
-               state_key: init.state_key
-             )
-
-    assert get_in(claim.response, ["result", "structuredContent", "assignment", "work_package_id"]) == work_package.id
-
-    assert %Server{initialized: true, session: %Session{} = session} = stored_server = HTTPStateStore.get(local_config, "client-a", init.state_key)
-    assert session.assignment.work_package_id == work_package.id
-    assert session.assignment.grant_id == minted.grant.id
-    assert session.proof_hash == minted.grant.secret_hash
-    refute inspect(stored_server) =~ minted.work_key.secret
-  end
-
   defp initialize_request(id) do
     %{
       "jsonrpc" => "2.0",
@@ -469,43 +223,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
     }
   end
 
-  defp notification_request, do: %{"jsonrpc" => "2.0", "method" => "notifications/initialized", "params" => %{}}
-
-  defp get_current_assignment_request do
-    %{
-      "jsonrpc" => "2.0",
-      "id" => "assignment",
-      "method" => "tools/call",
-      "params" => %{"name" => "get_current_assignment", "arguments" => %{}}
-    }
-  end
-
   defp tool_call_request(id, name, arguments) do
     %{"jsonrpc" => "2.0", "id" => id, "method" => "tools/call", "params" => %{"name" => name, "arguments" => arguments}}
-  end
-
-  defp local_assignment_claim_args(%WorkPackage{} = package, overrides \\ %{}) do
-    %{
-      "repo" => package.repo,
-      "base_branch" => package.base_branch,
-      "work_package_id" => package.id,
-      "branch" => package.branch_pattern,
-      "worktree_path" => package.worktree_path,
-      "caller_id" => "codex-local-test",
-      "claimed_by" => "local-worker-1"
-    }
-    |> Map.merge(overrides)
-  end
-
-  defp local_claim_worktree_path(work_package_id) do
-    Path.expand(Path.join(System.tmp_dir!(), "sympp-http-local-claim-#{work_package_id}"))
-  end
-
-  defp tool_names(payload) do
-    payload
-    |> get_in(["result", "tools"])
-    |> Enum.map(& &1["name"])
-    |> Enum.sort()
   end
 
   defp diagnostic_events(log) do
