@@ -148,15 +148,21 @@ else
     ln -s "$previous_release" "$SYMPP_HOME/service/current.rollback"
     mv -Tf "$SYMPP_HOME/service/current.rollback" "$SYMPP_HOME/service/current"
     cp "$previous_unit" "$unit_file"
-    export SYMPP_SOURCE_REVISION="$(python3 - "$unit_file" <<'REV'
+    mapfile -t previous_settings < <(python3 - "$unit_file" <<'REV'
 import shlex, sys
+values = {}
 for line in open(sys.argv[1]):
     if line.startswith('Environment='):
         value = shlex.split(line[len('Environment='):])[0]
-        if value.startswith('SYMPP_SOURCE_REVISION='):
-            print(value.split('=', 1)[1])
+        key, _, value = value.partition('=')
+        values[key] = value
+for key in ['SYMPP_SOURCE_REVISION', 'SYMPP_BACKEND_PORT', 'SYMPP_SERVICE_HOST']:
+    print(values[key])
 REV
-)"
+)
+    export SYMPP_SOURCE_REVISION="${previous_settings[0]}"
+    export SYMPP_BACKEND_PORT="${previous_settings[1]}"
+    export SYMPP_SERVICE_HOST="${previous_settings[2]}"
     systemctl --user daemon-reload
     if systemctl --user restart "$SYMPP_SERVICE_NAME.service" && wait_ready; then
       echo 'factory: previous release restored and ready' >&2

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # Read only the chosen unit's install settings; do not print its environment.
-python3 - "$1" <<'PY'
+python3 - "$@" <<'PY'
 import fcntl
 import json
 import urllib.request
@@ -15,6 +15,8 @@ raw = subprocess.check_output(['systemctl', '--user', 'show', unit, '-p', 'Envir
 values = dict(item.split('=', 1) for item in shlex.split(raw) if '=' in item)
 if not values.get('SYMPP_HOME') or not values.get('SYMPP_SERVICE_HOST'):
     raise SystemExit('Factory service is not installed. Run its installer first.')
+if len(sys.argv) > 2 and sys.argv[2] != values.get('SYMPP_BACKEND_PORT', '19998'):
+    raise SystemExit('Selected factory service does not match the saved server port. Rerun setup with its service name.')
 allowed = ['PATH', 'SYMPP_HOME', 'SYMPP_DATABASE', 'SYMPP_REPOS_ROOT', 'SYMPP_BACKEND_PORT', 'SYMPP_SERVICE_HOST', 'SYMPP_WORKFLOW_FILE', 'ERL_FLAGS', 'SYMPP_SERVICE_SOURCE', 'SYMPP_SERVICE_REF']
 env = dict(os.environ, **{key: values[key] for key in allowed if key in values})
 env['SYMPP_SERVICE_NAME'] = sys.argv[1]
@@ -38,8 +40,11 @@ target = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'FETCH_
 try:
     with urllib.request.urlopen('http://127.0.0.1:' + values.get('SYMPP_BACKEND_PORT', '19998') + '/mcp/readiness', timeout=3) as response:
         health = json.load(response)
-    running = health.get('source', {}).get('revision') if health.get('status') == 'ok' and health.get('ledger', {}).get('reachable') is True else None
-except (OSError, ValueError):
+    pid = subprocess.check_output(['systemctl', '--user', 'show', unit, '-p', 'MainPID', '--value'], text=True).strip()
+    sockets = subprocess.check_output(['ss', '-H', '-ltnp', 'sport = :' + values.get('SYMPP_BACKEND_PORT', '19998')], text=True)
+    owns_listener = pid != '0' and any('pid=' + pid + ',' in line and line.split()[3] == '127.0.0.1:' + values.get('SYMPP_BACKEND_PORT', '19998') for line in sockets.splitlines())
+    running = health.get('source', {}).get('revision') if owns_listener and health.get('status') == 'ok' and health.get('ledger', {}).get('reachable') is True else None
+except (OSError, ValueError, subprocess.CalledProcessError):
     running = None
 subprocess.run(['git', '-C', str(source), 'checkout', '--quiet', '--detach', target], check=True)
 def non_runtime(path):

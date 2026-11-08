@@ -104,7 +104,7 @@ test('client update rebuilds the saved checkout with its factory repository root
   const reposRoot = path.join(root, 'factory repos'), receipt = path.join(root, 'receipt');
   const environment = path.join(root, 'environment'), fragment = path.join(root, 'config/systemd/user/qa.service');
   fs.mkdirSync(path.dirname(fragment), { recursive: true }); fs.writeFileSync(fragment, '');
-  const values = { SYMPP_HOME: path.join(root, 'factory'), SYMPP_DATABASE: path.join(root, 'factory/ledger.sqlite3'), SYMPP_SERVICE_HOST: '127.0.0.1', SYMPP_REPOS_ROOT: reposRoot, SYMPP_SERVICE_SOURCE: checkout, SYMPP_SERVICE_REF: 'main' };
+  const values = { SYMPP_HOME: path.join(root, 'factory'), SYMPP_DATABASE: path.join(root, 'factory/ledger.sqlite3'), SYMPP_SERVICE_HOST: '127.0.0.1', SYMPP_BACKEND_PORT: '1', SYMPP_REPOS_ROOT: reposRoot, SYMPP_SERVICE_SOURCE: checkout, SYMPP_SERVICE_REF: 'main' };
   fs.writeFileSync(environment, Object.entries(values).map(([key, value]) => JSON.stringify(key + '=' + value)).join(' '));
   fs.writeFileSync(path.join(bin, 'systemctl'), '#!/bin/sh\ncase "$*" in *Environment*) cat "$ENVIRONMENT_FILE";; *FragmentPath*) printf "%s\\n" "$FRAGMENT_FILE";; *) exit 1;; esac\n', { mode: 0o755 });
   const env = { ...process.env, XDG_RUNTIME_DIR: root, PATH: bin + path.delimiter + process.env.PATH, ENVIRONMENT_FILE: environment, FRAGMENT_FILE: fragment, RECEIPT: receipt, SYMPP_REPOS_ROOT: path.join(root, 'wrong shell root') };
@@ -175,9 +175,12 @@ test('factory updates skip current and procedure-only revisions but rebuild unkn
   const environment = path.join(root, 'environment');
   fs.writeFileSync(environment, Object.entries(values).map(([key, value]) => JSON.stringify(key + '=' + value)).join(' '));
   fs.writeFileSync(path.join(bin, 'systemctl'), '#!/bin/sh\ncase "$*" in *Environment*) cat "$ENVIRONMENT_FILE";; *FragmentPath*) printf "%s\\n" "$FRAGMENT_FILE";; *) exit 1;; esac\n', { mode: 0o755 });
-  const env = { ...process.env, XDG_RUNTIME_DIR: root, PATH: bin + path.delimiter + process.env.PATH, ENVIRONMENT_FILE: environment, FRAGMENT_FILE: fragment, RECEIPT: receipt };
+  fs.writeFileSync(path.join(bin, 'systemctl'), '#!/bin/sh\ncase "$*" in *Environment*) cat "$ENVIRONMENT_FILE";; *FragmentPath*) printf "%s\\n" "$FRAGMENT_FILE";; *MainPID*) printf "%s\\n" "$LISTENER_PID";; *) exit 1;; esac\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'ss'), '#!/bin/sh\nprintf "LISTEN 0 128 127.0.0.1:%s *:* users:(pid=%s,fd=1)\\n" "$LISTENER_PORT" "$LISTENER_PID"\n', { mode: 0o755 });
+  const env = { ...process.env, XDG_RUNTIME_DIR: root, PATH: bin + path.delimiter + process.env.PATH, LISTENER_PID: String(process.pid), LISTENER_PORT: values.SYMPP_BACKEND_PORT, ENVIRONMENT_FILE: environment, FRAGMENT_FILE: fragment, RECEIPT: receipt };
   const updater = path.resolve(__dirname, '../../packages/sympp/scripts/update-sympp-service.sh');
   const update = () => require('node:util').promisify(require('node:child_process').execFile)('bash', [updater, 'qa'], { cwd: root, env });
+  await assert.rejects(require('node:util').promisify(require('node:child_process').execFile)('bash', [updater, 'qa', '1'], { cwd: root, env }), /does not match/);
   assert.match((await update()).stdout, /already current/);
   const procedure = path.join(upstream, 'packages/sympp/skills/worker/SKILL.md');
   fs.mkdirSync(path.dirname(procedure), { recursive: true }); fs.writeFileSync(procedure, 'procedure update');
