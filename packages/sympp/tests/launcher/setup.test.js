@@ -130,6 +130,9 @@ cp.spawnSync = (command, args, options) => {
     return { status: 1, stdout: 'The mod update failed; all changed files were restored', stderr: 'reason: sympp mod check failed' };
   }
   if (command === 'powershell.exe' && args.some(a => a.includes('SYMPP_COMMAND_BIN'))) return { status: 0 };
+  if (command === 'bash' && args[0] === '-s') {
+    fs.appendFileSync(process.env.UPDATE_LOG, 'local-factory\\n'); return { status: 0, stdout: 'factory: already current\\n' };
+  }
   if (command === 'ssh') {
     if (args[0] === '-G') return { status: 0, stdout: 'hostname 100.64.1.2' };
     if (args.at(-1).startsWith('cat ')) return { status: 0, stdout: 'fixture-token' };
@@ -180,4 +183,14 @@ cp.spawnSync = (command, args, options) => {
     fs.writeFileSync(config, 'untouched');
   }
   assert.equal(fs.readFileSync(log, 'utf8'), 'skill\nfactory\n'.repeat(8));
+  if (process.platform === 'linux') {
+    delete env.UPDATE_FAIL;
+    saved.setup.server = 'http://127.0.0.1:21783';
+    saved.env.SYMPP_SERVER_URL = saved.setup.server;
+    fs.writeFileSync(path.join(root, '.local/share/sympp/connection.json'), JSON.stringify(saved));
+    result = run('update');
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /factory: already current/);
+    assert.ok(fs.readFileSync(log, 'utf8').endsWith('skill\nlocal-factory\n'));
+  }
 });
