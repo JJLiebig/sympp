@@ -687,7 +687,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   """
   @spec local_trusted_reconcile_dry_run(Config.t(), map()) :: mcp_tool_result()
   def local_trusted_reconcile_dry_run(%Config{repo: repo}, arguments) do
-    with {:ok, arguments} <- validate_arguments(arguments, "reconcile_work_request"),
+    with {:ok, false} <- optional_boolean(arguments, "apply", false),
+         {:ok, arguments} <- validate_arguments(arguments, "reconcile_work_request"),
          {:ok, detail} <- reconcile_detail_argument(arguments),
          {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, recorded_by} <- optional_string_argument(arguments, "recorded_by", "architect"),

@@ -104,6 +104,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadAccessTest do
     assert last_seen_at == due.last_seen_at
   end
 
+  test "a worker that loses its claim stays scoped, and a dry run rejects a non-boolean apply", %{repo: repo} do
+    {work_request, _handoff} = claimable_work_request!(repo, "WR-READS-WORKER-SCOPE")
+    foreign = add_package!(repo, work_request, "WP-READS-FOREIGN")
+    package = create_local_claim_package!(repo, "SYMPP-READS-STALE-WORKER")
+    assert {:ok, _minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+    worker = connect!(repo, "client-reads-stale-worker")
+    assert tool!(worker, "claim_local_assignment", local_assignment_claim_args(package)).response["result"]
+
+    assert {:ok, lease} = ClaimLeaseService.current_for_work_package(repo, package.id)
+    lease |> ClaimLease.update_changeset(%{last_seen_at: DateTime.add(DateTime.utc_now(:microsecond), -6, :minute)}) |> repo.update!()
+
+    for {tool, arguments} <- [{"read_task_plan", %{"work_package_id" => foreign.id}}, {"read_work_request", %{"work_request_id" => work_request.id}}] do
+      assert tool!(worker, tool, arguments).response["error"], tool
+    end
+
+    operator = connect!(repo, "client-reads-dry-run")
+    refused = tool!(operator, "reconcile_work_request", %{"work_request_id" => work_request.id, "apply" => "true"})
+    assert refused.response["error"]["code"] == -32_602
+  end
+
   defp claimable_work_request!(repo, id) do
     work_request = create_work_request!(repo, id: id, status: "ready_for_slicing")
 
