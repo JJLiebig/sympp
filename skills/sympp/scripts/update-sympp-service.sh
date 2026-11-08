@@ -63,6 +63,8 @@ if running and needs_build:
         paths = diff.stdout.decode().rstrip('\0').split('\0') if diff.stdout else []
         needs_build = not all(non_runtime(path) for path in paths)
 if not needs_build:
+    subprocess.run(['git', '-C', str(source), 'config', 'sympp.serviceRef', ref], check=True)
+    subprocess.run(['git', '-C', str(source), 'config', 'sympp.serviceRevision', target], check=True)
     print('factory: already current' if running == target else 'factory: runtime unchanged')
     raise SystemExit(0)
 env['SYMPP_SERVICE_REF'] = ref

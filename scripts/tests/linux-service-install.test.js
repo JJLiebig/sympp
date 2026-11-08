@@ -188,6 +188,8 @@ test('factory updates skip current and procedure-only revisions but rebuild unkn
   fs.mkdirSync(path.dirname(procedure), { recursive: true }); fs.writeFileSync(procedure, 'procedure update');
   git('add', '.'); git('commit', '-qm', 'procedure');
   assert.match((await update()).stdout, /runtime unchanged/);
+  assert.equal(git('-C', checkout, 'config', '--get', 'sympp.serviceRef'), 'main');
+  assert.equal(git('-C', checkout, 'config', '--get', 'sympp.serviceRevision'), git('rev-parse', 'HEAD'));
   assert.equal(fs.existsSync(receipt), false);
   serveReadiness = false;
   env.LISTENER_PID = '0';
