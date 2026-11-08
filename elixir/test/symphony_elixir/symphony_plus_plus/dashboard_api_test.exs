@@ -2839,9 +2839,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       |> post("/api/v1/sympp/operator/settings", %{"work_request_archive_after_days" => 7})
       |> json_response(200)
 
+      # A longer window never restores an archive; only the operator's restore does.
       relaxed_dashboard_payload = local_operator_dashboard_payload()
-      assert Enum.any?(relaxed_dashboard_payload["work_requests"]["work_requests"], &(&1["id"] == request.id))
-      assert relaxed_dashboard_payload["archived_work_requests"]["work_requests"] == []
+      refute Enum.any?(relaxed_dashboard_payload["work_requests"]["work_requests"], &(&1["id"] == request.id))
+      assert [%{"id" => "WR-LOCAL-ARCHIVE-SETTINGS"}] = relaxed_dashboard_payload["archived_work_requests"]["work_requests"]
 
       archive_payload =
         local_operator_conn()

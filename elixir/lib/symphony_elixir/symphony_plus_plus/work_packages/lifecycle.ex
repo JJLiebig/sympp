@@ -291,25 +291,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
 
   defp ended_blocker?(blocker, owner_id, ended_ids), do: blocker.active and MapSet.member?(ended_ids, owner_id)
 
+  # A blocker raised from an archived WorkRequest stays in its frozen history;
+  # the package it blocked ends regardless.
   defp resolve_blocker(repo, work_package_id, blocker, :ok) do
-    case PlanningRepository.append_progress_event(
-           repo,
-           %{
-             work_package_id: work_package_id,
-             summary: "Cleared blocker after terminal transition: #{blocker.summary || blocker.id}",
-             body: "The WorkPackage or its owning WorkRequest reached a terminal state.",
-             status: "resolved",
-             idempotency_key: "terminal-cleanup:#{work_package_id}:#{blocker.id}:#{blocker.event_id}",
-             payload: %{
-               type: "blocker",
-               source_tool: "resolve_blocker",
-               blocker_id: blocker.id,
-               resolution: "Owning work reached a terminal state.",
-               active: false
-             }
-           },
-           allow_archived: true
-         ) do
+    case WorkRequestPhase.require_writable_package(repo, work_package_id) do
+      :ok -> append_blocker_resolution(repo, work_package_id, blocker)
+      {:error, :work_request_archived} -> {:cont, :ok}
+    end
+  end
+
+  defp append_blocker_resolution(repo, work_package_id, blocker) do
+    case PlanningRepository.append_progress_event(repo, %{
+           work_package_id: work_package_id,
+           summary: "Cleared blocker after terminal transition: #{blocker.summary || blocker.id}",
+           body: "The WorkPackage or its owning WorkRequest reached a terminal state.",
+           status: "resolved",
+           idempotency_key: "terminal-cleanup:#{work_package_id}:#{blocker.id}:#{blocker.event_id}",
+           payload: %{
+             type: "blocker",
+             source_tool: "resolve_blocker",
+             blocker_id: blocker.id,
+             resolution: "Owning work reached a terminal state.",
+             active: false
+           }
+         }) do
       {:ok, _event} -> {:cont, :ok}
       {:error, reason} -> {:halt, {:error, reason}}
     end

@@ -112,7 +112,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     assert repo.aggregate(ProgressEvent, :count, :id) == event_count
   end
 
-  test "a blocker raised from an archived WorkRequest does not stop the blocked package from ending", %{repo: repo, work_request: request} do
+  test "a blocker raised from an archived WorkRequest stays in its history and does not stop the blocked package from ending", %{repo: repo, work_request: request} do
     assert {:ok, other} =
              WorkRequestRepository.create(repo, %{
                title: "Archived source",
@@ -130,7 +130,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
 
     assert {:ok, _delivery} = DeliveryCloseout.record(repo, request.id, target.id, ending("finished"))
     assert repo.get!(WorkPackage, target.id).status == "ended"
-    assert WorkPackageActivity.context(repo, source.id).blocker_state.active_ids == []
+    assert WorkPackageActivity.context(repo, source.id).blocker_state.active_ids == ["cross-request-blocker"]
   end
 
   test "qualification fails on each predicate that does not hold" do

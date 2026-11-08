@@ -63,11 +63,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   end
 
   @spec append_progress_event(repo(), map()) :: {:ok, ProgressEvent.t()} | {:error, error()}
-  @spec append_progress_event(repo(), map(), keyword()) :: {:ok, ProgressEvent.t()} | {:error, error()}
-  def append_progress_event(repo, attrs, opts \\ []) when is_atom(repo) and is_map(attrs) and is_list(opts) do
+  def append_progress_event(repo, attrs) when is_atom(repo) and is_map(attrs) do
     repo.transaction(fn ->
       changeset_fun = &ProgressEvent.create_changeset/1
-      opts = [trusted_audit_metadata: false, allow_archived: Keyword.get(opts, :allow_archived, false)]
+      opts = [trusted_audit_metadata: false]
 
       case append_progress_event_in_transaction(repo, attrs, changeset_fun, opts) do
         {:ok, event} -> event
@@ -138,10 +137,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   end
 
   # Callers hold a transaction, so the archive check and the insert are atomic.
-  # Two kinds of system bookkeeping pass `allow_archived: true` and stay possible
-  # on an archived WorkRequest: audits of releasing, revoking or reclaiming
-  # runtime authority, so a worker left running there can still be stopped, and
-  # clearing a blocker because the package it blocked ended.
+  # Audits of releasing, revoking or reclaiming runtime authority pass
+  # `allow_archived: true` (only those trusted paths do), so a worker left
+  # running on an archived WorkRequest can still be stopped.
   defp append_progress_event_in_transaction(repo, attrs, changeset_fun, opts) do
     with :ok <- require_writable_progress(repo, attrs, Keyword.get(opts, :allow_archived, false)),
          {:ok, attrs} <- normalize_append_attrs(attrs, Keyword.fetch!(opts, :trusted_audit_metadata)),

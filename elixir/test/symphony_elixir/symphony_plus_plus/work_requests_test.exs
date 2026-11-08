@@ -253,16 +253,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert Enum.map(all_requests, & &1.id) == [old_request.id, recent_request.id, unresolved.id, unfinished.id]
   end
 
-  test "an operator restore restarts the age window, and a longer window restores age archives", %{repo: repo} do
+  test "an operator restore restarts the age window, and a longer window restores nothing", %{repo: repo} do
     now = utc_usec(~U[2026-05-23 12:00:00Z])
     request = completed_delivered_request!(repo, "WR-RETENTION-RESTORE", utc_usec(~U[2026-05-01 00:00:00Z]))
 
     assert {:ok, %{archived_ids: [id]}} = Service.retention_pass(repo, now: now)
     assert id == request.id
     assert {:ok, %{archived_ids: []}} = Service.retention_pass(repo, now: now, archive_after_days: 3650)
-    assert repo.get!(WorkRequest, id).archived_at == nil
+    assert %DateTime{} = repo.get!(WorkRequest, id).archived_at
 
-    assert {:ok, %{archived_ids: [^id]}} = Service.retention_pass(repo, now: now)
     assert {:ok, restored} = Service.restore(repo, id)
     window_end = DateTime.add(restored.restored_at, 3, :day)
     assert {:ok, %{archived_ids: []}} = Service.retention_pass(repo, now: DateTime.add(window_end, -1, :microsecond))

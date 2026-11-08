@@ -253,8 +253,8 @@ next successful retention pass archives the goal with `archive_reason:
 "never_started"`, leaving `completed_at` null. It leaves
 the board and appears in `archived_work_requests`; its archive card operational state
 is `archived` / `Archived`, rather than completed. Restore clears the archive and
-starts a fresh full threshold window from restoration. Increasing the setting
-does not automatically restore an existing never-started archive.
+starts a fresh full threshold window from restoration. Changing a retention
+setting never restores an archive; only the operator's restore does.
 
 This rule neither queues worktree cleanup nor deletes ledger history. Archives
 with this reason are excluded from subsequent automatic archived-goal deletion,

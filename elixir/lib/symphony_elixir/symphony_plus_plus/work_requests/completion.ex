@@ -29,7 +29,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   import Ecto.Query, only: [from: 2]
 
   @archivable_phases ["done", "unresolved"]
-  @restorable_archive_reasons ["age"]
   @default_archive_after_days 3
   @completed_visible_limit 10
   @delete_work_request_chunk_size 500
@@ -125,7 +124,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
          {:ok, archived_never_started} <- NeverStartedRetention.archive(repo, now, never_started_days),
          cutoff = DateTime.add(now, -archive_after_days * 24 * 60 * 60, :second),
          {:ok, candidates} <- retention_candidates(repo),
-         {:ok, _restored} <- restore_unexpired(repo, candidates, cutoff),
          {:ok, archived_for_age} <- archive_expired(repo, candidates, cutoff),
          {:ok, remaining} <- retention_candidates(repo),
          {:ok, archived_for_limit} <- archive_overflow(repo, remaining),
@@ -170,13 +168,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     Lifecycle.apply_terminal_effects(repo, work_packages)
   end
 
-  # Every unarchived WorkRequest, plus age archives that a longer window may
-  # restore, with the time its work became done.
+  # Every unarchived done WorkRequest, with the time its retention clock started.
   defp retention_candidates(repo) do
     work_requests =
       repo.all(
         from(work_request in WorkRequest,
-          where: is_nil(work_request.archived_at) or work_request.archive_reason in ^@restorable_archive_reasons,
+          where: is_nil(work_request.archived_at),
           order_by: [asc: work_request.inserted_at, asc: work_request.id]
         )
       )
@@ -197,27 +194,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
 
   defp archive_expired(repo, candidates, cutoff) do
     candidates
-    |> Enum.filter(fn {work_request, clock} -> is_nil(work_request.archived_at) and DateTime.compare(clock, cutoff) != :gt end)
+    |> Enum.filter(fn {_work_request, clock} -> DateTime.compare(clock, cutoff) != :gt end)
     |> Enum.map(&elem(&1, 0))
     |> archive_all(repo, "age", &done_since?(&1, &2, fn clock -> DateTime.compare(clock, cutoff) != :gt end))
   end
 
   defp archivable_phase?(_work_request, %{phase: phase}), do: phase in @archivable_phases
 
-  defp restore_unexpired(repo, candidates, cutoff) do
-    candidates
-    |> Enum.filter(fn {work_request, clock} -> not is_nil(work_request.archived_at) and DateTime.compare(clock, cutoff) == :gt end)
-    |> Enum.map(fn {work_request, _clock} ->
-      work_request
-      |> Ecto.Changeset.change(archived_at: nil, archive_reason: nil)
-      |> update_work_request(repo)
-    end)
-    |> collect_or_error()
-  end
-
   defp archive_overflow(repo, candidates) do
     candidates
-    |> Enum.filter(fn {work_request, _clock} -> is_nil(work_request.archived_at) end)
     |> Enum.group_by(fn {work_request, _clock} -> {work_request.repo, work_request.base_branch} end)
     |> Enum.flat_map(fn {_scope, scoped} ->
       scoped
@@ -454,17 +439,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
 
         {:ok, deleted_count + count}
     end)
-  end
-
-  defp collect_or_error(results) do
-    Enum.reduce_while(results, {:ok, []}, fn
-      {:ok, item}, {:ok, items} -> {:cont, {:ok, [item | items]}}
-      {:error, reason}, {:ok, _items} -> {:halt, {:error, reason}}
-    end)
-    |> case do
-      {:ok, items} -> {:ok, Enum.reverse(items)}
-      {:error, reason} -> {:error, reason}
-    end
   end
 
   defp enqueue_worktrees_for_deletion(repo, work_packages) do
