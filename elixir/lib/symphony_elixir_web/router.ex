@@ -62,7 +62,7 @@ defmodule SymphonyElixirWeb.Router do
     post("/api/v1/sympp/operator/work-requests/:work_request_id/archive", SymppDashboardApiController, :operator_archive_work_request)
     post("/api/v1/sympp/operator/work-requests/:work_request_id/delete", SymppDashboardApiController, :operator_delete_work_request)
     post("/api/v1/sympp/operator/work-requests/:work_request_id/restore", SymppDashboardApiController, :operator_restore_work_request)
-    post("/api/v1/sympp/operator/work-packages/:work_package_id/state", SymppDashboardApiController, :operator_update_work_package_state)
+    post("/api/v1/sympp/operator/work-packages/:work_package_id/finish", SymppDashboardApiController, :operator_finish_work_package)
     post("/api/v1/sympp/operator/work-packages/:work_package_id/blockers/:blocker_id/clear", SymppDashboardApiController, :operator_clear_work_package_blocker)
     post("/api/v1/sympp/operator/work-packages/:work_package_id/archive", SymppDashboardApiController, :operator_archive_work_package)
 
@@ -101,7 +101,7 @@ defmodule SymphonyElixirWeb.Router do
     match(:*, "/api/v1/sympp/herdr/work-requests/:work_request_id", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/settings", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-requests/:work_request_id/state", ObservabilityApiController, :method_not_allowed)
-    match(:*, "/api/v1/sympp/operator/work-packages/:work_package_id/state", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/sympp/operator/work-packages/:work_package_id/finish", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-packages/:work_package_id/blockers/:blocker_id/clear", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-packages/:work_package_id/archive", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/github/sync-prs", ObservabilityApiController, :method_not_allowed)

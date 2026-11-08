@@ -7,6 +7,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
@@ -17,9 +18,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
   import Ecto.Query, only: [from: 2]
 
   @local_operator_actor "local-operator"
-  @local_operator_nonmergeable_terminal_package_statuses ["closed", "abandoned"]
-  @local_operator_noncloseable_terminal_package_statuses ["merged", "abandoned"]
-  @local_operator_hideable_package_statuses ["merged", "closed", "abandoned"]
 
   @spec local_operator_work_request_state(map()) :: {:ok, String.t()} | {:error, atom()}
   def local_operator_work_request_state(params) do
@@ -30,115 +28,24 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
     end
   end
 
-  @spec local_operator_work_package_status(map()) :: {:ok, atom()} | {:error, atom()}
-  def local_operator_work_package_status(params) do
-    case text_param(params, "status") do
-      "merged" -> {:ok, :merged}
-      "merged_and_archive" -> {:ok, :merged_and_archive}
-      "closed_and_archive" -> {:ok, :closed_and_archive}
-      "completed_no_pr" -> {:ok, :completed_no_pr}
-      "unblock" -> {:ok, :unblock}
-      _status -> {:error, :invalid_status}
-    end
-  end
-
-  @spec change_work_package_for_local_operator(module(), String.t(), atom(), map()) ::
-          {:ok, WorkPackage.t()} | {:error, term()}
-  def change_work_package_for_local_operator(repo, work_package_id, :merged, _params) do
-    mark_work_package_merged_and_refresh_for_local_operator(repo, work_package_id)
-  end
-
-  def change_work_package_for_local_operator(repo, work_package_id, :merged_and_archive, _params) do
-    local_operator_transaction(repo, fn ->
-      with {:ok, work_package} <- mark_work_package_merged_for_local_operator(repo, work_package_id),
-           :ok <- refresh_work_requests_for_work_package(repo, work_package.id),
-           {:ok, _hidden_package} <- hide_work_package_for_local_operator_in_transaction(repo, work_package) do
-        {:ok, work_package}
-      end
-    end)
-  end
-
-  def change_work_package_for_local_operator(repo, work_package_id, :closed_and_archive, _params) do
-    local_operator_transaction(repo, fn ->
-      with {:ok, work_package} <- close_work_package_for_local_operator(repo, work_package_id),
-           {:ok, _hidden_package} <- hide_work_package_for_local_operator_in_transaction(repo, work_package) do
-        {:ok, work_package}
-      end
-    end)
-  end
-
-  def change_work_package_for_local_operator(repo, work_package_id, :completed_no_pr, params) do
+  @doc """
+  Ends a dispatched or ready WorkPackage as `finished`: its PR waits on someone
+  else, so sympp stops watching it. The WorkRequest can complete; packages that
+  depend on it stay blocked.
+  """
+  @spec finish_work_package_for_local_operator(module(), String.t()) :: {:ok, WorkPackage.t()} | {:error, term()}
+  def finish_work_package_for_local_operator(repo, work_package_id) do
     with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
-         :ok <- require_closeable_work_package(work_package),
-         {:ok, no_pr_evidence} <- required_no_pr_evidence(params),
          {:ok, work_package} <- require_work_request_package(work_package),
          {:ok, _delivery} <-
            WorkRequestService.record_work_package_delivery(repo, work_package.work_request_id, work_package.id, %{
-             outcome: "completed_no_pr",
-             idempotency_key: completed_no_pr_idempotency_key(work_package.id),
-             no_pr_evidence: no_pr_evidence,
+             outcome: "finished",
+             idempotency_key: "local-operator-finish:#{work_package.id}",
              recorded_by: @local_operator_actor
            }) do
       WorkPackageRepository.get(repo, work_package_id)
     end
   end
-
-  def change_work_package_for_local_operator(repo, work_package_id, :unblock, _params) do
-    WorkPackageRepository.update_status(repo, work_package_id, "blocked", "ready_for_worker")
-  end
-
-  defp mark_work_package_merged_and_refresh_for_local_operator(repo, work_package_id) do
-    local_operator_transaction(repo, fn ->
-      with {:ok, work_package} <- mark_work_package_merged_for_local_operator(repo, work_package_id),
-           :ok <- refresh_work_requests_for_work_package(repo, work_package.id) do
-        {:ok, work_package}
-      end
-    end)
-  end
-
-  defp mark_work_package_merged_for_local_operator(repo, work_package_id) do
-    with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
-      case work_package.status do
-        "merged" ->
-          {:ok, work_package}
-
-        status when status in @local_operator_nonmergeable_terminal_package_statuses ->
-          {:error, :invalid_status}
-
-        status when is_binary(status) ->
-          WorkPackageRepository.update_status(repo, work_package.id, status, "merged")
-
-        _status ->
-          {:error, :invalid_status}
-      end
-    end
-  end
-
-  defp close_work_package_for_local_operator(repo, work_package_id) do
-    with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
-      case work_package.status do
-        "closed" ->
-          {:ok, work_package}
-
-        status when status in @local_operator_noncloseable_terminal_package_statuses ->
-          {:error, :invalid_status}
-
-        status when is_binary(status) ->
-          WorkPackageRepository.update_status(repo, work_package.id, status, "closed")
-
-        _status ->
-          {:error, :invalid_status}
-      end
-    end
-  end
-
-  defp require_closeable_work_package(%WorkPackage{status: status})
-       when status in @local_operator_noncloseable_terminal_package_statuses do
-    {:error, :invalid_status}
-  end
-
-  defp require_closeable_work_package(%WorkPackage{status: status}) when is_binary(status), do: :ok
-  defp require_closeable_work_package(%WorkPackage{}), do: {:error, :invalid_status}
 
   @spec hide_work_package_for_local_operator(module(), String.t()) :: {:ok, WorkPackage.t()} | {:error, term()}
   def hide_work_package_for_local_operator(repo, work_package_id) do
@@ -157,8 +64,8 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
     end
   end
 
-  defp require_hideable_work_package(%WorkPackage{status: status}) do
-    if status in @local_operator_hideable_package_statuses, do: :ok, else: {:error, :not_delivered}
+  defp require_hideable_work_package(%WorkPackage{} = work_package) do
+    if Lifecycle.ended?(work_package), do: :ok, else: {:error, :not_delivered}
   end
 
   defp require_direct_work_package(%WorkPackage{work_request_id: work_request_id})
@@ -172,15 +79,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
        do: {:ok, work_package}
 
   defp require_work_request_package(%WorkPackage{}), do: {:error, :work_request_package_required}
-
-  defp required_no_pr_evidence(params) do
-    case text_param(params, "no_pr_evidence") do
-      nil -> {:error, :missing_no_pr_evidence}
-      evidence -> {:ok, evidence}
-    end
-  end
-
-  defp completed_no_pr_idempotency_key(work_package_id), do: "local-operator-completed-no-pr:#{work_package_id}"
 
   @spec clear_work_package_blocker_for_local_operator(module(), String.t(), term(), map()) ::
           {:ok, term()} | {:error, term()}
@@ -315,25 +213,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
 
   defp normalize_local_operator_transaction_result({:ok, value}), do: {:ok, value}
   defp normalize_local_operator_transaction_result({:error, reason}), do: {:error, reason}
-
-  defp refresh_work_requests_for_work_package(repo, work_package_id) do
-    with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
-      refresh_work_request_for_package(repo, work_package)
-    end
-  end
-
-  defp refresh_work_request_for_package(repo, %WorkPackage{work_request_id: work_request_id})
-       when is_binary(work_request_id),
-       do: refresh_work_request_completion(repo, work_request_id)
-
-  defp refresh_work_request_for_package(_repo, %WorkPackage{}), do: :ok
-
-  defp refresh_work_request_completion(repo, work_request_id) do
-    case WorkRequestService.refresh_completion(repo, work_request_id) do
-      {:ok, _work_request} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
 
   @spec scoped_question(module(), String.t(), String.t()) :: {:ok, ClarificationQuestion.t()} | {:error, term()}
   def scoped_question(repo, work_request_id, question_id) when is_binary(work_request_id) and is_binary(question_id) do

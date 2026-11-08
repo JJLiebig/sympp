@@ -100,7 +100,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
     assert winning_server.session.assignment.work_package_id == package.id
 
     assert {:ok, active_package} = WorkPackageRepository.get(repo, package.id)
-    assert active_package.status == "active"
+    assert active_package.status == "dispatched"
 
     assert [active_lease] =
              repo.all(

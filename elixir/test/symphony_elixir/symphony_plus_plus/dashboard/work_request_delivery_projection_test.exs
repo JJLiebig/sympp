@@ -7,7 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDeliveryProjectio
     work_request = create_work_request!(repo, id: "WR-DASH-DELIVERY-BOARD")
 
     closeout_slice = add_approved_slice!(repo, work_request, id: "WRS-DASH-NEEDS-CLOSEOUT")
-    closeout_package = create_matching_work_package!(repo, work_request, closeout_slice, id: "SYMPP-DASH-NEEDS-CLOSEOUT", status: "ready_for_merge")
+    closeout_package = create_matching_work_package!(repo, work_request, closeout_slice, id: "SYMPP-DASH-NEEDS-CLOSEOUT", status: "ready")
 
     assert {:ok, _dispatched_closeout} =
              CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, closeout_slice.id, "approved", closeout_package.id)
@@ -46,7 +46,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDeliveryProjectio
         id: "SYMPP-DASH-READY-MERGE",
         kind: "adapter",
         policy_template: "adapter",
-        status: "ready_for_merge"
+        status: "ready"
       )
 
     assert {:ok, _dispatched_ready_merge} =
@@ -72,20 +72,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDeliveryProjectio
         id: "SYMPP-DASH-READY-FINISH",
         kind: "investigation",
         policy_template: "investigation",
-        status: "ready_for_merge"
+        status: "ready"
       )
 
     assert {:ok, _dispatched_ready_finish} =
              CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, ready_finish_slice.id, "approved", ready_finish_package.id)
 
     no_pr_slice = add_approved_slice!(repo, work_request, id: "WRS-DASH-NO-PR")
-    no_pr_package = create_matching_work_package!(repo, work_request, no_pr_slice, id: "SYMPP-DASH-NO-PR", status: "closed")
+    no_pr_package = create_matching_work_package!(repo, work_request, no_pr_slice, id: "SYMPP-DASH-NO-PR", status: "dispatched")
 
     assert {:ok, _dispatched_no_pr} =
              CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, no_pr_slice.id, "approved", no_pr_package.id)
 
     assert {:ok, _no_pr_delivery} =
-             WorkRequestRepository.record_work_package_delivery(
+             CanonicalWorkPackageFixtures.end_work_package(
                repo,
                work_request.id,
                no_pr_slice.id,
@@ -97,19 +97,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDeliveryProjectio
              )
 
     superseded_slice = add_approved_slice!(repo, work_request, id: "WRS-DASH-SUPERSEDED")
-    superseded_package = create_matching_work_package!(repo, work_request, superseded_slice, id: "SYMPP-DASH-SUPERSEDED", status: "closed")
+    superseded_package = create_matching_work_package!(repo, work_request, superseded_slice, id: "SYMPP-DASH-SUPERSEDED", status: "dispatched")
 
     assert {:ok, _dispatched_superseded} =
              CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, superseded_slice.id, "approved", superseded_package.id)
 
     successor_slice = add_approved_slice!(repo, work_request, id: "WRS-DASH-SUCCESSOR")
-    successor_package = create_matching_work_package!(repo, work_request, successor_slice, id: "SYMPP-DASH-SUCCESSOR", status: "ready_for_worker")
+    successor_package = create_matching_work_package!(repo, work_request, successor_slice, id: "SYMPP-DASH-SUCCESSOR", status: "dispatched")
 
     assert {:ok, _successor_dispatch} =
              CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, successor_slice.id, "approved", successor_package.id)
 
     assert {:ok, _superseded_delivery} =
-             WorkRequestRepository.record_work_package_delivery(
+             CanonicalWorkPackageFixtures.end_work_package(
                repo,
                work_request.id,
                superseded_slice.id,
@@ -126,7 +126,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDeliveryProjectio
     merged_delivery_package =
       create_matching_work_package!(repo, work_request, merged_delivery_work_package,
         id: "SYMPP-DASH-RECORDED-MERGED",
-        status: "ready_for_worker"
+        status: "dispatched"
       )
 
     assert {:ok, _merged_delivery_progress} =
@@ -155,7 +155,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDeliveryProjectio
              )
 
     assert {:ok, _merged_delivery} =
-             WorkRequestRepository.record_work_package_delivery(
+             CanonicalWorkPackageFixtures.end_work_package(
                repo,
                work_request.id,
                merged_delivery_work_package.id,
@@ -173,7 +173,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDeliveryProjectio
     filtered_successor_package =
       create_matching_work_package!(repo, work_request, filtered_successor_slice,
         id: "SYMPP-DASH-FILTERED-SUCCESSOR",
-        status: "closed"
+        status: "dispatched"
       )
 
     assert {:ok, _filtered_successor_dispatch} =
@@ -188,13 +188,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDeliveryProjectio
     out_of_scope_successor_package =
       create_work_package!(repo,
         id: "SYMPP-DASH-OUT-OF-SCOPE-SUCCESSOR",
-        status: "ready_for_worker",
+        status: "dispatched",
         repo: work_request.repo,
         base_branch: "other-base"
       )
 
     assert {:error, :not_found} =
-             WorkRequestRepository.record_work_package_delivery(
+             CanonicalWorkPackageFixtures.end_work_package(
                repo,
                work_request.id,
                filtered_successor_slice.id,
@@ -256,8 +256,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDeliveryProjectio
     merged_slice = Map.fetch!(work_packages_by_id, "WRS-DASH-RECORDED-MERGED")
     assert merged_slice.operational_state.key == "delivered"
     assert merged_slice.operational_state.label == "Delivered"
-    assert merged_slice.operational_state.raw_status == "ready_for_worker"
-    assert merged_slice.operational_state.work_package_status == "ready_for_worker"
+    assert merged_slice.operational_state.raw_status == "ended"
+    assert merged_slice.operational_state.work_package_status == "ended"
     assert merged_slice.operational_state.has_started == true
     assert merged_slice.operational_state.is_stale == true
     assert merged_slice.operational_state.attention_items == []
@@ -277,7 +277,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDeliveryProjectio
         id: "SYMPP-DASH-ONLY-READY-FINISH",
         kind: "docs",
         policy_template: "docs",
-        status: "ready_for_merge"
+        status: "ready"
       )
 
     assert {:ok, _dispatched_ready_finish} =

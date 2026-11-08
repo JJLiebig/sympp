@@ -14,14 +14,16 @@ const DAY = 24 * HOUR;
 const LONG_REVIEW = 3 * HOUR;
 const DORMANT_AFTER = 14 * DAY;
 const RANK = { needs_you: 0, on_track: 3, idle: 4, parked: 5, settled: 6 };
-const OUTCOMES = { pr_merged: "merged", completed_no_pr: "finished", superseded: "dropped", abandoned: "dropped" };
-const TERMINAL_OUTCOMES = { merged: "merged", closed: "closed", abandoned: "dropped", skipped: "dropped" };
+const OUTCOMES = { pr_merged: "merged", completed_no_pr: "finished", finished: "finished", superseded: "dropped", abandoned: "dropped", skipped: "dropped" };
+// Migrated endings keep the old terminal status they were recorded with.
+const LEGACY_OUTCOMES = { merged: "merged", closed: "finished", abandoned: "dropped" };
+const deliveryOutcome = (delivery) => (delivery?.outcome === "legacy" ? LEGACY_OUTCOMES[delivery.legacy_status] : OUTCOMES[delivery?.outcome ?? ""]);
 // Packages without a backend stage: their recorded status, read as loosely as the web board does.
 const STATUS_RULES = [
   [/^(merged|github_pr_merged)$/, "done"],
-  [/merge_ready|ready_for_merge|review_complete|^reviewed$|review_owner_accepted|acceptance|ready_for_close/, "merge"],
+  [/merge_ready|review_complete|^reviewed$|review_owner_accepted|acceptance|ready_for_close/, "merge"],
   [/review/, "review"],
-  [/validat|ci_waiting/, "checks"],
+  [/validat/, "checks"],
 ];
 const ACTORS = { architect: "Architect", worker: "Worker", prerequisite_owner: "Prerequisite owner" };
 const REASONS = {
@@ -240,8 +242,7 @@ function buildPackage(slice, groups, now, runs) {
   const review = slice.review_signal ?? {};
   const activity = slice.activity_signal ?? {};
   const run = runs?.get(slice.work_package_id || slice.id) ?? null;
-  const outcome = OUTCOMES[slice.delivery?.outcome ?? ""] ?? TERMINAL_OUTCOMES[slice.raw_status ?? slice.status]
-    ?? (slice.operational_state?.key === "skipped" ? "dropped" : null)
+  const outcome = deliveryOutcome(slice.delivery)
     ?? (board && (board.delivered || board.stage === "done") ? (board.track === "no_pr" ? "finished" : "merged") : null);
   const stage = outcome ? "done" : board?.stage ?? statusStage(slice);
   const observed = stageTime(slice, board, stage);
@@ -421,7 +422,7 @@ export function packageSections(job) {
 }
 
 export function stageText(pkg, now) {
-  if (pkg.stage === "done") return pkg.outcome === "dropped" ? "Dropped" : pkg.outcome === "finished" ? "Finished" : pkg.outcome === "closed" ? "Closed" : "Merged";
+  if (pkg.stage === "done") return pkg.outcome === "dropped" ? "Dropped" : pkg.outcome === "finished" ? "Finished" : "Merged";
   if (pkg.stage === "queued") return pkg.after.length ? `After ${pkg.after.join(", ")}` : "Queued";
   const label = pkg.stage === "review" ? `Review${pkg.round > 1 ? ` · round ${pkg.round}` : ""}` : STAGE_LABEL[pkg.stage];
   return pkg.untimed || pkg.since === null ? label : `${label} · ${span(now - pkg.since)}`;

@@ -11,20 +11,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     Sanitizer
   }
 
-  alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
+  alias SymphonyElixir.SymphonyPlusPlus.Policies.Templates
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @stale_heartbeat_after_seconds 300
-  @ready_statuses ["ready_for_merge"]
+  @ready_statuses ["ready"]
   @merge_required_gates ["human_merge", "architect_merge"]
   @runtime_merge_required_kinds ["hotfix", "adapter", "mcp", "skill", "hooks"]
-  @started_package_statuses ["active", "claimed", "planning", "implementing"]
   @prepared_worktree_statuses ["prepared", "already_prepared"]
-  @merged_package_statuses ["merged"]
-  @closed_package_statuses ["closed", "abandoned", "skipped"]
 
   @type repo :: module()
 
@@ -252,19 +250,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
 
   defp blocking_or_terminal_operational_state(status, active_blocker_count, metadata) do
     cond do
-      status in @merged_package_statuses ->
-        operational_state("merged", "Merged", "success", "Raw lifecycle status indicates merged delivery.", status)
-
-      status in @closed_package_statuses ->
-        operational_state(status, status_label(status), "neutral", "Raw lifecycle status is #{status}.", status)
+      Lifecycle.ended?(status) ->
+        operational_state("ended", "Ended", "neutral", "The WorkPackage ended; its ending row records how.", status)
 
       active_blocker_count > 0 ->
         operational_state("blocked", "Blocked", "critical", blocker_detail(active_blocker_count), status)
 
-      status == "blocked" ->
-        operational_state("blocked", "Blocked", "critical", "Raw lifecycle status is blocked.", status)
-
-      pr_merged?(metadata) and open_package_status?(status) ->
+      pr_merged?(metadata) ->
         operational_state("merged", "Merged", "success", "PR metadata reports a merged pull request while raw status is #{status}.", status)
 
       true ->
@@ -293,51 +285,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     end
   end
 
-  defp pickup_operational_state("ready_for_worker" = status, %{has_started: true}) do
-    operational_state(
-      "needs_attention",
-      "Needs Attention",
-      "warning",
-      "Raw status is ready_for_worker but worker, runtime, progress, PR, review, or merge activity is recorded.",
-      status
-    )
-  end
-
-  defp pickup_operational_state("ready_for_worker" = status, %{has_prepared_worktree: true}) do
-    operational_state("prepared", "Prepared", "neutral", "Worktree preparation is recorded and the package is awaiting worker claim.", status)
-  end
-
-  defp pickup_operational_state(status, %{has_active_worker: true}) when status != "ready_for_worker" do
+  defp pickup_operational_state(status, %{has_active_worker: true}) when status != "planned" do
     operational_state("active", "Active", "info", "Worker grant or runtime evidence indicates work is active now.", status)
   end
 
-  defp pickup_operational_state(status, %{has_started: true}) do
+  defp pickup_operational_state(status, %{has_started: true}) when status != "planned" do
     operational_state(
       "started_paused",
       "Started / Paused",
       "warning",
-      "Historical lifecycle, runtime, progress, PR, or review evidence exists, but no active worker or runtime is visible now.",
+      "Runtime, progress, PR, or review evidence exists, but no active worker or runtime is visible now.",
       status
     )
   end
 
-  defp pickup_operational_state("ready_for_worker" = status, _activity) do
-    operational_state(
-      "ready_for_worker",
-      "Ready For Worker",
-      "neutral",
-      "No delivery, worker, runtime, progress, blocker, review, PR, or merge activity is recorded.",
-      status
-    )
+  defp pickup_operational_state("dispatched" = status, %{has_prepared_worktree: true}) do
+    operational_state("prepared", "Prepared", "neutral", "Worktree preparation is recorded and the package is awaiting its worker.", status)
   end
 
-  defp pickup_operational_state("created" = status, _activity) do
-    operational_state("created", "Created", "neutral", "Package has been created but is not ready for worker pickup.", status)
+  defp pickup_operational_state("dispatched" = status, _activity) do
+    operational_state("dispatched", "Dispatched", "neutral", "The package was dispatched; no worker, PR or review activity is recorded yet.", status)
   end
 
   defp pickup_operational_state(status, _activity) do
     key = status || "unknown"
-    operational_state(key, status_label(key), "neutral", "Raw lifecycle status is #{key}.", status)
+    operational_state(key, status_label(key), "neutral", "WorkPackage status is #{key}.", status)
   end
 
   defp delivery_operational_state_overlay(base_state, delivery_state) do
@@ -387,10 +359,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     operational_state("planned", "Planned", "neutral", "WorkPackage is planned and has not been dispatched.", work_package.status)
   end
 
-  defp base_work_package_without_context_state(%WorkPackage{status: "skipped"} = work_package) do
-    operational_state("skipped", "Skipped", "neutral", "WorkPackage was skipped before dispatch.", work_package.status)
-  end
-
   defp base_work_package_without_context_state(%WorkPackage{} = work_package) do
     status = work_package.status || "unknown"
     operational_state(status, status_label(status), "neutral", "WorkPackage status is #{status}.", status)
@@ -402,17 +370,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       "Planned",
       "neutral",
       "WorkPackage is planned and has not been dispatched.",
-      work_package.status,
-      attention_items
-    )
-  end
-
-  defp idle_work_package_operational_state(%WorkPackage{status: "skipped"} = work_package, attention_items) do
-    operational_state(
-      "skipped",
-      "Skipped",
-      "neutral",
-      "WorkPackage was skipped before dispatch.",
       work_package.status,
       attention_items
     )
@@ -438,35 +395,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       "blocked",
       "active",
       "prepared",
-      "needs_attention",
       "started_paused",
-      "reviewing",
-      "ci_waiting",
       "merge_ready",
       "ready_to_finish",
       "merging",
       "merged",
-      "closed",
-      "abandoned"
+      "ended"
     ]
   end
 
   defp promoted_context_operational_state?(_state), do: false
 
-  defp work_package_attention_items(%WorkPackage{status: status}, _blockers, _context)
-       when status in @merged_package_statuses or status in @closed_package_statuses,
-       do: []
+  defp work_package_attention_items(%WorkPackage{status: "ended"}, _blockers, _context), do: []
 
   defp work_package_attention_items(%WorkPackage{} = work_package, blockers, context) do
     missing_readiness = Map.fetch!(context, :missing_readiness)
-    activity = Map.fetch!(context, :activity)
     lineage = Map.fetch!(context, :lineage)
 
     single_items =
       [
         active_blocker_attention_item(blockers),
-        missing_readiness_attention_item(work_package, missing_readiness),
-        ready_status_with_activity_attention_item(work_package, activity)
+        missing_readiness_attention_item(work_package, missing_readiness)
       ]
       |> Enum.reject(&is_nil/1)
 
@@ -510,23 +459,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
 
   defp missing_readiness_attention_item(%WorkPackage{}, _missing_readiness), do: nil
 
-  defp ready_status_with_activity_attention_item(%WorkPackage{status: "ready_for_worker"}, activity) do
-    if activity.has_started and not activity.has_active_worker do
-      %{
-        key: "ready_for_worker_with_activity",
-        label: "Ready Status With Activity",
-        tone: "warning",
-        reason: "Raw status is ready_for_worker but worker, runtime, progress, PR, review, or merge activity is recorded."
-      }
-    end
-  end
-
-  defp ready_status_with_activity_attention_item(%WorkPackage{}, _delivery_started), do: nil
-
   defp active_blockers(blockers), do: Enum.filter(blockers, & &1.active)
 
   defp work_package_activity(
-         %WorkPackage{status: status} = work_package,
+         %WorkPackage{} = work_package,
          progress_events,
          agent_runs,
          runtime,
@@ -540,7 +476,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
 
     has_started =
       work_package_started?(
-        status,
         has_active_worker,
         agent_runs,
         runtime,
@@ -559,9 +494,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     }
   end
 
-  defp work_package_started?(status, has_active_worker, agent_runs, runtime, has_meaningful_progress, metadata) do
-    status in @started_package_statuses or
-      has_active_worker or
+  defp work_package_started?(has_active_worker, agent_runs, runtime, has_meaningful_progress, metadata) do
+    has_active_worker or
       agent_run_activity?(agent_runs) or
       runtime_activity?(runtime) or
       has_meaningful_progress or
@@ -687,8 +621,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
 
   defp merged_value?(_value), do: false
 
-  defp open_package_status?(status), do: status not in @merged_package_statuses and status not in @closed_package_statuses
-
   defp operational_state(key, label, tone, reason, raw_status, attention_items \\ []) do
     %{
       key: key,
@@ -698,11 +630,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       raw_status: raw_status,
       attention_items: attention_items
     }
-  end
-
-  defp blocker_indicator(%WorkPackage{status: "blocked"}, blockers) do
-    active_count = Enum.count(blockers, & &1.active)
-    alert_indicator("blocker", "Blocked", "critical", active_count > 0, blocker_detail(active_count))
   end
 
   defp blocker_indicator(%WorkPackage{}, blockers) do
@@ -833,7 +760,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     end
   end
 
-  defp policy_for(%WorkPackage{} = work_package), do: LifecycleService.policy_for(work_package)
+  defp policy_for(%WorkPackage{} = work_package), do: Templates.for_work_package(work_package)
 
   @spec merge_required?(WorkPackage.t()) :: boolean()
   def merge_required?(%WorkPackage{} = work_package) do

@@ -27,7 +27,6 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
 
   @local_operator_actor "local-operator"
   @review_observation_timeout_ms 3_500
-  @local_operator_hideable_package_statuses ["merged", "closed", "abandoned"]
   @architect_handoff_anchor_id_like "SYMPP-WR-ARCH-%"
   @architect_handoff_anchor_kind "delegation"
 
@@ -432,7 +431,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
 
   defp expired_terminal_work_package_query(queryable, cutoff) do
     from(work_package in queryable,
-      where: work_package.status in ^@local_operator_hideable_package_statuses,
+      where: work_package.status == "ended",
       where: is_nil(work_package.parent_id),
       where: is_nil(work_package.phase_id),
       where: is_nil(work_package.work_request_id),

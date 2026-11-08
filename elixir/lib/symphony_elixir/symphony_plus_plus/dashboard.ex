@@ -32,6 +32,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
@@ -43,13 +44,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
   import Ecto.Query, only: [from: 2]
 
-  @ready_statuses ["ready_for_merge"]
+  @ready_statuses ["ready"]
   @work_package_context_chunk_size 500
   @operator_finished_work_package_limit 80
   @finished_work_package_candidate_multiplier 3
   @finished_work_package_min_candidate_limit 40
   @finished_progress_lookup_chunk_size 500
-  @finished_package_statuses ["merged", "closed", "abandoned"]
   @operator_work_package_signal_keys [
     :active_agent_run,
     :active_blocker_count,
@@ -746,7 +746,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     end
   end
 
-  defp finished_work_package?(%WorkPackage{status: status}), do: status in @finished_package_statuses
+  defp finished_work_package?(%WorkPackage{} = work_package), do: Lifecycle.ended?(work_package)
 
   defp visible_finished_work_packages(_repo, _finished, 0), do: []
   defp visible_finished_work_packages(_repo, [], _limit), do: []
@@ -1206,14 +1206,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
   defp group_cards(cards) do
     by_status = Enum.group_by(cards, & &1.status)
-    statuses = Enum.uniq(WorkPackage.statuses() ++ Map.keys(by_status))
+    statuses = Enum.uniq(Lifecycle.statuses() ++ Map.keys(by_status))
 
     Map.new(statuses, fn status ->
       {status, Map.get(by_status, status, [])}
     end)
   end
 
-  defp group_statuses(groups) when is_map(groups), do: Enum.uniq(WorkPackage.statuses() ++ Map.keys(groups))
+  defp group_statuses(groups) when is_map(groups), do: Enum.uniq(Lifecycle.statuses() ++ Map.keys(groups))
 
   defp summary(%State{} = state, grants, agent_runs, blockers) do
     runtime = OperationalProjection.runtime_summary(agent_runs)
@@ -1610,7 +1610,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       work_package_count: length(work_packages),
       planned_work_package_count: Enum.count(work_packages, &(&1.status == "planned")),
       dispatched_work_package_count: Enum.count(work_packages, &(not is_nil(&1.dispatched_at))),
-      skipped_work_package_count: Enum.count(work_packages, &(&1.status == "skipped"))
+      ended_work_package_count: Enum.count(work_packages, &Lifecycle.ended?/1)
     }
   end
 
@@ -1624,7 +1624,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       work_package_count: length(work_packages),
       planned_work_package_count: Enum.count(work_packages, &(&1.status == "planned")),
       dispatched_work_package_count: Enum.count(work_packages, &(not is_nil(&1.dispatched_at))),
-      skipped_work_package_count: Enum.count(work_packages, &(&1.status == "skipped"))
+      ended_work_package_count: Enum.count(work_packages, &Lifecycle.ended?/1)
     }
   end
 

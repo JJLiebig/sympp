@@ -57,7 +57,7 @@ type Slice = {
   dispatched_at?: string | null;
   product_tree_node_id?: string | null;
   review?: { args?: { mode?: string | null } | null } | null;
-  delivery?: { outcome?: string | null; recorded_at?: string | null; pr_merged_at?: string | null } | null;
+  delivery?: { outcome?: string | null; legacy_status?: string | null; recorded_at?: string | null; pr_merged_at?: string | null } | null;
   operational_state?: { key?: string | null } | null;
   board_state?: BoardState | null;
   pr_signal?: { number?: number | null; url?: string | null; created_at?: string | null; head_changed_at?: string | null; checks?: { status?: string | null; changed_at?: string | null } | null } | null;
@@ -98,13 +98,15 @@ export type Settings = {
 export type Hydrated = { generated_at?: string; settings?: Settings | null; work_request_details?: Detail[] };
 type Timed = { event: HistoryEvent; at: number };
 
-const OUTCOMES: Record<string, Outcome> = { pr_merged: "merged", completed_no_pr: "finished", superseded: "dropped", abandoned: "dropped" };
+const OUTCOMES: Record<string, Outcome> = { pr_merged: "merged", completed_no_pr: "finished", finished: "finished", superseded: "dropped", abandoned: "dropped", skipped: "dropped" };
+// Migrated endings keep the old terminal status they were recorded with.
+const LEGACY_OUTCOMES: Record<string, Outcome> = { merged: "merged", closed: "finished", abandoned: "dropped" };
 // First match wins. Statuses are whatever agents wrote, so these are deliberately loose.
 const STATUS_RULES: Array<[RegExp, Stage]> = [
   [/^(merged|github_pr_merged)$/, "done"],
-  [/merge_ready|ready_for_merge|review_complete|^reviewed$|review_owner_accepted|acceptance|ready_for_close/, "merge"],
+  [/merge_ready|review_complete|^reviewed$|review_owner_accepted|acceptance|ready_for_close/, "merge"],
   [/review/, "review"],
-  [/validat|ci_waiting/, "checks"],
+  [/validat/, "checks"],
 ];
 
 export function buildGoals(hydrated: Hydrated, history: Record<string, HistoryEvent[]>): { goals: Goal[]; now: number } {
@@ -208,7 +210,9 @@ function blankPkg(slice: Slice, now: number): Pkg {
 }
 
 function outcomeOf(slice: Slice): Outcome | null {
-  return OUTCOMES[slice.delivery?.outcome ?? ""] ?? (slice.operational_state?.key === "skipped" ? "dropped" : null);
+  const delivery = slice.delivery;
+  const outcome = delivery?.outcome === "legacy" ? LEGACY_OUTCOMES[delivery.legacy_status ?? ""] : OUTCOMES[delivery?.outcome ?? ""];
+  return outcome ?? (slice.operational_state?.key === "skipped" ? "dropped" : null);
 }
 
 function endOf(slice: Slice, events: HistoryEvent[], now: number) {

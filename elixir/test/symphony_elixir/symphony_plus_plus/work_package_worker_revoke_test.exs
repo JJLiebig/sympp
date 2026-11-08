@@ -19,7 +19,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackageWorkerRevokeTest do
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{ArchitectHandoff, WorkRequest}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
@@ -60,7 +59,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackageWorkerRevokeTest do
   end
 
   test "another WorkRequest architect force-releases a reservation left after assignment release", %{repo: repo} do
-    {_work_request, _slice, package} = linked_slice!(repo, "active")
+    {_work_request, _slice, package} = linked_slice!(repo, "dispatched")
     session = create_work_request_architect_session(repo, create_work_request!(repo, "other-architect"))
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     {claim, worker} = claim_worker(repo, package, "previous-worker")
@@ -96,7 +95,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackageWorkerRevokeTest do
   end
 
   test "force release clears active claims and denies workers without changing their authority", %{repo: repo} do
-    {work_request, _slice, package} = linked_slice!(repo, "active")
+    {work_request, _slice, package} = linked_slice!(repo, "dispatched")
     session = create_work_request_architect_session(repo, work_request)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     {claim, worker} = claim_worker(repo, package, "current-worker")
@@ -116,7 +115,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackageWorkerRevokeTest do
   end
 
   test "architect cleanup recycles linked worker grant claim lease and recoverable MCP binding before superseded closeout", %{repo: repo} do
-    {work_request, work_package, linked_package} = linked_slice!(repo, "implementing")
+    {work_request, work_package, linked_package} = linked_slice!(repo, "dispatched")
     successor_slice = create_work_package!(repo, work_request, "WRS-MCP-DELIVERY-RUNTIME-CLEANUP-SUCCESSOR")
     session = create_work_request_architect_session(repo, work_request)
 
@@ -148,7 +147,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackageWorkerRevokeTest do
 
     cleanup_payload = get_in(cleanup_response, ["result", "structuredContent"])
     assert cleanup_payload["work_package"]["id"] == linked_package.id
-    assert cleanup_payload["work_package"]["status"] == "implementing"
+    assert cleanup_payload["work_package"]["status"] == "dispatched"
     assert cleanup_payload["runtime_cleanup"]["status"] == "cleaned"
     assert Enum.sort(cleanup_payload["runtime_cleanup"]["revoked_worker_grant_ids"]) == Enum.sort([minted.grant.id, child_minted.grant.id])
     assert cleanup_payload["runtime_cleanup"]["released_claim_lease_ids"] == [claim_lease.id]
@@ -179,11 +178,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackageWorkerRevokeTest do
     closeout_response = mcp_tool(repo, session, "record_work_package_delivery", closeout_args)
 
     assert get_in(closeout_response, ["result", "structuredContent", "work_package_delivery", "outcome"]) == "superseded"
-    assert repo.get!(WorkPackage, linked_package.id).status == "closed"
+    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
   end
 
   test "architect cleanup allows abandoned no-code closeout after claimed runtime is recycled", %{repo: repo} do
-    {work_request, work_package, linked_package} = linked_slice!(repo, "ready_for_worker")
+    {work_request, work_package, linked_package} = linked_slice!(repo, "dispatched")
     session = create_work_request_architect_session(repo, work_request)
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
@@ -212,11 +211,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackageWorkerRevokeTest do
       })
 
     assert get_in(abandoned_response, ["result", "structuredContent", "work_package_delivery", "outcome"]) == "abandoned"
-    assert repo.get!(WorkPackage, linked_package.id).status == "abandoned"
+    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
   end
 
   test "architect cleanup rejects fresh active AgentRun evidence without mutating runtime", %{repo: repo} do
-    {work_request, work_package, linked_package} = linked_slice!(repo, "implementing")
+    {work_request, work_package, linked_package} = linked_slice!(repo, "dispatched")
     successor_slice = create_work_package!(repo, work_request, "WRS-MCP-DELIVERY-AGENT-RUN-SUCCESSOR")
     session = create_work_request_architect_session(repo, work_request)
 

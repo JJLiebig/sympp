@@ -7,6 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, Node}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
@@ -219,15 +220,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
       "title" => package["title"],
       "status" => package["raw_status"],
       "pr_url" => get_in(package, ["work_package", "pr", "url"]) || get_in(package, ["delivery", "pr_url"]),
-      "next_action" => activity["next_action"] || package_next_action(state)
+      "next_action" => activity["next_action"] || package_next_action(state, package["raw_status"])
     }
   end
 
-  defp package_next_action("planned"), do: "dispatch_work_package"
-  defp package_next_action("ready_for_worker"), do: "launch_worker"
-  defp package_next_action("needs_closeout"), do: "reconcile_work_request"
-  defp package_next_action(state) when state in ["delivered", "completed_no_pr", "superseded", "abandoned", "skipped"], do: "none"
-  defp package_next_action(_state), do: "read_delivery_board"
+  defp package_next_action("needs_closeout", _status), do: "reconcile_work_request"
+  defp package_next_action(_state, status), do: Lifecycle.next_action(status).action || "none"
 
   @spec plan_summary(map()) :: map()
   def plan_summary(payload) do
@@ -577,7 +575,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
       "work_package_count" => length(work_packages),
       "planned_work_package_count" => Enum.count(work_packages, &(&1.status == "planned")),
       "dispatched_work_package_count" => Enum.count(work_packages, &(not is_nil(&1.dispatched_at))),
-      "skipped_work_package_count" => Enum.count(work_packages, &(&1.status == "skipped"))
+      "ended_work_package_count" => Enum.count(work_packages, &Lifecycle.ended?/1)
     }
   end
 

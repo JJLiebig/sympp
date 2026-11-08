@@ -35,10 +35,6 @@ defmodule SymphonyElixir.Tracker.Memory do
      end)}
   end
 
-  @spec dispatch_filters_match?(Issue.t()) :: boolean()
-  def dispatch_filters_match?(%Issue{}), do: true
-  def dispatch_filters_match?(_issue), do: true
-
   @spec create_comment(String.t(), String.t()) :: :ok | {:error, term()}
   def create_comment(issue_id, body) do
     send_event({:memory_tracker_comment, issue_id, body})

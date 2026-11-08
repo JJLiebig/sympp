@@ -7,6 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, DependencyInputs, ExecutionGraph, Node}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -213,7 +214,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
       source: source,
       track: track,
       outcome: outcome,
-      delivered: if(outcome, do: outcome in ["pr_merged", "completed_no_pr"], else: pr[:status] == "merged" or work_package.status == "merged")
+      delivered: if(outcome, do: outcome in ["pr_merged", "completed_no_pr"], else: pr[:status] == "merged")
     }
   end
 
@@ -230,37 +231,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   defp board_stage(_package, _pr, _review, %{outcome: "completed_no_pr"} = delivery),
     do: {"done", delivery.recorded_at, "recorded_delivery"}
 
-  defp board_stage(_package, _pr, _review, %{outcome: outcome}) when outcome in ["superseded", "abandoned"],
-    do: {nil, nil, "recorded_delivery"}
+  defp board_stage(_package, _pr, _review, %{outcome: "finished"} = delivery),
+    do: {"done", delivery.recorded_at, "recorded_delivery"}
+
+  defp board_stage(_package, _pr, _review, %{outcome: "legacy", legacy_status: legacy_status} = delivery) when legacy_status in ["merged", "closed"],
+    do: {"done", delivery.recorded_at, "recorded_delivery"}
+
+  defp board_stage(_package, _pr, _review, %{outcome: _outcome}), do: {nil, nil, "recorded_delivery"}
+
+  defp board_stage(%{status: "ended"}, _pr, _review, _delivery), do: {nil, nil, "recorded_status"}
 
   defp board_stage(_package, %{status: "merged"} = pr, _review, _delivery),
     do: {"done", pr[:merged_at], pr[:source] || "recorded_pr"}
 
-  defp board_stage(%{status: "merged"}, _pr, _review, _delivery), do: {"done", nil, "recorded_status"}
-
-  defp board_stage(%{status: status}, _pr, _review, _delivery) when status in ["skipped", "closed", "abandoned"],
-    do: {nil, nil, "recorded_status"}
-
   defp board_stage(_package, _pr, %{status: "in_progress"} = review, _delivery),
     do: {"review", review[:round_started_at] || review[:started_at], "provider"}
 
-  defp board_stage(%{status: "ready_for_merge"}, _pr, _review, _delivery), do: {"merge", nil, "recorded_status"}
-
-  defp board_stage(%{status: "reviewing"}, _pr, review, _delivery),
-    do: {"review", review[:round_started_at] || review[:started_at], "recorded_status"}
+  defp board_stage(%{status: "ready"}, _pr, _review, _delivery), do: {"merge", nil, "recorded_status"}
 
   defp board_stage(package, pr, _review, _delivery) do
     cond do
       pr[:status] == "open" and pr[:head_matches] != false ->
         {"checks", nil, pr[:source] || "recorded_pr"}
 
-      package.status == "ci_waiting" ->
-        {"checks", nil, "recorded_status"}
-
       package.dispatched_at ->
         {"build", package.dispatched_at, "dispatched"}
 
-      package.status in ["active", "claimed", "planning", "implementing", "blocked"] ->
+      package.status == "dispatched" ->
         {"build", nil, "recorded_status"}
 
       true ->
@@ -315,11 +312,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   defp accountable_owner(nil), do: nil
   defp accountable_owner(id), do: %{id: id, source: "work_package"}
 
-  defp activity_stage(%{status: status}, _operational_state, %{status: "in_progress"})
-       when status not in ["skipped", "merged", "closed", "abandoned"], do: "reviewing"
-
-  defp activity_stage(%{status: status}, _operational_state, _review)
-       when status in ["planning", "implementing", "reviewing", "ci_waiting", "ready_for_merge"], do: status
+  defp activity_stage(%{status: status}, _operational_state, %{status: "in_progress"}) when status != "ended", do: "reviewing"
+  defp activity_stage(%{status: "ready"}, _operational_state, _review), do: "ready"
 
   defp activity_stage(_work_package, operational_state, _review), do: operational_state.key
 
@@ -342,41 +336,63 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
     |> Sanitizer.timestamp()
   end
 
+  defp next_activity(%{status: "ended"}, _summary, _review, _worker), do: {nil, nil, nil}
+
   defp next_activity(work_package, summary, review, worker) do
     dependency = map_value(summary, "dependency_signal") || %{}
     eligibility = Map.get(summary, :merge_eligibility, %{})
-    dependency_reason = Enum.find(Map.get(eligibility, :reason_codes, []), &(&1 != "not_ready"))
+    unmet = Map.get(dependency, :unmet_work_package_ids, [])
+    checks_failing? = get_in(summary, [:pr_signal, :checks, :status]) == "failing"
 
+    facts = %{
+      dependencies_met?: unmet == [],
+      progress: progress(summary, worker),
+      attention?: checks_failing? or review[:status] == "inspection_needed",
+      worker_idle?: worker[:status] == "idle"
+    }
+
+    %{action: action, actor: actor} = Lifecycle.next_action(work_package, facts)
+    # Merge eligibility adds dependency reasons on top of ready.
+    action = if Lifecycle.ready?(work_package) and not facts.attention? and is_binary(eligibility[:next_action]), do: eligibility[:next_action], else: action
+
+    {waiting_reason(work_package, summary, review, worker, eligibility, unmet, checks_failing?), actor, action}
+  end
+
+  # Progress inside dispatched, from the signals observed today: a worker whose
+  # runtime went stale has exited; an open PR means review and CI are running.
+  defp progress(summary, worker) do
     cond do
-      work_package.status in ["skipped", "merged", "closed", "abandoned"] -> {nil, nil, nil}
-      dependency_reason -> {dependency_reason, "architect", eligibility[:next_action]}
-      Map.get(dependency, :unmet_work_package_ids, []) != [] -> {"unmet_dependencies", "prerequisite_owner", "resolve_dependencies"}
-      get_in(summary, [:blocker_state, :active?]) -> {"active_blocker", "architect", "resolve_blocker"}
-      get_in(summary, [:pr_signal, :checks, :status]) == "failing" -> {"validation_failed", "architect", "inspect_validation"}
-      true -> next_runtime_activity(work_package, review, worker, eligibility)
+      worker[:status] == "stale" -> "worker_exited"
+      get_in(summary, [:pr_signal, :status]) == "open" -> "review_ci"
+      true -> "implementing"
     end
   end
 
-  defp next_runtime_activity(work_package, review, worker, eligibility) do
+  defp waiting_reason(work_package, summary, review, worker, eligibility, unmet, checks_failing?) do
     cond do
-      worker[:status] == "stale" -> {"runtime_stale", "architect", "inspect_runtime"}
-      review[:status] == "inspection_needed" -> {"review_head_changed", "architect", "inspect_changed_since_review"}
-      review[:next_action] not in [nil, "none"] -> {if(review[:next_action] == "wait", do: "review_in_progress"), "worker", review[:next_action]}
-      true -> status_activity(work_package.status, eligibility)
+      reason = Enum.find(Map.get(eligibility, :reason_codes, []), &(&1 != "not_ready")) -> reason
+      unmet != [] -> "unmet_dependencies"
+      get_in(summary, [:blocker_state, :active?]) -> "active_blocker"
+      checks_failing? -> "validation_failed"
+      true -> runtime_waiting_reason(work_package, review, worker)
     end
   end
 
-  defp status_activity("ready_for_merge", eligibility), do: {"awaiting_integration", "architect", eligibility[:next_action]}
-  defp status_activity("ci_waiting", _eligibility), do: {"validation_pending", "worker", "check_validation"}
-  defp status_activity("planned", _eligibility), do: {nil, "architect", "dispatch_work_package"}
-  defp status_activity(_status, _eligibility), do: {nil, nil, nil}
+  defp runtime_waiting_reason(work_package, review, worker) do
+    cond do
+      worker[:status] == "stale" -> "runtime_stale"
+      review[:status] == "inspection_needed" -> "review_head_changed"
+      review[:next_action] == "wait" -> "review_in_progress"
+      Lifecycle.ready?(work_package) -> "awaiting_integration"
+      true -> nil
+    end
+  end
 
   defp observation_state(%{stale?: true}, _package), do: "stale"
   defp observation_state(%{active_agent_run_ids: [_ | _]}, _package), do: "current"
   defp observation_state(%{current_actor: actor}, _package) when is_map(actor), do: "current"
 
-  defp observation_state(_runtime, %{status: status})
-       when status in ["planned", "created", "ready_for_worker"] do
+  defp observation_state(_runtime, %{status: "planned"}) do
     "queued"
   end
 

@@ -169,9 +169,8 @@ does not search PATH or a package's worktree for a provider script.
 
 A dispatched package is building from `dispatched_at`, without worker reports,
 runtime observations, or a reporting cadence. Native review observations augment
-this state. A recorded `superseded` or `abandoned` outcome has a null stage and
-`delivered: false`. A legacy lifecycle status may identify a stage without an
-entry time: unrelated package updates never supply that time. Review uses the
+this state. A recorded `superseded`, `abandoned` or `skipped` outcome has a null
+stage and `delivered: false`; `finished` is done but not delivered. Review uses the
 known round/start time. Checks stage entry remains null because a status snapshot
 cannot establish review-to-checks re-entry; read `checks.changed_at` separately. These are
 observations, not reconstructed transition history. Repeated snapshots with the
@@ -291,6 +290,13 @@ These existing POST routes require local operator authorization:
 | `/archive` | Requires completion after refreshing current evidence; otherwise returns `not_completed`. Hides the goal and queues terminal package worktree cleanup. History remains. |
 | `/delete` | Requires only that the goal exists; archive and completion are **not** backend prerequisites. Permanently removes the goal and dependent ledger history/grant scopes and queues linked worktree cleanup, including nonterminal packages. Confirm deletion and finish or stop active work first; it is not a safe unconditional one-click action. |
 | `/restore` | Requires an existing goal. Clears archive state. A never-started archive gets a new threshold window without completion; a still-completed archive resets `completed_at`. Does not restore deleted worktrees or undo queued cleanup. |
+
+`POST /api/v1/sympp/operator/work-packages/:id/finish` ends a `dispatched` or
+`ready` WorkPackage as `finished`: its PR waits on someone else, so sympp stops
+watching it. The goal can complete; packages that depend on it stay blocked
+until their dependency is removed. Repeating the call returns the same result.
+A package that is still `planned` returns `ending_not_allowed`; one that already
+ended another way returns `already_ended` (409).
 
 Worktree cleanup runs asynchronously and defers active workers while
 their package records exist. Deleting those records removes that activity check,

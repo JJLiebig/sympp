@@ -250,10 +250,17 @@ PR URL or package facts. If you choose explicit PR closeout instead of
 `apply: true`, replay the dry-run result's `action` payload through
 `record_work_package_delivery`.
 
-For explicit `pr_merged`, `completed_no_pr`, `superseded`, or `abandoned`
-closeout payloads, read
-[terminal evidence](references/operations.md#terminal-evidence) and use
-`record_work_package_delivery`.
+A WorkPackage is `planned`, `dispatched`, `ready` or `ended`. `sync_pr` moves a
+dispatched package to `ready` when its PR is open and not a draft, CI is green
+for the current head and dependency inputs are current; any of those turning
+false moves it back to `dispatched` and lists the reasons. A ready contract is
+frozen: supersede it with a successor instead of editing it. An ended package
+has exactly one ending record, written by `record_work_package_delivery`
+(`skip_work_package` writes `skipped`). For explicit `pr_merged`,
+`completed_no_pr`, `superseded`, `abandoned`, `finished` or `skipped` endings,
+read [terminal evidence](references/operations.md#terminal-evidence).
+`finished` means the PR waits on someone else: the WorkRequest can complete but
+dependents stay blocked. Any chief or architect may record it.
 
 Do not infer delivery from prose decisions or chat. A successful terminal
 closeout revokes live worker grants and releases

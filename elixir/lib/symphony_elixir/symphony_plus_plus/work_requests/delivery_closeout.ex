@@ -4,6 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository, as: ClaimLeaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
@@ -11,13 +12,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.RuntimeCleanup
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   import Ecto.Query, only: [from: 2]
 
-  @abandonable_no_code_statuses ["planning", "ready_for_worker"]
-  @abandoned_no_code_status "abandoned"
   @work_package_delivery_replay_fields [
     :work_request_id,
     :work_package_id,
@@ -45,7 +43,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
           | :idempotency_key_conflict
           | :malformed_pr_evidence
           | :missing_strong_pr_evidence
-          | :work_package_not_abandonable
+          | {:delivery_outcome_conflict, String.t()}
+          | {:ending_not_allowed, String.t(), String.t()}
 
   @spec record(Repository.repo(), String.t(), String.t(), map()) ::
           {:ok, WorkPackageDelivery.t()} | {:error, error()}
@@ -157,10 +156,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
          %WorkPackageDelivery{} = delivery,
          opts
        ) do
-    with :ok <- validate_delivery_scope(repo, work_package, delivery),
+    with :ok <- validate_ending_source(repo, work_package, delivery),
+         :ok <- validate_delivery_scope(repo, work_package, delivery),
          :ok <- validate_closeout_progress_slot(repo, work_package, delivery),
          :ok <- validate_terminal_evidence(work_package, delivery) do
       validate_linked_closeout_preconditions(repo, work_package, delivery, opts)
+    end
+  end
+
+  defp validate_ending_source(repo, %WorkPackage{id: id}, %WorkPackageDelivery{outcome: outcome}) do
+    with {:ok, %WorkPackage{status: status}} <- WorkPackageRepository.get(repo, id) do
+      if status in Lifecycle.ending_sources(outcome), do: :ok, else: {:error, {:ending_not_allowed, status, outcome}}
     end
   end
 
@@ -206,12 +212,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
          %WorkPackage{} = work_package,
          %WorkPackageDelivery{} = delivery
        ) do
-    closeout_progress_event_matches?(
-      event,
-      work_package,
-      delivery,
-      terminal_status_for_outcome(delivery.outcome)
-    )
+    closeout_progress_event_matches?(event, work_package, delivery)
   end
 
   defp existing_delivery_state(
@@ -226,9 +227,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
       %WorkPackageDelivery{} = existing ->
         cond do
           not work_package_delivery_replay?(existing, delivery) ->
-            {:error, :delivery_outcome_conflict}
+            {:error, {:delivery_outcome_conflict, existing.outcome}}
 
-          closeout_progress_replay?(repo, work_package, existing) ->
+          closeout_replay?(repo, work_package) ->
             :replayed_closeout
 
           true ->
@@ -278,34 +279,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
        ) do
     context = WorkPackageActivity.context(repo, work_package_id)
 
-    validate_closeout_context(repo, work_package_id, delivery, context, opts)
+    validate_closeout_context(context, delivery, opts)
   end
 
-  defp validate_closeout_context(repo, work_package_id, delivery, context, opts) do
-    with :ok <- maybe_reject_active_blocker_context(context, allow_active_blockers?(delivery, opts)) do
-      maybe_require_abandonable_package(repo, work_package_id, delivery, context)
-    end
+  defp validate_closeout_context(context, delivery, opts) do
+    maybe_reject_active_blocker_context(context, allow_active_blockers?(delivery, opts))
   end
 
   defp allow_active_blockers?(%WorkPackageDelivery{outcome: outcome}, _opts)
-       when outcome in ["superseded", "abandoned"],
+       when outcome in ["superseded", "abandoned", "skipped", "finished"],
        do: true
 
   defp allow_active_blockers?(%WorkPackageDelivery{}, opts),
     do: Keyword.get(opts, :allow_active_blockers?, false)
-
-  defp maybe_require_abandonable_package(
-         repo,
-         work_package_id,
-         %WorkPackageDelivery{outcome: "abandoned"},
-         context
-       ) do
-    with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
-      require_abandonable_no_code_status(repo, work_package, context)
-    end
-  end
-
-  defp maybe_require_abandonable_package(_repo, _work_package_id, %WorkPackageDelivery{}, _context), do: :ok
 
   defp validate_terminal_evidence(
          %WorkPackage{id: work_package_id},
@@ -335,7 +321,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
          %WorkPackageDelivery{} = delivery,
          opts
        ) do
-    case closeout_progress_replay?(repo, work_package, delivery) do
+    case closeout_replay?(repo, work_package) do
       true ->
         refresh_replayed_closeout(repo, work_request, delivery)
 
@@ -351,20 +337,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
        ) do
     context = WorkPackageActivity.context(repo, delivery.work_package_id)
 
-    with {:ok, event} <-
-           PlanningRepository.get_progress_event_by_idempotency_key(
-             repo,
-             delivery.work_package_id,
-             closeout_idempotency_key(delivery)
-           ),
-         {:ok, _refreshed} <- Completion.refresh_in_transaction(repo, work_request.id) do
+    key = closeout_idempotency_key(delivery)
+
+    event =
+      case PlanningRepository.get_progress_event_by_idempotency_key(repo, delivery.work_package_id, key) do
+        {:ok, event} -> event
+        {:error, _reason} -> nil
+      end
+
+    with {:ok, _refreshed} <- Completion.refresh_in_transaction(repo, work_request.id) do
       {:ok, {delivery, replay_closeout_context(context, event)}}
     end
   end
 
   defp replay_closeout_context(context, event) do
     current = closeout_context(context, [], [], allow_active_blockers?: false)
-    recorded_reasons = List.wrap(map_value(event.payload, :runtime_reason_codes_before_closeout))
+    recorded_reasons = List.wrap(map_value((event && event.payload) || %{}, :runtime_reason_codes_before_closeout))
 
     current
     |> Map.update!(:runtime_reason_codes, &Enum.uniq(recorded_reasons ++ &1))
@@ -380,14 +368,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
        ) do
     with {:ok, closeout_context} <-
            prepare_linked_closeout_context(repo, work_package, delivery, opts),
-         {:ok, closeout} <-
-           close_work_package(
-             repo,
-             work_request,
-             work_package,
-             delivery,
-             closeout_context
-           ),
+         {:ok, closeout} <- close_work_package(repo, work_request, work_package, delivery),
          {:ok, _event} <-
            append_closeout_progress(
              repo,
@@ -402,21 +383,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     end
   end
 
-  defp close_work_package(
-         repo,
-         %WorkRequest{} = work_request,
-         %WorkPackage{} = work_package,
-         %WorkPackageDelivery{} = delivery,
-         closeout_context
-       ) do
-    WorkPackageRepository.close_delivery_work_package(
-      repo,
-      work_request,
-      work_package,
-      terminal_status_for_outcome(delivery.outcome),
-      allow_active_blockers?: Map.get(closeout_context, :allow_active_blockers?, false),
-      allow_active_runtime?: true
-    )
+  defp close_work_package(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, %WorkPackageDelivery{} = delivery) do
+    with {:ok, current} <- Repository.get_work_package(repo, work_request.id, work_package.id),
+         {:ok, ended} <- Lifecycle.transition(repo, current, :end, outcome: delivery.outcome) do
+      {:ok, %{work_package: ended, previous_status: current.status, next_status: ended.status, changed?: true}}
+    end
   end
 
   defp append_closeout_progress(
@@ -443,17 +414,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
                  closeout_context
                )
            }),
-         true <-
-           closeout_progress_event_matches?(event, work_package, delivery, closeout.next_status) do
+         true <- closeout_progress_event_matches?(event, work_package, delivery) do
       {:ok, event}
     else
       false -> {:error, :idempotency_key_conflict}
       {:error, reason} -> {:error, reason}
     end
   end
-
-  defp terminal_status_for_outcome(outcome),
-    do: WorkPackageDelivery.terminal_status_for_outcome(outcome)
 
   defp prepare_linked_closeout_context(
          repo,
@@ -476,7 +443,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     context = WorkPackageActivity.context(repo, work_package_id)
     allow_active_blockers? = allow_active_blockers?(delivery, opts)
 
-    with :ok <- validate_closeout_context(repo, work_package_id, delivery, context, opts),
+    with :ok <- validate_closeout_context(context, delivery, opts),
          {:ok, retired_worker_grant_ids} <- retire_live_worker_grants(repo, work_package_id),
          {:ok, retired_claim_lease_ids} <-
            retire_current_claim_leases(repo, work_package_id, "#{delivery.outcome}_delivery_closeout") do
@@ -501,51 +468,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   end
 
   defp delivery_closeout_opts(_attrs), do: [allow_active_blockers?: true]
-
-  defp require_abandonable_no_code_status(_repo, %{status: status}, _context)
-       when status in @abandonable_no_code_statuses, do: :ok
-
-  defp require_abandonable_no_code_status(
-         repo,
-         %{id: work_package_id, status: @abandoned_no_code_status},
-         context
-       ) do
-    with {:ok, events} <- PlanningRepository.list_progress_events(repo, work_package_id) do
-      cond do
-        recycled_runtime_context?(context) and
-            Enum.any?(events, &abandoned_runtime_cleanup_event?/1) ->
-          :ok
-
-        not Enum.any?(events, &abandoned_progress_event?/1) ->
-          {:error, :active_runtime}
-
-        true ->
-          :ok
-      end
-    end
-  end
-
-  defp require_abandonable_no_code_status(_repo, _work_package, _context),
-    do: {:error, :work_package_not_abandonable}
-
-  defp recycled_runtime_context?(context),
-    do: get_in(context, [:runtime_state, :recycled?]) == true
-
-  defp abandoned_runtime_cleanup_event?(%{payload: payload}) when is_map(payload) do
-    map_value(payload, :source_tool) == RuntimeCleanup.source_tool() and
-      get_in(payload, ["delivery_evidence", "outcome"]) == @abandoned_no_code_status
-  end
-
-  defp abandoned_runtime_cleanup_event?(_event), do: false
-
-  defp abandoned_progress_event?(%{status: @abandoned_no_code_status}), do: true
-
-  defp abandoned_progress_event?(%{payload: payload}) when is_map(payload) do
-    map_value(payload, :status) == @abandoned_no_code_status or
-      map_value(payload, :next_status) == @abandoned_no_code_status
-  end
-
-  defp abandoned_progress_event?(_event), do: false
 
   defp empty_closeout_context do
     closeout_context(WorkPackageActivity.empty_context(), [], [], allow_active_blockers?: false)
@@ -621,54 +543,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     )
   end
 
-  defp closeout_progress_replay?(
-         repo,
-         %WorkPackage{id: work_package_id},
-         %WorkPackageDelivery{} = delivery
-       ) do
-    with true <- filled_string?(work_package_id),
-         {:ok, event} <-
-           PlanningRepository.get_progress_event_by_idempotency_key(
-             repo,
-             work_package_id,
-             closeout_idempotency_key(delivery)
-           ),
-         {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
-         true <-
-           WorkPackageDelivery.terminal_status_matches_outcome?(
-             work_package.status,
-             delivery.outcome
-           ),
-         true <- closeout_progress_event_matches?(event, delivery, work_package.status) do
-      true
-    else
-      _result -> false
+  defp closeout_replay?(repo, %WorkPackage{id: work_package_id}) do
+    case WorkPackageRepository.get(repo, work_package_id) do
+      {:ok, work_package} -> Lifecycle.ended?(work_package)
+      {:error, _reason} -> false
     end
   end
 
-  defp closeout_progress_event_matches?(
-         event,
-         %WorkPackage{id: work_package_id},
-         %WorkPackageDelivery{} = delivery,
-         next_status
-       ) do
-    event.work_package_id == work_package_id and
-      closeout_progress_event_matches?(event, delivery, next_status)
-  end
-
-  defp closeout_progress_event_matches?(event, %WorkPackageDelivery{} = delivery, next_status) do
-    event.idempotency_key == closeout_idempotency_key(delivery) and
-      event.status == next_status and
-      closeout_progress_payload_matches?(event.payload || %{}, delivery, next_status)
-  end
-
-  defp closeout_progress_payload_matches?(
-         payload,
-         %WorkPackageDelivery{} = delivery,
-         next_status
-       ) do
-    closeout_progress_payload_identity_matches?(payload, delivery) and
-      map_value(payload, :next_status) == next_status
+  defp closeout_progress_event_matches?(event, %WorkPackage{id: work_package_id}, %WorkPackageDelivery{} = delivery) do
+    event.work_package_id == work_package_id and event.idempotency_key == closeout_idempotency_key(delivery) and
+      closeout_progress_payload_identity_matches?(event.payload || %{}, delivery)
   end
 
   defp closeout_progress_payload_identity_matches?(payload, %WorkPackageDelivery{} = delivery) do

@@ -62,24 +62,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
     workers = group!(repo, work_request.id, "GROUP-FANOUT-WORKERS", "Parallel workers", 2)
     output = group!(repo, work_request.id, "GROUP-FANOUT-OUTPUT", "Output", 3)
 
-    source = package!(repo, work_request, "WP-FANOUT-SOURCE", "Source snapshot", "merged", inputs.id, 1)
+    source = package!(repo, work_request, "WP-FANOUT-SOURCE", "Source snapshot", "dispatched", inputs.id, 1)
 
     parse =
-      package!(repo, work_request, "WP-FANOUT-PARSE", "Parse records", "implementing", workers.id, 2,
+      package!(repo, work_request, "WP-FANOUT-PARSE", "Parse records", "dispatched", workers.id, 2,
         repo: "example/ingestion-workers",
         base_branch: "release",
         review: %{"type" => "review-suite", "args" => %{"mode" => "normal", "current" => 1, "total" => 2, "step" => "analysis"}}
       )
 
     index =
-      package!(repo, work_request, "WP-FANOUT-INDEX", "Build index", "ready_for_merge", workers.id, 3,
+      package!(repo, work_request, "WP-FANOUT-INDEX", "Build index", "ready", workers.id, 3,
         repo: "example/ingestion-workers",
         base_branch: "release",
         review: %{"type" => "human", "args" => %{"team" => "fixture-reviewers"}}
       )
 
     join =
-      package!(repo, work_request, "WP-FANOUT-JOIN", "Join parsed records and index", "ready_for_worker", output.id, 4,
+      package!(repo, work_request, "WP-FANOUT-JOIN", "Join parsed records and index", "dispatched", output.id, 4,
         repo: "example/publish-service",
         base_branch: "main"
       )
@@ -95,7 +95,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
     depends_on!(repo, work_request.id, playtest.id, source.id, 6)
 
     {:ok, _delivery} =
-      WorkRequestRepository.record_work_package_delivery(repo, work_request.id, source.id, %{
+      CanonicalWorkPackageFixtures.end_work_package(repo, work_request.id, source.id, %{
         outcome: "pr_merged",
         idempotency_key: "fixture-source-delivered",
         recorded_by: "fixture",
@@ -125,19 +125,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
     history = group!(repo, work_request.id, "GROUP-RECOVERY-HISTORY", "History", 1)
     retry = group!(repo, work_request.id, "GROUP-RECOVERY-RETRY", "Retry", 2)
 
-    old = package!(repo, work_request, "WP-RECOVERY-OLD", "Original attempt", "implementing", history.id, 1)
+    old = package!(repo, work_request, "WP-RECOVERY-OLD", "Original attempt", "dispatched", history.id, 1)
     skipped = package!(repo, work_request, "WP-RECOVERY-SKIPPED", "Optional audit", "skipped", history.id, 2)
+    end_seeded!(repo, work_request, skipped, "skipped", nil, nil)
 
     successor =
-      package!(repo, work_request, "WP-RECOVERY-SUCCESSOR", "Narrow successor", "blocked", retry.id, 3, review: %{"type" => "review-suite", "args" => %{"mode" => "normal"}})
+      package!(repo, work_request, "WP-RECOVERY-SUCCESSOR", "Narrow successor", "dispatched", retry.id, 3, review: %{"type" => "review-suite", "args" => %{"mode" => "normal"}})
 
-    validate = package!(repo, work_request, "WP-RECOVERY-VALIDATE", "Validate recovery", "ready_for_worker", retry.id, 4)
+    validate = package!(repo, work_request, "WP-RECOVERY-VALIDATE", "Validate recovery", "dispatched", retry.id, 4)
 
     depends_on!(repo, work_request.id, validate.id, successor.id, 1)
     depends_on!(repo, work_request.id, validate.id, skipped.id, 2)
 
     {:ok, _delivery} =
-      WorkRequestRepository.record_work_package_delivery(repo, work_request.id, old.id, %{
+      CanonicalWorkPackageFixtures.end_work_package(repo, work_request.id, old.id, %{
         id: "DELIVERY-RECOVERY-OLD",
         outcome: "superseded",
         idempotency_key: "fixture-recovery-successor",
@@ -191,7 +192,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
             true -> "C"
           end
 
-        status = if index in [3, 6, 10], do: "implementing", else: "ready_for_worker"
+        status = if index in [3, 6, 10], do: "dispatched", else: "dispatched"
         id = "WP-DENSE-#{String.pad_leading(to_string(index), 2, "0")}"
         {index, package!(repo, work_request, id, titles[index], status, groups[suffix].id, index)}
       end
@@ -272,6 +273,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
           pr!(repo, work_package.id, pr_number, head_sha, %{conclusion: "success", completed: 4, total: 4}, status == "merged", 201 + sequence * 2, package_repo)
         end
 
+        end_seeded!(repo, work_request, work_package, status, pr_number, package_repo)
+
         {sequence, work_package}
       end)
 
@@ -303,7 +306,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
       {1, :contract, "merged", "Lock the storage, retention, backup, and cutover contract", kraken, 1112},
       {2, :storage, "skipped", "Add Kraken's durable evidence-retention lease substrate", kraken, nil},
       {3, :storage, "skipped", "Implement Kraken's fail-closed hot-to-archive lifecycle executor", kraken, nil},
-      {4, :storage, "ready_for_worker", "Make OVH BHS Standard S3 cutover repeatable and verifiable", kraken, nil},
+      {4, :storage, "dispatched", "Make OVH BHS Standard S3 cutover repeatable and verifiable", kraken, nil},
       {5, :storage, "skipped", "Renew valuable proof leases from VOD Intelligence rollups", intelligence, nil},
       {6, :storage, "skipped", "Renew proof leases from persisted report workflows", intelligence, nil},
       {7, :backup, "closed", "Back up and restore Kraken host state through Hetzner Storage Box", kraken, nil},
@@ -317,7 +320,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
       {15, :first_pass, "skipped", "Repair and replay current Kraken evidence provenance", kraken, nil},
       {16, :first_pass, "skipped", "Project artifact lineage and story-ready stream context in VOD Intelligence", intelligence, nil},
       {17, :first_pass, "skipped", "Rebuild and verify VOD Intelligence evidence provenance", intelligence, nil},
-      {18, :playback, "ready_for_worker", "Serve verified original-object playback descriptors from Kraken", kraken, nil},
+      {18, :playback, "dispatched", "Serve verified original-object playback descriptors from Kraken", kraken, nil},
       {19, :playback, "planned", "Resolve product proof playback in VOD Intelligence", intelligence, nil},
       {20, :playback, "planned", "Expose authorized proof playback through VOD API", "JJLiebig/nextide-saas-vod-api", nil},
       {21, :playback, "planned", "Seek directly to exact audio evidence in VOD Intelligence UI", "JJLiebig/nextide-saas-vod-intelligence-ui", nil},
@@ -369,6 +372,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
     work_request
   end
 
+  # Seeded "merged", "closed" and "skipped" packages end through real ending rows.
+  defp seed_status(status) when status in ["merged", "closed"], do: "dispatched"
+  defp seed_status("skipped"), do: "planned"
+  defp seed_status(status), do: status
+
+  defp end_seeded!(repo, work_request, work_package, "merged", pr_number, package_repo) do
+    {:ok, _delivery} =
+      CanonicalWorkPackageFixtures.end_work_package(repo, work_request.id, work_package.id, %{
+        outcome: "pr_merged",
+        pr_url: "https://github.com/#{package_repo}/pull/#{pr_number || 9000 + work_package.sequence}",
+        pr_merged_at: at(work_package.sequence),
+        merge_commit_sha: "fixture-merge-#{work_package.sequence}"
+      })
+  end
+
+  defp end_seeded!(repo, work_request, work_package, "closed", _pr_number, _package_repo) do
+    {:ok, _delivery} =
+      CanonicalWorkPackageFixtures.end_work_package(repo, work_request.id, work_package.id, %{
+        outcome: "completed_no_pr",
+        no_pr_evidence: "Fictional package closed without a pull request."
+      })
+  end
+
+  defp end_seeded!(repo, work_request, work_package, "skipped", _pr_number, _package_repo) do
+    {:ok, _delivery} = CanonicalWorkPackageFixtures.end_work_package(repo, work_request.id, work_package.id, %{outcome: "skipped"})
+  end
+
+  defp end_seeded!(_repo, _work_request, _work_package, _status, _pr_number, _package_repo), do: :ok
+
   defp package!(repo, work_request, id, title, status, group_id, sequence, opts \\ []) do
     {:ok, work_package} =
       CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, %{
@@ -387,7 +419,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
         validation_steps: ["fixture validation"],
         stop_conditions: [],
         review_requirement: Keyword.get(opts, :review),
-        status: status,
+        status: seed_status(status),
         dispatched_at: Keyword.get(opts, :dispatched_at, at(sequence))
       })
 

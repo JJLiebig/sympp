@@ -118,7 +118,7 @@ artifact does not duplicate schemas.
 An architect can set `candidate_head_sha` on `upsert_dependency` after qualifying
 that exact backend WorkPackage head through its native checks and review handoff.
 The prerequisite must be one WorkPackage; the dependent may be a Group. A current
-pin plus the backend's `ready_for_merge` state and matching branch/PR head enables
+pin plus the backend's `ready` status and matching branch/PR head enables
 wiring and technical review before backend merge. Readiness alone does not prove
 checks or review passed. Without a pin, dispatch waits for actual delivered scope,
 including all required successors; skipped or abandoned attempts do not count.

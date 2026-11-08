@@ -4,11 +4,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
   alias SymphonyElixir.FakeGitHubClient
   alias SymphonyElixir.GitHubPullRequestFixtures
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
 
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{ChecksBackstop, MergeReconciler, PullRequestProgress}
 
-  alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
@@ -17,6 +15,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.TestSupport
   alias SymphonyElixir.WorkPackageFactory
@@ -87,17 +86,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
 
   test "merged PR matches a package scoped to its local checkout", %{repo: repo} do
     repo_path = TestSupport.git_repo_with_origin_fixture!("https://github.com/nextide/repo.git", prefix: "sympp-sync-pr-repo")
-    assert {:ok, package} = create_package(repo, id: "SYMPP-GH-LOCAL-REPO", repo: repo_path, status: "ready_for_merge")
+    assert {:ok, package} = create_package(repo, id: "SYMPP-GH-LOCAL-REPO", repo: repo_path, status: "ready")
     append_pr_evidence(repo, package, 27, "head-local")
     FakeGitHubClient.put_response("nextide/repo", 27, GitHubPullRequestFixtures.metadata(27, "head-local", merged?: true))
 
     assert {:ok, result} = MergeReconciler.reconcile(repo, client: FakeGitHubClient)
     assert [%{status: "merged", reason: "github_pr_merged"}] = result.results
-    assert repo.get!(WorkPackage, package.id).status == "merged"
+    assert repo.get!(WorkPackage, package.id).status == "ended"
   end
 
   test "unchanged provider observation repairs a deleted PR artifact", %{repo: repo} do
-    assert {:ok, package} = create_package(repo, id: "SYMPP-GH-OPEN", status: "ready_for_merge")
+    assert {:ok, package} = create_package(repo, id: "SYMPP-GH-OPEN", status: "ready")
     append_pr_evidence(repo, package, 2, "head-a")
     FakeGitHubClient.put_response("nextide/repo", 2, GitHubPullRequestFixtures.metadata(2, "head-a", merged?: false))
 
@@ -110,11 +109,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
     assert {:ok, recovered} = MergeReconciler.reconcile(repo, client: FakeGitHubClient)
     assert recovered.dashboard_changed
     assert [_artifact] = repo.all(Artifact)
-    assert repo.get!(WorkPackage, package.id).status == "ready_for_merge"
+    assert repo.get!(WorkPackage, package.id).status == "ready"
   end
 
   test "merge transition rolls back when merge evidence cannot be recorded", %{repo: repo} do
-    assert {:ok, package} = create_package(repo, id: "SYMPP-GH-EVIDENCE-FAIL", status: "ready_for_merge")
+    assert {:ok, package} = create_package(repo, id: "SYMPP-GH-EVIDENCE-FAIL", status: "ready")
     append_pr_evidence(repo, package, 9, "head-a")
 
     assert {:ok, _existing_event} =
@@ -134,19 +133,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
     assert result.dashboard_changed
     assert [%{status: "error", reason: "merge_evidence_conflict"}] = result.results
     assert {:ok, updated} = WorkPackageRepository.get(repo, package.id)
-    assert updated.status == "ready_for_merge"
+    assert updated.status == "ready"
 
     assert {:ok, events} = PlanningRepository.list_progress_events(repo, package.id)
     refute Enum.any?(events, &match?(%ProgressEvent{status: "github_pr_merged"}, &1))
-  end
-
-  test "worker grant still cannot mark a package merged", %{repo: repo} do
-    assert {:ok, package} = create_package(repo, id: "SYMPP-GH-WORKER-DENIED", status: "ready_for_merge")
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-
-    assert {:error, :worker_cannot_mark_merged} =
-             LifecycleService.transition(repo, package.id, "merged", Map.from_struct(assignment))
   end
 
   test "conditional CLI requests decode fresh responses and gh's nonzero 304 exit" do
@@ -169,7 +159,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
 
   test "pending checks finish without a worker, preserve 304 observations and stop polling", %{repo: repo} do
     for conclusion <- ["success", "failure"] do
-      assert {:ok, package} = create_package(repo, id: "SYMPP-CHECKS-#{conclusion}", status: "implementing")
+      assert {:ok, package} = create_package(repo, id: "SYMPP-CHECKS-#{conclusion}", status: "dispatched")
       append_pr_evidence(repo, package, 70, "head-#{conclusion}")
       assert {:ok, %{payload: attached}} = current_pr(repo, package.id)
 
@@ -218,7 +208,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
       assert payload["check_summary"] == %{"status" => expected}
       assert payload["checks_changed_at"] != attached["checks_changed_at"]
       assert payload["head_sha"] == "head-#{conclusion}"
-      assert repo.get!(WorkPackage, package.id).status == "implementing"
+      assert repo.get!(WorkPackage, package.id).status == "dispatched"
 
       never = fn _, _ -> flunk("completed PR was polled") end
       assert %{} == ChecksBackstop.poll(repo, cache, client: ConditionalChecksClient, request: never)
@@ -231,7 +221,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
   end
 
   test "a worker's newer report wins over an in-flight backstop request", %{repo: repo} do
-    assert {:ok, package} = create_package(repo, id: "SYMPP-CHECKS-RACE", status: "implementing")
+    assert {:ok, package} = create_package(repo, id: "SYMPP-CHECKS-RACE", status: "dispatched")
     append_pr_evidence(repo, package, 71, "head-race")
     assert {:ok, %{payload: attached}} = current_pr(repo, package.id)
     pending = Map.merge(attached, %{"source_tool" => "sync_pr", "check_summary" => %{"status" => "pending"}})
@@ -262,14 +252,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
   end
 
   defp create_package(repo, overrides) do
-    attrs =
+    overrides =
       overrides
       |> Keyword.put_new(:kind, "hotfix")
       |> Keyword.put_new(:repo, "nextide/repo")
       |> Keyword.put_new(:base_branch, "main")
-      |> WorkPackageFactory.attrs()
 
-    WorkPackageRepository.create(repo, attrs)
+    {:ok, work_request} =
+      WorkRequestRepository.create(repo, %{
+        title: "Merge reconciliation",
+        repo: overrides[:repo],
+        base_branch: overrides[:base_branch],
+        work_type: "feature",
+        human_description: "Reconcile GitHub merges.",
+        constraints: %{},
+        desired_dispatch_shape: "single_package",
+        status: "sliced"
+      })
+
+    overrides
+    |> Keyword.put(:work_request_id, work_request.id)
+    |> WorkPackageFactory.attrs()
+    |> then(&WorkPackageRepository.create(repo, &1))
   end
 
   defp append_pr_evidence(repo, package, number, head_sha) do

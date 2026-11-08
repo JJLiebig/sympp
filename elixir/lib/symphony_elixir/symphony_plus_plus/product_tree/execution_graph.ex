@@ -281,7 +281,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
       work_package_id: work_package_id,
       status: status,
       delivery_outcome: deliveries |> Map.get(work_package_id) |> value(:outcome),
-      resolved: DeliveryResolution.resolved?(work_package_id, packages, deliveries, successors)
+      resolved: DeliveryResolution.satisfies_dependents?(work_package_id, packages, deliveries, successors)
     }
   end
 

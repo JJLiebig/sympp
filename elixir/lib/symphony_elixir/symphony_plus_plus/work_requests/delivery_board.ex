@@ -6,9 +6,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
   alias SymphonyElixir.SymphonyPlusPlus.FactoryRepos
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
-  alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
+  alias SymphonyElixir.SymphonyPlusPlus.Policies.Templates
   alias SymphonyElixir.SymphonyPlusPlus.ReviewObservation
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
@@ -16,8 +17,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
-  @ready_statuses ["ready_for_merge"]
-  @terminal_package_statuses ["merged", "closed", "abandoned"]
+  @ready_statuses ["ready"]
   @runtime_merge_required_kinds ["hotfix", "adapter", "mcp", "skill", "hooks"]
   @delivery_lookup_chunk_size 400
   @context_lookup_chunk_size 400
@@ -27,7 +27,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     "pr_merged" => {"delivered", "Delivered", "success", "Recorded delivery outcome says the linked PR merged."},
     "completed_no_pr" => {"completed_no_pr", "Completed Without PR", "success", "Recorded delivery outcome says the WorkPackage completed without a PR."},
     "superseded" => {"superseded", "Superseded", "neutral", "Recorded delivery outcome says this WorkPackage was superseded by a successor."},
-    "abandoned" => {"abandoned", "Abandoned", "neutral", "Recorded delivery outcome says this WorkPackage was abandoned."}
+    "abandoned" => {"abandoned", "Abandoned", "neutral", "Recorded delivery outcome says this WorkPackage was abandoned."},
+    "finished" => {"finished", "Finished", "success", "Recorded delivery outcome says the WorkPackage was finished while its PR waits on someone else."},
+    "skipped" => {"skipped", "Skipped", "neutral", "Recorded delivery outcome says this WorkPackage was skipped."},
+    "legacy" => {"legacy", "Ended", "neutral", "The WorkPackage ended before ending rows recorded how."}
   }
 
   @attention_details %{
@@ -618,6 +621,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     %{
       id: delivery.id,
       outcome: delivery.outcome,
+      legacy_status: delivery.legacy_status,
       recorded_by: delivery.recorded_by,
       recorded_at: delivery.recorded_at,
       pr_url: delivery.pr_url,
@@ -785,10 +789,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     state("planned", "Planned", "neutral", "WorkPackage is planned and has not been dispatched.", work_package.status, nil, nil, [])
   end
 
-  defp no_delivery_operational_state(%WorkPackage{status: "skipped"} = work_package, nil) do
-    state("skipped", "Skipped", "neutral", "WorkPackage was skipped before dispatch.", work_package.status, nil, nil, [])
-  end
-
   defp no_delivery_operational_state(%WorkPackage{} = work_package, :hidden) do
     state(
       "dispatched",
@@ -831,7 +831,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
           ["pr_merged_without_delivery_outcome"]
         }
 
-      terminal_package_status?(work_package.raw_status) ->
+      Lifecycle.ended?(work_package.raw_status) ->
         {
           "needs_closeout",
           "Needs Closeout",
@@ -866,17 +866,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     {"ready_to_finish", "Ready To Finish", "success", "Ready to finish with closeout evidence.", []}
   end
 
-  defp status_work_package_state(%{raw_status: "reviewing"}) do
-    {"reviewing", "Reviewing", "info", "Review in progress.", []}
-  end
-
-  defp status_work_package_state(%{raw_status: "ci_waiting"}) do
-    {"ci_waiting", "Validating", "info", "Waiting on validation.", []}
-  end
-
   defp status_work_package_state(%{
          id: work_package_id,
-         raw_status: "ready_for_worker",
+         raw_status: "dispatched",
          dependency_signal: %{unmet_work_package_ids: [_ | _] = prerequisite_ids}
        }) do
     {
@@ -888,8 +880,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     }
   end
 
-  defp status_work_package_state(%{raw_status: "ready_for_worker"}) do
-    {"ready_for_worker", "Ready", "neutral", "Ready for worker pickup.", []}
+  defp status_work_package_state(%{raw_status: "dispatched"}) do
+    {"dispatched", "Dispatched", "neutral", "Dispatched; waiting for its worker.", []}
   end
 
   defp status_work_package_state(work_package) do
@@ -936,10 +928,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
   defp active_runtime?(work_package), do: get_in(work_package, [:runtime_state, :active?]) == true
 
-  defp terminal_package_status?(status), do: status in @terminal_package_statuses
-
   defp merge_required?(%WorkPackage{} = work_package) do
-    case LifecycleService.policy_for(work_package) do
+    case Templates.for_work_package(work_package) do
       {:ok, policy} ->
         required_gates = Map.get(policy, :required_gates, [])
         "human_merge" in required_gates or "architect_merge" in required_gates
@@ -950,7 +940,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   end
 
   defp pr_required?(%WorkPackage{} = work_package) do
-    case LifecycleService.policy_for(work_package) do
+    case Templates.for_work_package(work_package) do
       {:ok, policy} -> "human_merge" in Map.get(policy, :required_gates, [])
       {:error, _reason} -> work_package.kind in @runtime_merge_required_kinds
     end

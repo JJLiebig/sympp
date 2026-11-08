@@ -15,7 +15,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
-  @terminal_work_package_statuses ["skipped", "merged", "closed", "abandoned"]
+  @terminal_work_package_statuses ["ended"]
 
   @finding_replay_retry_attempts 50
   @ready_evidence_tools [
@@ -240,7 +240,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
   defp reject_ready_evidence_mutation(_repo, _session, _work_package_id, _tool, _attrs), do: :ok
 
   defp reject_ready_work_package(
-         %WorkPackage{status: "ready_for_merge"},
+         %WorkPackage{status: "ready"},
          %Session{assignment: %{grant_role: "architect"}},
          "append_progress",
          %{"payload" => %{"type" => "blocker", "source_tool" => "report_blocker", "active" => true} = payload}
@@ -255,7 +255,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
     end
   end
 
-  defp reject_ready_work_package(%WorkPackage{status: "ready_for_merge"}, _session, _tool, _attrs) do
+  defp reject_ready_work_package(%WorkPackage{status: "ready"}, _session, _tool, _attrs) do
     {:tool_error, "already_ready"}
   end
 

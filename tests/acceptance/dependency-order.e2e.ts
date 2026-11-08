@@ -31,7 +31,8 @@ test('all dependency endpoint combinations dispatch only after canonical deliver
   await architect.call('skip_work_package', { work_package_id: cancelled });
   const refusal = await architect.reject('dispatch_work_package', { work_package_id: next }, 'unmet_work_package_dependencies');
   expect(refusal.prerequisite_work_package_ids.sort()).toEqual([direct, cancelled].sort());
-  expect((await row(architect, request, cancelled)).raw_status).toBe('skipped');
+  expect((await row(architect, request, cancelled)).raw_status).toBe('ended');
+  expect((await row(architect, request, cancelled)).delivery_outcome).toBe('skipped');
   await architect.call('delete_dependency', { dependency_id: cancellation });
   // Retiring scope is not completion; only the delivered end of the chain satisfies it.
   await architect.call('append_progress', { work_package_id: direct, summary: 'This attempt is blocked.', idempotency_key: 'superseded-blocker', payload: { type: 'blocker', active: true, blocker_id: 'old-attempt' } });
@@ -134,12 +135,10 @@ test('candidate pins allow dispatch but all overlapping constraints and current 
   expect((await architect.call('dispatch_work_package', { work_package_id: late })).work_package.id).toBe(late);
   await architect.call('attach_branch', { work_package_id: ui, branch: 'feature/delivery-202', head_sha: head('d') });
   expect((await row(architect, request, ui)).merge_eligibility.reason_codes).toContain('dependency_inputs_stale');
-  // A ready contract edit withdraws readiness and increments its optimistic revision.
-  const updated = await architect.call('update_work_package', { work_package_id: ui, expected_contract_revision: 1, patch: { title: 'Revised consumer contract' } });
-  expect(updated.contract_revision).toBe(2);
-  expect(updated.status.work_package_status).toBe('implementing');
+  // A ready contract is frozen: an edit is refused and the package stays ready.
+  await architect.reject('update_work_package', { work_package_id: ui, expected_contract_revision: 1, patch: { title: 'Revised consumer contract' } }, 'contract_frozen');
+  expect((await row(architect, request, ui)).raw_status).toBe('ready');
   expect((await row(architect, request, ui)).merge_eligibility.eligible).toBe(false);
-  await architect.reject('update_work_package', { work_package_id: ui, expected_contract_revision: 1, patch: { title: 'Stale write' } }, 'contract_revision_conflict');
 });
 
 test('clearing a candidate and expanding to a group requires fresh qualification of every prerequisite', async ({ delivery: { factory, provider } }) => {
@@ -205,7 +204,7 @@ test('out-of-order automatic and manual closeout retain order violations through
   const applied = await architect.call('reconcile_work_request', { work_request_id: request, apply: true });
   expect(applied.reconciliation.applied_count).toBe(0);
   const merged = await row(architect, request, ui);
-  expect(merged.raw_status).toBe('merged');
+  expect(merged.raw_status).toBe('ended');
   expect(merged.delivery_outcome).toBe('pr_merged');
   expect(merged.work_package.blocker_state['active?']).toBe(false);
   expect(merged.attention_reason_codes).toContain('delivery_order_violation');

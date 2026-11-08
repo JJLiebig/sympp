@@ -17,8 +17,14 @@ defmodule SymphonyElixir.WorkPackageFactory do
       owner_id: "agent-1"
     }
 
-    Enum.into(overrides, defaults)
+    overrides
+    |> Enum.into(defaults)
+    |> put_default_status()
   end
+
+  # Executable packages default to dispatched; architect anchors keep their anchor status.
+  defp put_default_status(%{kind: "delegation"} = attrs), do: Map.put_new(attrs, :status, "planning")
+  defp put_default_status(attrs), do: Map.put_new(attrs, :status, "dispatched")
 
   @spec database_path() :: Path.t()
   def database_path do

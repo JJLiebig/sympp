@@ -2,6 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeCleanupQueueTest do
   use ExUnit.Case, async: false
 
   alias SymphonyElixir.SymphonyPlusPlus.Repo
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
@@ -33,7 +34,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeCleanupQueueTest do
     codex_home = use_codex_home!(fixture.root)
     package = prepared_package!(repo, fixture.repo_root, codex_home, "WP-CLEANUP-RETRY", "fix/cleanup-retry")
 
-    assert {:ok, _terminal} = WorkPackageRepository.update_status(repo, package.id, "created", "merged")
+    ended = repo.update!(Ecto.Changeset.change(package, status: "ended"))
+    assert :ok = Lifecycle.apply_terminal_effects(repo, ended)
     assert [%Entry{attempts: 0}] = repo.all(Entry)
 
     unavailable_root = fixture.repo_root <> "-unavailable"
@@ -57,10 +59,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeCleanupQueueTest do
     codex_home = use_codex_home!(fixture.root)
     {request, package} = prepared_linked_package!(repo, fixture.repo_root, codex_home, "WR-CLEANUP-STARTUP", "fix/cleanup-startup")
 
-    repo.update!(Ecto.Changeset.change(package, status: "merged"))
-
     assert {:ok, _delivery} =
-             WorkRequestRepository.record_work_package_delivery(repo, request.id, package.id, %{
+             CanonicalWorkPackageFixtures.end_work_package(repo, request.id, package.id, %{
                outcome: "completed_no_pr",
                idempotency_key: "cleanup-startup-delivered",
                no_pr_evidence: "Completed work resumes queued cleanup after archive."
@@ -131,7 +131,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeCleanupQueueTest do
     fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-cleanup-queue-active")
     codex_home = use_codex_home!(fixture.root)
     package = prepared_package!(repo, fixture.repo_root, codex_home, "WP-CLEANUP-ACTIVE", "fix/cleanup-active")
-    active = repo.update!(Ecto.Changeset.change(package, status: "active"))
+    active = repo.update!(Ecto.Changeset.change(package, status: "dispatched"))
 
     assert :ok = WorktreeCleanupQueue.enqueue_terminal(repo, active, codex_home: codex_home)
     assert repo.all(Entry) == []
@@ -142,8 +142,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeCleanupQueueTest do
     fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-offline-cleanup")
     codex_home = use_codex_home!(fixture.root)
     {_request, package} = prepared_linked_package!(repo, fixture.repo_root, codex_home, "WR-OFFLINE", "fix/offline")
-    repo.update!(Ecto.Changeset.change(package, status: "merged"))
-    assert :ok = WorktreeCleanupQueue.enqueue_terminal(repo, %{package | status: "merged"}, codex_home: codex_home)
+    repo.update!(Ecto.Changeset.change(package, status: "ended"))
+    assert :ok = WorktreeCleanupQueue.enqueue_terminal(repo, %{package | status: "ended"}, codex_home: codex_home)
     [obligation] = repo.all(Entry)
     before = File.ls!(package.worktree_path)
     previous = System.get_env("SYMPP_OFFLINE_SANDBOX")

@@ -178,7 +178,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
     assert payload["scope"] == %{"repo" => anchor.repo, "base_branch" => anchor.base_branch}
     assert payload["work_request"] == %{"id" => work_request.id}
     assert payload["work_package"]["id"] == approved_slice.id
-    assert payload["work_package"]["status"] == "ready_for_worker"
+    assert payload["work_package"]["status"] == "dispatched"
     assert is_binary(payload["work_package"]["dispatched_at"])
     assert payload["worker_grant"]["secret_in_response"] == false
     refute Map.has_key?(payload["worker_grant"], "display_key")
@@ -204,7 +204,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
     refute serialized_response =~ ".secret"
 
     assert {:ok, persisted_slice} = WorkRequestRepository.get_work_package(repo, work_request.id, approved_slice.id)
-    assert persisted_slice.status == "ready_for_worker"
+    assert persisted_slice.status == "dispatched"
     assert persisted_slice.id == payload["work_package"]["id"]
 
     assert {:ok, worker_grants} = AccessGrantRepository.list_for_work_package(repo, payload["work_package"]["id"])
@@ -228,7 +228,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
 
       refused = mcp_tool(repo, session, "sync_pr", handoff)
       assert refused["error"]
-      assert repo.get!(WorkPackage, approved_slice.id).status == "ready_for_worker"
+      assert repo.get!(WorkPackage, approved_slice.id).status == "dispatched"
       assert {:ok, unchanged} = PlanningRepository.get_state(repo, approved_slice.id)
       refute Enum.any?(unchanged.progress_events, &(&1.payload["source_tool"] == "sync_pr"))
 
@@ -238,17 +238,66 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       assert {:ok, claimed_grant} = AccessGrantService.claim_local_worker_grant(repo, approved_slice.id, claimed_by: "grant-only-worker")
       grant_owned = mcp_tool(repo, session, "sync_pr", handoff)
       assert grant_owned["error"]
-      assert repo.get!(WorkPackage, approved_slice.id).status == "ready_for_worker"
+      assert repo.get!(WorkPackage, approved_slice.id).status == "dispatched"
       assert {:ok, _revoked} = AccessGrantService.revoke(repo, claimed_grant.id)
 
       mismatch = mcp_tool(repo, session, "sync_pr", Map.put(handoff, "head_sha", String.duplicate("b", 40)))
       assert get_in(mismatch, ["error", "data", "reason"]) =~ "provider_head_mismatch"
-      assert repo.get!(WorkPackage, approved_slice.id).status == "ready_for_worker"
+      assert repo.get!(WorkPackage, approved_slice.id).status == "dispatched"
 
       url_only = Map.delete(handoff, "head_sha")
+
+      blocker = %{type: "blocker", source_tool: "report_blocker", blocker_id: "sync-hold", active: true}
+
+      assert {:ok, _blocked} =
+               PlanningRepository.append_progress_event(repo, %{
+                 work_package_id: approved_slice.id,
+                 summary: "Hold",
+                 status: "blocked",
+                 idempotency_key: "sync-hold",
+                 payload: blocker
+               })
+
+      held = mcp_tool(repo, session, "sync_pr", url_only)
+      assert get_in(held, ["result", "structuredContent", "work_package", "status"]) == "dispatched"
+      assert "no_active_blockers" in get_in(held, ["result", "structuredContent", "pr_sync", "readiness_reasons"])
+
+      assert {:ok, _resolved} =
+               PlanningRepository.append_progress_event(repo, %{
+                 work_package_id: approved_slice.id,
+                 summary: "Hold cleared",
+                 status: "resolved",
+                 idempotency_key: "sync-hold-cleared",
+                 payload: %{blocker | active: false}
+               })
+
       accepted = mcp_tool(repo, session, "sync_pr", url_only)
-      assert get_in(accepted, ["result", "structuredContent", "work_package", "status"]) == "ready_for_merge"
+      assert get_in(accepted, ["result", "structuredContent", "work_package", "status"]) == "ready"
       assert repo.get!(ClaimLease, other_owner.id).status == "released"
+
+      # Each qualification predicate that stops holding unqualifies the ready package;
+      # a green sync of the current head qualifies it again.
+      new_head = String.duplicate("d", 40)
+      green = GitHubPullRequestFixtures.metadata(412, new_head, base_branch: anchor.base_branch)
+
+      for {metadata, reason} <- [
+            {green, "head_changed"},
+            {Map.put(green, "draft", true), "pr_draft"},
+            {Map.put(green, "check_summary", %{"status" => "failure"}), "ci_not_green"},
+            {Map.merge(green, %{"state" => "closed", "mergeable_state" => "unknown"}), "pr_not_open"}
+          ] do
+        FakeGitHubClient.put_response("nextide/repo", 412, metadata)
+        unqualified = mcp_tool(repo, session, "sync_pr", url_only)
+        assert get_in(unqualified, ["result", "structuredContent", "work_package", "status"]) == "dispatched"
+        assert reason in get_in(unqualified, ["result", "structuredContent", "pr_sync", "readiness_reasons"])
+
+        FakeGitHubClient.put_response("nextide/repo", 412, green)
+        requalified = mcp_tool(repo, session, "sync_pr", url_only)
+        assert get_in(requalified, ["result", "structuredContent", "work_package", "status"]) == "ready"
+      end
+
+      assert {:ok, %{progress_events: events}} = PlanningRepository.get_state(repo, approved_slice.id)
+      assert Enum.count(events, &(&1.status == "unqualified")) == 4
 
       FakeGitHubClient.put_response(
         "nextide/repo",
@@ -258,14 +307,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
 
       different_pr = mcp_tool(repo, session, "sync_pr", Map.put(url_only, "url", "https://github.com/nextide/repo/pull/413"))
       assert get_in(different_pr, ["error", "data", "reason"]) == "pr_reference_mismatch"
-      assert repo.get!(WorkPackage, approved_slice.id).status == "ready_for_merge"
+      assert repo.get!(WorkPackage, approved_slice.id).status == "ready"
 
       merged_head = String.duplicate("c", 40)
       landed_pr = GitHubPullRequestFixtures.metadata(412, merged_head, base_branch: anchor.base_branch, merged?: true)
 
       FakeGitHubClient.put_response("nextide/repo", 412, landed_pr)
       landed = mcp_tool(repo, session, "sync_pr", %{"work_package_id" => approved_slice.id, "number" => 412, "repository" => "nextide/repo"})
-      assert get_in(landed, ["result", "structuredContent", "work_package", "status"]) == "merged"
+      assert get_in(landed, ["result", "structuredContent", "work_package", "status"]) == "ended"
       assert repo.get_by!(WorkPackageDelivery, work_package_id: approved_slice.id).outcome == "pr_merged"
     after
       restore_app_env(:sympp_github_client, original_client)
@@ -327,7 +376,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       end
 
     live_database_payload = get_in(live_database_response, ["result", "structuredContent"])
-    assert live_database_payload["work_package"]["status"] == "ready_for_worker"
+    assert live_database_payload["work_package"]["status"] == "dispatched"
     refute Map.has_key?(live_database_payload, "worker_handoff")
     assert live_database_payload["worker_bootstrap"]["assignment"]["work_package"]["id"] == approved_live_database_slice.id
     refute inspect(live_database_response) =~ "run_mcp_command"
@@ -352,7 +401,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       )
 
     blank_database_payload = get_in(blank_database_response, ["result", "structuredContent"])
-    assert blank_database_payload["work_package"]["status"] == "ready_for_worker"
+    assert blank_database_payload["work_package"]["status"] == "dispatched"
     refute Map.has_key?(blank_database_payload, "worker_handoff")
     assert blank_database_payload["worker_bootstrap"]["assignment"]["work_package"]["id"] == approved_blank_database_slice.id
     refute inspect(blank_database_response) =~ "run_mcp_command"

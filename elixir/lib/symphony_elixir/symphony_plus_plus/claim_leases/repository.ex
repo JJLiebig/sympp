@@ -24,7 +24,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository do
     "sympp_claim_leases_id_unique_index"
   ]
   @sqlite_primary_key_message "unique constraint failed: sympp_claim_leases.id"
-  @terminal_work_package_statuses ["skipped", "merged", "closed", "abandoned"]
+  @terminal_work_package_statuses ["ended"]
 
   @spec migrate(repo()) :: :ok | {:error, error()}
   def migrate(repo) when is_atom(repo) do

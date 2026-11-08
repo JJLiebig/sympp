@@ -8,6 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
   alias SymphonyElixir.SymphonyPlusPlus.{BaseBranch, BranchPattern, Id}
   alias SymphonyElixir.SymphonyPlusPlus.Policies.Templates
   alias SymphonyElixir.SymphonyPlusPlus.ReviewRequirement
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.StringList
 
   alias SymphonyElixir.SymphonyPlusPlus.Title
@@ -28,25 +29,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
   ]
   @anchor_kinds ["delegation"]
   @kinds @executable_kinds ++ @anchor_kinds
-  @ready_status "ready_for_merge"
-
-  @statuses [
-    "planned",
-    "skipped",
-    "created",
-    "ready_for_worker",
-    "active",
-    "claimed",
-    "planning",
-    "implementing",
-    "reviewing",
-    "ci_waiting",
-    @ready_status,
-    "merged",
-    "closed",
-    "blocked",
-    "abandoned"
-  ]
+  # Architect anchors are not executable work; they keep this status until the
+  # anchors are replaced by WorkRequest ownership.
+  @anchor_status "planning"
   @type t :: %__MODULE__{
           id: String.t() | nil,
           work_request_id: String.t() | nil,
@@ -119,8 +104,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
   @spec executable_kinds() :: [String.t()]
   def executable_kinds, do: @executable_kinds
 
-  @spec statuses() :: [String.t()]
-  def statuses, do: @statuses
+  @spec anchor_status() :: String.t()
+  def anchor_status, do: @anchor_status
 
   @spec repo(map(), t()) :: String.t() | nil
   def repo(work_request, %__MODULE__{} = work_package) do
@@ -133,7 +118,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
       attrs
       |> normalize_keys()
       |> put_new_value("id", stable_id())
-      |> put_new_value("status", "created")
+      |> put_new_value("status", "planned")
 
     %__MODULE__{}
     |> changeset(attrs)
@@ -142,7 +127,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
 
   @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
   def update_changeset(%__MODULE__{} = work_package, attrs) do
-    attrs = Map.drop(normalize_keys(attrs), ["id", "inserted_at", "updated_at", "created_at"])
+    attrs = Map.drop(normalize_keys(attrs), ["id", "status", "inserted_at", "updated_at", "created_at"])
 
     changeset(work_package, attrs)
   end
@@ -185,12 +170,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
     |> Title.validate()
     |> validate_required([:id, :kind, :title, :repo, :base_branch, :acceptance_criteria, :status])
     |> validate_inclusion(:kind, @kinds)
-    |> validate_inclusion(:status, @statuses)
+    |> validate_status()
     |> validate_number(:sequence, greater_than: 0)
     |> validate_number(:contract_revision, greater_than: 0)
     |> validate_branch_pattern()
     |> validate_policy_template()
     |> validate_review_requirement()
+  end
+
+  defp validate_status(changeset) do
+    allowed = if get_field(changeset, :kind) in @anchor_kinds, do: [@anchor_status], else: Lifecycle.statuses()
+    validate_inclusion(changeset, :status, allowed)
   end
 
   defp validate_branch_pattern(changeset) do

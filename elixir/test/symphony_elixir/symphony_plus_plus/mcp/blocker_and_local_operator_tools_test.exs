@@ -20,7 +20,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerAndLocalOperatorToolsTest d
                work_request_work_package_attrs(id: "WRS-MCP-ARCH-PACKAGE-SURFACES", base_branch: work_request.base_branch)
              )
 
-    work_package = repo.update!(Ecto.Changeset.change(work_package, status: "blocked"))
+    work_package = repo.update!(Ecto.Changeset.change(work_package, status: "dispatched"))
 
     {_handoff_anchor, handoff_session, _handoff_grant} =
       create_work_request_handoff_architect_session(repo, work_request, [
@@ -52,7 +52,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerAndLocalOperatorToolsTest d
     resolve_event_id = get_in(resolve_blocker_response, ["result", "structuredContent", "progress_event", "id"])
     refute Map.has_key?(get_in(resolve_blocker_response, ["result", "structuredContent", "progress_event"]), "payload")
     assert repo.get!(ProgressEvent, resolve_event_id).payload["active"] == false
-    assert repo.get!(WorkPackage, work_package.id).status == "active"
+    assert repo.get!(WorkPackage, work_package.id).status == "dispatched"
 
     anchor_blocker_id = "arch-policy-anchor-blocker"
 
