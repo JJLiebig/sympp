@@ -1,12 +1,14 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
   @moduledoc false
 
+  alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, Response, ToolCatalog}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer, as: PlanningRenderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
 
   @version_resource "sympp://health/version"
+  @agent_text_mime_type "text/vnd.toon"
 
   @doc "The tools this server lists for its surface profile."
   @spec tool_specs(Config.t()) :: [map()]
@@ -48,10 +50,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
     end
   end
 
+  # Any trusted caller can read these, so they use the agent encoding, which
+  # redacts secret-shaped keys and values.
   def read_work_package_virtual_resource(repo, work_package_id, file_name, uri) do
     with {:ok, state} <- render_state(repo, work_package_id, file_name, uri),
-         {:ok, markdown} <- PlanningRenderer.render_state(state, file_name) do
-      {:ok, Response.text_resource(uri, markdown, "text/markdown")}
+         {:ok, toon} <- WorkerContext.encode_virtual_file(state, file_name, uri: uri) do
+      {:ok, Response.text_resource(uri, toon, @agent_text_mime_type)}
     else
       {:error, _code, _message, _data} = error -> error
       {:error, _reason} -> service_error(uri)

@@ -199,7 +199,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
         repo: repo
       )
 
-    assert [%{"mimeType" => "text/markdown", "text" => text}] = get_in(response, ["result", "contents"]), inspect(response)
+    assert [%{"mimeType" => "text/vnd.toon", "text" => text}] = get_in(response, ["result", "contents"]), inspect(response)
     text
   end
 

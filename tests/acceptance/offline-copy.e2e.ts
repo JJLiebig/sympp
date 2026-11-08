@@ -46,7 +46,6 @@ if (process.env.SYMPP_OFFLINE_ACCEPTANCE === '1') {
     const nativeBoard = await viewer.raw(null, {}, 'GET', '/api/v1/sympp/herdr/dashboard');
     expect(nativeBoard.status).toBe(200);
     expect(nativeBoard.body.runtime).toEqual({ offline: true, repos_root: null });
-    expect(nativeBoard.body.chiefs).toEqual([]);
     // The native board adds the person's asks to the browser board's canonical content.
     const shared = nativeBoard.body.work_request_details.map(({ asks: _asks, ...detail }: any) => detail);
     expect(parseBoard({ ...nativeBoard.body, generated_at: browserBoard.generated_at, work_request_details: shared }))
@@ -60,10 +59,7 @@ if (process.env.SYMPP_OFFLINE_ACCEPTANCE === '1') {
     for (const route of ['/mcp', '/mcp/client-lease']) {
       expect((await viewer.raw({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }, {}, 'POST', route)).status).toBe(403);
     }
-    for (const route of [
-      `/api/v1/sympp/operator/work-requests/${request}/work-packages/${wp}/dispatch`,
-      `/api/v1/sympp/operator/work-packages/${wp}/focus`,
-    ]) expect((await viewer.operator(route, {})).status).toBe(403);
+    expect((await viewer.operator(`/api/v1/sympp/operator/work-requests/${request}/work-packages/${wp}/dispatch`, {})).status).toBe(403);
     expect((await architect.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages).toEqual(before.work_packages);
     await offline.stop();
 

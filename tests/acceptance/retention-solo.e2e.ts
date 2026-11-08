@@ -1,6 +1,6 @@
 import { expect } from 'e2e';
 import { join } from 'node:path';
-import { test, packages, worker } from '../support/authority.js';
+import { test, packages } from '../support/authority.js';
 import { ageHistory, archives, detail, requestPath, retention, unstarted } from '../support/retention-history.js';
 
 test('never-started retention uses creation age and restore age without inventing completion or deleting history', async ({ processes }) => {
@@ -43,10 +43,10 @@ test('never-started retention uses creation age and restore age without inventin
   expect((await detail(client, fresh)).id).toBe(fresh);
 });
 
-test('actual architect and dispatch evidence protect old goals while completed retention restores and deletes deliberately', async ({ processes }) => {
+test('ownership and dispatch evidence protect old goals while completed retention restores and deletes deliberately', async ({ processes }) => {
   let factory = processes.factory();
   let client = await factory.client();
-  const claimed = await client.request('Claimed architect protects old request');
+  const owned = await client.request('Owned request protects old request');
   const dispatched = await client.request('Dispatched work protects old request');
   await packages(client, ['Actually dispatched']);
   const finished = await unstarted(client, 'Finished goal');
@@ -54,7 +54,7 @@ test('actual architect and dispatch evidence protect old goals while completed r
   await client.call('record_work_request_operator_decision', { work_request_id: finished, decision: 'Keep until deliberate deletion.', rationale: 'Retention', scope_impact: 'None', created_by: 'acceptance' });
   expect((await client.operator(`${requestPath(finished)}/state`, { state: 'completed' })).status).toBe(200);
   await ageHistory(factory, [
-    ...[claimed, dispatched].map((id) => ({ table: 'sympp_work_requests' as const, id, column: 'inserted_at' as const, days: 90 })),
+    ...[owned, dispatched].map((id) => ({ table: 'sympp_work_requests' as const, id, column: 'inserted_at' as const, days: 90 })),
     { table: 'sympp_work_requests', id: finished, column: 'completed_at', days: 4 },
   ]);
   factory = processes.factory();
@@ -63,7 +63,7 @@ test('actual architect and dispatch evidence protect old goals while completed r
   await retention(client);
   const ids = (await archives(client)).map((row: any) => row.id);
   expect(ids).toContain(finished);
-  for (const id of [claimed, dispatched, unfinished]) expect(ids).not.toContain(id);
+  for (const id of [owned, dispatched, unfinished]) expect(ids).not.toContain(id);
   expect((await client.operator(`${requestPath(finished)}/restore`, {})).status).toBe(200);
   await retention(client);
   expect((await archives(client)).map((row: any) => row.id)).not.toContain(finished);
@@ -77,7 +77,7 @@ test('actual architect and dispatch evidence protect old goals while completed r
   // Deliberate deletion also supports an unfinished, never-archived goal.
   expect((await client.operator(`${requestPath(unfinished)}/delete`, {})).status).toBe(200);
   expect((await client.operator(`${requestPath(unfinished)}/restore`, {})).status).toBe(404);
-  expect((await detail(client, claimed)).id).toBe(claimed);
+  expect((await detail(client, owned)).id).toBe(owned);
 });
 
 test('Solo evidence survives restart and lifecycle transitions without creating factory work', async ({ processes }) => {
@@ -146,7 +146,7 @@ test('Solo evidence survives restart and lifecycle transitions without creating 
   expect(recent.entries.map((row: any) => row.sequence)).toEqual(Array.from({ length: 50 }, (_, index) => index + 6));
 });
 
-test('Solo rejects bound mutation, preserves redacted evidence and supports every documented lifecycle edge', async ({ processes }) => {
+test('Solo refuses mutation outside Herdr, preserves redacted evidence and supports every documented lifecycle edge', async ({ processes }) => {
   const factory = processes.factory();
   const client = await factory.client();
   const scope = { repo: 'example/solo', base_branch: 'beta', workspace_path: processes.root, caller_id: 'solo-boundary' };
@@ -159,15 +159,12 @@ test('Solo rejects bound mutation, preserves redacted evidence and supports ever
   expect(entry.body).toBe('Body [REDACTED]');
   expect(entry.payload.token).toBe('[REDACTED]');
   await client.reject('solo_append_progress', { session_id: id, summary: 'Reject secret key', idempotency_key: secret }, 'invalid_entry_idempotency_key');
-  const architect = await factory.client();
-  await architect.request('Bound sessions cannot mutate Solo');
-  const [wp] = await packages(architect, ['Scoped work']);
-  const bound = await worker(factory, wp);
-  await bound.reject('solo_attach', scope, 'solo_tools_require_unbound_session');
-  await bound.reject('solo_pause', { session_id: id }, 'solo_tools_require_unbound_session');
-  expect((await client.call('solo_show', { session_id: id })).solo_session.status).toBe('active');
-  await bound.call('release_current_assignment');
-  expect((await bound.call('solo_attach', scope)).solo_session.id).toBe(id);
+  const outside = await factory.client(null);
+  await outside.reject('solo_attach', scope, 'read_only_outside_herdr');
+  await outside.reject('solo_pause', { session_id: id }, 'read_only_outside_herdr');
+  expect((await outside.call('solo_show', { session_id: id })).solo_session.status).toBe('active');
+  const other = await factory.client();
+  expect((await other.call('solo_attach', scope)).solo_session.id).toBe(id);
   let previous = id;
   for (const actions of [['complete'], ['archive'], ['pause', 'archive'], ['pause', 'complete', 'archive']] as const) {
     const current = (await client.call('solo_attach', scope)).solo_session.id;

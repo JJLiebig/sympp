@@ -170,7 +170,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
         },
         "sympp://work-packages/{work_package_id}/{file_name}" => %{
           "file_names" => PlanningRenderer.virtual_files(),
-          "mimeType" => "text/markdown"
+          "mimeType" => "text/vnd.toon"
         }
       }
     }
@@ -635,7 +635,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
       %{
         "uri_template" => "sympp://work-packages/{work_package_id}/#{file_name}",
         "name" => file_name,
-        "mimeType" => "text/markdown"
+        "mimeType" => "text/vnd.toon"
       }
     end)
   end

@@ -47,6 +47,7 @@ export async function retention(client: Client, days = 30) {
 
 export async function unstarted(client: Client, title: string) {
   return (await client.call('create_work_request', { repo: 'example/retention', base_branch: 'beta',
-    title, description: 'Disposable retention acceptance history.', request_kind: 'feature', status: 'draft',
+    // Handed off without an owner: nobody has started working on it.
+    title, description: 'Disposable retention acceptance history.', request_kind: 'feature', status: 'draft', own: false,
   })).work_request.id as string;
 }

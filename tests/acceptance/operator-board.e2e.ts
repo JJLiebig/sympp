@@ -52,23 +52,17 @@ test('operator sees dependency ordering, pending qualification and actual delive
   await expect(screen.getByLabel('Finished goals are archived after', { exact: false })).toBeVisible();
   await screen.getByRole('button', 'sympp settings', { exact: true }).tap();
   if (candidate.recording) return;
-  const worker = await candidate.factory!.client();
-  await worker.call('claim_local_assignment', { work_package_id: first, claimed_by: 'browser-worker' });
-
   provider!.set(401, pr(401, head('a'), {
     statusCheckRollup: [{ name: 'required', status: 'IN_PROGRESS', conclusion: null }], reviewDecision: 'REVIEW_REQUIRED', mergeStateStatus: 'BLOCKED',
   }));
-  await worker.call('attach_branch', { branch: 'feature/delivery-401', head_sha: head('a') });
-  await worker.call('attach_pr', { url: prUrl(401), head_sha: head('a') });
-  await worker.call('sync_pr', { url: prUrl(401) });
+  await client.call('attach_branch', { work_package_id: first, branch: 'feature/delivery-401', head_sha: head('a') });
+  await client.call('sync_pr', { work_package_id: first, url: prUrl(401), head_sha: head('a') });
   await candidate.capture('ci-wait');
   await browser.reload();
   await screen.getByRole('button', 'Expanded', { exact: true }).tap();
   await expect(browser.locator(`[data-goal="${request}"] ol span.font-semibold`)).toContainText('Checks');
   expect((await row(client, request, first)).delivery_outcome).toBeNull();
   expect((await client.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.completed_at).toBeNull();
-  await worker.call('release_current_assignment', { reason: 'End the synthetic worker session before architect acceptance.' });
-  await client.call('force_release_work_package_claim', { work_package_id: first, reason: 'Recycle the released synthetic worker reservation.' });
   expect((await row(client, request, first)).work_package.runtime_state['active?']).toBe(false);
   provider!.set(401, pr(401, head('a')));
   await sync(client, first, 401, head('a'));
@@ -122,11 +116,9 @@ test('operator attention differs from explicit blockers and settings/archive act
   const prematureArchive = await client.operator(`/api/v1/sympp/operator/work-requests/${request}/archive`, {});
   expect(prematureArchive.status).toBe(422);
   expect(prematureArchive.body.error.code).toBe('not_completed');
-  const anchor = (await client.call('get_current_assignment')).assignment.work_package_id;
-  await client.call('append_progress', {
-    work_package_id: anchor, summary: 'An operator scope choice is needed.', idempotency_key: 'browser-escalation',
-    payload: { type: 'architect_operator_report', human_escalation: { question: 'Approve the bounded scope?' } },
-  });
+  const question = (await client.call('ask_question', {
+    work_request_id: request, category: 'scope', question: 'Approve the bounded scope?', why_needed: 'An operator scope choice is needed.',
+  })).clarification_question.id;
   await candidate.capture('operator-needed');
   await app.open('/sympp/board');
   const goal = browser.locator(`[data-goal="${request}"]`);
@@ -137,10 +129,7 @@ test('operator attention differs from explicit blockers and settings/archive act
     work_package_id: wp, summary: 'Required schema missing.', idempotency_key: 'browser-blocker',
     payload: { type: 'blocker', active: true, blocker_id: 'schema' },
   });
-  await client.call('append_progress', {
-    work_package_id: anchor, summary: 'Scope approved.', idempotency_key: 'browser-escalation-resolved',
-    payload: { type: 'architect_operator_report', human_escalation: null },
-  });
+  await client.call('close_question', { work_request_id: request, question_id: question, expected_question_status: 'open' });
   await candidate.capture('blocker-without-escalation');
   await browser.reload();
   await expect(goal).not.toContainText('Approve the bounded scope?');

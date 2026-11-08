@@ -1,5 +1,5 @@
 {
-  "mcp_contract_fingerprint": "cb91ab8c06a8a9e6b28b8fcd1efe2afe7a85f3f6ac2eb8c0bcf0be17e4165c31",
+  "mcp_contract_fingerprint": "709ceb6360ddb9a58185148abded0b35a17fa4334381bc031aca9adf662e9fbf",
   "tool_sets": {
     "owner_gated_tools": [
       "update_task_plan",

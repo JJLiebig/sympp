@@ -12,10 +12,10 @@ test('dispatch and delivery board payload measurements for a 25-package request'
   ].join(' ').repeat(4);
   const created = await architect.call('create_work_request', {
     repo: 'example/service', base_branch: 'beta', title: 'Service rollout payload measurement',
-    description, request_kind: 'feature', status: 'ready_for_slicing', claimed_by: 'acceptance-architect',
+    description, request_kind: 'feature', status: 'ready_for_slicing',
   });
   const request = created.work_request.id;
-  await architect.call('claim_local_architect_assignment', { work_request_id: request, claimed_by: 'acceptance-architect' });
+  architect.workRequest = request;
   const ids = (await architect.call('slice_work_request', {
     work_packages: Array.from({ length: 25 }, (_, index) => contract(`Rollout package ${index + 1}`)),
   })).work_package_ids;
@@ -67,14 +67,9 @@ test('dispatch and delivery board payload measurements for a 25-package request'
   })).result;
   expect(fullDispatch.structuredContent.worker_bootstrap.assignment.work_package.product_description).toBe(description);
   expect(fullDispatch.structuredContent.worker_bootstrap.assignment.work_package.engineering_scope).toBe('Deliver Rollout package 2');
-  expect(fullDispatch.structuredContent.worker_grant.secret_in_response).toBe(false);
-  const outsider = await factory.client();
-  const unbound = await outsider.rpc('resources/read', { uri: dispatch.structuredContent.assignment_uri });
-  expect(unbound.error).toBeTruthy();
-  await outsider.request('Foreign repository request', 'ready_for_slicing', 'beta', 'example/foreign');
-  const denied = await outsider.rpc('resources/read', { uri: dispatch.structuredContent.assignment_uri });
-  expect(denied.error).toBeTruthy();
-  expect(JSON.stringify(denied)).not.toContain(description);
+  // Every trusted caller may read; the assignment resource is the same for another terminal.
+  const reader = await factory.client(null);
+  expect(JSON.parse((await reader.rpc('resources/read', { uri: dispatch.structuredContent.assignment_uri })).result.contents[0].text)).toEqual(bootstrap);
   const chars = (value: unknown) => JSON.stringify(value).length;
   expect(chars(dispatch)).toBeLessThan(chars(fullDispatch) / 2);
   expect(chars(board)).toBeLessThan(chars(fullBoard) / 2);
@@ -177,7 +172,6 @@ test('a clarified request becomes a revised plan and ordinary worker assignment'
   expect(assignment.stop_conditions).toEqual(['Return material scope changes to the architect.']);
   // No worker client/claim is created. The actual dispatch contract is complete.
   expect(bootstrap.launch_prompt).toContain('No worker MCP calls');
-  expect(dispatched.worker_grant.secret_in_response).toBe(false);
 });
 
 test('invalid batches are atomic and secondary delivery preserves repository and branch boundaries', async ({ factory }) => {

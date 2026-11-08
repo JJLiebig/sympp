@@ -206,6 +206,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
   defp repo_backed_followup?(payload, %Server{}), do: repo_backed_followup?(payload)
 
   defp repo_backed_followup?(%{"method" => "resources/read", "params" => %{"uri" => uri}}), do: protected_resource_uri?(uri)
+  # Health reads the live ledger only to list what a Herdr caller owns.
+  defp repo_backed_followup?(%{"method" => "tools/call", "params" => %{"name" => "sympp.health", "_meta" => %{"herdr" => _}}}), do: true
   defp repo_backed_followup?(%{"method" => "tools/call", "params" => %{"name" => "sympp.health"}}), do: false
   defp repo_backed_followup?(%{"method" => "tools/call"}), do: true
   defp repo_backed_followup?(_payload), do: false
