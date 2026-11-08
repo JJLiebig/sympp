@@ -6,7 +6,7 @@ import { readOnly } from "./api";
 import { span, type Card, type CardState } from "./model";
 import { useAct } from "./operator";
 import { Owner } from "./owner";
-import { Gates, PrLink } from "./parts";
+import { CARD_GRID, CiCell, PrLink, ReviewCell } from "./parts";
 
 const DAY = 24 * 3600e3;
 const ORDER: Record<CardState, number> = { review_ci: 0, working: 1, merged: 2, done: 3 };
@@ -16,7 +16,7 @@ const STATE: Record<CardState, { label: string; tone: string; pip: string }> = {
   merged: { label: "Merged", tone: "text-merge/80", pip: "bg-merge/40" },
   done: { label: "Done", tone: "text-dim", pip: "bg-faint" },
 };
-const ROW = "grid grid-cols-[10px_minmax(0,1fr)_minmax(0,200px)_220px_70px_70px_190px_24px] items-center gap-3 rounded px-2 py-1 odd:bg-white/[0.035]";
+const ROW = `${CARD_GRID} rounded px-2 py-1 odd:bg-white/[0.035]`;
 
 // Ended cards drop off a day after they merged or their terminal finished; dismissed ones right away.
 export function visibleCards(cards: Card[], at: number) {
@@ -54,7 +54,8 @@ function CardRow({ at, card }: { at: number; card: Card }) {
       <span className="truncate font-mono text-[11px] text-faint" title={`${card.repo} · ${card.branch}`}>
         {card.repo.split("/").pop()} · {card.branch}
       </span>
-      <Gates ci={card.ci} review={card.review} />
+      <CiCell ci={card.ci} />
+      <ReviewCell review={card.review} />
       <PrLink pr={card.pr} repo={card.repo} />
       <span className={`whitespace-nowrap font-mono text-[11px] font-semibold ${meta.tone}`} title={`${meta.label} for ${span(at - card.since)}`}>
         {meta.label}
