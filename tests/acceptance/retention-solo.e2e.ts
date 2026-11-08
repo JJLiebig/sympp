@@ -43,7 +43,7 @@ test('never-started retention uses creation age and restore age without inventin
   expect((await detail(client, fresh)).id).toBe(fresh);
 });
 
-test('actual architect and dispatch evidence protect old goals while completed retention restores and deletes deliberately', async ({ processes }) => {
+test('dispatched work protects old goals while completed retention restores and deletes deliberately', async ({ processes }) => {
   let factory = processes.factory();
   let client = await factory.client();
   const claimed = await client.request('Claimed architect protects old request');
@@ -61,9 +61,12 @@ test('actual architect and dispatch evidence protect old goals while completed r
   client = await factory.client();
   expect((await archives(client)).map((row: any) => row.id)).not.toContain(finished);
   await retention(client);
-  const ids = (await archives(client)).map((row: any) => row.id);
+  const archived = await archives(client);
+  const ids = archived.map((row: any) => row.id);
   expect(ids).toContain(finished);
-  for (const id of [claimed, dispatched, unfinished]) expect(ids).not.toContain(id);
+  // A claimed architect without packages is still intake, so it ages out like any never-started goal.
+  expect(archived.find((row: any) => row.id === claimed).archive_reason).toBe('never_started');
+  for (const id of [dispatched, unfinished]) expect(ids).not.toContain(id);
   expect((await client.operator(`${requestPath(finished)}/restore`, {})).status).toBe(200);
   await retention(client);
   expect((await archives(client)).map((row: any) => row.id)).not.toContain(finished);

@@ -24,7 +24,7 @@ test('deployment observations cover every delivered revision and preserve comple
   await configure('unfinished.yml');
   expect((await hydrated()).deployments['example/service'].dev.reason).toBe('unfinished');
   const question = (await architect.call('ask_question', { work_request_id: request, category: 'acceptance',
-    question: 'Has the delivered scope answered the remaining operator choice?', why_needed: 'Delivery alone must not close an unanswered goal.',
+    question: 'Has the delivered scope answered the remaining operator choice?', why_needed: 'An open question does not hold back delivered work.',
   })).clarification_question.id;
   for (const [index, wp] of ids.entries()) {
     await architect.call('dispatch_work_package', { work_package_id: wp });
@@ -33,11 +33,11 @@ test('deployment observations cover every delivered revision and preserve comple
     provider.set(number, pr(number, sha, { state: 'MERGED', mergedAt: new Date().toISOString(), mergeCommit: { oid: sha } }));
     await sync(architect, wp, number, sha);
   }
-  expect((await architect.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.completed_at).toBeNull();
-  expect((await hydrated()).deployments['example/service'].dev.reason).toBe('unfinished');
-  await architect.call('close_question', { work_request_id: request, question_id: question, expected_question_status: 'open' });
   const completed = (await hydrated()).completed_at;
   expect(completed).toBeTruthy();
+  expect((await architect.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.phase).toBe('done');
+  await architect.call('close_question', { work_request_id: request, question_id: question, expected_question_status: 'open' });
+  expect((await hydrated()).completed_at).toBe(completed);
   const run = (id: number, sha: string, conclusion: string | null, hour = 11, patch: object = {}) => ({
     id, head_sha: sha, conclusion, status: 'completed', event: 'push',
     updated_at: `2026-10-10T${hour}:00:00Z`, repository: { full_name: 'example/service' },
