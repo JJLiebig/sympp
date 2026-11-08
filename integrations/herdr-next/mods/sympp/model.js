@@ -15,6 +15,9 @@ const LONG_REVIEW = 3 * HOUR;
 const DORMANT_AFTER = 14 * DAY;
 const RANK = { needs_you: 0, on_track: 3, idle: 4, parked: 5, settled: 6 };
 const OUTCOMES = { pr_merged: "merged", completed_no_pr: "finished", finished: "finished", superseded: "dropped", abandoned: "dropped", skipped: "dropped" };
+// Migrated endings keep the old terminal status they were recorded with.
+const LEGACY_OUTCOMES = { merged: "merged", closed: "finished", abandoned: "dropped" };
+const deliveryOutcome = (delivery) => (delivery?.outcome === "legacy" ? LEGACY_OUTCOMES[delivery.legacy_status] : OUTCOMES[delivery?.outcome ?? ""]);
 // Packages without a backend stage: their recorded status, read as loosely as the web board does.
 const STATUS_RULES = [
   [/^(merged|github_pr_merged)$/, "done"],
@@ -239,7 +242,7 @@ function buildPackage(slice, groups, now, runs) {
   const review = slice.review_signal ?? {};
   const activity = slice.activity_signal ?? {};
   const run = runs?.get(slice.work_package_id || slice.id) ?? null;
-  const outcome = OUTCOMES[slice.delivery?.outcome ?? ""]
+  const outcome = deliveryOutcome(slice.delivery)
     ?? (board && (board.delivered || board.stage === "done") ? (board.track === "no_pr" ? "finished" : "merged") : null);
   const stage = outcome ? "done" : board?.stage ?? statusStage(slice);
   const observed = stageTime(slice, board, stage);

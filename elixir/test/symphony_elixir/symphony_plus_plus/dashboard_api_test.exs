@@ -2076,17 +2076,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
-  test "a stale worker routes recovery to the architect while failing checks wait on the worker" do
+  test "stale or idle workers route recovery to the architect while failing checks wait on an active worker" do
     alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals
     package = %SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage{status: "dispatched"}
     stale = Signals.activity(package, %{worker_signal: %{status: "stale"}}, %{key: "dispatched"}, [])
     assert stale["next_actor"] == "architect"
     assert stale["next_action"] == "inspect_worker"
     assert stale["waiting_reason"] == "runtime_stale"
-    failing = Signals.activity(package, %{pr_signal: %{checks: %{status: "failing"}}}, %{key: "dispatched"}, [])
+    failing_pr = %{status: "open", checks: %{status: "failing"}}
+    failing = Signals.activity(package, %{pr_signal: failing_pr, worker_signal: %{status: "active"}}, %{key: "dispatched"}, [])
     assert failing["next_actor"] == "worker"
     assert failing["next_action"] == "wait"
     assert failing["waiting_reason"] == "validation_failed"
+    unattended = Signals.activity(package, %{pr_signal: failing_pr, worker_signal: %{status: "idle"}}, %{key: "dispatched"}, [])
+    assert unattended["next_actor"] == "architect"
+    assert unattended["next_action"] == "inspect_worker"
   end
 
   test "native asks omit textless waits and resolved escalations" do

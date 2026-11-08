@@ -621,6 +621,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     %{
       id: delivery.id,
       outcome: delivery.outcome,
+      legacy_status: delivery.legacy_status,
       recorded_by: delivery.recorded_by,
       recorded_at: delivery.recorded_at,
       pr_url: delivery.pr_url,

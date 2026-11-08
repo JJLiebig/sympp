@@ -347,7 +347,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
     facts = %{
       dependencies_met?: unmet == [],
       progress: progress(summary, worker),
-      attention?: checks_failing? or review[:status] == "inspection_needed"
+      attention?: checks_failing? or review[:status] == "inspection_needed",
+      worker_idle?: worker[:status] == "idle"
     }
 
     %{action: action, actor: actor} = Lifecycle.next_action(work_package, facts)
