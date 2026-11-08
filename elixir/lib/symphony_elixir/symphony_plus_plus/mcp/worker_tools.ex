@@ -760,6 +760,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   defp worker_error(:database_busy, tool), do: service_error(:database_busy, tool)
   defp worker_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp worker_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
+
+  defp worker_error(:work_request_archived, tool),
+    do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"phase" => "archived"})
+
   defp worker_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
   defp invalid_params_error(tool, {:blocker_closeout_required, blockers}) do

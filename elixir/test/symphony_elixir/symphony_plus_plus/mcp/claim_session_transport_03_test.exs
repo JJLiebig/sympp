@@ -8,8 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
   test "claim_local_architect_assignment claims and reconnects a legacy-main WorkRequest with only its id", %{repo: repo} do
     work_request =
       create_work_request!(repo,
-        id: "WR-MCP-LOCAL-ARCHITECT-CLAIM",
-        status: "ready_for_clarification"
+        id: "WR-MCP-LOCAL-ARCHITECT-CLAIM"
       )
       |> Ecto.Changeset.change(base_branch: "origin/main")
       |> repo.update!()
@@ -121,8 +120,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
   test "local architect claim creates absent historical handoff authority", %{repo: repo} do
     work_request =
       create_work_request!(repo,
-        id: "WR-MCP-LOCAL-ARCHITECT-MISSING-HANDOFF",
-        status: "ready_for_clarification"
+        id: "WR-MCP-LOCAL-ARCHITECT-MISSING-HANDOFF"
       )
 
     expected_anchor_id = ArchitectHandoff.anchor_id_for_work_request(work_request)
@@ -155,8 +153,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
   test "claim_local_architect_assignment reclaims old other-actor handoff lease after local recovery window", %{repo: repo} do
     work_request =
       create_work_request!(repo,
-        id: "WR-MCP-LOCAL-ARCHITECT-STALE-OTHER",
-        status: "ready_for_clarification"
+        id: "WR-MCP-LOCAL-ARCHITECT-STALE-OTHER"
       )
 
     assert {:ok, handoff} =
@@ -204,8 +201,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
 
     other_work_request =
       create_work_request!(repo,
-        id: "WR-MCP-LOCAL-ARCHITECT-OTHER-SCOPE",
-        status: "ready_for_clarification"
+        id: "WR-MCP-LOCAL-ARCHITECT-OTHER-SCOPE"
       )
 
     write_response =
@@ -235,8 +231,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
   test "claim_local_architect_assignment recovers old grant owner after the handoff lease was released", %{repo: repo} do
     work_request =
       create_work_request!(repo,
-        id: "WR-MCP-LOCAL-ARCHITECT-RELEASED-GRANT-OWNER",
-        status: "ready_for_clarification"
+        id: "WR-MCP-LOCAL-ARCHITECT-RELEASED-GRANT-OWNER"
       )
 
     assert {:ok, handoff} =
@@ -295,8 +290,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
   test "claim_local_architect_assignment keeps recovered handoff grants live when reclaim audit fails", %{repo: repo} do
     work_request =
       create_work_request!(repo,
-        id: "WR-MCP-LOCAL-ARCHITECT-RECOVERED-AUDIT-FAILS",
-        status: "ready_for_clarification"
+        id: "WR-MCP-LOCAL-ARCHITECT-RECOVERED-AUDIT-FAILS"
       )
 
     assert {:ok, handoff} =
@@ -325,15 +319,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
     |> ClaimLease.update_changeset(%{last_seen_at: DateTime.add(DateTime.utc_now(:microsecond), -6, :minute)})
     |> repo.update!()
 
-    completed_at = ~U[2026-06-01 12:00:00.000000Z]
-
-    repo.update!(
-      Ecto.Changeset.change(work_request,
-        completed_at: completed_at,
-        completion_source: "derived"
-      )
-    )
-
     new_arguments = %{"work_request_id" => work_request.id, "claimed_by" => "Codex janitor"}
 
     {response, _failed_server} =
@@ -355,8 +340,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
     assert restored_grant.revoked_at == nil
 
     assert {:ok, restored_work_request} = WorkRequestRepository.get(repo, work_request.id)
-    assert restored_work_request.completed_at == completed_at
-    assert restored_work_request.completion_source == "derived"
     assert is_nil(restored_work_request.archived_at)
     assert is_nil(restored_work_request.archive_reason)
   end
@@ -364,8 +347,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
   test "claim_local_architect_assignment reclaims a stale bound local session for the same WorkRequest with a new owner label", %{repo: repo} do
     work_request =
       create_work_request!(repo,
-        id: "WR-MCP-LOCAL-ARCHITECT-STALE-BOUND",
-        status: "ready_for_clarification"
+        id: "WR-MCP-LOCAL-ARCHITECT-STALE-BOUND"
       )
 
     assert {:ok, handoff} =
@@ -439,8 +421,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
       create_work_request!(repo,
         id: "WR-MCP-LOCAL-ARCHITECT-REPO-ALIAS",
         repo: "JJLiebig/nextide-saas-vod-intelligence",
-        base_branch: "main",
-        status: "ready_for_slicing"
+        base_branch: "main"
       )
 
     assert {:ok, handoff} =

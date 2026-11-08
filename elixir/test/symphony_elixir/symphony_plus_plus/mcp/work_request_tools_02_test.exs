@@ -11,32 +11,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       create_work_request!(repo,
         id: "WR-MCP-WR-LEGACY-HANDOFF",
         repo: "handoff-fixture",
-        base_branch: "main",
-        status: "ready_for_slicing"
+        base_branch: "main"
       )
 
     equivalent_sibling =
       create_work_request!(repo,
         id: "WR-MCP-WR-LEGACY-HANDOFF-SIBLING",
         repo: "fixture-owner/handoff-fixture",
-        base_branch: handoff_work_request.base_branch,
-        status: "ready_for_slicing"
+        base_branch: handoff_work_request.base_branch
       )
 
     other_repo =
       create_work_request!(repo,
         id: "WR-MCP-WR-LEGACY-HANDOFF-OTHER-REPO",
         repo: "other-owner/handoff-fixture",
-        base_branch: handoff_work_request.base_branch,
-        status: "ready_for_slicing"
+        base_branch: handoff_work_request.base_branch
       )
 
     other_base =
       create_work_request!(repo,
         id: "WR-MCP-WR-LEGACY-HANDOFF-OTHER-BASE",
         repo: equivalent_sibling.repo,
-        base_branch: "release/legacy-handoff",
-        status: "ready_for_slicing"
+        base_branch: "release/legacy-handoff"
       )
 
     assert {:ok, sibling_slice} =
@@ -55,7 +51,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
 
     session = legacy_handoff_session_without_repo_scope!(repo, session, grant)
 
-    list_response = mcp_tool(repo, session, "list_work_requests", %{"status" => "ready_for_slicing"}, config: config)
+    list_response = mcp_tool(repo, session, "list_work_requests", %{}, config: config)
     list_payload = get_in(list_response, ["result", "structuredContent"])
 
     assert list_payload["scope"] == %{
@@ -83,22 +79,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(other_base_read_response, ["error", "data", "reason"]) == "not_found"
     refute inspect(other_base_read_response) =~ other_base.id
 
-    sibling_status_response =
-      mcp_tool(
-        repo,
-        session,
-        "set_work_request_status",
-        %{
-          "work_request_id" => equivalent_sibling.id,
-          "current_status" => "ready_for_slicing",
-          "next_status" => "sliced"
-        },
-        config: config
-      )
-
-    assert get_in(sibling_status_response, ["error", "code"]) == -32_004
-    assert get_in(sibling_status_response, ["error", "data", "reason"]) == "not_found"
-
     sibling_update_response =
       mcp_tool(
         repo,
@@ -116,8 +96,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(sibling_update_response, ["error", "code"]) == -32_004
     assert get_in(sibling_update_response, ["error", "data", "reason"]) == "not_found"
 
-    assert {:ok, persisted_sibling} = WorkRequestRepository.get(repo, equivalent_sibling.id)
-    assert persisted_sibling.status == "ready_for_slicing"
     assert {:ok, [persisted_sibling_slice]} = WorkRequestRepository.list_work_packages(repo, equivalent_sibling.id)
     assert persisted_sibling_slice.id == sibling_slice.id
     assert persisted_sibling_slice.status == "planned"
@@ -128,16 +106,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       create_work_request!(repo,
         id: "WR-MCP-WR-LEGACY-HANDOFF-PARTIAL",
         repo: "sympp",
-        base_branch: "main",
-        status: "ready_for_slicing"
+        base_branch: "main"
       )
 
     sibling =
       create_work_request!(repo,
         id: "WR-MCP-WR-LEGACY-HANDOFF-PARTIAL-SIBLING",
         repo: handoff_work_request.repo,
-        base_branch: handoff_work_request.base_branch,
-        status: "ready_for_slicing"
+        base_branch: handoff_work_request.base_branch
       )
 
     {_anchor, session, grant} =
@@ -148,14 +124,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     repo_only_session =
       legacy_handoff_session_with_scope_fields!(repo, session, grant, handoff_work_request.repo, nil)
 
-    repo_only_response = mcp_tool(repo, repo_only_session, "list_work_requests", %{"status" => "ready_for_slicing"})
+    repo_only_response = mcp_tool(repo, repo_only_session, "list_work_requests", %{})
     assert get_in(repo_only_response, ["error", "code"]) == -32_001
     refute inspect(repo_only_response) =~ sibling.id
 
     base_only_session =
       legacy_handoff_session_with_scope_fields!(repo, repo_only_session, grant, nil, handoff_work_request.base_branch)
 
-    base_only_response = mcp_tool(repo, base_only_session, "list_work_requests", %{"status" => "ready_for_slicing"})
+    base_only_response = mcp_tool(repo, base_only_session, "list_work_requests", %{})
     assert get_in(base_only_response, ["error", "code"]) == -32_001
     refute inspect(base_only_response) =~ sibling.id
   end
@@ -165,16 +141,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       create_work_request!(repo,
         id: "WR-MCP-WR-PREFIX-FIRST",
         repo: "nextide/symphony-plus-plus",
-        base_branch: "main",
-        status: "ready_for_slicing"
+        base_branch: "main"
       )
 
     second =
       create_work_request!(repo,
         id: "WR-MCP-WR-PREFIX-SECOND",
         repo: first.repo,
-        base_branch: first.base_branch,
-        status: "ready_for_slicing"
+        base_branch: first.base_branch
       )
 
     phase_id = "phase-manual-work-request-scope"
@@ -187,7 +161,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
         base_branch: first.base_branch
       )
 
-    list_response = mcp_tool(repo, session, "list_work_requests", %{"status" => "ready_for_slicing"})
+    list_response = mcp_tool(repo, session, "list_work_requests", %{})
     list_payload = get_in(list_response, ["result", "structuredContent"])
 
     assert list_payload["scope"] == %{"repo" => first.repo, "base_branch" => first.base_branch}
@@ -199,16 +173,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       create_work_request!(repo,
         id: "WR-MCP-WR-PARTIAL-HANDOFF-FIRST",
         repo: "nextide/symphony-plus-plus",
-        base_branch: "main",
-        status: "ready_for_slicing"
+        base_branch: "main"
       )
 
     sibling =
       create_work_request!(repo,
         id: "WR-MCP-WR-PARTIAL-HANDOFF-SIBLING",
         repo: first.repo,
-        base_branch: first.base_branch,
-        status: "ready_for_slicing"
+        base_branch: first.base_branch
       )
 
     phase_id = "phase-wr-architect-partial-provenance"
@@ -221,7 +193,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
         base_branch: first.base_branch
       )
 
-    list_response = mcp_tool(repo, session, "list_work_requests", %{"status" => "ready_for_slicing"})
+    list_response = mcp_tool(repo, session, "list_work_requests", %{})
     assert get_in(list_response, ["error", "code"]) == -32_001
     assert get_in(list_response, ["error", "data", "reason"]) == "phase_scope_not_available"
     refute inspect(list_response) =~ sibling.id
@@ -232,16 +204,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       create_work_request!(repo,
         id: "WR-MCP-WR-HANDOFF-DRIFTED",
         repo: "nextide/symphony-plus-plus",
-        base_branch: "main",
-        status: "ready_for_slicing"
+        base_branch: "main"
       )
 
     sibling =
       create_work_request!(repo,
         id: "WR-MCP-WR-HANDOFF-DRIFTED-SIBLING",
         repo: handoff_work_request.repo,
-        base_branch: handoff_work_request.base_branch,
-        status: "ready_for_slicing"
+        base_branch: handoff_work_request.base_branch
       )
 
     {_anchor, session, _grant} =
@@ -252,7 +222,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert {:ok, _drifted} =
              WorkRequestRepository.update(repo, handoff_work_request.id, %{"repo" => "nextide/drifted"})
 
-    list_response = mcp_tool(repo, session, "list_work_requests", %{"status" => "ready_for_slicing"})
+    list_response = mcp_tool(repo, session, "list_work_requests", %{})
     assert get_in(list_response, ["error", "code"]) == -32_001
     refute inspect(list_response) =~ sibling.id
   end

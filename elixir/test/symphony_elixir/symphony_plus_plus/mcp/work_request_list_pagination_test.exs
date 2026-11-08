@@ -16,8 +16,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestListPaginationTest do
         create_work_request!(repo,
           id: "WR-MCP-PAGE-SCOPED-#{String.pad_leading(Integer.to_string(index), 3, "0")}",
           repo: anchor.repo,
-          base_branch: anchor.base_branch,
-          status: "ready_for_slicing"
+          base_branch: anchor.base_branch
         )
       end
 
@@ -25,8 +24,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestListPaginationTest do
       create_work_request!(repo,
         id: "WR-MCP-PAGE-SCOPED-DRAFT",
         repo: anchor.repo,
-        base_branch: anchor.base_branch,
-        status: "draft"
+        base_branch: anchor.base_branch
       )
 
     visible = Enum.take_every(ready, 2)
@@ -37,14 +35,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestListPaginationTest do
     event = repo.config()[:telemetry_prefix] ++ [:query]
     :ok = :telemetry.attach(handler_id, event, &QueryProbe.handle/4, self())
 
-    first = mcp_tool(repo, session, "list_work_requests", %{"status" => "ready_for_slicing", "limit" => 2})
+    first = mcp_tool(repo, session, "list_work_requests", %{"limit" => 2})
     :telemetry.detach(handler_id)
     first_payload = get_in(first, ["result", "structuredContent"])
     queries = drain_queries([])
 
     second =
       mcp_tool(repo, session, "list_work_requests", %{
-        "status" => "ready_for_slicing",
         "limit" => 2,
         "cursor" => first_payload["next_cursor"]
       })
@@ -53,7 +50,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestListPaginationTest do
 
     third =
       mcp_tool(repo, session, "list_work_requests", %{
-        "status" => "ready_for_slicing",
         "limit" => 2,
         "cursor" => second_payload["next_cursor"]
       })
@@ -82,8 +78,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestListPaginationTest do
         create_work_request!(repo,
           id: "WR-MCP-PAGE-SPARSE-#{String.pad_leading(Integer.to_string(index), 4, "0")}",
           repo: anchor.repo,
-          base_branch: anchor.base_branch,
-          status: "ready_for_slicing"
+          base_branch: anchor.base_branch
         )
       end
 
@@ -91,7 +86,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestListPaginationTest do
     grant_work_request_scope!(repo, session, visible.id)
     remove_grant_scope_type!(repo, session, "repo")
 
-    result = mcp_tool(repo, session, "list_work_requests", %{"status" => "ready_for_slicing", "limit" => 1})
+    result = mcp_tool(repo, session, "list_work_requests", %{"limit" => 1})
     payload = get_in(result, ["result", "structuredContent"])
 
     assert Enum.map(payload["work_requests"], & &1["id"]) == [visible.id]

@@ -162,18 +162,18 @@ export class Client {
     return body;
   }
 
-  async request(title: string, status = 'ready_for_slicing', baseBranch = 'beta', repo = 'example/service', extraScopes: object[] = []) {
+  async request(title: string, baseBranch = 'beta', repo = 'example/service', extraScopes: object[] = []) {
     const created = await this.call('create_work_request', {
       repo, base_branch: baseBranch, title,
       description: 'Synthetic acceptance request; no external work is executed.',
-      request_kind: 'feature', status, claimed_by: 'acceptance-architect',
+      request_kind: 'feature', claimed_by: 'acceptance-architect',
       repo_scopes: [{ repo: 'example/client', base_branch: 'integration' }, ...extraScopes],
     });
     expect(created.status).toBe('created');
     expect(created.work_request.creator).toEqual({ kind: 'agent', name: 'acceptance-architect', via: 'mcp' });
     const id = created.work_request.id;
     const unclaimed = await this.call('read_work_request', { work_request_id: id });
-    expect(unclaimed.work_request.status).toBe(status);
+    expect(unclaimed.work_request.phase).toBe('intake');
     const claimed = await this.call('claim_local_architect_assignment', {
       work_request_id: id, claimed_by: 'acceptance-architect',
     });

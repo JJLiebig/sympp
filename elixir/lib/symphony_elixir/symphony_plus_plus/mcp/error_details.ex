@@ -3,7 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ErrorDetails do
 
   alias SymphonyElixir.SymphonyPlusPlus.BranchPattern
 
-  @lifecycle_detail_fields ["actual_status", "allowed_authoring_states", "current_contract_revision"]
+  @lifecycle_detail_fields ["actual_status", "allowed_authoring_states", "phase", "current_contract_revision"]
 
   @spec lifecycle_error(String.t(), atom(), map()) :: {:error, integer(), String.t(), map()}
   def lifecycle_error(tool, reason, details \\ %{}) do
@@ -116,8 +116,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ErrorDetails do
   defp reason_text(reason), do: inspect(reason)
 
   defp lifecycle_next_action(:contract_revision_conflict), do: "read_work_request"
-  defp lifecycle_next_action(:work_request_not_authorable), do: "read_work_request"
   defp lifecycle_next_action(:work_package_terminal), do: "create_successor"
   defp lifecycle_next_action(:contract_frozen), do: "supersede_with_successor"
   defp lifecycle_next_action(:work_request_terminal), do: "no_change"
+  defp lifecycle_next_action(:work_request_archived), do: "restore"
 end

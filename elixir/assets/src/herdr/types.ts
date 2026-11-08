@@ -47,7 +47,7 @@ export type WorkRequestDetail = {
     id: string;
     title?: string | null;
     repo?: string | null;
-    status?: string | null;
+    phase?: string | null;
   };
   work_packages?: WorkRequestExecutionGraphModel["work_packages"];
   product_tree?: Record<string, unknown>;

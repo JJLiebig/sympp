@@ -9,8 +9,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport07Test do
   test "embedded architect batches recover stale ownership", %{repo: repo} do
     work_request =
       create_work_request!(repo,
-        id: "WR-HTTP-STABLE-ARCHITECT-CATALOG",
-        status: "ready_for_slicing"
+        id: "WR-HTTP-STABLE-ARCHITECT-CATALOG"
       )
 
     assert {:ok, handoff} =
@@ -55,7 +54,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport07Test do
         "arguments" => Map.put(slice_arguments, "work_request_id", work_request.id)
       })
 
-    assert get_in(slice.response, ["result", "structuredContent", "status", "work_request_status"]) == "sliced"
     assert [_work_package_id] = get_in(slice.response, ["result", "structuredContent", "work_package_ids"])
 
     assert {:ok, rebound} =

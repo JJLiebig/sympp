@@ -33,7 +33,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     "record_work_package_delivery",
     "revoke_work_package_worker_key",
     "force_release_work_package_claim",
-    "set_work_request_status",
     "ask_question",
     "answer_question",
     "answer_question_and_record_decision",

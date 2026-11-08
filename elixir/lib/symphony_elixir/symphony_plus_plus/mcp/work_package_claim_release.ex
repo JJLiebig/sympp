@@ -38,12 +38,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageClaimRelease do
            "cleared_session_bindings" => cleared_bindings
          },
          {:ok, event} <-
-           PlanningRepository.append_audit_progress_event_for_work_package(repo, assignment, work_package.id, %{
-             "summary" => "Architect force-released worker claim",
-             "body" => reason,
-             "status" => "worker_claim_released",
-             "payload" => payload
-           }) do
+           PlanningRepository.append_audit_progress_event_for_work_package(
+             repo,
+             assignment,
+             work_package.id,
+             %{
+               "summary" => "Architect force-released worker claim",
+               "body" => reason,
+               "status" => "worker_claim_released",
+               "payload" => payload
+             },
+             allow_archived: true
+           ) do
       {:ok, Map.merge(payload, %{"audit_event" => %{"id" => event.id}, "next_action" => "claim_local_assignment"})}
     end
   end

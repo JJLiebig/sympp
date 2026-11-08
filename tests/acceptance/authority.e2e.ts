@@ -111,7 +111,7 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
   expect(createdNative.body.refresh).toEqual({ dashboard: true, work_request_id: nativeId });
   const nativeDetail = await native.raw(null, {}, 'GET', `/api/v1/sympp/herdr/work-requests/${nativeId}`);
   expect(nativeDetail.body.work_request.title).toBe(intake.title);
-  expect(nativeDetail.body.work_request.status).toBe('ready_for_clarification');
+  expect(nativeDetail.body.work_request.phase).toBe('intake');
   expect(nativeDetail.body.work_packages).toEqual([]);
   expect((await native.raw({}, {}, 'POST', `/api/v1/sympp/operator/work-requests/${nativeId}/delete`)).status).toBe(401);
   expect((await fresh.call('read_work_request', { detail: 'full', work_request_id: id })).work_packages.map((entry: any) => entry.id)).toEqual([nativePackage]);
@@ -151,7 +151,7 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
 test('architect scope separates same-repository discovery from foreign writes and hides sibling endpoints', async ({ processes }) => {
   const factory = processes.factory();
   const architect = await factory.client();
-  const own = await architect.request('Owned request', 'ready_for_slicing', 'beta', 'example/service', [
+  const own = await architect.request('Owned request', 'beta', 'example/service', [
     { repo: 'example/service', base_branch: 'integration' },
   ]);
   const [ownWp] = await packages(architect, ['Owned package']);
@@ -169,7 +169,6 @@ test('architect scope separates same-repository discovery from foreign writes an
   })).clarification_question;
   expect((await architect.call('read_work_request', { detail: 'full', work_request_id: other })).work_request.id).toBe(other);
   for (const [name, args] of [
-    ['set_work_request_status', { work_request_id: other, current_status: 'sliced', next_status: 'clarifying' }],
     ['slice_work_request', { work_request_id: other, work_packages: [contract('Stolen')] }],
     ['dispatch_work_package', { work_request_id: other, work_package_id: otherWp }],
     ['reconcile_work_request', { work_request_id: other, apply: true }],
@@ -212,9 +211,8 @@ test('architect scope separates same-repository discovery from foreign writes an
   expect((await siblingWorker.call('get_current_assignment')).assignment.grant_id).toBe(siblingGrant);
 
   const secondary = await factory.client();
-  await secondary.request('Secondary repository reader', 'ready_for_slicing', 'integration', 'example/client');
+  await secondary.request('Secondary repository reader', 'integration', 'example/client');
   expect((await secondary.call('read_work_request', { detail: 'full', work_request_id: own })).work_request.id).toBe(own);
-  await secondary.reject('set_work_request_status', { work_request_id: own, current_status: 'sliced', next_status: 'clarifying' }, 'not_found');
   const [secondaryWp] = (await architect.call('slice_work_request', { work_packages: [contract('Secondary delivery', { repo: 'example/client', base_branch: 'integration' })] })).work_package_ids;
   await architect.call('dispatch_work_package', { work_package_id: secondaryWp });
   const secondaryWorker = await worker(factory, secondaryWp, 'secondary-worker');
@@ -248,7 +246,7 @@ test('architect scope separates same-repository discovery from foreign writes an
   expect(closedRow.work_package.id).toBe(ownWp);
   expect(closedRow.operational_state.key).toBe('completed_no_pr');
   const sameRepoReader = await factory.client();
-  await sameRepoReader.request('Same repository different delivery base', 'ready_for_slicing', 'integration');
+  await sameRepoReader.request('Same repository different delivery base', 'integration');
   const [alternateBase] = (await architect.call('slice_work_request', { work_packages: [contract('Alternate delivery base', { base_branch: 'integration' })] })).work_package_ids;
   await architect.call('dispatch_work_package', { work_package_id: alternateBase });
   const alternateWorker = await worker(factory, alternateBase, 'alternate-base-worker');
@@ -262,7 +260,7 @@ test('architect scope separates same-repository discovery from foreign writes an
 
   for (const [repo, branch] of [['foreign/service', 'beta'], ['example/service', 'other-branch']]) {
     const outsider = await factory.client();
-    const foreign = await outsider.request('Confidential outside scope', 'ready_for_slicing', branch, repo);
+    const foreign = await outsider.request('Confidential outside scope', branch, repo);
     expect((await architect.call('read_work_request', { detail: 'full', work_request_id: foreign })).work_request.id).toBe(foreign);
     const listed = await architect.call('list_work_requests', {});
     expect(JSON.stringify(listed)).not.toContain(foreign);
@@ -274,7 +272,7 @@ test('plan views give a reader bound to another request the same complete plan a
   const architect = await factory.client();
   const request = await architect.request('Plan projection authority');
   const reader = await factory.client();
-  await reader.request('Secondary plan reader', 'ready_for_slicing', 'integration', 'example/client');
+  await reader.request('Secondary plan reader', 'integration', 'example/client');
   const views = ['groups_only', 'groups_with_work_package_refs', 'groups_with_work_packages'];
   const read = async (client: Client, view: string) => (await client.call('read_plan', { detail: 'full', work_request_id: request, view })).product_tree;
   const group = async (title: string, parent?: string) => (await architect.call('upsert_group', {
@@ -923,7 +921,7 @@ deliveryTest('worker metadata replay and short-head matching preserve distinct r
     expect((await client.call('mark_ready')).ready).toBe(true);
   }
   const shortRepoArchitect = await factory.client();
-  await shortRepoArchitect.request('Unambiguous PR identity', 'ready_for_slicing', 'beta', 'service');
+  await shortRepoArchitect.request('Unambiguous PR identity', 'beta', 'service');
   const [shortWp] = await packages(shortRepoArchitect, ['Explicit repository identity']);
   const shortRepoWorker = await worker(factory, shortWp, 'short-repo-worker');
   await shortRepoWorker.reject('attach_pr', { number: 309, head_sha: head('e') }, 'missing_repository_use_url_or_owner_repo');
@@ -1072,7 +1070,7 @@ test('architect reports preserve server times and partial edits while rejecting 
   expect(detail.work_request.operator_report).toEqual(await read());
   expect(detail.work_packages.map((entry: any) => entry.id)).not.toContain(anchor);
   const unchanged = await architect.call('read_work_request', { detail: 'full', work_request_id: request });
-  expect(unchanged.work_request.status).toBe('sliced');
+  expect(unchanged.work_request.phase).toBe('active');
   expect(unchanged.clarification_questions.find((entry: any) => entry.id === question.id).status).toBe('open');
   expect((await row(architect, request, wp)).attention_reason_codes).not.toContain('active_blocker');
 });
@@ -1080,17 +1078,15 @@ test('architect reports preserve server times and partial edits while rejecting 
 test('architect question and decision mutations preserve provenance and redact compact responses', async ({ processes }) => {
   const factory = processes.factory();
   const architect = await factory.client();
-  const request = await architect.request('Redacted clarification authority', 'ready_for_clarification');
-  const status = await architect.call('set_work_request_status', { work_request_id: request, current_status: 'ready_for_clarification', next_status: 'clarifying' });
-  expect(status.work_request.status).toBe('clarifying');
-  expect(status.scope.repo).toBe('example/service');
-  expect(status.scope.base_branch).toBe('beta');
+  const request = await architect.request('Redacted clarification authority');
   const ask = await architect.call('ask_question', { work_request_id: request, category: 'scope',
     question: 'Avoid Bearer raw_secret_synthetic', why_needed: 'Keep raw_secret_synthetic out of responses.',
     asked_by_agent_run_id: 'raw_secret_synthetic', decision_prompt: { tl_dr: 'Choose scope', details: 'A bounded decision is required.',
       options: [{ id: 'continue', label: 'Continue', answer: 'Proceed without raw_secret_synthetic.' }],
     },
   });
+  expect(ask.scope.repo).toBe('example/service');
+  expect(ask.scope.base_branch).toBe('beta');
   const question = ask.clarification_question.id;
   for (const field of ['asked_by_agent_run_id', 'decision_prompt']) expect(ask.clarification_question[field]).toBeUndefined();
   expect(JSON.stringify(ask)).not.toContain('raw_secret_synthetic');
@@ -1132,7 +1128,7 @@ test('architect question and decision mutations preserve provenance and redact c
     ids.push(result.decision_log_entry.id);
   }
   const persisted = await architect.call('read_work_request', { detail: 'full', work_request_id: request });
-  expect(persisted.work_request.status).toBe('clarifying');
+  expect(persisted.work_request.phase).toBe('intake');
   expect(persisted.clarification_questions.map((entry: any) => entry.status)).toEqual(['answered', 'closed', 'answered']);
   expect(persisted.decision_log_entries.map((entry: any) => entry.id)).toEqual(ids);
   expect(JSON.stringify(persisted)).not.toContain('raw_secret_synthetic');

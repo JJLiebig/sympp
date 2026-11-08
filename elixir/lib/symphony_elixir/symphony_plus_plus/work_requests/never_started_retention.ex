@@ -1,25 +1,37 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.NeverStartedRetention do
-  @moduledoc false
+  @moduledoc """
+  Archives WorkRequests that never started once the never-started window has
+  passed since creation, or since the operator's last restore: phase `intake`,
+  or phase `planned` with no package ever dispatched or ended (no ending row and
+  every package still planned, never dispatched). Edits do not restart the window.
+  """
 
-  import Ecto.Query, only: [from: 2, exclude: 2]
+  import Ecto.Query, only: [from: 2]
 
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{ArchitectHandoff, Repository, WorkRequest}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{WorkPackage, WorkPackageDelivery}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{Phase, Repository, WorkRequest}
 
-  # Legacy dispatches may predate dispatched_at; these states already imply execution.
+  @never_started_phases ["intake", "planned"]
 
   @spec archive(Repository.repo(), DateTime.t(), pos_integer()) :: {:ok, [String.t()]} | {:error, Repository.error()}
   def archive(repo, now, days) do
     cutoff = DateTime.add(now, -days * 24 * 60 * 60, :second)
 
     repo.transaction(fn ->
-      query = candidates(cutoff)
-      requests = repo.all(query)
-      ids = never_started_ids(repo, requests)
+      requests = repo.all(candidates(cutoff))
+
+      ids =
+        case Phase.load(repo, requests) do
+          {:ok, summaries} ->
+            started = started_ids(repo, Enum.map(requests, & &1.id))
+            Enum.filter(Enum.map(requests, & &1.id), &(summaries[&1].phase in @never_started_phases and not MapSet.member?(started, &1)))
+
+          {:error, reason} ->
+            repo.rollback(reason)
+        end
 
       if ids != [] do
-        repo.update_all(from(request in exclude(query, :order_by), where: request.id in ^ids),
+        repo.update_all(from(request in WorkRequest, where: request.id in ^ids and is_nil(request.archived_at)),
           set: [archived_at: now, archive_reason: "never_started", updated_at: now]
         )
       end
@@ -36,36 +48,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.NeverStartedRetention do
         else: {:error, {:storage_failed, message}}
   end
 
-  defp candidates(cutoff) do
-    from(request in WorkRequest,
-      where: is_nil(request.archived_at) and is_nil(request.completed_at),
-      where: fragment("COALESCE(?, ?)", request.never_started_restored_at, request.inserted_at) <= type(^cutoff, :utc_datetime_usec),
-      where: fragment("NOT EXISTS (SELECT 1 FROM sympp_work_package_deliveries WHERE work_request_id = ?)", request.id),
-      order_by: [asc: request.inserted_at, asc: request.id]
-    )
-  end
+  defp started_ids(_repo, []), do: MapSet.new()
 
-  defp never_started_ids(_repo, []), do: []
-
-  defp never_started_ids(repo, requests) do
-    ids = Enum.map(requests, & &1.id)
-    anchors = Map.new(requests, &{ArchitectHandoff.anchor_id_for_work_request(&1), &1.id})
-    anchor_ids = Map.keys(anchors)
-
-    started_ids =
+  defp started_ids(repo, ids) do
+    dispatched_or_past_planned =
       repo.all(
         from(package in WorkPackage,
-          where: package.work_request_id in ^ids or package.id in ^anchor_ids,
-          where:
-            not is_nil(package.dispatched_at) or package.status in ^Lifecycle.in_flight_statuses() or
-              fragment("EXISTS (SELECT 1 FROM sympp_agent_runs WHERE work_package_id = ?)", package.id) or
-              fragment("EXISTS (SELECT 1 FROM sympp_claim_leases WHERE work_package_id = ?)", package.id) or
-              fragment("EXISTS (SELECT 1 FROM sympp_access_grants WHERE work_package_id = ? AND claimed_at IS NOT NULL)", package.id),
-          select: {package.work_request_id, package.id}
+          where: package.work_request_id in ^ids,
+          where: package.status != "planned" or not is_nil(package.dispatched_at),
+          select: package.work_request_id
         )
       )
-      |> MapSet.new(fn {request_id, package_id} -> request_id || Map.fetch!(anchors, package_id) end)
 
-    Enum.reject(ids, &MapSet.member?(started_ids, &1))
+    ended = repo.all(from(delivery in WorkPackageDelivery, where: delivery.work_request_id in ^ids, select: delivery.work_request_id))
+    MapSet.new(dispatched_or_past_planned ++ ended)
+  end
+
+  defp candidates(cutoff) do
+    from(request in WorkRequest,
+      where: is_nil(request.archived_at) and is_nil(request.operator_completed_at),
+      where: fragment("COALESCE(?, ?)", request.restored_at, request.inserted_at) <= type(^cutoff, :utc_datetime_usec),
+      order_by: [asc: request.inserted_at, asc: request.id]
+    )
   end
 end

@@ -36,10 +36,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
   @spec update(Repository.repo(), String.t(), map()) :: {:ok, WorkRequest.t()} | {:error, error()}
   def update(repo, id, attrs), do: notify_dashboard(Repository.update(repo, id, attrs))
 
-  @spec update_status(Repository.repo(), String.t(), String.t(), String.t()) ::
-          {:ok, WorkRequest.t()} | {:error, error()}
-  def update_status(repo, id, current_status, next_status), do: notify_dashboard(Repository.update_status(repo, id, current_status, next_status))
-
   @spec ask_question(Repository.repo(), String.t(), map()) :: {:ok, ClarificationQuestion.t()} | {:error, error()}
   def ask_question(repo, work_request_id, attrs), do: notify_dashboard(Repository.ask_question(repo, work_request_id, attrs))
 
@@ -101,11 +97,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
   @spec list_decisions(Repository.repo(), String.t()) :: {:ok, [DecisionLogEntry.t()]} | {:error, error()}
   def list_decisions(repo, work_request_id), do: Repository.list_decisions(repo, work_request_id)
 
-  @spec refresh_completion(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, error()}
-  def refresh_completion(repo, work_request_id), do: notify_dashboard(Completion.refresh(repo, work_request_id))
-
-  @spec force_complete(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, error()}
-  def force_complete(repo, work_request_id), do: notify_dashboard(Completion.force_complete(repo, work_request_id))
+  @spec complete(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, error() | :work_request_archived}
+  def complete(repo, work_request_id), do: notify_dashboard(Completion.complete(repo, work_request_id))
 
   @spec archive(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, error() | :not_completed}
   def archive(repo, work_request_id), do: notify_dashboard(Completion.archive(repo, work_request_id))

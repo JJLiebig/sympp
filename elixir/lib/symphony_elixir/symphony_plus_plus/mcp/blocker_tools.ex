@@ -20,6 +20,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerTools do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     Auth,
     Config,
+    ErrorDetails,
     ProgressEvents,
     Session,
     ToolResult
@@ -163,6 +164,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerTools do
   defp architect_error(:database_busy, tool), do: service_error(:database_busy, tool)
   defp architect_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp architect_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
+
+  defp architect_error(:work_request_archived, tool),
+    do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"phase" => "archived"})
+
   defp architect_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
   defp auth_error(:unauthorized, resource), do: {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => "missing_session"}}

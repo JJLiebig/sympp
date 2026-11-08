@@ -27,7 +27,7 @@ export function boardPayload() {
     work_request_details: [
       {
         work_request: {
-          id: 'wr-pr', title: 'Native job tab', repo: 'owner/web', status: 'sliced', base_branch: 'main',
+          id: 'wr-pr', title: 'Native job tab', repo: 'owner/web', phase: 'active', base_branch: 'main',
           inserted_at: at(3000), architect_session_location: { label: 'Herdr', role: 'architect', last_seen_at: at(20) },
           dispatched_by: { kind: 'chief', domain: 'herdr' },
         },
@@ -65,16 +65,16 @@ export function boardPayload() {
         ],
       },
       {
-        work_request: { id: 'wr-nopr', title: 'Research spike', repo: 'owner/notes', status: 'sliced', inserted_at: at(400) },
+        work_request: { id: 'wr-nopr', title: 'Research spike', repo: 'owner/notes', phase: 'active', inserted_at: at(400) },
         work_packages: [
           pkg('np-1', 'Survey', 1, { stage: 'done', track: 'no_pr', delivered: true, entered_at: at(200) }, { repo: 'owner/notes', dispatched_at: at(300) }),
           pkg('np-2', 'Write-up', 2, { stage: 'build', track: 'no_pr' }, { repo: 'owner/notes', dispatched_at: at(100) }),
         ],
       },
-      { work_request: { id: 'wr-shaping', title: 'New idea', repo: 'owner/web', status: 'clarifying', inserted_at: at(30) } },
+      { work_request: { id: 'wr-shaping', title: 'New idea', repo: 'owner/web', phase: 'intake', inserted_at: at(30) } },
       {
         work_request: {
-          id: 'wr-cross', title: 'Shared tokens', repo: 'owner/api', status: 'sliced', inserted_at: at(1000),
+          id: 'wr-cross', title: 'Shared tokens', repo: 'owner/api', phase: 'active', inserted_at: at(1000),
           operator_report: {
             human_escalation: { question: 'Ship tokens before the API?', raised_at: at(240) },
             brief: { text: 'Token API is building; the UI waits on it and on your call.', written_at: at(60) },
@@ -114,7 +114,7 @@ export function variantPayload(variant) {
     { dispatched_at: at(minutes + 30), activity_signal: { observation_state: 'current' }, ...extra });
   board.work_request_details.push(
     {
-      work_request: { id: 'wr-restore', title: 'Restore sessions after a reboot', repo: 'owner/web', status: 'sliced', inserted_at: at(2400) },
+      work_request: { id: 'wr-restore', title: 'Restore sessions after a reboot', repo: 'owner/web', phase: 'active', inserted_at: at(2400) },
       // The architect's groups: the web board strips each top-level one apart, nested ones inside it.
       product_tree: { nodes: [
         { id: 'n-core', title: 'Core', position: 0, parent_id: null }, { id: 'n-recover', title: 'Recovery', position: 1, parent_id: null },
@@ -134,13 +134,13 @@ export function variantPayload(variant) {
       ],
     },
     {
-      work_request: { id: 'wr-theme', title: 'Follow the system theme', repo: 'owner/web', status: 'sliced', inserted_at: at(80) },
+      work_request: { id: 'wr-theme', title: 'Follow the system theme', repo: 'owner/web', phase: 'active', inserted_at: at(80) },
       work_packages: [step('t-1', 'Theme listener', 1, 'build', 40, {
         pr_signal: { status: 'open', number: 833, checks: { status: 'pending' } }, ...(quiet ? {} : { activity_signal: { observation_state: 'stale' } }),
       })],
     },
     {
-      work_request: { id: 'wr-status', title: 'Quieter status bar', repo: 'owner/web', status: 'sliced', inserted_at: at(150) },
+      work_request: { id: 'wr-status', title: 'Quieter status bar', repo: 'owner/web', phase: 'active', inserted_at: at(150) },
       work_packages: [
         step('s-1', 'Status colours', 1, 'review', 30, { pr_signal: { status: 'open', number: 835, checks: { status: 'passing' } },
           review_signal: { type: 'review_suite', mode: 'fast', status: 'in_progress', round: 2, started_at: at(90), round_started_at: at(12), steps: reviewSteps(null), next_action: 'github_review' } }),
@@ -152,21 +152,21 @@ export function variantPayload(variant) {
       ],
     },
     {
-      work_request: { id: 'wr-notes', title: 'Release notes template', repo: 'owner/notes', status: 'sliced', inserted_at: at(100) },
+      work_request: { id: 'wr-notes', title: 'Release notes template', repo: 'owner/notes', phase: 'active', inserted_at: at(100) },
       work_packages: [step('n-1', 'Template', 1, 'build', 15, { repo: 'owner/notes', pr_signal: { status: 'open', number: 21 } })],
     },
     {
-      work_request: { id: 'wr-docs', title: 'Operator guide refresh', repo: 'owner/web', status: 'sliced', inserted_at: at(3000) },
+      work_request: { id: 'wr-docs', title: 'Operator guide refresh', repo: 'owner/web', phase: 'active', inserted_at: at(3000) },
       work_packages: quiet
         ? [step('d-1', 'Outline', 1, 'done', 900), step('d-2', 'Screens', 2, 'done', 600), step('d-3', 'Install chapter', 3, 'build', 20), pkg('d-4', 'Troubleshooting', 4, { stage: 'queued', track: 'pr' })]
         : [step('d-1', 'Outline', 1, 'done', 900), step('d-2', 'Screens', 2, 'done', 400), pkg('d-3', 'Install chapter', 3, { stage: 'queued', track: 'pr' }), pkg('d-4', 'Troubleshooting', 4, { stage: 'queued', track: 'pr' })],
     },
     {
-      work_request: { id: 'wr-badges', title: 'Agent badges in the sidebar', repo: 'owner/web', status: 'sliced', inserted_at: at(1400) },
+      work_request: { id: 'wr-badges', title: 'Agent badges in the sidebar', repo: 'owner/web', phase: 'active', inserted_at: at(1400) },
       work_packages: [step('b-1', 'Badge art', 1, 'done', 500), step('b-2', 'Badge slot', 2, 'done', 300)],
     },
     {
-      work_request: { id: 'wr-keys', title: 'Keyboard map for every level', repo: 'owner/web', status: 'sliced', inserted_at: at(200) },
+      work_request: { id: 'wr-keys', title: 'Keyboard map for every level', repo: 'owner/web', phase: 'planned', inserted_at: at(200) },
       work_packages: [pkg('k-1', 'Key table', 1, { stage: 'queued', track: 'pr' }), pkg('k-2', 'Help overlay', 2, { stage: 'queued', track: 'pr' })],
     },
   );

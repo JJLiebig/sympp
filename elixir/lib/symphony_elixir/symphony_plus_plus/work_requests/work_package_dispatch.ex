@@ -13,6 +13,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDeliveryScope
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -63,7 +64,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
   end
 
   defp dispatch_transaction(repo, work_request_id, work_package_id, opts) do
-    with {:ok, %WorkRequest{status: "sliced"} = work_request} <- Repository.get(repo, work_request_id),
+    with {:ok, %WorkRequest{} = work_request} <- Repository.get(repo, work_request_id),
+         :ok <- Phase.require_writable(work_request),
          {:ok, %WorkPackage{status: "planned"} = work_package} <-
            Repository.get_work_package(repo, work_request_id, work_package_id),
          {:ok, execution_graph} <- ExecutionGraph.evaluate(repo, work_request_id),
@@ -84,7 +86,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
          worker_bootstrap: bootstrap
        }}
     else
-      {:ok, %WorkRequest{}} -> {:error, :invalid_work_request_status}
       {:ok, %WorkPackage{}} -> {:error, :invalid_work_package_status}
       {:error, reason} -> {:error, reason}
     end
@@ -113,7 +114,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
 
   @spec error_message(term()) :: String.t()
   def error_message(:not_found), do: "WorkRequest or WorkPackage was not found"
-  def error_message(:invalid_work_request_status), do: "Parent WorkRequest must be sliced before dispatch"
+  def error_message(:work_request_archived), do: "WorkRequest is archived; restore it before dispatch"
   def error_message(:invalid_work_package_status), do: "WorkPackage must be planned before dispatch"
 
   def error_message({:execution_graph_cycle, cycles}),

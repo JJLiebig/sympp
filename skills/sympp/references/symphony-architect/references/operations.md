@@ -29,8 +29,9 @@ arguments for each request when switching back. If claiming fails, report the bl
 A local architect claim can recover stale handoff scope when the ledger proves
 one matching WorkRequest, repo, base branch, anchor, and grant. For
 `phase_scope_not_available`, follow returned `missing_evidence` and `action`.
-For `work_request_terminal`, ask the local operator to restore the WorkRequest
-or start a new one. Do not invent state or bypass a binding denial.
+For `work_request_archived`, ask the local operator to restore the WorkRequest.
+For `work_request_terminal` (completed by the operator), start a new one. Do not
+invent state or bypass a binding denial.
 
 ## Planning operations
 

@@ -928,7 +928,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, workflow_mode} <- optional_string_argument(arguments, "workflow_mode", "architect_led_feature_branch"),
          {:ok, repo_scopes} <- optional_list_argument(arguments, "repo_scopes"),
          {:ok, constraints} <- optional_object_argument(arguments, "constraints"),
-         {:ok, status} <- optional_string_argument(arguments, "status", "ready_for_clarification"),
          {:ok, creator_kind} <- optional_string_argument(arguments, "creator_kind", "agent"),
          {:ok, creator_name} <- optional_string_argument(arguments, "creator_name", claimed_by || "mcp-agent"),
          {:ok, created_via} <- optional_string_argument(arguments, "created_via", "mcp") do
@@ -942,7 +941,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          "desired_dispatch_shape" => workflow_mode,
          "repo_scopes" => repo_scopes || [],
          "constraints" => constraints || %{},
-         "status" => status,
          "creator_kind" => creator_kind,
          "creator_name" => creator_name,
          "created_via" => created_via
@@ -1036,8 +1034,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
        ToolResult.tool_result(%{
          "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
          "decision_log_entry" => WorkRequestPayloads.decision_log_entry(decision_record),
-         "provenance" => local_operator_note_provenance(created_by, source_id),
-         "status" => %{"work_request_status" => work_request.status}
+         "provenance" => local_operator_note_provenance(created_by, source_id)
        })}
     else
       {:tool_error, reason} ->
@@ -1163,12 +1160,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp worker_error({:scope_lookup_failed, reason}, tool), do: service_error(reason, tool)
   defp worker_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp worker_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
+
+  defp worker_error(:work_request_archived, tool),
+    do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"phase" => "archived"})
+
   defp worker_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
   defp local_operator_error(:database_busy, tool), do: service_error(:database_busy, tool)
   defp local_operator_error({:service_unavailable, _reason} = reason, tool), do: service_error(reason, tool)
   defp local_operator_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp local_operator_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
+
+  defp local_operator_error(:work_request_archived, tool),
+    do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"phase" => "archived"})
+
   defp local_operator_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
   defp architect_error(:architect_grant_required, resource) do

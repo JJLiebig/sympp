@@ -99,19 +99,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeCleanupQueueTest do
     refute File.exists?(package.worktree_path)
   end
 
-  test "never-started archive, refresh and later retention leave a prepared worktree and history intact", %{repo: repo} do
+  test "never-started archive and later retention leave a prepared worktree and history intact", %{repo: repo} do
     fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-never-started-cleanup")
     codex_home = use_codex_home!(fixture.root)
     {request, package} = prepared_linked_package!(repo, fixture.repo_root, codex_home, "WR-NEVER-CLEANUP", "fix/never-started")
-    repo.update!(Ecto.Changeset.change(package, status: "skipped"))
+    repo.update!(Ecto.Changeset.change(package, status: "planned"))
     now = DateTime.utc_now(:microsecond)
     repo.update!(Ecto.Changeset.change(request, inserted_at: DateTime.add(now, -90, :day)))
 
     assert {:ok, %{archived_ids: [id]}} = WorkRequestService.retention_pass(repo, now: now, delete_after_days: 1)
     assert id == request.id
-    assert {:ok, archived} = WorkRequestService.refresh_completion(repo, id)
-    assert archived.completed_at == nil
-    assert archived.archive_reason == "never_started"
+    assert repo.get!(WorkRequest, id).archive_reason == "never_started"
 
     assert {:ok, %{deleted_ids: []}} = WorkRequestService.retention_pass(repo, now: DateTime.add(now, 100, :day), delete_after_days: 1)
     assert repo.get!(WorkRequest, id).archive_reason == "never_started"
@@ -121,7 +119,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeCleanupQueueTest do
     assert File.dir?(package.worktree_path)
 
     assert {:ok, restored} = WorkRequestService.restore(repo, id)
-    assert restored.completed_at == nil
     assert restored.archived_at == nil
     assert repo.all(Entry) == []
     assert File.dir?(package.worktree_path)
@@ -194,8 +191,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeCleanupQueueTest do
       work_type: "feature",
       human_description: "Test durable cleanup.",
       constraints: %{},
-      desired_dispatch_shape: "single_package",
-      status: "ready_for_slicing"
+      desired_dispatch_shape: "single_package"
     }
   end
 

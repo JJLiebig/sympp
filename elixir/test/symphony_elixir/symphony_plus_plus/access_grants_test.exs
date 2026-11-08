@@ -1169,7 +1169,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
           base_branch: "main"
         )
 
-      insert_work_request!(Repo, "wr-grant-scope-backfill", work_package.repo, work_package.base_branch, load: false)
+      insert_work_request!(Repo, "wr-grant-scope-backfill", work_package.repo, work_package.base_branch, load: false, legacy_status: true)
       insert_legacy_slice!(Repo, "wrs-grant-scope-backfill", "wr-grant-scope-backfill", work_package.id, work_package.base_branch)
 
       foreign_work_package =
@@ -1180,7 +1180,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
           base_branch: work_package.base_branch
         )
 
-      insert_work_request!(Repo, "wr-grant-scope-foreign-branch", work_package.repo, "feature/other", load: false)
+      insert_work_request!(Repo, "wr-grant-scope-foreign-branch", work_package.repo, "feature/other", load: false, legacy_status: true)
       insert_legacy_slice!(Repo, "wrs-grant-scope-foreign-branch", "wr-grant-scope-foreign-branch", foreign_work_package.id, "feature/other")
 
       Repo.query!(
@@ -1386,15 +1386,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     refute log =~ minted.work_key.secret
   end
 
+  # `legacy_status: true` writes the status column that ledgers kept before the derived phase.
   defp insert_work_request!(repo, id, repo_name, base_branch, opts \\ []) do
     now = DateTime.utc_now(:microsecond)
+    {status_column, status_value} = if Keyword.get(opts, :legacy_status, false), do: {[", status"], ["sliced"]}, else: {[], []}
 
     repo.query!(
       """
       INSERT INTO sympp_work_requests
         (id, title, repo, base_branch, work_type, human_description, constraints,
-         desired_dispatch_shape, status, inserted_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         desired_dispatch_shape, inserted_at, updated_at#{status_column})
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?#{if status_value == [], do: "", else: ", ?"})
       """,
       [
         id,
@@ -1405,10 +1407,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
         "Scope test",
         Jason.encode!(%{}),
         "one_package",
-        "ready_for_slicing",
         now,
         now
-      ]
+      ] ++ status_value
     )
 
     if Keyword.get(opts, :load, true), do: repo.get!(WorkRequest, id)

@@ -71,7 +71,7 @@ test('offline snapshot lifecycle changes leave copied live worktree paths and so
   const database = await snapshot(source);
   const offline = processes.factory('offline', { database, offline: true });
   const client = new Client(await offline.endpoint, offline.receipt);
-  for (const [action, body] of [['state', { state: 'completed' }], ['archive', {}], ['restore', {}], ['delete', {}]] as const) {
+  for (const [action, body] of [['complete', {}], ['archive', {}], ['restore', {}], ['delete', {}]] as const) {
     expect((await client.operator(`${requestPath(request)}/${action}`, body)).status).toBe(200);
     expect(await readFile(join(path, 'keep.txt'), 'utf8')).toBe('Source worktree content\n');
   }

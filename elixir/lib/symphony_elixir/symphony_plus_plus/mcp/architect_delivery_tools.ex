@@ -1070,15 +1070,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   defp append_work_package_worker_revoke_event(repo, %Session{} = session, %WorkRequest{} = work_request, %WorkPackage{} = work_package, %AccessGrant{} = grant, reason) do
     payload = WorkPackageWorkerRevoke.payload(work_request, work_package, grant, reason)
 
-    PlanningRepository.append_audit_progress_event_for_work_package(repo, session.assignment, work_package.id, %{
-      "summary" => "WorkRequest work-package worker grant revoked for cleanup",
-      "body" =>
-        "Cleanup reason: #{redacted_child_worker_revoke_reason(reason)}; " <>
-          "WorkRequest: #{work_request.id}; WorkPackage: #{work_package.id}",
-      "status" => "work_package_worker_key_revoked",
-      "idempotency_key" => ProgressEvents.metadata_idempotency_key(payload),
-      "payload" => payload
-    })
+    PlanningRepository.append_audit_progress_event_for_work_package(
+      repo,
+      session.assignment,
+      work_package.id,
+      %{
+        "summary" => "WorkRequest work-package worker grant revoked for cleanup",
+        "body" =>
+          "Cleanup reason: #{redacted_child_worker_revoke_reason(reason)}; " <>
+            "WorkRequest: #{work_request.id}; WorkPackage: #{work_package.id}",
+        "status" => "work_package_worker_key_revoked",
+        "idempotency_key" => ProgressEvents.metadata_idempotency_key(payload),
+        "payload" => payload
+      },
+      allow_archived: true
+    )
   end
 
   defp work_package_worker_revoke_result(%WorkPackage{} = work_package, %AccessGrant{} = grant, %ProgressEvent{} = event) do
@@ -1281,6 +1287,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   defp architect_error({:provider_head_mismatch, expected, actual}, tool),
     do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => "provider_head_mismatch", "expected_head_sha" => expected, "actual_head_sha" => actual}}
+
+  defp architect_error(:work_request_archived, tool),
+    do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"phase" => "archived"})
 
   defp architect_error(reason, tool),
     do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}

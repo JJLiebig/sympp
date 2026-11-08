@@ -49,7 +49,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
         id: "WR-MCP-WORKTREE-DELIVERY-BASE",
         repo: anchor.repo,
         base_branch: anchor.base_branch,
-        status: "sliced",
         repo_scopes: [%{repo: fixture.origin, base_branch: delivery_base}]
       )
 
@@ -223,8 +222,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
       create_work_request!(repo,
         id: "WR-MCP-WORKTREE-TEMPLATE",
         repo: anchor.repo,
-        base_branch: anchor.base_branch,
-        status: "sliced"
+        base_branch: anchor.base_branch
       )
 
     assert {:ok, work_package} =
@@ -333,8 +331,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
       create_work_request!(repo,
         id: "WR-MCP-WORKTREE-BARE-REPO",
         repo: anchor.repo,
-        base_branch: anchor.base_branch,
-        status: "sliced"
+        base_branch: anchor.base_branch
       )
 
     assert {:ok, work_package} =
@@ -417,8 +414,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
       create_work_request!(repo,
         id: "WR-MCP-WORKTREE-HOST-CONFLICT",
         repo: anchor.repo,
-        base_branch: anchor.base_branch,
-        status: "sliced"
+        base_branch: anchor.base_branch
       )
 
     assert {:ok, work_package} =

@@ -363,7 +363,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
         {1, _rows} ->
           repo
           |> get(access_grant.id)
-          |> clear_completion_after_grant(repo)
           |> ensure_grant_scopes_and_return(repo, attrs)
           |> return_claim_or_rollback(repo)
 
@@ -383,16 +382,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
   defp return_claim_or_rollback({:error, reason}, repo), do: repo.rollback(reason)
 
   defp rollback_claim_error({:error, reason}, repo), do: repo.rollback(reason)
-
-  defp clear_completion_after_grant({:ok, %AccessGrant{work_package_id: work_package_id} = grant}, repo)
-       when is_binary(work_package_id) do
-    case WorkRequestRepository.clear_completion_for_work_package(repo, work_package_id) do
-      :ok -> {:ok, grant}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp clear_completion_after_grant(result, _repo), do: result
 
   defp scope_live_package_authority(query, []), do: query
 

@@ -72,7 +72,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
         title: "Read WorkRequests",
         repo: anchor.repo,
         base_branch: anchor.base_branch,
-        status: "ready_for_slicing",
         human_description: "Use Bearer raw-secret-value for validation",
         constraints: %{"safe" => "visible", "token" => "raw-secret-value"}
       )
@@ -81,24 +80,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
       create_work_request!(repo,
         id: "WR-MCP-WR-OTHER-REPO",
         repo: "nextide/other",
-        base_branch: anchor.base_branch,
-        status: "ready_for_slicing"
+        base_branch: anchor.base_branch
       )
 
     other_branch =
       create_work_request!(repo,
         id: "WR-MCP-WR-OTHER-BRANCH",
         repo: anchor.repo,
-        base_branch: "main",
-        status: "ready_for_slicing"
+        base_branch: "main"
       )
 
-    _other_status =
+    _other_phase =
       create_work_request!(repo,
-        id: "WR-MCP-WR-OTHER-STATUS",
+        id: "WR-MCP-WR-OTHER-PHASE",
         repo: anchor.repo,
-        base_branch: anchor.base_branch,
-        status: "draft"
+        base_branch: anchor.base_branch
       )
 
     assert {:ok, _open_question} =
@@ -139,11 +135,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
       repo.aggregate(Artifact, :count)
     }
 
-    list_response = mcp_tool(repo, session, "list_work_requests", %{"status" => "ready_for_slicing"})
+    list_response = mcp_tool(repo, session, "list_work_requests", %{"phase" => "planned"})
     list_payload = get_in(list_response, ["result", "structuredContent"])
 
     assert list_payload["scope"] == %{"repo" => anchor.repo, "base_branch" => anchor.base_branch}
-    assert list_payload["filters"] == %{"status" => "ready_for_slicing"}
+    assert list_payload["filters"] == %{"phase" => "planned"}
     assert list_payload["total_count"] == 1
 
     assert [
@@ -151,8 +147,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
                "id" => "WR-MCP-WR-IN",
                "title" => "Read WorkRequests",
                "repo" => "nextide/symphony-plus-plus",
-               "base_branch" => "symphony-plus-plus/beta",
-               "status" => "ready_for_slicing"
+               "base_branch" => "symphony-plus-plus/beta"
              } = listed_work_request
            ] = list_payload["work_requests"]
 
@@ -259,8 +254,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert get_in(branch_argument_response, ["error", "data", "reason"]) == "unexpected_argument"
     assert get_in(branch_argument_response, ["error", "data", "arguments"]) == ["base_branch"]
 
-    invalid_status_response = mcp_tool(repo, session, "list_work_requests", %{"status" => "merged"})
-    assert get_in(invalid_status_response, ["error", "data", "reason"]) == "invalid_status"
+    invalid_phase_response = mcp_tool(repo, session, "list_work_requests", %{"phase" => "merged"})
+    assert get_in(invalid_phase_response, ["error", "data", "reason"]) == "invalid_phase"
   end
 
   test "WorkRequest MCP list narrows to explicit WorkRequest read scopes", %{repo: repo} do
@@ -273,22 +268,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
       create_work_request!(repo,
         id: "WR-MCP-WR-LIST-SCOPED",
         repo: anchor.repo,
-        base_branch: anchor.base_branch,
-        status: "ready_for_slicing"
+        base_branch: anchor.base_branch
       )
 
     hidden =
       create_work_request!(repo,
         id: "WR-MCP-WR-LIST-HIDDEN",
         repo: anchor.repo,
-        base_branch: anchor.base_branch,
-        status: "ready_for_slicing"
+        base_branch: anchor.base_branch
       )
 
     grant_work_request_scope!(repo, session, visible.id)
     remove_grant_scope_type!(repo, session, "repo")
 
-    list_response = mcp_tool(repo, session, "list_work_requests", %{"status" => "ready_for_slicing"})
+    list_response = mcp_tool(repo, session, "list_work_requests", %{})
     list_payload = get_in(list_response, ["result", "structuredContent"])
 
     assert Enum.map(list_payload["work_requests"], & &1["id"]) == [visible.id]
@@ -343,8 +336,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
       create_work_request!(repo,
         id: "WR-MCP-WR-DRIFTED-SIBLING",
         repo: "nextide/other",
-        base_branch: anchor.base_branch,
-        status: "ready_for_slicing"
+        base_branch: anchor.base_branch
       )
 
     repo.update_all(
@@ -352,7 +344,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
       set: [scope_repo: sibling.repo]
     )
 
-    list_response = mcp_tool(repo, session, "list_work_requests", %{"status" => "ready_for_slicing"})
+    list_response = mcp_tool(repo, session, "list_work_requests", %{})
     assert get_in(list_response, ["error", "code"]) == -32_003
     assert get_in(list_response, ["error", "data", "reason"]) == "outside_session_scope"
     refute inspect(list_response) =~ sibling.id

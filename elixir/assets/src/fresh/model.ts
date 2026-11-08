@@ -42,7 +42,7 @@ export type Group = { id: string; title: string; parentId: string | null };
 // "waiting" means nothing has been deployed or started yet.
 export type DeployStep = { env: "Dev" | "Prod"; state: "ok" | "failed" | "pending" | "waiting"; at: number | null };
 // `deploy` is present only for goals whose repository has its deploy workflows tagged.
-export type Goal = { id: string; title: string; area: string[]; repo: string; baseBranch: string | null; defaultBranch: string | null; createdAt: number; closedAt: number | null; pkgs: Pkg[]; asks: Ask[]; groups: Group[]; architect?: Place | null; report?: ArchitectReport; mock?: boolean; deploy?: DeployStep[] };
+export type Goal = { id: string; title: string; area: string[]; repo: string; baseBranch: string | null; defaultBranch: string | null; createdAt: number; closedAt: number | null; phase?: string | null; pkgs: Pkg[]; asks: Ask[]; groups: Group[]; architect?: Place | null; report?: ArchitectReport; mock?: boolean; deploy?: DeployStep[] };
 
 export type PkgView = { pkg: Pkg; stage: Stage; since: number; untimed: boolean; failed: boolean; round: number; actor: string | null };
 export type GoalView = { goal: Goal; live: PkgView[]; queued: Pkg[]; done: Pkg[]; ask: Ask | null; state: "live" | "resting" | "settled"; lastMoveAt: number };
@@ -83,7 +83,7 @@ type OperatorReport = {
   human_escalation?: { question?: string | null; raised_at?: string | null; resolved_at?: string | null } | null;
 };
 type Detail = {
-  work_request: { id: string; title?: string | null; repo?: string | null; repo_display?: string | null; base_branch?: string | null; inserted_at?: string | null; completed_at?: string | null; status?: string | null; operator_report?: OperatorReport | null; architect_session_location?: SessionLocation | null; area_path?: string[] | null; default_branch?: string | null; deployments?: Deployments | null };
+  work_request: { id: string; title?: string | null; repo?: string | null; repo_display?: string | null; base_branch?: string | null; inserted_at?: string | null; completed_at?: string | null; phase?: string | null; operator_report?: OperatorReport | null; architect_session_location?: SessionLocation | null; area_path?: string[] | null; default_branch?: string | null; deployments?: Deployments | null };
   work_packages?: Slice[];
   product_tree?: { nodes?: Array<{ id: string; title?: string | null; position?: number; parent_id?: string | null }> } | null;
 };
@@ -130,6 +130,7 @@ function buildGoal(detail: Detail, history: Record<string, HistoryEvent[]>, now:
     deploy: deployOf(request.deployments),
     createdAt: ms(request.inserted_at) ?? now,
     closedAt: ms(request.completed_at),
+    phase: request.phase ?? null,
     pkgs: (detail.work_packages ?? []).map((slice) => ({ ...buildPkg(slice, history[slice.work_package_id || slice.id] ?? [], now), goalTitle: title, area })),
     asks: asksOf(request.operator_report?.human_escalation, now),
     architect: placeOf(request.architect_session_location),
@@ -353,7 +354,9 @@ function goalViewAt(goal: Goal, at: number): GoalView {
   const done = views.filter((view) => view.stage === "done").map((view) => view.pkg);
   const ask = goal.asks.find((entry) => entry.from <= at && at < entry.to) ?? null;
   const closed = goal.closedAt !== null && goal.closedAt <= at;
-  const allDone = pkgs.length > 0 && done.length === pkgs.length && !ask;
+  const allEnded = pkgs.length > 0 && done.length === pkgs.length;
+  // An unresolved goal has ended all its packages; an open ask doesn't keep it live.
+  const allDone = allEnded && (!ask || goal.phase === "unresolved");
 
   return {
     goal,

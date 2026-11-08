@@ -48,7 +48,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
         Server.new(local_mcp_config(repo), state_key: state_key)
       )
 
-    work_request = create_work_request!(repo, id: "WR-RECREATED-WORKER-HANDLE", status: "ready_for_slicing")
+    work_request = create_work_request!(repo, id: "WR-RECREATED-WORKER-HANDLE")
 
     architect_response =
       Server.handle(

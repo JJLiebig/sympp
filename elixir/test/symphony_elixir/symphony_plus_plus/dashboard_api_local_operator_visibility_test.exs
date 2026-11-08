@@ -97,8 +97,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
     File.write!(config_path, Jason.encode!(update_in(config, ["repos", "Example-Org/Widget-Service"], &Map.delete(&1, "deploy_workflows"))))
 
     with_local_operator_endpoint(fn ->
-      request = create_work_request!(repo, repo: "https://github.com/Example-Org/Widget-Service.git", status: "sliced")
-      unmapped = create_work_request!(repo, repo: "example-org/unmapped-service", status: "sliced")
+      request = create_work_request!(repo, repo: "https://github.com/Example-Org/Widget-Service.git")
+      unmapped = create_work_request!(repo, repo: "example-org/unmapped-service")
       now = DateTime.utc_now(:microsecond)
 
       packages =
@@ -161,7 +161,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
 
   test "hydrated locations discover machines, allow renames, and hide private addresses", %{repo: repo} do
     with_local_operator_endpoint(fn ->
-      request = create_work_request!(repo, repo: "example-org/widget-service", status: "sliced")
+      request = create_work_request!(repo, repo: "example-org/widget-service")
       package = create_dispatched_package!(repo, request, slice_id: "WRS-LOCATION", package_id: "WP-LOCATION", status: "dispatched")
       observed_at = ~U[2026-10-01 09:00:00.000000Z]
 
@@ -279,7 +279,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
       archived_request =
         create_work_request!(repo,
           id: "WR-LOCAL-ARCHIVED-LINKS",
-          status: "ready_for_slicing",
           repo: "nextide/symphony-plus-plus",
           base_branch: "main"
         )
@@ -301,7 +300,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
       active_request =
         create_work_request!(repo,
           id: "WR-LOCAL-ACTIVE-LINK",
-          status: "ready_for_slicing",
           repo: archived_request.repo,
           base_branch: archived_request.base_branch
         )
@@ -316,7 +314,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
       archived_at = DateTime.utc_now(:microsecond)
 
       archived_request
-      |> Ecto.Changeset.change(completed_at: archived_at, completion_source: "operator", archived_at: archived_at)
+      |> Ecto.Changeset.change(operator_completed_at: archived_at, archived_at: archived_at)
       |> repo.update!()
 
       payload = local_operator_dashboard_payload()
@@ -478,8 +476,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
       work_type: "feature",
       human_description: "Record the human's desired outcome before slicing.",
       constraints: %{"allowed_paths" => ["elixir/lib"], "requires_secret" => false},
-      desired_dispatch_shape: "single_package",
-      status: "draft"
+      desired_dispatch_shape: "single_package"
     }
 
     Enum.into(overrides, defaults)

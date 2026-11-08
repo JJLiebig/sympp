@@ -13,16 +13,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{ArchitectHandoffClaimLease, WorkRequest}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase, as: WorkRequestPhase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
 
-  @eligible_statuses [
-    "draft",
-    "ready_for_clarification",
-    "clarifying",
-    "human_info_needed",
-    "ready_for_slicing",
-    "sliced"
-  ]
   @architect_capabilities [
     "read:phase",
     "read:work_request",
@@ -88,10 +81,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
   @spec claimed_by() :: String.t()
   def claimed_by, do: @claimed_by
 
-  @spec eligible_status?(String.t() | nil) :: boolean()
-  def eligible_status?(status) when is_binary(status), do: status in @eligible_statuses
-  def eligible_status?(_status), do: false
-
   @spec eligible_scope?(WorkRequest.t() | map() | term()) :: boolean()
   def eligible_scope?(work_request) when is_map(work_request) do
     require_frozen_scope(work_request) == :ok
@@ -122,7 +111,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
     handoff_opts = handoff_opts(opts)
 
     with {:ok, work_request} <- WorkRequestRepository.get(repo, work_request_id),
-         :ok <- require_eligible_status(work_request),
+         :ok <- WorkRequestPhase.require_writable(work_request),
          :ok <- require_frozen_scope(work_request),
          {:ok, phase} <- get_or_create_phase(repo, work_request),
          {:ok, anchor} <- get_or_create_anchor(repo, work_request, phase),
@@ -136,7 +125,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
     handoff_opts = handoff_opts(opts)
 
     with {:ok, work_request} <- WorkRequestRepository.get(repo, work_request_id),
-         :ok <- require_eligible_status(work_request),
          :ok <- require_frozen_scope(work_request),
          {:ok, phase} <- PhaseRepository.get(repo, phase_id(work_request)),
          {:ok, anchor} <- WorkPackageRepository.get(repo, anchor_id(work_request)),
@@ -283,23 +271,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
 
   defp handoff_work_request_terminal_state(%WorkRequest{archived_at: %DateTime{}}), do: :archived
 
-  defp handoff_work_request_terminal_state(%WorkRequest{
-         completed_at: %DateTime{},
-         completion_source: "operator"
-       }),
-       do: :completed
+  defp handoff_work_request_terminal_state(%WorkRequest{operator_completed_at: %DateTime{}}), do: :completed
 
   defp handoff_work_request_terminal_state(%WorkRequest{}), do: nil
 
   defp handoff_work_request_missing_evidence(%WorkRequest{} = work_request, %WorkPackage{} = anchor) do
-    status_evidence =
-      if handoff_work_request_status_available?(work_request), do: nil, else: :work_request_status
-
-    [status_evidence | handoff_work_request_scope_missing_evidence(work_request, anchor)]
+    work_request
+    |> handoff_work_request_scope_missing_evidence(anchor)
     |> Enum.reject(&is_nil/1)
   end
-
-  defp handoff_work_request_status_available?(%WorkRequest{} = work_request), do: eligible_status?(work_request.status)
 
   defp handoff_work_request_scope_missing_evidence(%WorkRequest{} = work_request, %WorkPackage{} = anchor) do
     [
@@ -614,10 +594,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
       :undefined -> :ets.new(@local_lock_table, [:named_table, :public, :set])
       _table -> :ok
     end
-  end
-
-  defp require_eligible_status(%WorkRequest{status: status}) do
-    if eligible_status?(status), do: :ok, else: {:error, :invalid_status}
   end
 
   defp require_frozen_scope(work_request) when is_map(work_request) do
@@ -982,8 +958,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
       work_request: %{
         id: work_request.id,
         repo: work_request.repo,
-        base_branch: work_request.base_branch,
-        status: work_request.status
+        base_branch: work_request.base_branch
       },
       phase: %{id: phase.id, title: phase.title, status: phase.status},
       anchor_package: %{

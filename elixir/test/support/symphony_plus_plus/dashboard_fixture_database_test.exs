@@ -365,8 +365,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
         work_type: "feature",
         human_description: "Synthetic dashboard graph fixture.",
         constraints: %{"fixture" => true},
-        desired_dispatch_shape: "architect_led_feature_branch",
-        status: "sliced"
+        desired_dispatch_shape: "architect_led_feature_branch"
       })
 
     work_request
