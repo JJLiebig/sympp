@@ -103,8 +103,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
   end
 
   @doc """
-  Terminal effects for packages that just ended: resolve their blockers (and
-  blockers that target them) and queue their worktree cleanup.
+  Terminal effects for packages that just ended: resolve the blockers on them
+  (their own untargeted blockers and any blocker that targets them) and queue
+  their worktree cleanup. A blocker an ended package raised against another
+  package stays active, because it describes that other package.
   """
   @spec apply_terminal_effects(module(), WorkPackage.t() | [WorkPackage.t()]) :: :ok | {:error, term()}
   def apply_terminal_effects(repo, %WorkPackage{} = work_package), do: apply_terminal_effects(repo, [work_package])
