@@ -105,6 +105,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
   end
 
   @doc """
+  Resolves the active blockers these packages raised against packages that have
+  since ended. Restoring an archived WorkRequest uses it for blockers whose target
+  ended while their history was frozen.
+  """
+  @spec resolve_blockers_on_ended_targets(module(), [WorkPackage.t()]) :: :ok | {:error, term()}
+  def resolve_blockers_on_ended_targets(_repo, []), do: :ok
+
+  def resolve_blockers_on_ended_targets(repo, work_packages) when is_atom(repo) and is_list(work_packages) do
+    with {:ok, events} <- PlanningRepository.list_progress_events(repo, Enum.map(work_packages, & &1.id)) do
+      events
+      |> Enum.group_by(& &1.work_package_id)
+      |> Enum.flat_map(fn {owner_id, owner_events} -> Enum.map(BlockerProjection.blockers(owner_events), &{owner_id, &1}) end)
+      |> Enum.filter(fn {_owner_id, blocker} -> blocker.active and ended_target?(repo, blocker) end)
+      |> Enum.reduce_while(:ok, fn {owner_id, blocker}, :ok -> resolve_blocker(repo, owner_id, blocker, :ok) end)
+    end
+  end
+
+  defp ended_target?(repo, %{blocked_item: %{kind: "work_package", id: target_id}}) do
+    case repo.get(WorkPackage, target_id) do
+      %WorkPackage{} = target -> ended?(target)
+      nil -> false
+    end
+  end
+
+  defp ended_target?(_repo, _blocker), do: false
+
+  @doc """
   Terminal effects for packages that just ended: resolve the blockers on them
   (their own untargeted blockers and any blocker that targets them) and queue
   their worktree cleanup. A blocker an ended package raised against another

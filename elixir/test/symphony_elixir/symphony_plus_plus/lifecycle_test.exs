@@ -12,6 +12,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryResolution
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.WorkPackageFactory
 
@@ -112,7 +113,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     assert repo.aggregate(ProgressEvent, :count, :id) == event_count
   end
 
-  test "a blocker raised from an archived WorkRequest stays in its history and does not stop the blocked package from ending", %{repo: repo, work_request: request} do
+  test "a blocker raised from an archived WorkRequest stays frozen, lets the blocked package end and resolves on restore", %{repo: repo, work_request: request} do
     assert {:ok, other} =
              WorkRequestRepository.create(repo, %{
                title: "Archived source",
@@ -131,6 +132,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     assert {:ok, _delivery} = DeliveryCloseout.record(repo, request.id, target.id, ending("finished"))
     assert repo.get!(WorkPackage, target.id).status == "ended"
     assert WorkPackageActivity.context(repo, source.id).blocker_state.active_ids == ["cross-request-blocker"]
+
+    assert {:ok, _restored} = WorkRequestService.restore(repo, other.id)
+    assert WorkPackageActivity.context(repo, source.id).blocker_state.active_ids == []
   end
 
   test "qualification fails on each predicate that does not hold" do

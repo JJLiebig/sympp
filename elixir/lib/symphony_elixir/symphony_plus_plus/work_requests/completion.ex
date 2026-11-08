@@ -87,7 +87,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  @doc "Operator restore. Clears the archive and restarts the retention clocks."
+  @doc """
+  Operator restore. Clears the archive, restarts the retention clocks and
+  resolves blockers whose target ended while the WorkRequest was archived.
+  """
   @spec restore(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, Repository.error()}
   def restore(repo, work_request_id) when is_atom(repo) and is_binary(work_request_id) do
     case Repository.get(repo, work_request_id) do
@@ -95,12 +98,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
         {:ok, work_request}
 
       {:ok, %WorkRequest{} = work_request} ->
-        work_request
-        |> Ecto.Changeset.change(archived_at: nil, archive_reason: nil, restored_at: DateTime.utc_now(:microsecond))
-        |> update_work_request(repo)
+        repo.transaction(fn -> restore_archived(repo, work_request) end)
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp restore_archived(repo, %WorkRequest{} = work_request) do
+    with {:ok, restored} <-
+           work_request
+           |> Ecto.Changeset.change(archived_at: nil, archive_reason: nil, restored_at: DateTime.utc_now(:microsecond))
+           |> update_work_request(repo),
+         :ok <- Lifecycle.resolve_blockers_on_ended_targets(repo, linked_work_packages(repo, restored.id)) do
+      restored
+    else
+      {:error, reason} -> repo.rollback(reason)
     end
   end
 
