@@ -18,6 +18,7 @@ const sourcePluginRoot = installedRoot;
 const revision = "b".repeat(40);
 const contract = "c".repeat(64);
 let currentContract = contract;
+let failSchemaLookup = false;
 let server;
 let bridge;
 const productRoot = path.join(temporaryRoot, "product");
@@ -80,6 +81,7 @@ async function main() {
           result: { content: [{ type: "text", text: "forwarded" }], structuredContent: message.params.arguments } }));
       }
       if (message.method === "tools/list") {
+        if (failSchemaLookup) { failSchemaLookup = false; return request.socket.destroy(); }
         const names = currentContract === contract ? ["test.removed", "test.arguments", "test.unchanged"] : ["test.arguments", "test.unchanged", "test.added"];
         response.writeHead(200, { "Content-Type": "application/json" });
         return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { tools: names.map(name => ({ name,
@@ -224,12 +226,18 @@ async function main() {
   bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 10, method: "tools/call", params: { name: "test.forward", arguments: {} } })}\n`);
   assert.equal((await responsePromise).result.content[0].text, "forwarded");
 
+  failSchemaLookup = true;
+  responsePromise = readResponse(19);
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 19, method: "tools/call", params: { name: "test.removed", arguments: {} } })}\n`);
+  assert.equal((await responsePromise).error.message, "original error");
+  responsePromise = readResponse(20);
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 20, method: "tools/call", params: { name: "test.added", arguments: {} } })}\n`);
+  assert.equal((await responsePromise).result.content[0].text, "forwarded");
   for (const [id, name] of [[13, "test.removed"], [14, "test.arguments"], [15, "test.denied"], [17, "test.unchanged"]]) {
     responsePromise = readResponse(id);
     bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: {} } })}\n`);
     const error = (await responsePromise).error;
     if (name === "test.denied" || name === "test.unchanged") assert.equal(error.message, "original error");
-    else if (name === "test.added") continue;
     else assert.match(error.message, /was updated.*restart the session/);
     assert.equal(error.data.tool, name);
   }

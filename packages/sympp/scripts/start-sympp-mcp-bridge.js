@@ -1366,6 +1366,7 @@ async function bridge(identity, state, runtimeFile) {
           if ([-32601, -32602].includes(payload.error?.code) && sessionContract && sessionTools?.has(parsed.params?.name)) {
             const health = await backendHealth(current.identity.backend);
             if (health?.contract && health.contract !== sessionContract) {
+              try {
               const listed = await mcpPost(current.mcpUrl, JSON.stringify({ jsonrpc: "2.0", id: "bridge-current-tools", method: "tools/list", params: {} }), sessionId, protocol, timeoutMs);
               const tools = listed.lines.map(line => JSON.parse(line)).find(result => Array.isArray(result.result?.tools))?.result.tools;
               const name = parsed.params.name;
@@ -1373,6 +1374,7 @@ async function bridge(identity, state, runtimeFile) {
                 payload.error.message = `${name.startsWith("sympp.") ? name : `sympp.${name}`} was updated and ${schemas(tools).has(name) ? "its schema changed" : "it was removed"}; restart the session to reload the sympp MCP bridge.`;
                 forwarded = JSON.stringify(payload);
               }
+              } catch (_) { /* Schema lookup is advisory; preserve the original tool error. */ }
             }
           }
         }

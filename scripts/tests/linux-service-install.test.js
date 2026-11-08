@@ -34,7 +34,7 @@ test("Skills service setup selects divergent branches and older tags, preserving
   const installer = path.resolve(__dirname, "../../packages/sympp/scripts/setup-sympp-service.sh");
   const receipt = path.join(root, "revision");
   const refReceipt = path.join(root, 'selected-ref');
-  const env = { ...process.env, SYMPP_SERVICE_SOURCE: checkout, INSTALLED_REVISION: receipt, INSTALLED_REF: refReceipt };
+  const env = { ...process.env, SYMPP_HOME: path.join(root, 'factory'), SYMPP_SERVICE_SOURCE: checkout, INSTALLED_REVISION: receipt, INSTALLED_REF: refReceipt };
   for (const [ref, expected] of [["feature", feature], ["old", old]]) {
     run("bash", [installer], root, { ...env, SYMPP_SERVICE_REF: ref });
     assert.equal(fs.readFileSync(receipt, "utf8").trim(), expected);
@@ -42,6 +42,9 @@ test("Skills service setup selects divergent branches and older tags, preserving
   }
   run('bash', [installer], root, env);
   assert.equal(fs.readFileSync(refReceipt, 'utf8'), process.env.SYMPP_SERVICE_REF || 'main');
+  const locked = spawnSync('flock', ['-n', path.join(env.SYMPP_HOME, 'service/update.lock'), 'bash', installer], { cwd: root, env, encoding: 'utf8' });
+  assert.notEqual(locked.status, 0);
+  assert.match(locked.stderr, /Another factory update is running/);
   const beforeDirty = fs.readFileSync(receipt, 'utf8').trim();
   fs.writeFileSync(path.join(checkout, "local-work"), "keep");
   const refused = spawnSync("bash", [installer], { cwd: root, env: { ...env, SYMPP_SERVICE_REF: "main" }, encoding: "utf8" });
@@ -69,7 +72,9 @@ test('detached checkout installs pin the selected revision and only reuse matchi
   const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, SYMPP_HOME: path.join(root, 'factory'), SYMPP_DATABASE: path.join(root, 'ledger.sqlite3'), SYMPP_REPOS_ROOT: path.join(root, 'repos'), SYMPP_SERVICE_REF: '', SYMPP_SERVICE_HOST: '127.0.0.1', REF_RECEIPT: receipt };
   const selected = () => {
     const result = spawnSync('bash', [path.join(repo, 'scripts/install-sympp-checkout.sh')], { env, cwd: root, encoding: 'utf8' });
-    assert.equal(result.status, 42, result.stderr); // Stop at the build boundary, before any service changes.
+    assert.notEqual(result.status, 0, result.stderr); // A failed build must leave the service untouched.
+    assert.equal(fs.existsSync(path.join(env.SYMPP_HOME, 'service/current')), false);
+    assert.match(result.stderr, /Factory build failed/);
     return fs.readFileSync(receipt, 'utf8');
   };
   assert.equal(selected(), revision);
