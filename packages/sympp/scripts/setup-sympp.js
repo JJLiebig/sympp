@@ -49,8 +49,33 @@ function tomlSyntax(source) {
 }
 
 function codexConfig(config, registration) {
-  const owned = /^# BEGIN (?:Symphony\+\+|sympp) Skills MCP\r?\n[\s\S]*?^# END (?:Symphony\+\+|sympp) Skills MCP\r?\n?/gm;
-  const matches = [...tomlSyntax(config).matchAll(owned)];
+  const syntaxConfig = tomlSyntax(config);
+  const starts = [...syntaxConfig.matchAll(/^# BEGIN (?:Symphony\+\+|sympp) Skills MCP\r?\n/gm)];
+  const matches = starts.map((start, i) => {
+    const from = start.index + start[0].length;
+    const limit = starts[i + 1]?.index ?? config.length;
+    const body = syntaxConfig.slice(from, limit);
+    const closing = /^# END (?:Symphony\+\+|sympp) Skills MCP\r?\n?/m.exec(body);
+    let length = closing ? closing.index + closing[0].length : 0;
+    let prefix = "", inTable = false;
+    if (!closing) {
+      // A lost END marker grants ownership only through the directly following sympp tables.
+      // Keep trailing comments/spacing with the user's next table, and ignore headers in strings.
+      let offset = 0;
+      for (const line of body.match(/[^\n]*\n|[^\n]+$/g) || []) {
+        if (/^[ \t]*\[/.test(line)) {
+          const table = /^[ \t]*\[[ \t]*(?:mcp_servers|"mcp_servers"|'mcp_servers')[ \t]*\.[ \t]*(["']?)(sympp|symphony_plus_plus)\1[ \t]*(?:\.|\])/.exec(line);
+          if (!table || table[2] !== "sympp" && !start[0].includes("Symphony++")) break;
+          if (!inTable) prefix = config.slice(from, from + offset);
+          inTable = true;
+        } else if (!inTable && !/^[ \t]*(?:#.*)?\r?\n?$/.test(line)) break;
+        const original = config.slice(from + offset, from + offset + line.length);
+        offset += line.length;
+        if (original.trim() && !line.trimStart().startsWith("#")) length = offset;
+      }
+    }
+    return { index: start.index, prefix, empty: !closing && !inTable, 0: config.slice(start.index, from + length) };
+  });
   let remaining = config;
   for (const match of [...matches].reverse()) {
     remaining = remaining.slice(0, match.index) + remaining.slice(match.index + match[0].length);
@@ -70,12 +95,14 @@ function codexConfig(config, registration) {
     `[mcp_servers.${name}.env]`, ...Object.entries(registration.env).map(([key, value]) => `${key} = ${JSON.stringify(value)}`), end, ""];
   const block = lines.join("\n");
   if (matches.length) {
+    const firstOwned = matches.findIndex(match => !match.empty);
     let updated = config;
     for (let i = matches.length - 1; i >= 0; i--) {
       const match = matches[i];
-      updated = updated.slice(0, match.index) + (i === 0 ? block : "") + updated.slice(match.index + match[0].length);
+      updated = updated.slice(0, match.index) + match.prefix + (i === firstOwned ? block : "") + updated.slice(match.index + match[0].length);
     }
-    return updated;
+    // An orphan BEGIN must not move root settings into the generated env table.
+    return firstOwned < 0 ? updated + (updated && !updated.endsWith("\n") ? "\n" : "") + block : updated;
   }
   return remaining.trimEnd() + (remaining.trim() ? "\n\n" : "") + block;
 }

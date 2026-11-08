@@ -22,6 +22,31 @@ test("migration replaces owned blocks while preserving unrelated registrations a
   assert.throws(() => codexConfig('mcp_servers = { sympp = {} }\n', registration), /inline MCP/);
 });
 
+test("setup repairs unterminated owned Codex tables without changing user configuration", () => {
+  const prefix = 'model = "example-model"\r\n# user preferences\r\n';
+  const block = codexConfig("", registration);
+  const suffixes = ["", '\r\n# keep this table\r\n[model_provider.custom] # user provider\r\nurl = "https://example.com"\r\n',
+    '[mcp_servers.sympp_extra]\ncommand = "other"\n', '[[profiles.custom]]\nmodel = "other"\n'];
+  for (const spelling of ["sympp", "Symphony++"]) {
+    for (const suffix of suffixes) {
+      const server = spelling === "Symphony++" ? "symphony_plus_plus" : "sympp";
+      const damaged = `# BEGIN ${spelling} Skills MCP\n[mcp_servers."${server}"]\ncommand = "old"\n[mcp_servers.${server}.env]\nSETTING = "old"\n`;
+      const repaired = codexConfig(prefix + damaged + suffix, registration);
+      assert.equal(repaired, prefix + block + suffix);
+      assert.equal(codexConfig(repaired, registration), repaired);
+    }
+  }
+  const leading = '# user comment before any table\r\n\r\n';
+  assert.equal(codexConfig('# BEGIN sympp Skills MCP\n' + leading + '[mcp_servers.sympp]\ncommand = "old"\n', registration), leading + block);
+  const settings = 'model = "custom"\n\n# user settings\n';
+  assert.equal(codexConfig('# BEGIN sympp Skills MCP\n' + settings, registration), settings + block);
+  const instructions = 'instructions = """\n[mcp_servers.notes]\n# END sympp Skills MCP\n"""\n';
+  assert.equal(codexConfig('# BEGIN sympp Skills MCP\n[mcp_servers.sympp]\n' + instructions, registration), block);
+  const nextBlock = '# BEGIN sympp Skills MCP\n[mcp_servers.sympp]\ncommand = "old"\n';
+  assert.equal(codexConfig(nextBlock + block, registration), block);
+  assert.throws(() => codexConfig(nextBlock + '[user]\nvalue = 1\n[mcp_servers.sympp]\ncommand = "unmanaged"\n', registration), /unmanaged/);
+});
+
 test("Codex passes the agent's Herdr terminal to the bridge", () => {
   // Codex gives an MCP server only the variables it lists; without these the bridge can't bind its
   // terminal, so a remote chief registers without one and never shows as running.

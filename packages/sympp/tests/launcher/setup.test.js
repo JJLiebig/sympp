@@ -105,6 +105,20 @@ test('remote setup registers a launchable bridge in selected Codex and user Clau
   const codex = fs.readFileSync(path.join(env.CODEX_HOME, 'config.toml'), 'utf8');
   assert.match(codex, /SYMPP_SERVER_URL = "http:\/\/127.0.0.1:19998"/);
   assert.doesNotMatch(codex, /SYMPP_DATABASE|SYMPP_RUNTIME_FILE/);
+  const configFile = path.join(env.CODEX_HOME, 'config.toml');
+  const suffix = '\n# custom settings\n[profiles.custom]\nmodel = "custom"\n';
+  fs.writeFileSync(configFile, codex.replace('# END sympp Skills MCP\n', '') + suffix);
+  const setupCodex = () => spawnSync(process.execPath, [path.resolve(__dirname, '../../scripts/setup-sympp.js'), '--host', 'codex', '--server', 'http://127.0.0.1:19998'], { env, cwd: root, encoding: 'utf8', windowsHide: true });
+  const repaired = setupCodex();
+  assert.equal(repaired.status, 0, repaired.stdout + repaired.stderr);
+  assert.equal(fs.readFileSync(configFile, 'utf8'), codex + suffix);
+  fs.utimesSync(configFile, new Date(1000000), new Date(1000000));
+  const before = fs.statSync(configFile).mtimeMs;
+  const unchanged = setupCodex();
+  assert.equal(unchanged.status, 0, unchanged.stdout + unchanged.stderr);
+  assert.match(unchanged.stdout, /codex: "already configured"/);
+  assert.equal(fs.statSync(configFile).mtimeMs, before);
+
   fs.writeFileSync(claude.env.SYMPP_SERVER_TOKEN_FILE, 'first-client-credential');
   const second = spawnSync(process.execPath, [path.resolve(__dirname, '../../scripts/setup-sympp.js'), '--host', 'codex', '--server', 'http://127.0.0.1:19999'], {
     env: { ...env, CODEX_HOME: path.join(root, 'codex-second') }, cwd: root, encoding: 'utf8', windowsHide: true,
