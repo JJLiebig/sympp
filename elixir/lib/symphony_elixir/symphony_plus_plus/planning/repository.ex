@@ -14,6 +14,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase, as: WorkRequestPhase
 
   @default_append_retry_attempts 200
   @default_state_read_retry_attempts 50
@@ -47,18 +48,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
 
   @spec append_plan_node(repo(), map()) :: {:ok, PlanNode.t()} | {:error, error()}
   def append_plan_node(repo, attrs) when is_atom(repo) and is_map(attrs) do
-    insert_with_allocated_value(
-      repo,
-      drop_ordering(attrs, :position),
-      PlanNode,
-      :position,
-      &PlanNode.create_changeset/1
-    )
+    with :ok <- require_writable_package(repo, attrs) do
+      insert_with_allocated_value(
+        repo,
+        drop_ordering(attrs, :position),
+        PlanNode,
+        :position,
+        &PlanNode.create_changeset/1
+      )
+    end
   end
 
   @spec append_finding(repo(), map()) :: {:ok, Finding.t()} | {:error, error()}
   def append_finding(repo, attrs) when is_atom(repo) and is_map(attrs) do
-    insert_with_allocated_value(repo, drop_ordering(attrs, :sequence), Finding, :sequence, &Finding.create_changeset/1)
+    with :ok <- require_writable_package(repo, attrs) do
+      attrs = drop_ordering(attrs, :sequence)
+      insert_with_allocated_value(repo, attrs, Finding, :sequence, &Finding.create_changeset/1)
+    end
   end
 
   @spec append_progress_event(repo(), map()) :: {:ok, ProgressEvent.t()} | {:error, error()}
@@ -135,7 +141,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   end
 
   defp append_progress_event_in_transaction(repo, attrs, changeset_fun, opts) do
-    with {:ok, attrs} <- normalize_append_attrs(attrs, Keyword.fetch!(opts, :trusted_audit_metadata)),
+    with :ok <- require_writable_package(repo, attrs),
+         {:ok, attrs} <- normalize_append_attrs(attrs, Keyword.fetch!(opts, :trusted_audit_metadata)),
          :not_found <-
            existing_progress_event_by_idempotency_key_with_retry(repo, attrs, append_retry_attempts()) do
       repo
@@ -275,6 +282,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
     |> update(repo)
   end
 
+  # Planning records belong to a package; an archived WorkRequest takes no new ones.
+  defp require_writable_package(repo, attrs) do
+    WorkRequestPhase.require_writable_package(repo, Map.get(attrs, :work_package_id) || Map.get(attrs, "work_package_id"))
+  end
+
   @spec update_plan_node_status(repo(), String.t(), String.t()) :: {:ok, PlanNode.t()} | {:error, error()}
   def update_plan_node_status(repo, plan_node_id, status)
       when is_atom(repo) and is_binary(plan_node_id) and is_binary(status) do
@@ -283,9 +295,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
         {:error, :not_found}
 
       %PlanNode{} = plan_node ->
-        plan_node
-        |> PlanNode.status_changeset(%{status: status})
-        |> update(repo)
+        with :ok <- WorkRequestPhase.require_writable_package(repo, plan_node.work_package_id) do
+          plan_node
+          |> PlanNode.status_changeset(%{status: status})
+          |> update(repo)
+        end
     end
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
@@ -299,9 +313,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
         {:error, :not_found}
 
       %PlanNode{} = plan_node ->
-        plan_node
-        |> PlanNode.update_changeset(attrs)
-        |> update(repo)
+        with :ok <- WorkRequestPhase.require_writable_package(repo, plan_node.work_package_id) do
+          plan_node
+          |> PlanNode.update_changeset(attrs)
+          |> update(repo)
+        end
     end
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)

@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Ecto.Adapters.SQL
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
@@ -143,14 +145,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
 
   test "writes to an archived WorkRequest are refused, nothing restores it implicitly, and restore does", %{repo: repo} do
     request = request_with_packages!(repo, "WR-ARCHIVED-WRITES", [:completed_no_pr])
+    assert {:ok, question} = Repository.ask_question(repo, request.id, question_attrs(id: "WRQ-BEFORE-ARCHIVE"))
     assert {:ok, archived} = Service.archive(repo, request.id)
+    [package] = repo.all(from(package in WorkPackage, where: package.work_request_id == ^request.id))
 
     assert {:error, :work_request_archived} = Repository.ask_question(repo, request.id, question_attrs(id: "WRQ-ARCHIVED"))
+    assert {:error, :work_request_archived} = Repository.record_decision(repo, request.id, decision_attrs(id: "WRD-ARCHIVED"))
+    assert {:error, :work_request_archived} = Repository.answer_question(repo, question.id, "open", %{answer: "Late.", answered_by: "operator"})
+
+    assert {:error, :work_request_archived} =
+             PlanningRepository.append_progress_event(repo, %{work_package_id: package.id, summary: "Late note", status: "recorded", idempotency_key: "late"})
+
     assert {:error, :work_request_archived} = Repository.slice_work_request(repo, request.id, [work_package_attrs(id: "WRS-ARCHIVED-NEW")])
     assert {:error, :work_request_archived} = Service.complete(repo, request.id)
     assert {:ok, ^archived} = Repository.get(repo, request.id)
     assert {:ok, [_only_package]} = Repository.list_work_packages(repo, request.id)
-    assert {:ok, []} = Repository.list_questions(repo, request.id)
+    assert {:ok, [%ClarificationQuestion{status: "open"}]} = Repository.list_questions(repo, request.id)
+    assert {:ok, []} = Repository.list_decisions(repo, request.id)
 
     assert {:ok, restored} = Service.restore(repo, request.id)
     assert restored.archived_at == nil

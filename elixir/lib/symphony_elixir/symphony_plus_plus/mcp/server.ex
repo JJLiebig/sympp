@@ -26,7 +26,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     ArchitectDeliveryTools,
     ArchitectProductTreeTools,
     ArchitectWorkRequestTools,
-    ArchivedWorkRequestGuard,
     Auth,
     BlockerTools,
     Config,
@@ -1161,12 +1160,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp worker_error({:scope_lookup_failed, reason}, tool), do: service_error(reason, tool)
   defp worker_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp worker_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
+
+  defp worker_error(:work_request_archived, tool),
+    do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"phase" => "archived"})
+
   defp worker_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
   defp local_operator_error(:database_busy, tool), do: service_error(:database_busy, tool)
   defp local_operator_error({:service_unavailable, _reason} = reason, tool), do: service_error(reason, tool)
   defp local_operator_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp local_operator_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
+
+  defp local_operator_error(:work_request_archived, tool),
+    do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"phase" => "archived"})
+
   defp local_operator_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
   defp architect_error(:architect_grant_required, resource) do
@@ -1312,8 +1319,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp dispatch_request_state({:ok, params}, method, id, %__MODULE__{} = server) do
     with {:ok, server} <- auto_claim_architect(server, method, params),
-         {:ok, server} <- require_current_session_claim_for_bound_call(server, method, params),
-         :ok <- refuse_archived_write(server, method, params) do
+         {:ok, server} <- require_current_session_claim_for_bound_call(server, method, params) do
       case dispatch_with_text_profile(method, params, server) do
         {:ok, result} ->
           {Response.response(id, result), server}
@@ -1336,20 +1342,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp dispatch_request_state({:error, code, message, data}, _method, id, %__MODULE__{} = server) do
     {Response.error(id, code, message, data), server}
   end
-
-  # Runs once the caller is bound (or trusted locally, where reads of any WorkRequest are allowed).
-  defp refuse_archived_write(%__MODULE__{config: %Config{repo: repo}, session: session}, "tools/call", %{"name" => name} = params)
-       when not is_nil(session) do
-    ArchivedWorkRequestGuard.check(repo, session, name, Map.get(params, "arguments", %{}))
-  end
-
-  defp refuse_archived_write(%__MODULE__{config: %Config{repo: repo}} = server, "tools/call", %{"name" => name} = params) do
-    if Surface.local_trusted_tools_enabled?(server),
-      do: ArchivedWorkRequestGuard.check(repo, nil, name, Map.get(params, "arguments", %{})),
-      else: :ok
-  end
-
-  defp refuse_archived_write(%__MODULE__{}, _method, _params), do: :ok
 
   defp auto_claim_architect(
          %__MODULE__{

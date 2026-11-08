@@ -243,7 +243,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   def answer_question(repo, id, current_status, attrs)
       when is_atom(repo) and is_binary(id) and is_binary(current_status) and is_map(attrs) do
     with :ok <- validate_question_status(current_status),
-         {:ok, answer} <- normalize_answer(attrs) do
+         {:ok, answer} <- normalize_answer(attrs),
+         :ok <- require_writable_question(repo, id) do
       answer_valid_question(repo, id, current_status, answer)
     end
   end
@@ -251,7 +252,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   @spec close_question(repo(), String.t(), String.t()) :: {:ok, ClarificationQuestion.t()} | {:error, error()}
   def close_question(repo, id, current_status)
       when is_atom(repo) and is_binary(id) and is_binary(current_status) do
-    with :ok <- validate_question_status(current_status) do
+    with :ok <- validate_question_status(current_status),
+         :ok <- require_writable_question(repo, id) do
       close_valid_question(repo, id, current_status)
     end
   end
@@ -265,7 +267,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       |> Map.drop(["sequence", "inserted_at", "updated_at"])
       |> Map.put("work_request_id", work_request_id)
 
-    insert_with_sequence(repo, attrs, &next_decision_sequence/2, &DecisionLogEntry.create_changeset/1)
+    with :ok <- require_writable_if_present(repo, work_request_id) do
+      insert_with_sequence(repo, attrs, &next_decision_sequence/2, &DecisionLogEntry.create_changeset/1)
+    end
+  end
+
+  # A missing WorkRequest is left to the foreign key, as before.
+  defp require_writable_if_present(repo, work_request_id) do
+    case repo.get(WorkRequest, work_request_id) do
+      %WorkRequest{} = work_request -> Phase.require_writable(work_request)
+      nil -> :ok
+    end
+  end
+
+  defp require_writable_question(repo, question_id) do
+    case repo.get(ClarificationQuestion, question_id) do
+      %ClarificationQuestion{work_request_id: work_request_id} -> require_writable_if_present(repo, work_request_id)
+      nil -> :ok
+    end
   end
 
   @spec slice_work_request(repo(), String.t(), [map()]) ::

@@ -69,6 +69,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase do
   def require_writable(%WorkRequest{archived_at: %DateTime{}}), do: {:error, :work_request_archived}
   def require_writable(%WorkRequest{}), do: :ok
 
+  @doc "Refuses writes to a package whose WorkRequest is archived. Packages without one pass."
+  @spec require_writable_package(module(), String.t() | nil) :: :ok | {:error, :work_request_archived}
+  def require_writable_package(repo, work_package_id) when is_binary(work_package_id) do
+    archived_at =
+      repo.one(
+        from(package in WorkPackage,
+          join: request in WorkRequest,
+          on: request.id == package.work_request_id,
+          where: package.id == ^work_package_id,
+          select: request.archived_at
+        )
+      )
+
+    if archived_at, do: {:error, :work_request_archived}, else: :ok
+  end
+
+  def require_writable_package(_repo, _work_package_id), do: :ok
+
   @doc "Loads the phase summary of each WorkRequest, keyed by id."
   @spec load(module(), [WorkRequest.t()]) :: {:ok, %{optional(String.t()) => summary()}} | {:error, term()}
   def load(_repo, []), do: {:ok, %{}}
