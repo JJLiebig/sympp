@@ -57,13 +57,16 @@ function codexConfig(config, registration) {
     const body = syntaxConfig.slice(from, limit);
     const closing = /^# END (?:Symphony\+\+|sympp) Skills MCP\r?\n?/m.exec(body);
     let length = closing ? closing.index + closing[0].length : 0;
+    let prefix = "";
     if (!closing) {
       // A lost END marker grants ownership only through the directly following sympp tables.
       // Keep trailing comments/spacing with the user's next table, and ignore headers in strings.
       let offset = 0, inTable = false;
       for (const line of body.match(/[^\n]*\n|[^\n]+$/g) || []) {
         if (/^[ \t]*\[/.test(line)) {
-          if (!/^[ \t]*\[[ \t]*(?:mcp_servers|"mcp_servers"|'mcp_servers')[ \t]*\.[ \t]*(?:sympp|"sympp"|'sympp')[ \t]*(?:\.|\])/.test(line)) break;
+          const table = /^[ \t]*\[[ \t]*(?:mcp_servers|"mcp_servers"|'mcp_servers')[ \t]*\.[ \t]*(["']?)(sympp|symphony_plus_plus)\1[ \t]*(?:\.|\])/.exec(line);
+          if (!table || table[2] !== "sympp" && !start[0].includes("Symphony++")) break;
+          if (!inTable) prefix = config.slice(from, from + offset);
           inTable = true;
         } else if (!inTable && !/^[ \t]*(?:#.*)?\r?\n?$/.test(line)) break;
         const original = config.slice(from + offset, from + offset + line.length);
@@ -71,7 +74,7 @@ function codexConfig(config, registration) {
         if (original.trim() && !line.trimStart().startsWith("#")) length = offset;
       }
     }
-    return { index: start.index, 0: config.slice(start.index, from + length) };
+    return { index: start.index, prefix, 0: config.slice(start.index, from + length) };
   });
   let remaining = config;
   for (const match of [...matches].reverse()) {
@@ -95,7 +98,7 @@ function codexConfig(config, registration) {
     let updated = config;
     for (let i = matches.length - 1; i >= 0; i--) {
       const match = matches[i];
-      updated = updated.slice(0, match.index) + (i === 0 ? block : "") + updated.slice(match.index + match[0].length);
+      updated = updated.slice(0, match.index) + match.prefix + (i === 0 ? block : "") + updated.slice(match.index + match[0].length);
     }
     return updated;
   }
