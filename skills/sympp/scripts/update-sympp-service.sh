@@ -23,7 +23,7 @@ env['XDG_CONFIG_HOME'] = str(Path(fragment).resolve().parents[2])
 # Use the saved factory source and ref.
 source = Path(values.get('SYMPP_SERVICE_SOURCE', str(Path.home() / '.local/share/symphony-plus-plus/source')))
 ref = values.get('SYMPP_SERVICE_REF', 'main')
-lock_path = Path(values['SYMPP_HOME']) / 'service/update.lock'
+lock_path = Path(os.environ.get('XDG_RUNTIME_DIR', '/run/user/' + str(os.getuid()))) / 'sympp-factory-update.lock'
 lock_path.parent.mkdir(parents=True, exist_ok=True)
 lock = open(lock_path, 'a')
 try:
@@ -54,5 +54,6 @@ if not needs_build:
     print('factory: already current' if running == target else 'factory: runtime unchanged')
     raise SystemExit(0)
 env['SYMPP_SERVICE_REF'] = ref
-subprocess.run(['bash', str(source / 'scripts/install-sympp-checkout.sh')], env=env, check=True, pass_fds=(lock.fileno(),))
+result = subprocess.run(['bash', str(source / 'scripts/install-sympp-checkout.sh')], env=env, pass_fds=(lock.fileno(),))
+raise SystemExit(result.returncode)
 PY

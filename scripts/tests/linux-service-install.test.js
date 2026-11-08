@@ -34,7 +34,7 @@ test("Skills service setup selects divergent branches and older tags, preserving
   const installer = path.resolve(__dirname, "../../packages/sympp/scripts/setup-sympp-service.sh");
   const receipt = path.join(root, "revision");
   const refReceipt = path.join(root, 'selected-ref');
-  const env = { ...process.env, SYMPP_HOME: path.join(root, 'factory'), SYMPP_SERVICE_SOURCE: checkout, INSTALLED_REVISION: receipt, INSTALLED_REF: refReceipt };
+  const env = { ...process.env, XDG_RUNTIME_DIR: root, SYMPP_HOME: path.join(root, 'factory'), SYMPP_SERVICE_SOURCE: checkout, INSTALLED_REVISION: receipt, INSTALLED_REF: refReceipt };
   for (const [ref, expected] of [["feature", feature], ["old", old]]) {
     run("bash", [installer], root, { ...env, SYMPP_SERVICE_REF: ref });
     assert.equal(fs.readFileSync(receipt, "utf8").trim(), expected);
@@ -42,7 +42,7 @@ test("Skills service setup selects divergent branches and older tags, preserving
   }
   run('bash', [installer], root, env);
   assert.equal(fs.readFileSync(refReceipt, 'utf8'), process.env.SYMPP_SERVICE_REF || 'main');
-  const locked = spawnSync('flock', ['-n', path.join(env.SYMPP_HOME, 'service/update.lock'), 'bash', installer], { cwd: root, env, encoding: 'utf8' });
+  const locked = spawnSync('flock', ['-n', path.join(root, 'sympp-factory-update.lock'), 'bash', installer], { cwd: root, env, encoding: 'utf8' });
   assert.notEqual(locked.status, 0);
   assert.match(locked.stderr, /Another factory update is running/);
   const beforeDirty = fs.readFileSync(receipt, 'utf8').trim();
@@ -69,7 +69,7 @@ test('detached checkout installs pin the selected revision and only reuse matchi
   const revision = git('rev-parse', 'HEAD');
   for (const command of ['systemctl', 'ss']) fs.writeFileSync(path.join(bin, command), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'mise'), '#!/bin/sh\nprintf "%s" "$SYMPP_SERVICE_REF" > "$REF_RECEIPT"\nexit 42\n', { mode: 0o755 });
-  const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, SYMPP_HOME: path.join(root, 'factory'), SYMPP_DATABASE: path.join(root, 'ledger.sqlite3'), SYMPP_REPOS_ROOT: path.join(root, 'repos'), SYMPP_SERVICE_REF: '', SYMPP_SERVICE_HOST: '127.0.0.1', REF_RECEIPT: receipt };
+  const env = { ...process.env, XDG_RUNTIME_DIR: root, PATH: bin + path.delimiter + process.env.PATH, SYMPP_HOME: path.join(root, 'factory'), SYMPP_DATABASE: path.join(root, 'ledger.sqlite3'), SYMPP_REPOS_ROOT: path.join(root, 'repos'), SYMPP_SERVICE_REF: '', SYMPP_SERVICE_HOST: '127.0.0.1', REF_RECEIPT: receipt };
   const selected = () => {
     const result = spawnSync('bash', [path.join(repo, 'scripts/install-sympp-checkout.sh')], { env, cwd: root, encoding: 'utf8' });
     assert.notEqual(result.status, 0, result.stderr); // A failed build must leave the service untouched.
@@ -107,7 +107,7 @@ test('client update rebuilds the saved checkout with its factory repository root
   const values = { SYMPP_HOME: path.join(root, 'factory'), SYMPP_DATABASE: path.join(root, 'factory/ledger.sqlite3'), SYMPP_SERVICE_HOST: '127.0.0.1', SYMPP_REPOS_ROOT: reposRoot, SYMPP_SERVICE_SOURCE: checkout, SYMPP_SERVICE_REF: 'main' };
   fs.writeFileSync(environment, Object.entries(values).map(([key, value]) => JSON.stringify(key + '=' + value)).join(' '));
   fs.writeFileSync(path.join(bin, 'systemctl'), '#!/bin/sh\ncase "$*" in *Environment*) cat "$ENVIRONMENT_FILE";; *FragmentPath*) printf "%s\\n" "$FRAGMENT_FILE";; *) exit 1;; esac\n', { mode: 0o755 });
-  const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, ENVIRONMENT_FILE: environment, FRAGMENT_FILE: fragment, RECEIPT: receipt, SYMPP_REPOS_ROOT: path.join(root, 'wrong shell root') };
+  const env = { ...process.env, XDG_RUNTIME_DIR: root, PATH: bin + path.delimiter + process.env.PATH, ENVIRONMENT_FILE: environment, FRAGMENT_FILE: fragment, RECEIPT: receipt, SYMPP_REPOS_ROOT: path.join(root, 'wrong shell root') };
   const updater = path.resolve(__dirname, '../../packages/sympp/scripts/update-sympp-service.sh');
   const result = spawnSync('bash', [updater, 'qa'], { cwd: root, env, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stdout + result.stderr);

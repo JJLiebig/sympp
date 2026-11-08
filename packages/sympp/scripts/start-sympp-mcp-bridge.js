@@ -904,6 +904,7 @@ async function factoryOwnership(origin) {
   const health = await backendHealth(origin);
   if (health?.status === 401) throw new Error("Remote sympp authentication failed (HTTP 401). Run setup --server again to refresh the token.");
   if (typeof health?.factoryOwned !== "boolean") throw new Error("sympp could not determine repository ownership from the backend.");
+  if (remoteConnection?.origin === origin) remoteConnection.contract = health.contract;
   return health.factoryOwned;
 }
 
@@ -1078,7 +1079,7 @@ async function resolveHealthyRuntime(runtimeFile, pluginRoot, cancelled) {
 }
 
 async function bridge(identity, state, runtimeFile) {
-  const sessionContract = (await backendHealth(identity.backend))?.contract;
+  const sessionContract = identity.contract ?? remoteConnection?.contract ?? (await backendHealth(identity.backend))?.contract;
   let sessionTools = null;
   const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object"
     ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;

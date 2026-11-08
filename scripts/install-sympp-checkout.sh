@@ -23,7 +23,7 @@ systemctl --user show-environment >/dev/null
 command -v ss >/dev/null
 mkdir -p "$SYMPP_HOME/service"
 if [[ -z "${SYMPP_UPDATE_LOCK_FD:-}" ]]; then
-  exec {SYMPP_UPDATE_LOCK_FD}>"$SYMPP_HOME/service/update.lock"
+  exec {SYMPP_UPDATE_LOCK_FD}>>"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/sympp-factory-update.lock"
 fi
 flock -n "$SYMPP_UPDATE_LOCK_FD" || { echo 'Another factory update is running. Retry later.' >&2; exit 1; }
 
