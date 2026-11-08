@@ -148,10 +148,11 @@ The resource reflects current contract and evidence; capture it before launch.
 outcome, attention reasons, merge eligibility and PR URL. Use `detail: "full"`
 for nested runtime, blocker, review, successor and closeout evidence.
 Terminal packages have no pending merge next action. WorkRequest reads include
-`execution_status`: `closed` means a nonempty plan is entirely terminal; `open`
-means it is not. Raw planning status stays unchanged. Closed execution does not
-claim abandoned scope was fulfilled; delivery outcomes and goal completion remain
-authoritative for that distinction.
+the derived `phase`: `intake` (no packages), `planned`, `active` (a package is
+dispatched or ready), `unresolved` (every package ended but not all of them
+resolve the goal), `done`, or `archived`. Only the operator completes, archives
+or restores a WorkRequest; for `unresolved` tell the operator to complete or
+archive it. Writes to an archived WorkRequest fail with `next_action: restore`.
 
 `reconcile_work_request` returns counts plus proposed, applied and error rows by
 default. Use `detail: "full"` for every skipped row and nested delivery evidence.

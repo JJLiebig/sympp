@@ -72,7 +72,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
   end
 
   test "WorkRequest architect sessions follow handoff authority instead of anchor terminality", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-AUTH-ARCH-HANDOFF", status: "sliced")
+    work_request = create_work_request!(repo, id: "WR-AUTH-ARCH-HANDOFF")
 
     {anchor, session, grant} =
       create_work_request_handoff_architect_session(repo, work_request, ArchitectHandoff.capabilities())
@@ -86,7 +86,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
     assert {1, nil} =
              repo.update_all(
                from(request in WorkRequest, where: request.id == ^work_request.id),
-               set: [completed_at: completed_at, completion_source: "operator"]
+               set: [operator_completed_at: completed_at]
              )
 
     assert Auth.require_session(session, repo) ==
@@ -95,7 +95,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
     assert {1, nil} =
              repo.update_all(
                from(request in WorkRequest, where: request.id == ^work_request.id),
-               set: [completed_at: nil, completion_source: nil]
+               set: [operator_completed_at: nil]
              )
 
     assert {1, nil} =

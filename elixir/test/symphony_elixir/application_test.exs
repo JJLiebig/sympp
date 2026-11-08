@@ -74,10 +74,10 @@ defmodule SymphonyElixir.ApplicationTest do
 
   defp completed_work_request!(id, days_ago) do
     assert {:ok, request} = WorkRequestRepository.create(Repo, work_request_attrs(id))
-    assert {:ok, completed} = WorkRequestService.force_complete(Repo, request.id)
+    assert {:ok, completed} = WorkRequestService.complete(Repo, request.id)
 
     completed
-    |> Ecto.Changeset.change(completed_at: DateTime.add(DateTime.utc_now(:microsecond), -days_ago * 86_400, :second))
+    |> Ecto.Changeset.change(operator_completed_at: DateTime.add(DateTime.utc_now(:microsecond), -days_ago * 86_400, :second))
     |> Repo.update!()
   end
 

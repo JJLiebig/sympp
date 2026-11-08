@@ -8,7 +8,7 @@ async function packageState(architect: Client, request: string, wp: string) {
 
 test('human answers retain decision provenance and stale replay cannot append a second decision', async ({ factory }) => {
   const architect = await factory.client();
-  const id = await architect.request('Human decision', 'human_info_needed');
+  const id = await architect.request('Human decision');
   const question = (await architect.call('ask_question', {
     work_request_id: id, category: 'scope', question: 'Ship the bounded option?', why_needed: 'Human approval defines scope.',
     decision_prompt: { tl_dr: 'Choose scope', details: 'Keep this delivery bounded.',
@@ -22,7 +22,6 @@ test('human answers retain decision provenance and stale replay cannot append a 
   };
   const answer = await architect.call('answer_question_and_record_decision', args);
   expect(answer.clarification_question.status).toBe('answered');
-  expect(answer.work_request.status).toBe('human_info_needed');
   await architect.reject('answer_question_and_record_decision', args, 'already_answered');
   const observer = await factory.client();
   const read = await observer.call('read_work_request', { detail: 'full', work_request_id: id });
@@ -36,10 +35,10 @@ test('human answers retain decision provenance and stale replay cannot append a 
   expect(decision.rationale).toBe(args.rationale);
   expect(decision.scope_impact).toBe(args.scope_impact);
   expect(read.clarification_questions[0].answer).toBe(args.answer);
-  expect(read.work_request.status).toBe('human_info_needed');
+  expect(read.work_request.phase).toBe('intake');
   expect((await architect.call('slice_work_request', {
     work_packages: [contract('Approved outcome', { goal: `Implement decision ${decision.id}` })],
-  })).status.work_request_status).toBe('sliced');
+  })).work_package_ids).toHaveLength(1);
 });
 
 test('questions, human escalation and review waits preserve explicit package blockers and sibling state', async ({ factory }) => {
@@ -113,7 +112,7 @@ test('questions, human escalation and review waits preserve explicit package blo
 
 test('human choice submission rejects unknown or empty redirects and preserves the selected answer', async ({ factory }) => {
   const architect = await factory.client();
-  const id = await architect.request('Structured human choices', 'human_info_needed');
+  const id = await architect.request('Structured human choices');
   const prompt = {
     tl_dr: 'Choose the bounded path.', details: 'The operator decides the product outcome.',
     options: [{ id: 'continue', label: 'Continue', answer: 'Continue with the bounded path.' }],
@@ -167,7 +166,7 @@ test('human choice submission rejects unknown or empty redirects and preserves t
     expect((await architect.raw(choice.input, {}, 'POST', endpoint)).status).toBe(409);
     const result = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
     expect(result.clarification_questions.find((entry: any) => entry.id === q).answer).toBe(choice.answer);
-    expect(result.work_request.status).toBe('human_info_needed');
+    expect(result.work_request.phase).toBe('intake');
   }
   const closed = await ask();
   await architect.call('close_question', { work_request_id: id, question_id: closed });

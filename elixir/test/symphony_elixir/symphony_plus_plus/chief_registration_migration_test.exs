@@ -4,7 +4,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ChiefRegistrationMigrationTest do
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.WorkPackageFactory
 
   test "chief migration preserves existing work and creator provenance without inventing attribution" do
@@ -50,10 +49,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ChiefRegistrationMigrationTest do
       assert {1, _} = Repo.insert_all("sympp_work_packages", [package])
       assert [20_261_025_160_000] = Ecto.Migrator.run(Repo, Migrations.all(), :up, to: 20_261_025_160_000, log: false)
 
-      stored = Repo.get!(WorkRequest, request.id)
-      assert stored.title == request.title
-      assert {stored.creator_kind, stored.creator_name, stored.created_via} == {"agent", "original-agent", "mcp"}
-      assert stored.dispatched_by == nil
+      assert [[title, creator_kind, creator_name, created_via, nil]] =
+               Repo.query!("SELECT title, creator_kind, creator_name, created_via, dispatched_by FROM sympp_work_requests WHERE id = ?", [request.id]).rows
+
+      assert title == request.title
+      assert {creator_kind, creator_name, created_via} == {"agent", "original-agent", "mcp"}
       assert Repo.get!(WorkPackage, package.id).dispatched_by == nil
       assert [] = Ecto.Migrator.run(Repo, Migrations.all(), :up, to: 20_261_025_160_000, log: false)
     after

@@ -94,7 +94,7 @@ test('operator sees dependency ordering, pending qualification and actual delive
 
   const reviewRepo = await repository(candidate.root, 'browser-review');
   const reviewClient = await candidate.factory!.client();
-  const reviewing = await reviewClient.request('Provider-reported review wait', 'ready_for_slicing', 'beta', reviewRepo.origin);
+  const reviewing = await reviewClient.request('Provider-reported review wait', 'beta', reviewRepo.origin);
   const [reviewWp] = (await reviewClient.call('slice_work_request', {
     work_packages: [contract('Review provider findings', { review: { type: 'review-suite', args: { mode: 'fast' } } })],
   })).work_package_ids;

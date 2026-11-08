@@ -477,11 +477,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
   defp require_local_architect_assignment_work_request_claimable(%WorkRequest{archived_at: %DateTime{}}),
     do: {:error, {:work_request_terminal, :archived}}
 
-  defp require_local_architect_assignment_work_request_claimable(%WorkRequest{
-         completed_at: %DateTime{},
-         completion_source: "operator"
-       }),
-       do: {:error, {:work_request_terminal, :completed}}
+  defp require_local_architect_assignment_work_request_claimable(%WorkRequest{operator_completed_at: %DateTime{}}),
+    do: {:error, {:work_request_terminal, :completed}}
 
   defp require_local_architect_assignment_work_request_claimable(%WorkRequest{}), do: :ok
 

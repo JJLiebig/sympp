@@ -111,8 +111,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
   end
 
   defp legacy_handoff_work_request?(%WorkRequest{} = work_request, %AccessGrant{} = grant, %WorkPackage{} = anchor) do
-    ArchitectHandoff.eligible_status?(work_request.status) and
-      ArchitectHandoff.eligible_scope?(work_request) and
+    ArchitectHandoff.eligible_scope?(work_request) and
       grant.work_package_id == anchor.id and
       grant.phase_id == anchor.phase_id and
       ArchitectHandoff.anchor_id_for_work_request(work_request) == anchor.id and
@@ -175,11 +174,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
 
   @spec work_request_list_filters(filters(), String.t() | nil) :: filters()
   def work_request_list_filters(filters, nil), do: filters
-  def work_request_list_filters(filters, status), do: Map.put(filters, "status", status)
+  def work_request_list_filters(filters, phase), do: Map.put(filters, "phase", phase)
 
   @spec work_request_repository_filters(filters()) :: filters()
   def work_request_repository_filters(filters) do
-    Map.take(filters, ["status"])
+    Map.take(filters, ["phase"])
   end
 
   @spec filter_scoped_work_requests(repo(), [term()], filters(), term(), keyword()) :: term()
@@ -591,9 +590,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
       {:ok,
        repo_scope_matches_filters?(repo_scopes, filters, opts) and
          Enum.all?(filters, fn
-           {"status", status} when is_binary(status) ->
-             work_request.status == status
-
            {"phase_id", phase_id} when is_binary(phase_id) ->
              ArchitectHandoff.phase_id_for_work_request(work_request) == phase_id
 
@@ -608,7 +604,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
      Enum.all?(filters, fn
        {"repo", repo} when is_binary(repo) -> repo_scope_name_matches?(repo, work_request.repo, opts)
        {"base_branch", base_branch} when is_binary(base_branch) -> BaseBranch.equivalent?(work_request.base_branch, base_branch)
-       {"status", status} when is_binary(status) -> work_request.status == status
        {"phase_id", phase_id} when is_binary(phase_id) -> ArchitectHandoff.phase_id_for_work_request(work_request) == phase_id
        _filter -> true
      end)}

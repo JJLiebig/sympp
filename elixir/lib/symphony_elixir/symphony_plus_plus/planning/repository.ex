@@ -14,8 +14,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion, as: WorkRequestCompletion
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
 
   @default_append_retry_attempts 200
   @default_state_read_retry_attempts 50
@@ -148,7 +146,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
         changeset_fun
       )
       |> fetch_after_idempotency_conflict(repo, attrs)
-      |> clear_work_request_completion_after_reopening_progress(repo)
     end
   end
 
@@ -192,30 +189,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   end
 
   defp pr_observation_payload?(_payload), do: false
-
-  defp clear_work_request_completion_after_reopening_progress({:ok, %ProgressEvent{} = event}, repo) do
-    if reopening_progress_event?(event) do
-      clear_work_request_completion_after_progress(event, repo)
-    else
-      {:ok, event}
-    end
-  end
-
-  defp clear_work_request_completion_after_reopening_progress(result, _repo), do: result
-
-  defp clear_work_request_completion_after_progress(%ProgressEvent{work_package_id: work_package_id} = event, repo) do
-    case WorkRequestRepository.clear_completion_for_work_package(repo, work_package_id) do
-      :ok -> {:ok, event}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp reopening_progress_event?(%ProgressEvent{work_package_id: work_package_id, payload: payload})
-       when is_binary(work_package_id) and is_map(payload) do
-    WorkRequestCompletion.blocker_event_payload?(payload) and (Map.get(payload, "active") || Map.get(payload, :active)) == true
-  end
-
-  defp reopening_progress_event?(%ProgressEvent{}), do: false
 
   defp normalize_append_attrs(attrs, trusted_audit_metadata?) do
     with :ok <- reject_conflicting_key(attrs, :work_package_id, & &1),

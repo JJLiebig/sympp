@@ -26,6 +26,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     ArchitectDeliveryTools,
     ArchitectProductTreeTools,
     ArchitectWorkRequestTools,
+    ArchivedWorkRequestGuard,
     Auth,
     BlockerTools,
     Config,
@@ -928,7 +929,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, workflow_mode} <- optional_string_argument(arguments, "workflow_mode", "architect_led_feature_branch"),
          {:ok, repo_scopes} <- optional_list_argument(arguments, "repo_scopes"),
          {:ok, constraints} <- optional_object_argument(arguments, "constraints"),
-         {:ok, status} <- optional_string_argument(arguments, "status", "ready_for_clarification"),
          {:ok, creator_kind} <- optional_string_argument(arguments, "creator_kind", "agent"),
          {:ok, creator_name} <- optional_string_argument(arguments, "creator_name", claimed_by || "mcp-agent"),
          {:ok, created_via} <- optional_string_argument(arguments, "created_via", "mcp") do
@@ -942,7 +942,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          "desired_dispatch_shape" => workflow_mode,
          "repo_scopes" => repo_scopes || [],
          "constraints" => constraints || %{},
-         "status" => status,
          "creator_kind" => creator_kind,
          "creator_name" => creator_name,
          "created_via" => created_via
@@ -1036,8 +1035,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
        ToolResult.tool_result(%{
          "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
          "decision_log_entry" => WorkRequestPayloads.decision_log_entry(decision_record),
-         "provenance" => local_operator_note_provenance(created_by, source_id),
-         "status" => %{"work_request_status" => work_request.status}
+         "provenance" => local_operator_note_provenance(created_by, source_id)
        })}
     else
       {:tool_error, reason} ->
@@ -1313,7 +1311,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   end
 
   defp dispatch_request_state({:ok, params}, method, id, %__MODULE__{} = server) do
-    with {:ok, server} <- auto_claim_architect(server, method, params),
+    with :ok <- refuse_archived_write(server, method, params),
+         {:ok, server} <- auto_claim_architect(server, method, params),
          {:ok, server} <- require_current_session_claim_for_bound_call(server, method, params) do
       case dispatch_with_text_profile(method, params, server) do
         {:ok, result} ->
@@ -1337,6 +1336,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp dispatch_request_state({:error, code, message, data}, _method, id, %__MODULE__{} = server) do
     {Response.error(id, code, message, data), server}
   end
+
+  defp refuse_archived_write(%__MODULE__{config: %Config{repo: repo}, session: session}, "tools/call", %{"name" => name} = params),
+    do: ArchivedWorkRequestGuard.check(repo, session, name, Map.get(params, "arguments", %{}))
+
+  defp refuse_archived_write(%__MODULE__{}, _method, _params), do: :ok
 
   defp auto_claim_architect(
          %__MODULE__{

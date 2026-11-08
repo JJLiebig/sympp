@@ -1,5 +1,5 @@
 {
-  "mcp_contract_fingerprint": "8201807b428d8f7a7a46e918e45bb78b40630bef3843ee73d635a66670b0d1a7",
+  "mcp_contract_fingerprint": "005a28bde722e5086343cc9e458e6dc5504427b6821932daeb65a1bf5ff70090",
   "tool_sets": {
     "architect_tools": [
       "list_work_requests",
@@ -18,7 +18,6 @@
       "record_work_package_delivery",
       "revoke_work_package_worker_key",
       "force_release_work_package_claim",
-      "set_work_request_status",
       "ask_question",
       "answer_question",
       "answer_question_and_record_decision",

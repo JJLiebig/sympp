@@ -14,9 +14,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion, as: WorkRequestCompletion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   import Ecto.Query, only: [from: 2]
@@ -44,7 +44,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     "abandoned",
     "skipped"
   ]
-  @delivery_promotion_blocking_work_request_statuses ["human_info_needed", "ready_for_clarification", "clarifying"]
   @work_request_count_chunk_size 500
 
   @type repo :: module()
@@ -63,7 +62,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     work_request_ids = Enum.map(work_requests, & &1.id)
 
     with {:ok, question_context} <- question_context(repo, work_request_ids),
-         {:ok, work_packages} <- work_packages(repo, work_request_ids, opts) do
+         {:ok, work_packages} <- work_packages(repo, work_request_ids, opts),
+         {:ok, phases} <- Phase.load(repo, work_requests, work_packages) do
       work_packages_by_request = Enum.group_by(work_packages, & &1.work_request_id)
       work_package_counts = work_packages |> Enum.map(&{&1.work_request_id, &1.status}) |> status_counts()
 
@@ -72,19 +72,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
           request_work_packages = Map.get(work_packages_by_request, work_request.id, [])
 
           {work_request.id,
-           %{
+           Map.merge(phase_fields(work_request, Map.fetch!(phases, work_request.id)), %{
              open_question_count: status_count(question_context.counts, work_request.id, "open"),
              answered_question_count: status_count(question_context.counts, work_request.id, "answered"),
              work_package_count: length(request_work_packages),
-             execution_status: WorkRequest.execution_status(Enum.map(request_work_packages, & &1.status)),
              planned_work_package_count: Enum.count(request_work_packages, &(&1.status == "planned")),
              dispatched_work_package_count: Enum.count(request_work_packages, &(not is_nil(&1.dispatched_at))),
-             ended_work_package_count: status_count(work_package_counts, work_request.id, "ended"),
-             completed_at: timestamp(work_request.completed_at),
-             completion_source: work_request.completion_source,
-             archived_at: timestamp(work_request.archived_at),
-             archive_reason: work_request.archive_reason
-           }}
+             ended_work_package_count: status_count(work_package_counts, work_request.id, "ended")
+           })}
         end)
 
       repo_identity_catalog = Dashboard.repo_identity_catalog_from_opts(opts, Enum.map(work_requests, & &1.repo))
@@ -121,45 +116,39 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
         ) :: map()
   def work_request_payload(
         %WorkRequest{} = work_request,
-        questions,
+        _questions,
         work_packages,
         work_package_contexts,
         repo_identity_catalog,
         opts
       ) do
-    question_state = %{
-      open_count: Enum.count(questions, &(&1.status == "open")),
-      latest_gate_at: latest_datetime(Enum.map(questions, & &1.updated_at))
-    }
-
-    completion_state =
-      work_request
-      |> WorkRequestCompletion.visible_state(
-        question_state,
-        work_packages,
-        work_package_contexts,
-        completion_deliveries_by_work_package_id(Keyword.get(opts, :delivery_board))
-      )
+    phase = Keyword.fetch!(opts, :phase)
 
     work_request
     |> base_payload(repo_identity_catalog)
-    |> Map.put(:execution_status, WorkRequest.execution_status(Enum.map(work_packages, & &1.status)))
+    |> Map.merge(phase_fields(work_request, phase))
     |> Map.put(:operator_report, Keyword.get(opts, :operator_report))
-    |> Map.put(:completed_at, timestamp(completion_state.completed_at))
-    |> Map.put(:completion_source, work_request.completion_source)
-    |> Map.put(:archived_at, timestamp(completion_state.archived_at))
-    |> Map.put(:archive_reason, work_request.archive_reason)
     |> Map.put(
       :operational_state,
       operational_state(
         work_request,
         work_packages,
         work_package_contexts,
-        completion_state,
+        phase.phase,
         Keyword.get(opts, :delivery_board),
         Keyword.get(opts, :delivery_state_opts, [])
       )
     )
+  end
+
+  defp phase_fields(%WorkRequest{} = work_request, %{phase: phase, completed_at: completed_at}) do
+    %{
+      phase: phase,
+      completed_at: timestamp(completed_at),
+      operator_completed_at: timestamp(work_request.operator_completed_at),
+      archived_at: timestamp(work_request.archived_at),
+      archive_reason: work_request.archive_reason
+    }
   end
 
   defp card_summaries(_repo, [], _opts), do: {:ok, %{}}
@@ -170,6 +159,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     with {:ok, question_context} <- question_context(repo, work_request_ids),
          {:ok, decision_counts} <- decision_counts(repo, work_request_ids),
          {:ok, work_packages} <- work_packages(repo, work_request_ids),
+         {:ok, phases} <- Phase.load(repo, work_requests, work_packages),
          {:ok, work_package_contexts} <- card_work_package_contexts(repo, work_packages, opts) do
       question_counts = question_context.counts
       work_packages_by_request = Enum.group_by(work_packages, & &1.work_request_id)
@@ -180,8 +170,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
 
         card_summaries(
           work_requests,
+          phases,
           question_counts,
-          question_context.states,
           decision_counts,
           work_packages_by_request,
           work_package_contexts,
@@ -193,8 +183,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
 
   defp card_summaries(
          work_requests,
+         phases,
          question_counts,
-         question_states,
          decision_counts,
          work_packages_by_request,
          work_package_contexts,
@@ -216,51 +206,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     summaries =
       Map.new(work_requests, fn %WorkRequest{} = work_request ->
         work_packages = Map.get(visible_work_packages_by_request, work_request.id, [])
-        all_work_packages = Map.get(work_packages_by_request, work_request.id, [])
-        open_question_count = status_count(question_counts, work_request.id, "open")
-
-        question_state =
-          Map.get(question_states, work_request.id, %{
-            open_count: open_question_count,
-            latest_gate_at: nil
-          })
-
-        completion_state =
-          work_request
-          |> WorkRequestCompletion.visible_state(
-            question_state,
-            work_packages,
-            work_package_contexts,
-            completion_deliveries_by_work_package_id(Map.get(delivery_boards, work_request.id))
-          )
+        phase = Map.fetch!(phases, work_request.id)
 
         operational_state =
           operational_state(
             work_request,
             work_packages,
             work_package_contexts,
-            completion_state,
+            phase.phase,
             Map.get(delivery_boards, work_request.id),
             delivery_state_opts
           )
 
         {work_request.id,
-         %{
-           open_question_count: open_question_count,
+         Map.merge(phase_fields(work_request, phase), %{
+           open_question_count: status_count(question_counts, work_request.id, "open"),
            answered_question_count: status_count(question_counts, work_request.id, "answered"),
            closed_question_count: status_count(question_counts, work_request.id, "closed"),
            decision_count: Map.get(decision_counts, work_request.id, 0),
            work_package_count: length(work_packages),
-           execution_status: WorkRequest.execution_status(Enum.map(all_work_packages, & &1.status)),
            planned_work_package_count: Enum.count(work_packages, &(&1.status == "planned")),
            dispatched_work_package_count: Enum.count(work_packages, &(not is_nil(&1.dispatched_at))),
            ended_work_package_count: status_count(work_package_counts, work_request.id, "ended"),
-           completed_at: timestamp(completion_state.completed_at),
-           completion_source: work_request.completion_source,
-           archived_at: timestamp(completion_state.archived_at),
-           archive_reason: work_request.archive_reason,
            operational_state: operational_state
-         }}
+         })}
       end)
 
     {:ok, summaries}
@@ -320,51 +289,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     end)
   end
 
-  defp completion_deliveries_by_work_package_id(delivery_board) do
-    delivery_board
-    |> DeliveryWorkPackageProjection.work_packages_by_id()
-    |> Enum.flat_map(fn {slice_id, delivery_work_package} ->
-      delivery = map_value(delivery_work_package, "delivery") || %{}
-
-      case map_value(delivery_work_package, "delivery_outcome") || map_value(delivery, "outcome") do
-        outcome when is_binary(outcome) and outcome != "" ->
-          successor_id = map_value(delivery_work_package, "successor_work_package_id") || map_value(delivery, "successor_work_package_id")
-          [{slice_id, %{outcome: outcome, successor_work_package_id: successor_id}}]
-
-        _outcome ->
-          []
-      end
-    end)
-    |> Map.new()
-  end
-
   defp question_context(repo, work_request_ids) do
     rows =
       chunked_work_request_rows(work_request_ids, fn chunk ->
         from(question in ClarificationQuestion,
           where: question.work_request_id in ^chunk,
-          select: {question.work_request_id, question.status, question.updated_at}
+          select: {question.work_request_id, question.status}
         )
         |> repo.all()
       end)
 
     counts =
       rows
-      |> Enum.map(fn {work_request_id, status, _updated_at} -> {work_request_id, status} end)
       |> status_counts()
 
-    states =
-      rows
-      |> Enum.group_by(fn {work_request_id, _status, _updated_at} -> work_request_id end)
-      |> Map.new(fn {work_request_id, questions} ->
-        {work_request_id,
-         %{
-           open_count: Enum.count(questions, fn {_work_request_id, status, _updated_at} -> status == "open" end),
-           latest_gate_at: latest_datetime(Enum.map(questions, fn {_work_request_id, _status, updated_at} -> updated_at end))
-         }}
-      end)
-
-    {:ok, %{counts: counts, states: states}}
+    {:ok, %{counts: counts}}
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
@@ -437,7 +376,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
       work_type: work_request.work_type,
       desired_dispatch_shape: work_request.desired_dispatch_shape,
       creator: creator(work_request),
-      status: work_request.status,
       inserted_at: timestamp(work_request.inserted_at),
       updated_at: timestamp(work_request.updated_at)
     })
@@ -456,7 +394,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
       constraints: redacted_json(work_request.constraints || %{}),
       desired_dispatch_shape: work_request.desired_dispatch_shape,
       creator: creator(work_request),
-      status: work_request.status,
       inserted_at: timestamp(work_request.inserted_at),
       updated_at: timestamp(work_request.updated_at)
     }
@@ -476,7 +413,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
          %WorkRequest{} = work_request,
          work_packages,
          work_package_contexts,
-         completion_state,
+         phase,
          delivery_board,
          delivery_state_opts
        ) do
@@ -487,102 +424,54 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     promoted_state = primary_work_request_slice_state(slice_states)
 
     cond do
-      completion_state.archived_at ->
+      phase == "archived" ->
         archived_operational_state(work_request, attention_items)
 
-      operator_completed?(work_request, completion_state) ->
-        completed_operational_state(work_request, attention_items)
-
-      delivery_truth_operational_state?(promoted_state) ->
-        promoted_operational_state(work_request, promoted_state, work_packages, attention_items)
-        |> DeliveryWorkPackageProjection.redact_reasons(delivery_state_opts)
-
-      completion_state.completed? ->
-        completed_operational_state(work_request, attention_items)
-
-      work_request.status in @delivery_promotion_blocking_work_request_statuses ->
-        base_operational_state(work_request.status, attention_items)
-
-      promoted_state ->
-        promoted_operational_state(work_request, promoted_state, work_packages, attention_items)
+      phase == "done" and not is_nil(work_request.operator_completed_at) ->
+        operational_state_map("completed", "Completed", "success", "The operator marked this WorkRequest done.", phase, attention_items)
 
       true ->
-        base_operational_state(work_request.status, attention_items)
+        derived_operational_state(promoted_state, work_packages, phase, attention_items, delivery_state_opts)
     end
   end
 
-  defp archived_operational_state(%WorkRequest{archive_reason: "never_started"} = work_request, attention_items) do
-    operational_state_map("archived", "Archived", "neutral", "Goal was archived because no package was ever started.", work_request.status, attention_items)
+  defp derived_operational_state(promoted_state, work_packages, phase, attention_items, delivery_state_opts) do
+    cond do
+      match?(%{key: "needs_closeout"}, promoted_state) ->
+        promoted_operational_state(promoted_state, work_packages, phase, attention_items)
+        |> DeliveryWorkPackageProjection.redact_reasons(delivery_state_opts)
+
+      phase == "unresolved" ->
+        operational_state_map(
+          "unresolved",
+          "Unresolved",
+          "warning",
+          "Every package ended, but not all of them resolve the WorkRequest. Complete or archive it.",
+          phase,
+          attention_items
+        )
+
+      delivery_truth_operational_state?(promoted_state) ->
+        promoted_operational_state(promoted_state, work_packages, phase, attention_items)
+        |> DeliveryWorkPackageProjection.redact_reasons(delivery_state_opts)
+
+      phase == "done" ->
+        operational_state_map("completed", "Completed", "success", "Every package ended and the WorkRequest is resolved.", phase, attention_items)
+
+      promoted_state ->
+        promoted_operational_state(promoted_state, work_packages, phase, attention_items)
+
+      true ->
+        operational_state_map("intake", "Intake", "neutral", "No packages are planned yet.", phase, attention_items)
+    end
   end
 
-  defp archived_operational_state(work_request, attention_items), do: completed_operational_state(work_request, attention_items)
-
-  defp operator_completed?(%WorkRequest{completion_source: "operator"}, %{completed?: true}), do: true
-  defp operator_completed?(%WorkRequest{}, _completion_state), do: false
-
-  defp completed_operational_state(%WorkRequest{completion_source: "operator"} = work_request, attention_items) do
-    operational_state_map(
-      "completed",
-      "Completed",
-      "success",
-      "WorkRequest was manually marked completed by the local operator.",
-      work_request.status,
-      attention_items
-    )
+  defp archived_operational_state(%WorkRequest{archive_reason: "never_started"}, attention_items) do
+    operational_state_map("archived", "Archived", "neutral", "Goal was archived because no package was ever started.", "archived", attention_items)
   end
 
-  defp completed_operational_state(%WorkRequest{} = work_request, attention_items) do
-    operational_state_map(
-      "completed",
-      "Completed",
-      "success",
-      "All WorkRequest questions, WorkPackages, blockers, and active runtimes are terminal.",
-      work_request.status,
-      attention_items
-    )
-  end
-
-  defp base_operational_state("human_info_needed" = status, attention_items) do
-    operational_state_map(
-      "human_info_needed",
-      "Human Info Needed",
-      "warning",
-      "WorkRequest is waiting for a human answer before architecture can proceed.",
-      status,
-      attention_items
-    )
-  end
-
-  defp base_operational_state("ready_for_clarification" = status, attention_items) do
-    operational_state_map("clarifying", "Clarifying", "warning", "WorkRequest is still in clarification.", status, attention_items)
-  end
-
-  defp base_operational_state("clarifying" = status, attention_items) do
-    operational_state_map("clarifying", "Clarifying", "warning", "WorkRequest is still in clarification.", status, attention_items)
-  end
-
-  defp base_operational_state("draft" = status, attention_items) do
-    operational_state_map("not_started", "Not Started", "neutral", "WorkRequest is still a draft.", status, attention_items)
-  end
-
-  defp base_operational_state("ready_for_slicing" = status, attention_items) do
-    operational_state_map(
-      "ready_for_slicing",
-      "Ready For Slicing",
-      "neutral",
-      "WorkRequest is ready for an architect to author WorkPackages.",
-      status,
-      attention_items
-    )
-  end
-
-  defp base_operational_state("sliced" = status, attention_items) do
-    operational_state_map("sliced", "Sliced", "neutral", "WorkRequest has been marked sliced.", status, attention_items)
-  end
-
-  defp base_operational_state(status, attention_items) do
-    key = status || "unknown"
-    operational_state_map(key, status_label(key), "neutral", "Raw WorkRequest lifecycle status is #{key}.", status, attention_items)
+  defp archived_operational_state(%WorkRequest{}, attention_items) do
+    operational_state_map("archived", "Archived", "neutral", "The WorkRequest is archived.", "archived", attention_items)
   end
 
   defp work_package_operational_states(work_packages, work_package_contexts, delivery_board, delivery_state_opts) do
@@ -610,7 +499,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
   defp delivery_truth_operational_state?(%{delivery_outcome: outcome}) when is_binary(outcome), do: true
   defp delivery_truth_operational_state?(_state), do: false
 
-  defp promoted_operational_state(%WorkRequest{} = work_request, promoted_state, work_packages, attention_items) do
+  defp promoted_operational_state(promoted_state, work_packages, phase, attention_items) do
     promoted_state
     |> OperationalProjection.operational_activity_fields()
     |> Map.merge(
@@ -619,7 +508,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
         promoted_state.label,
         promoted_state.tone,
         "Most actionable WorkPackage state is #{promoted_state.label} across #{length(work_packages)} package(s).",
-        work_request.status,
+        phase,
         attention_items
       )
     )
@@ -631,13 +520,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     |> Enum.uniq_by(&Map.get(&1, :key))
   end
 
-  defp operational_state_map(key, label, tone, reason, raw_status, attention_items) do
+  defp operational_state_map(key, label, tone, reason, phase, attention_items) do
     %{
       key: key,
       label: label,
       tone: tone,
       reason: reason,
-      raw_status: raw_status,
+      phase: phase,
       attention_items: attention_items
     }
   end
@@ -660,24 +549,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     String.contains?(message, "busy") or String.contains?(message, "locked")
   end
 
-  defp latest_datetime(values) do
-    values
-    |> Enum.reject(&is_nil/1)
-    |> Enum.max_by(&DateTime.to_unix(&1, :microsecond), fn -> nil end)
-  end
-
   defp sortable_timestamp(%DateTime{} = timestamp), do: DateTime.to_iso8601(timestamp)
   defp sortable_timestamp(_timestamp), do: ""
 
-  defp status_label(status) when is_binary(status) do
-    status
-    |> String.replace("_", " ")
-    |> String.capitalize()
-  end
-
-  defp status_label(status), do: to_string(status)
-
-  defp map_value(%{} = map, key) when is_binary(key), do: Map.get(map, key) || Map.get(map, String.to_atom(key))
   defp redacted_json(value), do: Sanitizer.redacted_json(value)
   defp redacted_text(value), do: Sanitizer.redacted_text(value)
   defp timestamp(value), do: Sanitizer.timestamp(value)

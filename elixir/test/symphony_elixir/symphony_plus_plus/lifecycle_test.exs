@@ -40,8 +40,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
                work_type: "feature",
                human_description: "Lifecycle request.",
                constraints: %{},
-               desired_dispatch_shape: "single_package",
-               status: "sliced"
+               desired_dispatch_shape: "single_package"
              })
 
     {:ok, work_request: work_request}

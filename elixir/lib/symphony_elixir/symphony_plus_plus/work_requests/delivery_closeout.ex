@@ -10,7 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -87,6 +87,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
              delivery_closeout_opts(attrs)
            ),
          {:ok, work_request} <- Repository.get(repo, work_request_id),
+         :ok <- Phase.require_writable(work_request),
          {:ok, delivery} <-
            Repository.record_work_package_delivery_in_transaction(
              repo,
@@ -332,7 +333,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
 
   defp refresh_replayed_closeout(
          repo,
-         %WorkRequest{} = work_request,
+         %WorkRequest{},
          %WorkPackageDelivery{} = delivery
        ) do
     context = WorkPackageActivity.context(repo, delivery.work_package_id)
@@ -345,9 +346,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
         {:error, _reason} -> nil
       end
 
-    with {:ok, _refreshed} <- Completion.refresh_in_transaction(repo, work_request.id) do
-      {:ok, {delivery, replay_closeout_context(context, event)}}
-    end
+    {:ok, {delivery, replay_closeout_context(context, event)}}
   end
 
   defp replay_closeout_context(context, event) do
@@ -377,8 +376,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
              delivery,
              closeout,
              closeout_context
-           ),
-         {:ok, _refreshed} <- Completion.refresh_in_transaction(repo, work_request.id) do
+           ) do
       {:ok, {delivery, closeout_context}}
     end
   end

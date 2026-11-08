@@ -7,7 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport
 
   test "stored ordinary events cannot impersonate reports and revoked architects cannot append them", %{repo: repo} do
-    request = create_work_request!(repo, id: "WR-REPORT-AUTH", repo: "exampleco/atlas", status: "sliced")
+    request = create_work_request!(repo, id: "WR-REPORT-AUTH", repo: "exampleco/atlas")
     capabilities = ArchitectHandoff.capabilities()
     {anchor, architect, _grant} = create_work_request_handoff_architect_session(repo, request, capabilities)
 
@@ -26,7 +26,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
     work_request =
       create_work_request!(repo,
         id: "WR-ARCH-DESCENDANT-PLANNING",
-        status: "sliced",
         repo_scopes: [%{repo: "nextide/secondary-service", base_branch: "release"}]
       )
 

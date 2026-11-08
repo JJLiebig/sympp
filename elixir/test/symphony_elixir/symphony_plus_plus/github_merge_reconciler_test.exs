@@ -266,8 +266,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
         work_type: "feature",
         human_description: "Reconcile GitHub merges.",
         constraints: %{},
-        desired_dispatch_shape: "single_package",
-        status: "sliced"
+        desired_dispatch_shape: "single_package"
       })
 
     overrides

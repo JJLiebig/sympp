@@ -4,7 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{SoloTools, ToolCatalog}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.{PlanNode, Renderer}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{WorkPackage, WorkPackageDelivery}
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{DecisionLogEntry, WorkRequest}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{DecisionLogEntry, Phase, WorkRequest}
 
   @local_operator_provenance_max_length 512
   @local_operator_text_max_length 4_000
@@ -41,7 +41,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
           "items" => %{"type" => "object", "additionalProperties" => false, "properties" => %{"repo" => string_schema(), "base_branch" => string_schema()}, "required" => ["repo"]}
         },
         "constraints" => object_schema(),
-        "status" => string_enum_schema(WorkRequest.statuses()),
         "claimed_by" => string_schema(),
         "creator_kind" => string_enum_schema(WorkRequest.creator_kinds()),
         "creator_name" => string_schema(),
@@ -226,7 +225,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   def architect_tool_input_schema("list_work_requests") do
     schema(
       %{
-        "status" => string_schema(),
+        "phase" => string_enum_schema(Phase.phases()),
         "limit" => integer_schema() |> Map.merge(%{"minimum" => 1, "maximum" => 200, "description" => "Page size. Defaults to 50; values above 200 are rejected."}),
         "cursor" => described_string_schema("Opaque cursor returned by the previous list_work_requests page.")
       },
@@ -345,17 +344,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "status" => string_enum_schema(["resolved"])
       }),
       ["blocker_id", "resolution", "summary", "idempotency_key"]
-    )
-  end
-
-  def architect_tool_input_schema("set_work_request_status") do
-    schema(
-      %{
-        "work_request_id" => string_schema(),
-        "current_status" => string_schema(),
-        "next_status" => string_schema()
-      },
-      ["work_request_id", "current_status", "next_status"]
     )
   end
 

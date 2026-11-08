@@ -204,7 +204,6 @@ test('native actions send JSON-only requests and surface persisted success or ac
   await C.postAction(endpoint, C.answerPath(question), C.answerBody(question, 'api_first', 'Include docs'));
   await assert.rejects(C.postAction(endpoint, C.answerPath(question), { answer: 'stale' }), /This question was answered. Refresh the job/);
   assert.equal(received[0].body.title, 'New job');
-  assert.equal(received[0].body.status, 'ready_for_clarification');
   assert.equal(received[1].url, '/api/v1/sympp/herdr/work-requests/wr%2F1/questions/q%201/answer');
   assert.deepEqual(received[1].body, { answer_choice: 'api_first', answer_note: 'Include docs' });
   for (const req of received) {

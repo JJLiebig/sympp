@@ -58,7 +58,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
   end
 
   test "full and compact packages forward canonical integration eligibility within board budgets", %{repo: repo} do
-    request = create_work_request!(repo, status: "sliced")
+    request = create_work_request!(repo, [])
     backend = eligibility_package!(repo, request, "BACKEND", "ready")
     ui = eligibility_package!(repo, request, "UI", "ready")
     stale = eligibility_package!(repo, request, "STALE", "ready")
@@ -121,7 +121,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
   end
 
   test "native board does not load progress for unrelated package history", %{repo: repo} do
-    request = create_work_request!(repo, status: "sliced")
+    request = create_work_request!(repo, [])
     visible = eligibility_package!(repo, request, "VISIBLE", "planned")
     assert {:ok, _} = PlanningRepository.append_progress_event(repo, %{work_package_id: visible.id, summary: "Visible activity"})
 
@@ -232,8 +232,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
       work_type: "feature",
       human_description: "Record the human's desired outcome before slicing.",
       constraints: %{"allowed_paths" => ["elixir/lib"], "requires_secret" => false},
-      desired_dispatch_shape: "single_package",
-      status: "draft"
+      desired_dispatch_shape: "single_package"
     }
 
     Enum.into(overrides, defaults)

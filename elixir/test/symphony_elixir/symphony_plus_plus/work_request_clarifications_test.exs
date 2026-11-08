@@ -24,6 +24,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestClarificationsTest do
     end
 
     def one(_query), do: 0
+    def get(SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest, id), do: %SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest{id: id}
     def update_all(_query, _updates), do: {0, []}
 
     def insert(%Changeset{} = changeset) do
@@ -79,8 +80,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestClarificationsTest do
     assert question.id == "WRQ-DUPLICATE"
     assert {:error, :id_already_exists} = Repository.ask_question(repo, work_request.id, question_attrs(id: "WRQ-DUPLICATE"))
 
-    assert {:error, {:constraint_failed, "foreign_key"}} =
-             Repository.ask_question(repo, "WR-MISSING", question_attrs(id: "WRQ-MISSING-PARENT"))
+    assert {:error, :not_found} = Repository.ask_question(repo, "WR-MISSING", question_attrs(id: "WRQ-MISSING-PARENT"))
 
     assert {:ok, decision} = Repository.record_decision(repo, work_request.id, decision_attrs(id: "WRD-DUPLICATE"))
     assert decision.id == "WRD-DUPLICATE"

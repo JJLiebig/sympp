@@ -14,8 +14,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
         base_branch: "symphony-plus-plus/beta",
         title: "Native delivery cockpit",
         human_description: description(),
-        desired_dispatch_shape: "architect_led_feature_branch",
-        status: "sliced"
+        desired_dispatch_shape: "architect_led_feature_branch"
       )
 
     {anchor, architect, _grant} = create_work_request_handoff_architect_session(repo, request, ["read:work_request"])
@@ -116,7 +115,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
     summary = summary_result["structuredContent"]
     assert String.length(Jason.encode!(summary)) < 8_000
     assert summary["work_request"]["human_description"] == description()
-    assert summary["work_request"]["execution_status"] == "open"
+    assert summary["work_request"]["phase"] == "active"
     assert length(summary["work_packages"]) == 28
     assert hd(summary["work_packages"])["next_action"] == "wait"
     assert List.last(summary["work_packages"])["next_action"] == "dispatch_work_package"

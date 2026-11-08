@@ -81,9 +81,6 @@ test('independent architect clients preserve the owner through release reconnect
   const factory = processes.factory();
   const owner = await factory.client();
   const request = await owner.request('Architect claim continuity');
-  await owner.call('set_work_request_status', { work_request_id: request, current_status: 'ready_for_slicing', next_status: 'draft' });
-  expect((await owner.call('read_work_request', { detail: 'full', work_request_id: request })).work_request.status).toBe('draft');
-  await owner.call('set_work_request_status', { work_request_id: request, current_status: 'draft', next_status: 'ready_for_slicing' });
   const peer = await factory.client();
   await peer.reject('claim_local_architect_assignment', { work_request_id: request }, 'claim_lease_active_for_other_actor');
   const denied = await peer.rpc('tools/call', { name: 'claim_local_architect_assignment', arguments: { work_request_id: request, claimed_by: 'different-owner' } });
@@ -503,9 +500,9 @@ test('HTTP client attachment telemetry and readiness preserve local request boun
 test('public architect handoff replays one unclaimed grant and trusted mutation claims only when needed', async ({ processes }) => {
   const factory = processes.factory();
   const client = await factory.client();
-  const create = async (status: string) => client.call('create_work_request', {
-    repo: 'example/service', base_branch: 'beta', title: `Handoff ${status}`, description: 'Synthetic handoff proof.',
-    request_kind: 'feature', status,
+  const create = async (title: string) => client.call('create_work_request', {
+    repo: 'example/service', base_branch: 'beta', title: `Handoff ${title}`, description: 'Synthetic handoff proof.',
+    request_kind: 'feature',
   });
   const initial = await create('draft');
   expect(initial.architect_handoff.status).toBe('created');
@@ -542,8 +539,8 @@ test('public architect handoff replays one unclaimed grant and trusted mutation 
   });
   expect(replaced.assignment.grant_id).toBe(claim.assignment.grant_id);
   expect(replaced.assignment.claimed_by).toBe('replacement-architect');
-  const ready = (await create('ready_for_slicing')).work_request.id;
-  expect((await client.call('list_work_requests', { status: 'ready_for_slicing' })).work_requests.map((entry: any) => entry.id)).toContain(ready);
+  const ready = (await create('ready')).work_request.id;
+  expect((await client.call('list_work_requests', { phase: 'intake' })).work_requests.map((entry: any) => entry.id)).toContain(ready);
   await client.call('read_delivery_board', { work_request_id: ready });
   expect((await client.call('get_current_assignment')).assignment).toBeNull();
   await client.call('slice_work_request', { work_request_id: ready, work_packages: [contract('Automatically claimed work')] });

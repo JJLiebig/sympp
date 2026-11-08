@@ -138,7 +138,7 @@ for (const status of [
 ]) test(`native review observation preserves ${status.status} without inventing delivery`, async ({ delivery: { factory } }) => {
   const repo = await repository(factory.root, 'review-observation');
   const architect = await factory.client();
-  const request = await architect.request('Review observation', 'ready_for_slicing', 'beta', repo.origin);
+  const request = await architect.request('Review observation', 'beta', repo.origin);
   const [wp] = (await architect.call('slice_work_request', { work_packages: [contract('Observed review', { review: { type: 'review-suite', args: { mode: 'fast' } } })] })).work_package_ids;
   await architect.call('dispatch_work_package', { work_package_id: wp });
   await architect.call('prepare_work_package_worktree', { work_package_id: wp, target_repo_root: repo.checkout });

@@ -4,7 +4,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @cutover_version 20_260_716_190_000
   @pre_cutover_version 20_260_714_160_000
@@ -161,33 +160,39 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
   defp seed_legacy_ledger! do
     now = DateTime.utc_now(:microsecond)
 
-    Repo.insert!(
-      WorkRequest.create_changeset(%{
+    # The stored status column predates the derived WorkRequest phase.
+    Repo.insert_all("sympp_work_requests", [
+      %{
         id: "WR-CANONICAL-MIGRATION",
         title: "Canonical migration",
         repo: "nextide/symphony-plus-plus",
         base_branch: "main",
         work_type: "refactor",
         human_description: "Cut over legacy identities.",
-        constraints: %{},
+        constraints: "{}",
         desired_dispatch_shape: "single_package",
-        status: "ready_for_slicing"
-      })
-    )
+        status: "ready_for_slicing",
+        inserted_at: now,
+        updated_at: now
+      }
+    ])
 
-    Repo.insert!(
-      WorkRequest.create_changeset(%{
+    # The stored status column predates the derived WorkRequest phase.
+    Repo.insert_all("sympp_work_requests", [
+      %{
         id: "WR-DISPATCHED-MIGRATION",
         title: "Dispatched canonical migration",
         repo: "nextide/symphony-plus-plus",
         base_branch: "main",
         work_type: "refactor",
         human_description: "Preserve a dispatched-only request.",
-        constraints: %{},
+        constraints: "{}",
         desired_dispatch_shape: "single_package",
-        status: "ready_for_slicing"
-      })
-    )
+        status: "ready_for_slicing",
+        inserted_at: now,
+        updated_at: now
+      }
+    ])
 
     insert_legacy_work_package!("WP-LINKED", "mcp", nil, "dispatched", now)
     insert_legacy_work_package!("WP-CLOSEOUT", "mcp", nil, "closed", now)

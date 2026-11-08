@@ -312,7 +312,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
 
   defp create_scenario_work_request({id, title, repo, repos}) do
     id
-    |> work_request_attrs(title, "sliced", "feature", "architect_led_feature_branch")
+    |> work_request_attrs(title, "feature", "architect_led_feature_branch")
     |> Map.put(:repo, repo)
     |> Map.put(:repo_scopes, Enum.map(repos, &%{repo: &1, base_branch: @demo_base_branch}))
     |> then(&WorkRequestRepository.create(Repo, &1))
@@ -412,16 +412,16 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
 
   defp seed_work_requests do
     [
-      work_request_attrs("SYMPP-DEMO-WR-CLARIFY", "Clarify cockpit onboarding copy", "clarifying", "docs", "single_package"),
-      work_request_attrs("SYMPP-DEMO-WR-HUMAN", "Resolve package ownership question", "human_info_needed", "feature", "architect_led_feature_branch"),
-      work_request_attrs("SYMPP-DEMO-WR-SLICING", "Plan dashboard visual QA sweep", "ready_for_slicing", "investigation", "investigation_first"),
-      work_request_attrs("SYMPP-DEMO-WR-SLICED", "Ship operator cockpit polish", "sliced", "feature", "architect_led_feature_branch"),
-      work_request_attrs("SYMPP-DEMO-WR-LIFECYCLE", "Coordinate package-to-merge lifecycle", "sliced", "feature", "architect_led_feature_branch")
+      work_request_attrs("SYMPP-DEMO-WR-CLARIFY", "Clarify cockpit onboarding copy", "docs", "single_package"),
+      work_request_attrs("SYMPP-DEMO-WR-HUMAN", "Resolve package ownership question", "feature", "architect_led_feature_branch"),
+      work_request_attrs("SYMPP-DEMO-WR-SLICING", "Plan dashboard visual QA sweep", "investigation", "investigation_first"),
+      work_request_attrs("SYMPP-DEMO-WR-SLICED", "Ship operator cockpit polish", "feature", "architect_led_feature_branch"),
+      work_request_attrs("SYMPP-DEMO-WR-LIFECYCLE", "Coordinate package-to-merge lifecycle", "feature", "architect_led_feature_branch")
     ]
     |> insert_all(&WorkRequestRepository.create(Repo, &1))
   end
 
-  defp work_request_attrs(id, title, status, work_type, dispatch_shape) do
+  defp work_request_attrs(id, title, work_type, dispatch_shape) do
     %{
       id: id,
       title: title,
@@ -435,8 +435,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
         "compatibility_stance" => "Clarify before assuming backward compatibility.",
         "synthetic_demo" => true
       },
-      desired_dispatch_shape: dispatch_shape,
-      status: status
+      desired_dispatch_shape: dispatch_shape
     }
   end
 

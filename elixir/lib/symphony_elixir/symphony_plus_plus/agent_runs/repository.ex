@@ -9,10 +9,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion, as: WorkRequestCompletion
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
-
-  @active_run_statuses AgentRun.active_statuses()
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
 
   @type repo :: module()
   @type error ::
@@ -165,8 +162,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
 
     with :ok <- reject_terminal_work_package(repo, work_package_id),
          :ok <- release_previous_attempt(repo, Keyword.get(opts, :replace_agent_run_id), work_package_id, opts),
-         {:ok, %AgentRun{} = agent_run} <- insert_run_with_recovery(repo, attrs, work_package_id, opts),
-         :ok <- clear_completion_for_active_run(repo, agent_run) do
+         {:ok, %AgentRun{} = agent_run} <- insert_run_with_recovery(repo, attrs, work_package_id, opts) do
       {:ok, agent_run}
     end
   end
@@ -392,9 +388,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
         {:ok, :active}
 
       1 ->
-        with :ok <- WorkRequestRepository.clear_completion_for_work_package(repo, work_package_id) do
-          {:ok, :released}
-        end
+        {:ok, :released}
 
       _count ->
         {:error, {:constraint_failed, "multiple_active_agent_runs"}}
@@ -469,10 +463,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
 
     case updated_count do
       1 ->
-        with {:ok, %AgentRun{} = agent_run} <- get(repo, id),
-             :ok <- clear_completion_for_active_run(repo, agent_run) do
-          {:ok, agent_run}
-        end
+        get(repo, id)
 
       0 ->
         {:error, :not_active}
@@ -482,23 +473,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
     end
   end
 
-  defp clear_completion_for_active_run(repo, %AgentRun{status: status, work_package_id: work_package_id})
-       when status in @active_run_statuses and is_binary(work_package_id) do
-    if repo.one(
-         from(delivery in WorkPackageDelivery,
-           where: delivery.work_package_id == ^work_package_id,
-           select: 1,
-           limit: 1
-         )
-       ) do
-      :ok
-    else
-      WorkRequestRepository.clear_completion_for_work_package(repo, work_package_id)
-    end
-  end
-
-  defp clear_completion_for_active_run(_repo, %AgentRun{}), do: :ok
-
   defp maybe_schedule_terminal_worktree_cleanup(repo, %AgentRun{status: status, work_package_id: work_package_id})
        when status in ["completed", "failed", "stopped"] and is_binary(work_package_id) do
     maybe_schedule_terminal_worktree_cleanup(repo, work_package_id)
@@ -506,8 +480,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
 
   defp maybe_schedule_terminal_worktree_cleanup(_repo, %AgentRun{}), do: :ok
 
-  defp maybe_schedule_terminal_worktree_cleanup(repo, work_package_id) when is_binary(work_package_id) do
-    WorkRequestCompletion.schedule_terminal_agent_run_worktree_cleanup(repo, work_package_id)
+  defp maybe_schedule_terminal_worktree_cleanup(_repo, work_package_id) when is_binary(work_package_id) do
+    WorktreeCleanupQueue.wake()
   end
 
   defp maybe_schedule_terminal_worktree_cleanup(_repo, _work_package_id), do: :ok

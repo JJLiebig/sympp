@@ -21,7 +21,7 @@ test('never-started retention uses creation age and restore age without inventin
   expect(archived.archive_reason).toBe('never_started');
   expect(archived.completed_at).toBeNull();
   expect(archived.operational_state.key).toBe('archived');
-  expect((await detail(client, old)).status).toBe('draft');
+  expect((await detail(client, old)).phase).toBe('archived');
   expect((await archives(client)).map((row: any) => row.id)).not.toContain(fresh);
   await ageHistory(factory, [{ table: 'sympp_work_requests', id: old, column: 'archived_at', days: 90 }]);
   factory = processes.factory();
@@ -33,7 +33,7 @@ test('never-started retention uses creation age and restore age without inventin
   await retention(client);
   expect((await archives(client)).map((row: any) => row.id)).not.toContain(old);
   expect((await detail(client, old)).completed_at).toBeNull();
-  await ageHistory(factory, [{ table: 'sympp_work_requests', id: old, column: 'never_started_restored_at', days: 31 }]);
+  await ageHistory(factory, [{ table: 'sympp_work_requests', id: old, column: 'restored_at', days: 31 }]);
   factory = processes.factory();
   client = await factory.client();
   await retention(client);
@@ -52,10 +52,10 @@ test('actual architect and dispatch evidence protect old goals while completed r
   const finished = await unstarted(client, 'Finished goal');
   const unfinished = await unstarted(client, 'Unfinished comparison');
   await client.call('record_work_request_operator_decision', { work_request_id: finished, decision: 'Keep until deliberate deletion.', rationale: 'Retention', scope_impact: 'None', created_by: 'acceptance' });
-  expect((await client.operator(`${requestPath(finished)}/state`, { state: 'completed' })).status).toBe(200);
+  expect((await client.operator(`${requestPath(finished)}/complete`, {})).status).toBe(200);
   await ageHistory(factory, [
     ...[claimed, dispatched].map((id) => ({ table: 'sympp_work_requests' as const, id, column: 'inserted_at' as const, days: 90 })),
-    { table: 'sympp_work_requests', id: finished, column: 'completed_at', days: 4 },
+    { table: 'sympp_work_requests', id: finished, column: 'operator_completed_at', days: 4 },
   ]);
   factory = processes.factory();
   client = await factory.client();

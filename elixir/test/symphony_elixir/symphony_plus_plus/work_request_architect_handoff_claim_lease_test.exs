@@ -40,7 +40,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestArchitectHandoffClaimLeaseT
     repo: repo,
     database_path: database_path
   } do
-    first = create_handoff!(repo, database_path, status: "ready_for_slicing")
+    first = create_handoff!(repo, database_path, [])
     {anchor, first_grant} = handoff_anchor_and_grant!(repo, first)
     assert {:ok, lease} = ClaimLeaseService.claim(repo, anchor.id, claim_actor("active local architect"), stale_after_ms: 60_000)
 
@@ -63,7 +63,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestArchitectHandoffClaimLeaseT
     repo: repo,
     database_path: database_path
   } do
-    first = create_handoff!(repo, database_path, status: "human_info_needed")
+    first = create_handoff!(repo, database_path, [])
     {anchor, first_grant} = handoff_anchor_and_grant!(repo, first)
 
     first_grant
@@ -117,8 +117,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestArchitectHandoffClaimLeaseT
         work_type: "feature",
         human_description: "Let an architect clarify and slice the request.",
         constraints: %{"allowed_paths" => ["elixir/lib"], "requires_secret" => false},
-        desired_dispatch_shape: "architect_led_feature_branch",
-        status: "ready_for_clarification"
+        desired_dispatch_shape: "architect_led_feature_branch"
       },
       Map.new(overrides)
     )

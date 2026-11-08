@@ -54,21 +54,12 @@ defmodule CanonicalWorkPackageFixtures do
     repo.transaction(fn ->
       with {:ok, planned} <- get_work_package(repo, work_request_id, planned_id),
            %WorkPackage{} = target <- repo.get(WorkPackage, target_id) do
-        target = canonicalize_target(repo, planned, target)
-        mark_work_request_sliced(repo, work_request_id)
-        target
+        canonicalize_target(repo, planned, target)
       else
         nil -> repo.rollback(:not_found)
         {:error, reason} -> repo.rollback(reason)
       end
     end)
-  end
-
-  def mark_sliced(repo, work_request_id, _current_status) do
-    case repo.get(WorkRequest, work_request_id) do
-      %WorkRequest{} = work_request -> {:ok, mark_work_request_sliced(repo, work_request.id)}
-      nil -> {:error, :not_found}
-    end
   end
 
   defp canonicalize_target(repo, %WorkPackage{id: id} = planned, %WorkPackage{id: id}) do
@@ -98,16 +89,6 @@ defmodule CanonicalWorkPackageFixtures do
     case repo.get(WorkPackage, work_package_id) do
       %WorkPackage{work_request_id: ^work_request_id} = work_package -> {:ok, work_package}
       _record -> {:error, :not_found}
-    end
-  end
-
-  defp mark_work_request_sliced(repo, work_request_id) do
-    work_request = repo.get!(WorkRequest, work_request_id)
-
-    if work_request.status == "sliced" do
-      work_request
-    else
-      repo.update!(Ecto.Changeset.change(work_request, status: "sliced"))
     end
   end
 

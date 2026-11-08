@@ -446,7 +446,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     request_id = Keyword.fetch!(overrides, :work_request_id)
     work_package_id = Keyword.fetch!(overrides, :work_package_id)
     status = Keyword.get(overrides, :status, "dispatched")
-    work_request = create_work_request!(repo, id: request_id, status: "ready_for_slicing")
+    work_request = create_work_request!(repo, id: request_id)
     work_package = create_work_package!(repo, work_request, id: "WRS-#{request_id}")
 
     assert {:ok, approved_slice} =

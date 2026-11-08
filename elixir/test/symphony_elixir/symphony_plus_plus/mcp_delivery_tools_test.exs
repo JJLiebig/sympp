@@ -62,8 +62,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     :ok
   end
 
-  test "closed execution reads consistently without fulfilling abandoned scope and reconciliation keeps full evidence on demand", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-CLOSED-EXECUTION", status: "sliced")
+  test "an ended plan with abandoned scope reads as unresolved everywhere and reconciliation keeps full evidence on demand", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-CLOSED-EXECUTION")
     session = create_work_request_architect_session(repo, work_request, ArchitectHandoff.capabilities())
 
     read = fn tool, args ->
@@ -72,7 +72,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
       get_in(response, ["result", "structuredContent"])
     end
 
-    assert read.("read_work_request", %{"detail" => "full", "work_request_id" => work_request.id})["work_request"]["execution_status"] == "open"
+    assert read.("read_work_request", %{"detail" => "full", "work_request_id" => work_request.id})["work_request"]["phase"] == "intake"
 
     packages =
       for index <- 1..25 do
@@ -101,7 +101,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
       read.("record_work_package_delivery", args)
     end
 
-    assert read.("read_work_request", %{"detail" => "full", "work_request_id" => work_request.id})["work_request"]["execution_status"] == "open"
+    assert read.("read_work_request", %{"detail" => "full", "work_request_id" => work_request.id})["work_request"]["phase"] == "planned"
     active = read.("read_delivery_board", %{"work_request_id" => work_request.id})["delivery_board"]["work_packages"] |> List.last()
     assert active["merge_eligibility"]["next_action"] == "dispatch_work_package"
     overview_packages = read.("read_work_request", %{"work_request_id" => work_request.id})["work_packages"]
@@ -111,23 +111,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     for detail <- ["summary", "full"] do
       board = read.("read_delivery_board", %{"work_request_id" => work_request.id, "detail" => detail})
-      assert board["work_request"]["status"] == "sliced"
-      assert board["work_request"]["execution_status"] == "closed"
-      assert board["delivery_board"]["execution_status"] == "closed"
+      assert board["work_request"]["phase"] == "unresolved"
       assert length(board["delivery_board"]["work_packages"]) == 25
       assert Enum.all?(board["delivery_board"]["work_packages"], &is_nil(&1["merge_eligibility"]["next_action"]))
     end
 
     request = read.("read_work_request", %{"detail" => "full", "work_request_id" => work_request.id})["work_request"]
-    assert request["execution_status"] == "closed"
-    assert request["status"] == "sliced"
-    listed = read.("list_work_requests", %{})["work_requests"] |> Enum.find(&(&1["id"] == work_request.id))
-    assert listed["execution_status"] == "closed"
-    assert listed["status"] == "sliced"
+    assert request["phase"] == "unresolved"
+    assert request["next_action"] == "complete_or_archive"
+    listed = read.("list_work_requests", %{"phase" => "unresolved"})["work_requests"]
+    assert Enum.map(listed, & &1["id"]) == [work_request.id]
     assert {:ok, native} = Dashboard.work_request_detail(repo, work_request.id)
-    assert native.work_request.execution_status == "closed"
+    assert native.work_request.phase == "unresolved"
     assert native.work_request.completed_at == nil
-    assert repo.get!(WorkRequest, work_request.id).completed_at == nil
 
     summary_response = mcp_tool(repo, session, "reconcile_work_request", %{"work_request_id" => work_request.id})
     full_response = mcp_tool(repo, session, "reconcile_work_request", %{"work_request_id" => work_request.id, "detail" => "full"})
@@ -167,7 +163,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     assert get_in(finished, ["result", "structuredContent", "work_package_delivery", "outcome"]) == "finished"
     assert repo.get!(WorkPackage, other_package.id).status == "ended"
-    assert %WorkRequest{completed_at: %DateTime{}} = repo.get!(WorkRequest, other_request.id)
+    assert {:ok, %{phase: "done"}} = SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase.load_one(repo, repo.get!(WorkRequest, other_request.id))
 
     conflict =
       record_delivery(repo, session, %{
@@ -624,7 +620,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
   defp linked_slice!(repo, overrides) do
     request_id = Keyword.fetch!(overrides, :work_request_id)
     work_package_status = Keyword.get(overrides, :work_package_status, "dispatched")
-    work_request = create_work_request!(repo, id: request_id, status: "ready_for_slicing")
+    work_request = create_work_request!(repo, id: request_id)
     work_package = create_work_package!(repo, work_request, id: "WRS-#{request_id}")
 
     assert {:ok, approved_slice} =
@@ -662,8 +658,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     create_work_request!(repo,
       id: id,
       repo: work_request.repo,
-      base_branch: work_request.base_branch,
-      status: "ready_for_slicing"
+      base_branch: work_request.base_branch
     )
   end
 

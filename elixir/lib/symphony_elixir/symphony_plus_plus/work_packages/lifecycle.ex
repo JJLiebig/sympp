@@ -19,7 +19,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
 
   @planned "planned"
   @dispatched "dispatched"
@@ -250,12 +249,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
     end
   end
 
-  defp apply_effects(repo, _event, %WorkPackage{} = work_package) do
-    case WorkRequestRepository.clear_completion_for_work_package(repo, work_package.id) do
-      :ok -> work_package
-      {:error, reason} -> repo.rollback(reason)
-    end
-  end
+  defp apply_effects(_repo, _event, %WorkPackage{} = work_package), do: work_package
 
   defp broadcast({:ok, %WorkPackage{}} = result, repo) do
     unless repo.in_transaction?(), do: DashboardPubSub.broadcast_changed()

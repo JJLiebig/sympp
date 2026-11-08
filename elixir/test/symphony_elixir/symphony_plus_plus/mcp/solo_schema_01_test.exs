@@ -145,8 +145,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
       create_work_request!(repo,
         id: "WR-#{id}",
         repo: package.repo,
-        base_branch: package.base_branch,
-        status: "ready_for_slicing"
+        base_branch: package.base_branch
       )
 
     contract =

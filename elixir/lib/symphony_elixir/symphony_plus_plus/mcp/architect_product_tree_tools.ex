@@ -37,7 +37,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
-  @work_request_authoring_states ["ready_for_slicing", "sliced"]
   @work_package_authoring_states ["planned", "dispatched"]
 
   @tools [
@@ -100,7 +99,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          "clarification_question" => WorkRequestPayloads.clarification_question(question_record),
          "scope" => scope,
          "status" => %{
-           "work_request_status" => updated_work_request.status,
            "question_status" => question_record.status
          }
        })}
@@ -143,8 +141,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
        ToolResult.tool_result(%{
          "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
          "decision_log_entry" => WorkRequestPayloads.decision_log_entry(decision_record),
-         "scope" => scope,
-         "status" => %{"work_request_status" => updated_work_request.status}
+         "scope" => scope
        })}
     else
       {:tool_error, reason} -> invalid_params_error("record_decision", reason)
@@ -162,7 +159,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          :ok <- require_work_package_batch(work_packages),
          {:ok, work_request, _filters, scope} <-
            WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_package_create, tool),
-         :ok <- require_work_package_slicing_status(work_request),
+         :ok <- require_work_package_authoring_status(work_request),
          :ok <- require_complete_work_package_contracts(work_packages),
          {:ok, {result, detail}} <-
            mutate_product_tree_with_projection(
@@ -182,8 +179,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
        ToolResult.tool_result(%{
          "work_package_ids" => Enum.map(result.work_packages, & &1.id),
          "product_tree_revision" => json_safe_payload(detail.product_tree.latest_revision),
-         "scope" => scope,
-         "status" => %{"work_request_status" => result.work_request.status}
+         "scope" => scope
        })}
     else
       {:tool_error, reason} -> invalid_params_error(tool, reason)
@@ -284,8 +280,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
          "group" => WorkRequestPayloads.group(group),
          "product_tree" => WorkRequestPayloads.public_product_tree(detail.product_tree),
-         "scope" => scope,
-         "status" => %{"work_request_status" => work_request.status}
+         "scope" => scope
        })}
     else
       {:tool_error, reason} -> invalid_params_error(tool, reason)
@@ -342,8 +337,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          "dependency" => WorkRequestPayloads.dependency_intent(dependency),
          "product_tree" => WorkRequestPayloads.public_product_tree(detail.product_tree),
          "product_tree_revision" => json_safe_payload(detail.product_tree.latest_revision),
-         "scope" => scope,
-         "status" => %{"work_request_status" => work_request.status}
+         "scope" => scope
        })}
     else
       {:tool_error, reason} -> invalid_params_error(tool, reason)
@@ -410,8 +404,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
           "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
           "deleted" => deleted_graph_record_payload(tool, deleted),
           "product_tree" => WorkRequestPayloads.public_product_tree(detail.product_tree),
-          "scope" => scope,
-          "status" => %{"work_request_status" => work_request.status}
+          "scope" => scope
         }
 
       payload =
@@ -450,32 +443,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   defp require_work_package_authoring_status(%WorkRequest{} = work_request),
     do: require_work_package_authoring_status(work_request, nil)
 
-  defp require_work_package_slicing_status(%WorkRequest{archived_at: nil, completion_source: source, status: status})
-       when source != "operator" and
-              status in ["ready_for_clarification", "clarifying", "human_info_needed"],
-       do: :ok
-
-  defp require_work_package_slicing_status(work_request),
-    do: require_work_package_authoring_status(work_request)
-
   defp require_work_package_authoring_status(%WorkRequest{archived_at: %DateTime{}}, revision),
-    do: {:error, {:work_request_terminal, "archived", revision}}
+    do: {:error, {:work_request_archived, revision}}
 
-  defp require_work_package_authoring_status(
-         %WorkRequest{completed_at: %DateTime{}, completion_source: "operator"},
-         revision
-       ),
-       do: {:error, {:work_request_terminal, "completed", revision}}
+  defp require_work_package_authoring_status(%WorkRequest{operator_completed_at: %DateTime{}}, revision),
+    do: {:error, {:work_request_terminal, "done", revision}}
 
-  defp require_work_package_authoring_status(%WorkRequest{status: status}, revision) when status in ["completed", "archived"],
-    do: {:error, {:work_request_terminal, status, revision}}
-
-  defp require_work_package_authoring_status(%WorkRequest{status: status}, _revision)
-       when status in @work_request_authoring_states,
-       do: :ok
-
-  defp require_work_package_authoring_status(%WorkRequest{status: status}, revision),
-    do: {:error, {:work_request_not_authorable, status, revision}}
+  defp require_work_package_authoring_status(%WorkRequest{}, _revision), do: :ok
 
   defp require_mutable_work_package_contract(%WorkPackage{status: status} = work_package) do
     cond do
@@ -690,19 +664,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   defp architect_error({:phase_scope_not_available, _missing_evidence}, resource), do: auth_error(:forbidden, resource)
   defp architect_error(:ambiguous_phase_scope, resource), do: auth_error(:forbidden, resource)
 
-  defp architect_error({:work_request_terminal, status}, tool),
-    do: architect_error({:work_request_terminal, status, nil}, tool)
+  defp architect_error({:work_request_archived, revision}, tool) do
+    ErrorDetails.lifecycle_error(tool, :work_request_archived, optional_put(%{"phase" => "archived"}, "current_contract_revision", revision))
+  end
 
-  defp architect_error({reason, status, revision}, tool)
-       when reason in [:work_request_terminal, :work_request_not_authorable] do
-    details =
-      %{
-        "actual_status" => reason_text(status),
-        "allowed_authoring_states" => @work_request_authoring_states
-      }
-      |> optional_put("current_contract_revision", revision)
-
-    ErrorDetails.lifecycle_error(tool, reason, details)
+  defp architect_error({:work_request_terminal, phase, revision}, tool) do
+    ErrorDetails.lifecycle_error(tool, :work_request_terminal, optional_put(%{"phase" => phase}, "current_contract_revision", revision))
   end
 
   defp architect_error({:contract_frozen, status, revision}, tool) do

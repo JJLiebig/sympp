@@ -83,7 +83,7 @@ type OperatorReport = {
   human_escalation?: { question?: string | null; raised_at?: string | null; resolved_at?: string | null } | null;
 };
 type Detail = {
-  work_request: { id: string; title?: string | null; repo?: string | null; repo_display?: string | null; base_branch?: string | null; inserted_at?: string | null; completed_at?: string | null; status?: string | null; operator_report?: OperatorReport | null; architect_session_location?: SessionLocation | null; area_path?: string[] | null; default_branch?: string | null; deployments?: Deployments | null };
+  work_request: { id: string; title?: string | null; repo?: string | null; repo_display?: string | null; base_branch?: string | null; inserted_at?: string | null; completed_at?: string | null; phase?: string | null; operator_report?: OperatorReport | null; architect_session_location?: SessionLocation | null; area_path?: string[] | null; default_branch?: string | null; deployments?: Deployments | null };
   work_packages?: Slice[];
   product_tree?: { nodes?: Array<{ id: string; title?: string | null; position?: number; parent_id?: string | null }> } | null;
 };

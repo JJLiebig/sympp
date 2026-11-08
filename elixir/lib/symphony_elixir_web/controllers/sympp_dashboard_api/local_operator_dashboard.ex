@@ -20,6 +20,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   alias SymphonyElixir.SymphonyPlusPlus.ReviewObservation
   alias SymphonyElixir.SymphonyPlusPlus.SessionLocations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -183,8 +184,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
       &Map.take(&1, [
         :id,
         :title,
-        :status,
-        :execution_status,
+        :phase,
         :repo,
         :repo_display,
         :area_path,
@@ -524,6 +524,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   @spec operator_work_request_detail_payload(module(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def operator_work_request_detail_payload(repo, work_request_id, opts \\ []) when is_binary(work_request_id) do
     with {:ok, work_request} <- WorkRequestRepository.get(repo, work_request_id),
+         {:ok, phase} <- Phase.load_one(repo, work_request),
          {:ok, questions} <- WorkRequestRepository.list_questions(repo, work_request_id),
          {:ok, decisions} <- WorkRequestRepository.list_decisions(repo, work_request_id),
          {:ok, selected_work_package} <- operator_selected_work_package(repo, work_request_id, opts) do
@@ -532,7 +533,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
 
       payload =
         %{
-          work_request: operator_work_request_enrichment(work_request),
+          work_request: operator_work_request_enrichment(work_request, phase),
           clarification_questions: Enum.map(questions, &Dashboard.clarification_question/1),
           decision_logs: Enum.map(visible_decisions, &Dashboard.decision_log_entry/1),
           summary: %{
@@ -632,7 +633,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     end
   end
 
-  defp operator_work_request_enrichment(%WorkRequest{} = work_request) do
+  defp operator_work_request_enrichment(%WorkRequest{} = work_request, phase) do
     %{
       id: work_request.id,
       title: Sanitizer.redacted_text(work_request.title),
@@ -647,9 +648,9 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
         name: Sanitizer.redacted_text(work_request.creator_name),
         via: work_request.created_via
       },
-      status: work_request.status,
-      completed_at: timestamp(work_request.completed_at),
-      completion_source: work_request.completion_source,
+      phase: phase.phase,
+      completed_at: timestamp(phase.completed_at),
+      operator_completed_at: timestamp(work_request.operator_completed_at),
       archived_at: timestamp(work_request.archived_at),
       archive_reason: work_request.archive_reason,
       inserted_at: timestamp(work_request.inserted_at),
@@ -724,7 +725,6 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
       "work_type" => text_param(params, "work_type", "feature"),
       "human_description" => text_param(params, "human_description"),
       "desired_dispatch_shape" => text_param(params, "desired_dispatch_shape", "architect_led_feature_branch"),
-      "status" => text_param(params, "status", "ready_for_clarification"),
       "creator_kind" => text_param(params, "creator_kind", "human"),
       "creator_name" => text_param(params, "creator_name", @local_operator_actor),
       "created_via" => text_param(params, "created_via", "cockpit"),
@@ -775,34 +775,21 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     Retention.run(repo, settings, opts)
   end
 
-  @spec archived_work_request_payload(WorkRequest.t()) :: map()
-  def archived_work_request_payload(work_request) do
-    %{
-      id: work_request.id,
-      completed_at: timestamp(work_request.completed_at),
-      archived_at: timestamp(work_request.archived_at),
-      archive_reason: work_request.archive_reason
-    }
+  @doc "The WorkRequest after an operator complete, archive or restore."
+  @spec work_request_mutation_payload(module(), WorkRequest.t()) :: {:ok, map()} | {:error, term()}
+  def work_request_mutation_payload(repo, %WorkRequest{} = work_request) do
+    with {:ok, phase} <- Phase.load_one(repo, work_request) do
+      {:ok,
+       %{
+         id: work_request.id,
+         phase: phase.phase,
+         completed_at: timestamp(phase.completed_at),
+         operator_completed_at: timestamp(work_request.operator_completed_at),
+         archived_at: timestamp(work_request.archived_at),
+         archive_reason: work_request.archive_reason
+       }}
+    end
   end
-
-  @spec work_request_mutation_payload(WorkRequest.t()) :: map()
-  def work_request_mutation_payload(%WorkRequest{} = work_request) do
-    %{
-      id: work_request.id,
-      completed_at: timestamp(work_request.completed_at),
-      completion_source: work_request.completion_source,
-      archived_at: timestamp(work_request.archived_at),
-      archive_reason: work_request.archive_reason,
-      status: work_request.status,
-      operational_state: completed_work_request_mutation_state(work_request)
-    }
-  end
-
-  defp completed_work_request_mutation_state(%WorkRequest{completed_at: %DateTime{}, status: status}) do
-    %{key: "completed", label: "Completed", tone: "success", raw_status: status}
-  end
-
-  defp completed_work_request_mutation_state(%WorkRequest{}), do: nil
 
   defp dashboard_ledger_database(repo) do
     Repo.operator_database_path(repo)

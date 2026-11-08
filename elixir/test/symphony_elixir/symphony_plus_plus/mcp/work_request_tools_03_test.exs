@@ -6,8 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
   test "claim_local_architect_assignment recovers bare WorkRequest id claim when grant scope rows are stale", %{repo: repo} do
     work_request =
       create_work_request!(repo,
-        id: "WR-MCP-LOCAL-ARCHITECT-BARE-STALE-SCOPE",
-        status: "ready_for_clarification"
+        id: "WR-MCP-LOCAL-ARCHITECT-BARE-STALE-SCOPE"
       )
 
     handoff = create_architect_handoff!(repo, work_request)
@@ -34,14 +33,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
   test "claim_local_architect_assignment recovers when a singleton grant scope row is stale", %{repo: repo} do
     work_request =
       create_work_request!(repo,
-        id: "WR-MCP-LOCAL-ARCHITECT-STALE-SINGLETON-SCOPE",
-        status: "ready_for_clarification"
+        id: "WR-MCP-LOCAL-ARCHITECT-STALE-SINGLETON-SCOPE"
       )
 
     sibling =
       create_work_request!(repo,
-        id: "WR-MCP-LOCAL-ARCHITECT-STALE-SINGLETON-SIBLING",
-        status: "ready_for_clarification"
+        id: "WR-MCP-LOCAL-ARCHITECT-STALE-SINGLETON-SIBLING"
       )
 
     handoff = create_architect_handoff!(repo, work_request)
@@ -75,14 +72,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
   test "claim_local_architect_assignment prunes stale additive grant scope rows", %{repo: repo} do
     work_request =
       create_work_request!(repo,
-        id: "WR-MCP-LOCAL-ARCHITECT-STALE-ADDITIVE-SCOPE",
-        status: "ready_for_clarification"
+        id: "WR-MCP-LOCAL-ARCHITECT-STALE-ADDITIVE-SCOPE"
       )
 
     sibling =
       create_work_request!(repo,
-        id: "WR-MCP-LOCAL-ARCHITECT-STALE-ADDITIVE-SIBLING",
-        status: "ready_for_clarification"
+        id: "WR-MCP-LOCAL-ARCHITECT-STALE-ADDITIVE-SIBLING"
       )
 
     handoff = create_architect_handoff!(repo, work_request)
@@ -124,8 +119,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       create_work_request!(repo,
         id: "WR-MCP-WR-SLICE-EXPLICIT",
         repo: anchor.repo,
-        base_branch: anchor.base_branch,
-        status: "ready_for_slicing"
+        base_branch: anchor.base_branch
       )
 
     assert {:ok, work_package} =
@@ -190,8 +184,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       create_work_request!(repo,
         id: "WR-MCP-WR-MUTATE-READONLY",
         repo: read_anchor.repo,
-        base_branch: read_anchor.base_branch,
-        status: "ready_for_slicing"
+        base_branch: read_anchor.base_branch
       )
 
     assert {:ok, read_only_slice} =
@@ -276,8 +269,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       create_work_request!(repo,
         id: "WR-MCP-WR-MUTATE-DRIFT",
         repo: drift_anchor.repo,
-        base_branch: drift_anchor.base_branch,
-        status: "draft"
+        base_branch: drift_anchor.base_branch
       )
 
     grant_work_request_scope!(repo, drift_session, drift_work_request.id)
@@ -293,16 +285,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
              )
 
     assert {:ok, _drifted_anchor} = WorkPackageRepository.update(repo, drift_anchor.id, %{repo: "nextide/other"})
-
-    drift_response =
-      mcp_tool(repo, drift_session, "set_work_request_status", %{
-        "work_request_id" => drift_work_request.id,
-        "current_status" => "draft",
-        "next_status" => "ready_for_clarification"
-      })
-
-    assert get_in(drift_response, ["error", "code"]) == -32_003
-    assert get_in(drift_response, ["error", "data", "reason"]) == "outside_session_scope"
 
     drift_slice_response =
       mcp_tool(repo, drift_session, "slice_work_request", %{
@@ -333,21 +315,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       create_work_request!(repo,
         id: "WR-MCP-WR-MUTATE-REVOKED",
         repo: revoked_anchor.repo,
-        base_branch: revoked_anchor.base_branch,
-        status: "draft"
+        base_branch: revoked_anchor.base_branch
       )
 
     assert {:ok, _revoked} = AccessGrantService.revoke(repo, revoked_grant.id)
-
-    revoked_response =
-      mcp_tool(repo, revoked_session, "set_work_request_status", %{
-        "work_request_id" => revoked_work_request.id,
-        "current_status" => "draft",
-        "next_status" => "ready_for_clarification"
-      })
-
-    assert get_in(revoked_response, ["error", "code"]) == -32_001
-    assert get_in(revoked_response, ["error", "data", "reason"]) == "revoked"
 
     revoked_slice_response =
       mcp_tool(repo, revoked_session, "slice_work_request", %{
@@ -377,8 +348,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       create_work_request!(repo,
         id: "WR-MCP-WR-MUTATE-WORKER",
         repo: "nextide/symphony-plus-plus",
-        base_branch: "symphony-plus-plus/beta",
-        status: "ready_for_slicing"
+        base_branch: "symphony-plus-plus/beta"
       )
 
     assert {:ok, worker_work_package} =
@@ -390,16 +360,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
                  base_branch: "symphony-plus-plus/beta"
                )
              )
-
-    worker_response =
-      mcp_tool(repo, worker_session, "set_work_request_status", %{
-        "work_request_id" => worker_work_request.id,
-        "current_status" => "draft",
-        "next_status" => "ready_for_clarification"
-      })
-
-    assert get_in(worker_response, ["error", "code"]) == -32_003
-    assert get_in(worker_response, ["error", "data", "reason_code"]) == "insufficient_role"
 
     worker_slice_response =
       mcp_tool(repo, worker_session, "slice_work_request", %{
@@ -419,17 +379,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
 
     assert get_in(worker_dispatch_response, ["error", "code"]) == -32_003
     assert get_in(worker_dispatch_response, ["error", "data", "reason_code"]) == "insufficient_role"
-
-    anonymous_response =
-      mcp_tool(repo, nil, "set_work_request_status", %{
-        "work_request_id" => "WR-MCP-WR-MISSING",
-        "current_status" => "draft",
-        "next_status" => "ready_for_clarification"
-      })
-
-    assert get_in(anonymous_response, ["error", "code"]) == -32_001
-    assert get_in(anonymous_response, ["error", "data", "reason"]) == "claim_required"
-    assert get_in(anonymous_response, ["error", "data", "action"]) == "claim_local_architect_assignment"
 
     anonymous_slice_response =
       mcp_tool(repo, nil, "slice_work_request", %{
@@ -453,7 +402,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(anonymous_dispatch_response, ["error", "data", "action"]) == "claim_local_architect_assignment"
   end
 
-  test "WorkRequest MCP work-package mutations require an authoring parent status", %{repo: repo} do
+  test "MCP writes to an archived WorkRequest are refused with restore as the next action", %{repo: repo} do
     {anchor, session, _grant} =
       create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-AUTHORING-STATUS", [
         "write:work_request"
@@ -463,8 +412,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       create_work_request!(repo,
         id: "WR-MCP-WR-AUTHORING-STATUS",
         repo: anchor.repo,
-        base_branch: anchor.base_branch,
-        status: "ready_for_slicing"
+        base_branch: anchor.base_branch
       )
 
     grant_work_request_scope!(repo, session, work_request.id)
@@ -476,7 +424,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
                work_request_work_package_attrs(id: "WP-MCP-WR-AUTHORING-STATUS")
              )
 
-    repo.update_all(from(request in WorkRequest, where: request.id == ^work_request.id), set: [status: "completed"])
+    repo.update_all(from(request in WorkRequest, where: request.id == ^work_request.id), set: [archived_at: DateTime.utc_now(:microsecond), archive_reason: "manual"])
 
     update_response =
       mcp_tool(repo, session, "update_work_package", %{
@@ -487,8 +435,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       })
 
     assert get_in(update_response, ["error", "code"]) == -32_009
-    assert get_in(update_response, ["error", "data", "reason"]) == "work_request_terminal"
-    assert get_in(update_response, ["error", "data", "recovery", "next_action"]) == "no_change"
+    assert get_in(update_response, ["error", "data", "reason"]) == "work_request_archived"
+    assert get_in(update_response, ["error", "data", "recovery", "next_action"]) == "restore"
 
     skip_response =
       mcp_tool(repo, session, "skip_work_package", %{
@@ -497,8 +445,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       })
 
     assert get_in(skip_response, ["error", "code"]) == -32_009
-    assert get_in(skip_response, ["error", "data", "reason"]) == "work_request_terminal"
-    assert get_in(skip_response, ["error", "data", "recovery", "next_action"]) == "no_change"
+    assert get_in(skip_response, ["error", "data", "reason"]) == "work_request_archived"
+    assert get_in(skip_response, ["error", "data", "recovery", "next_action"]) == "restore"
 
     persisted = repo.get!(WorkPackage, work_package.id)
     assert persisted.title == work_package.title

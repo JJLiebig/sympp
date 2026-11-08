@@ -129,8 +129,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
       "human_description" => text_value(map_value(work_request, "human_description")),
       "constraints" => work_request |> map_value("constraints") |> primitive_map(),
       "desired_dispatch_shape" => text_value(map_value(work_request, "desired_dispatch_shape")),
-      "status" => text_value(map_value(work_request, "status")),
-      "execution_status" => text_value(map_value(work_request, "execution_status"))
+      "phase" => text_value(map_value(work_request, "phase")),
+      "next_action" => text_value(map_value(work_request, "next_action"))
     }
     |> reject_nil_values()
   end
@@ -142,8 +142,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
   defp compact_mutation_work_request(%{} = work_request) do
     %{
       "id" => text_value(map_value(work_request, "id")),
-      "status" => text_value(map_value(work_request, "status")),
-      "execution_status" => text_value(map_value(work_request, "execution_status")),
+      "phase" => text_value(map_value(work_request, "phase")),
       "updated_at" => text_value(map_value(work_request, "updated_at"))
     }
     |> reject_nil_values()

@@ -6,7 +6,7 @@ import { expect } from 'e2e';
 import { type Client, type Factory } from './factory.js';
 
 type Age = { table: 'sympp_work_requests' | 'sympp_solo_sessions'; id: string;
-  column: 'inserted_at' | 'completed_at' | 'archived_at' | 'never_started_restored_at' | 'last_activity_at'; days: number };
+  column: 'inserted_at' | 'operator_completed_at' | 'archived_at' | 'restored_at' | 'last_activity_at'; days: number };
 
 // Hosted-only prepared history. Stop this disposable candidate before changing
 // timestamps; every lifecycle action itself still goes through its public API.
@@ -47,6 +47,6 @@ export async function retention(client: Client, days = 30) {
 
 export async function unstarted(client: Client, title: string) {
   return (await client.call('create_work_request', { repo: 'example/retention', base_branch: 'beta',
-    title, description: 'Disposable retention acceptance history.', request_kind: 'feature', status: 'draft',
+    title, description: 'Disposable retention acceptance history.', request_kind: 'feature',
   })).work_request.id as string;
 }

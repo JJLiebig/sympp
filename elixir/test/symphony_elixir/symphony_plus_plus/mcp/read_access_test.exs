@@ -43,7 +43,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadAccessTest do
 
   test "a bound architect reads another WorkRequest exactly as named", %{repo: repo} do
     {bound, _handoff} = claimable_work_request!(repo, "WR-READS-BOUND")
-    other = create_work_request!(repo, id: "WR-READS-OTHER", repo: "nextide/other-product", base_branch: "develop", status: "sliced")
+    other = create_work_request!(repo, id: "WR-READS-OTHER", repo: "nextide/other-product", base_branch: "develop")
     other_packages = for index <- 1..3, do: add_package!(repo, other, "WP-READS-OTHER-#{index}")
     client = connect!(repo, "client-reads-bound")
 
@@ -131,7 +131,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadAccessTest do
   end
 
   defp claimable_work_request!(repo, id) do
-    work_request = create_work_request!(repo, id: id, status: "ready_for_slicing")
+    work_request = create_work_request!(repo, id: id)
 
     assert {:ok, handoff} =
              ArchitectHandoff.create_or_replay(repo, work_request.id,

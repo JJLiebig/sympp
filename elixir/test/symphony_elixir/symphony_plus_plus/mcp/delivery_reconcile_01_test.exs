@@ -16,7 +16,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
         title: "Local ghp_localreadsecret discovery",
         repo: "https://example.test/repo?token=ghp_localreadsecret",
         base_branch: "feature/raw-secret-localreadbranch",
-        status: "ready_for_slicing",
         human_description: "Do not expose Bearer localreadsecretvalue."
       )
 
@@ -25,8 +24,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
         repo,
         id: "WR-MCP-LOCAL-READ-DRAFT",
         repo: work_request.repo,
-        base_branch: work_request.base_branch,
-        status: "draft"
+        base_branch: work_request.base_branch
       )
 
     assert {:ok, work_package} =
@@ -47,7 +45,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
           "jsonrpc" => "2.0",
           "id" => "local-list-work-requests",
           "method" => "tools/call",
-          "params" => %{"name" => "list_work_requests", "arguments" => %{"status" => "ready_for_slicing"}}
+          "params" => %{"name" => "list_work_requests", "arguments" => %{"phase" => "planned"}}
         },
         local_server
       )
@@ -56,7 +54,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
 
     list_payload = get_in(list_response, ["result", "structuredContent"])
     assert list_payload["scope"] == %{"visibility" => "local_ledger"}
-    assert list_payload["filters"] == %{"status" => "ready_for_slicing"}
+    assert list_payload["filters"] == %{"phase" => "planned"}
     assert list_payload["total_count"] == 1
     assert [%{"id" => "WR-MCP-LOCAL-READ", "title" => listed_title} = listed] = list_payload["work_requests"]
     assert listed_title == "Local [REDACTED] discovery"
@@ -137,7 +135,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
         id: "WR-MCP-WR-SLICE-DISPATCH",
         repo: anchor.repo,
         base_branch: anchor.base_branch,
-        status: "ready_for_slicing",
         human_description: "Do not return raw_secret_value."
       )
 
@@ -159,7 +156,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
              )
 
     assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
-    assert {:ok, _work_request} = CanonicalWorkPackageFixtures.mark_sliced(repo, work_request.id, "ready_for_slicing")
 
     live_database_path = current_main_database_path(repo)
     configured_database = sqlite_file_uri(live_database_path, "mode=rwc&cache=shared")
@@ -332,8 +328,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       create_work_request!(repo,
         id: "WR-MCP-WR-DISPATCH-GUARD",
         repo: anchor.repo,
-        base_branch: anchor.base_branch,
-        status: "ready_for_slicing"
+        base_branch: anchor.base_branch
       )
 
     grant_work_request_scope!(repo, session, in_scope.id)
@@ -344,8 +339,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
                in_scope.id,
                work_request_work_package_attrs(id: "WRS-MCP-WR-DISPATCH-PLANNED", base_branch: anchor.base_branch)
              )
-
-    assert {:ok, _work_request} = CanonicalWorkPackageFixtures.mark_sliced(repo, in_scope.id, "ready_for_slicing")
 
     assert {:ok, live_database_slice} =
              CanonicalWorkPackageFixtures.add_work_package(

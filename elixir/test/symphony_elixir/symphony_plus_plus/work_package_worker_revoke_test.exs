@@ -265,8 +265,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackageWorkerRevokeTest do
       work_type: "feature",
       human_description: "Recycle runtime authority before superseded closeout.",
       constraints: %{"allowed_paths" => ["elixir/lib"], "forbidden_paths" => [], "requires_secret" => false},
-      desired_dispatch_shape: "architect_led_feature_branch",
-      status: "ready_for_slicing"
+      desired_dispatch_shape: "architect_led_feature_branch"
     }
 
     assert {:ok, work_request} = WorkRequestRepository.create(repo, attrs)
