@@ -8,22 +8,21 @@ type Total = { label: string; goalIds: string[] };
 export type Changes = { notes: Map<string, string[]>; totals: Total[] };
 export const SinceContext = createContext<Map<string, string[]>>(new Map());
 
-const ARRIVED: Partial<Record<Verdict, string>> = { needs_you: "now needs you", bump: "new road bump", stalled: "stalled", settled: "finished" };
+const ARRIVED: Partial<Record<Verdict, string>> = { needs_you: "now needs you", unresolved: "unresolved", done: "finished" };
 // Singular and plural wording for the totals line.
 const TOTALS: Record<string, [string, string]> = {
   "now needs you": ["now needs you", "now need you"],
-  "new road bump": ["new road bump", "new road bumps"],
-  stalled: ["stalled", "stalled"],
+  unresolved: ["goal unresolved", "goals unresolved"],
   "back on track": ["back on track", "back on track"],
   finished: ["goal finished", "goals finished"],
   new: ["new goal", "new goals"],
-  done: ["package done", "packages done"],
+  done: ["package ended", "packages ended"],
   started: ["package started", "packages started"],
 };
 
 function verdictNote(was: Verdict, is: Verdict) {
   if (was === is) return "";
-  return ARRIVED[is] ?? (is === "on_track" && wantsAttention(was) ? "back on track" : "");
+  return ARRIVED[is] ?? (is === "active" && wantsAttention(was) ? "back on track" : "");
 }
 
 function goalChanges(then: GoalView | undefined, now: GoalView) {
@@ -32,7 +31,7 @@ function goalChanges(then: GoalView | undefined, now: GoalView) {
   const knownThen = new Set([...doneThen, ...then.live.map((live) => live.pkg.id)]);
   const done = now.done.filter((pkg) => !doneThen.has(pkg.id)).length;
   const started = now.live.filter((live) => !knownThen.has(live.pkg.id)).length;
-  const notes = [verdictNote(reportFor(then).verdict, reportFor(now).verdict), done > 0 ? `+${done} done` : "", started > 0 ? `+${started} started` : ""];
+  const notes = [verdictNote(reportFor(then).verdict, reportFor(now).verdict), done > 0 ? `+${done} ended` : "", started > 0 ? `+${started} started` : ""];
   return { notes: notes.filter(Boolean), done, started };
 }
 

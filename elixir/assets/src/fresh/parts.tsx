@@ -1,73 +1,94 @@
+import { Check, CircleDashed, X } from "lucide-react";
+
 import { GoalActions, ShelfCleanup } from "./actions";
 import { areaLabel } from "./areas";
-import { deployAt, span, type DeployStep, type Goal, type GoalView, type PkgView, type Stage } from "./model";
+import { deployAt, span, type Ci, type DeployStep, type Goal, type GoalView, type Outcome, type Pr, type PkgView, type Review, type Stage } from "./model";
 import { POP, useFlash } from "./motion";
 
-export const STAGE: Record<Stage, { label: string; text: string; bg: string; border: string }> = {
-  queued: { label: "Queued", text: "text-faint", bg: "bg-faint", border: "border-faint" },
-  build: { label: "Build", text: "text-build", bg: "bg-build", border: "border-build" },
-  checks: { label: "Checks", text: "text-checks", bg: "bg-checks", border: "border-checks" },
-  review: { label: "Review", text: "text-review", bg: "bg-review", border: "border-review" },
-  merge: { label: "Merge", text: "text-merge", bg: "bg-merge", border: "border-merge" },
-  done: { label: "Done", text: "text-dim", bg: "bg-merge/40", border: "border-line" },
+// `pip` is the small square that stands for a package in a strip of dots; `bar` is its step on the track.
+export const STAGE: Record<Stage, { label: string; text: string; pip: string; bar: string }> = {
+  planned: { label: "Planned", text: "text-faint", pip: "border border-faint", bar: "bg-line" },
+  launching: { label: "Launching", text: "text-build", pip: "border border-build", bar: "bg-build/50" },
+  implementing: { label: "Implementing", text: "text-build", pip: "bg-build", bar: "bg-build" },
+  review_ci: { label: "Review/CI", text: "text-review", pip: "bg-review", bar: "bg-review" },
+  ready: { label: "Ready", text: "text-merge", pip: "bg-merge", bar: "bg-merge" },
+  ended: { label: "Ended", text: "text-dim", pip: "bg-merge/40", bar: "bg-merge/40" },
 };
 
-const FULL_TRACK: Array<{ label: string; stage: Stage | "pr" }> = [
-  { label: "Build", stage: "build" },
-  { label: "PR", stage: "pr" },
-  { label: "Checks", stage: "checks" },
-  { label: "Review", stage: "review" },
-  { label: "Merge", stage: "merge" },
-];
-const SHORT_TRACK: Array<{ label: string; stage: Stage | "pr" }> = [
-  { label: "Work", stage: "build" },
-  { label: "Done", stage: "done" },
-];
-const ORDER: Record<Stage, number> = { queued: -1, build: 0, checks: 2, review: 3, merge: 4, done: 5 };
+export const OUTCOME: Record<Outcome, { label: string; tone: string }> = {
+  merged: { label: "Merged", tone: "text-merge/80" },
+  finished: { label: "Finished", tone: "text-merge/80" },
+  completed: { label: "Completed without a PR", tone: "text-merge/80" },
+  superseded: { label: "Superseded", tone: "text-faint" },
+  abandoned: { label: "Abandoned", tone: "text-fail" },
+  skipped: { label: "Skipped", tone: "text-faint" },
+};
 
-// Build ─ PR ─ Checks ─ Review ─ Merge, with the current step carrying how long it has been there.
+const STEPS: Stage[] = ["launching", "implementing", "review_ci", "ready"];
+
+// Where a moving package is: four steps from launch to ready, and the current one with how long it has been there.
 export function Track({ at, view }: { at: number; view: PkgView }) {
-  const steps = view.pkg.short ? SHORT_TRACK : FULL_TRACK;
-  const live = view.stage !== "done" && view.stage !== "queued";
-  const position = view.pkg.short && live ? 0 : ORDER[view.stage];
-
-  return (
-    <ol className="flex items-center gap-1.5 whitespace-nowrap font-mono text-xs">
-      {steps.map((step, index) => {
-        const current = live && (view.pkg.short ? index === 0 : step.stage === view.stage);
-        return (
-          <li key={step.label} className="flex items-center gap-1.5">
-            {index > 0 ? <span className={index <= position ? "text-dim" : "text-faint"}>─</span> : null}
-            {current ? <CurrentStep at={at} view={view} /> : <StepLabel reached={index < position} step={step} view={view} />}
-          </li>
-        );
-      })}
-    </ol>
-  );
-}
-
-// A step the package is not on. The PR step opens the PR once there is one.
-function StepLabel({ reached, step, view }: { reached: boolean; step: { label: string; stage: Stage | "pr" }; view: PkgView }) {
-  const tone = reached ? "text-dim" : "text-faint";
-  if (step.stage !== "pr" || !view.pkg.prUrl) return <span className={tone}>{step.label}</span>;
-  return (
-    <a className={`underline decoration-dotted underline-offset-2 hover:text-ink ${tone}`} href={view.pkg.prUrl} rel="noreferrer" target="_blank" title={view.pkg.prNumber ? `Open PR #${view.pkg.prNumber}` : "Open the PR"}>
-      {step.label}
-    </a>
-  );
-}
-
-function CurrentStep({ at, view }: { at: number; view: PkgView }) {
+  const position = STEPS.indexOf(view.stage);
   const tone = view.failed ? "text-fail" : STAGE[view.stage].text;
-  const label = view.pkg.short ? "Work" : STAGE[view.stage].label;
-  const round = view.stage === "review" && view.round > 1 ? ` · round ${view.round}` : "";
 
   return (
-    <span className={`font-semibold ${tone}`}>
-      {label}
-      {round}
-      {view.untimed ? "" : ` · ${span(at - view.since)}`}
+    <span className="flex items-center gap-2 whitespace-nowrap font-mono text-[11px]">
+      <span aria-hidden className="flex gap-0.5">
+        {STEPS.map((step, index) => (
+          <span key={step} className={`h-1 w-2.5 rounded-full ${index < position ? "bg-dim" : index === position ? (view.failed ? "bg-fail" : STAGE[step].bar) : "bg-line"}`} />
+        ))}
+      </span>
+      <span className={`font-semibold ${tone}`}>
+        {STAGE[view.stage].label}
+        {view.untimed ? "" : <span className="font-normal text-dim"> · {span(at - view.since)}</span>}
+      </span>
     </span>
+  );
+}
+
+const CI: Record<Ci, { label: string; tone: string; icon: typeof Check }> = {
+  passing: { label: "CI", tone: "text-merge", icon: Check },
+  pending: { label: "CI running", tone: "text-checks", icon: CircleDashed },
+  failing: { label: "CI failing", tone: "text-fail", icon: X },
+};
+
+function reviewLabel(review: Review): { text: string; tone: string } {
+  if (review.mode === "none") return { text: "no review", tone: "text-faint" };
+  const round = review.round > 1 ? ` · round ${review.round}` : "";
+  if (review.state === "running") return { text: `${review.mode} review${round}`, tone: "text-review" };
+  if (review.state === "findings") return { text: `${review.mode} review · findings`, tone: "text-checks" };
+  if (review.state === "done") return { text: `${review.mode} review done`, tone: "text-merge/80" };
+  if (review.state === "unknown") return { text: `${review.mode} review · unknown`, tone: "text-faint" };
+  return { text: `${review.mode} review`, tone: "text-faint" };
+}
+
+// The PR's checks and its Review Suite state, shown once there is something to check.
+export function Gates({ ci, review }: { ci: Ci | null; review: Review | null }) {
+  if (!ci && !review) return <span />;
+  const check = ci ? CI[ci] : null;
+  const words = review ? reviewLabel(review) : null;
+
+  return (
+    <span className="flex min-w-0 items-center gap-3 whitespace-nowrap font-mono text-[11px]">
+      {check ? (
+        <span className={`flex items-center gap-1 ${check.tone}`}>
+          <check.icon aria-hidden className="size-3" />
+          {check.label}
+        </span>
+      ) : null}
+      {words ? <span className={`truncate ${words.tone}`}>{words.text}</span> : null}
+    </span>
+  );
+}
+
+// A PR in the goal's own repository is its number; one elsewhere also names where it waits.
+export function PrLink({ pr, repo }: { pr: Pr | null; repo: string }) {
+  if (!pr) return <span />;
+  const name = pr.repo && pr.repo !== repo ? `${pr.repo}#${pr.number}` : `#${pr.number}`;
+  return (
+    <a className="truncate font-mono text-[11px] text-dim underline decoration-dotted underline-offset-2 hover:text-ink" href={pr.url} rel="noreferrer" target="_blank" title={`Open PR ${pr.repo}#${pr.number}`}>
+      {name}
+    </a>
   );
 }
 
@@ -99,9 +120,9 @@ export function Shelf({ age, at, cleanup, hint, label, views }: { age: string; a
             <span className="shrink-0 text-[11px] uppercase tracking-[0.12em] text-faint" title={view.goal.repo}>{areaLabel(view.goal.area)}</span>
             <span className="min-w-0 flex-1 truncate text-faint">{view.goal.report?.parked?.text}</span>
             <span className="shrink-0 font-mono text-xs text-faint">
-              {shelfCount(view)} · {age} {span(at - (view.goal.report?.parked?.at ?? view.lastMoveAt))}
+              {shelfCount(view)} · {age} {span(at - (view.goal.archivedAt ?? view.goal.report?.parked?.at ?? view.lastMoveAt))}
             </span>
-            <GoalActions goal={view.goal} moving={view.live.length} />
+            <GoalActions phase={view.phase} goal={view.goal} moving={view.live.length} />
           </li>
         ))}
       </ul>
@@ -112,8 +133,7 @@ export function Shelf({ age, at, cleanup, hint, label, views }: { age: string; a
 // A package's dot pops when its stage changes, so a glance catches what just moved.
 export function Pip({ stage, failed }: { stage: Stage; failed?: boolean }) {
   const ref = useFlash<HTMLSpanElement>(`${stage}${failed ? ":failed" : ""}`, POP, 700);
-  const tone = failed ? "bg-fail" : stage === "queued" ? "border border-faint" : STAGE[stage].bg;
-  return <span ref={ref} className={`inline-block size-2 rounded-[2px] ${tone}`} title={STAGE[stage].label} />;
+  return <span ref={ref} className={`inline-block size-2 shrink-0 rounded-[2px] ${failed ? "bg-fail" : STAGE[stage].pip}`} title={STAGE[stage].label} />;
 }
 
 const DEPLOY_MARK: Record<DeployStep["state"], { mark: string; tone: string }> = {

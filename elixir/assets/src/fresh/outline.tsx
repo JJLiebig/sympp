@@ -2,11 +2,10 @@ import { ChevronRight } from "lucide-react";
 
 import { GoalActions } from "./actions";
 import { areaLabel } from "./areas";
-import { AskLine, lanesOf, Rest } from "./board";
+import { GoalOwner, lanesOf, UnresolvedLine } from "./board";
 import type { GoalView } from "./model";
 import { Deploy } from "./parts";
-import { BriefAge, DotStrip, GoalPackages, GoalTitle, reportFor, useGoalLevel, VerdictBadge, wantsAttention } from "./report";
-import { FindArchitect } from "./session";
+import { BriefAge, DotStrip, GoalPackages, GoalTitle, NeedsYouFlag, PhaseBadge, reportFor, useGoalLevel, wantsAttention } from "./report";
 import { SinceChip } from "./since";
 
 // Direction 1: the old dropdown, alive. Goals that want attention come first; the rest are filed by area.
@@ -22,7 +21,6 @@ export function Outline({ at, views }: { at: number; views: GoalView[] }) {
       {areas.map((area) => (
         <Block key={area} at={at} label={area} tone="text-faint" views={steady.filter((view) => areaLabel(view.goal.area) === area)} />
       ))}
-      <Rest at={at} lanes={lanes} />
     </div>
   );
 }
@@ -56,7 +54,8 @@ function GoalRow({ at, tagged, view }: { at: number; tagged?: boolean; view: Goa
               <span className="truncate font-medium">
                 <GoalTitle goal={view.goal} />
               </span>
-              <VerdictBadge small verdict={report.verdict} />
+              <PhaseBadge small view={view} />
+              <NeedsYouFlag view={view} />
               <SinceChip goalId={view.goal.id} />
               {tagged ? <span className="shrink-0 text-[11px] uppercase tracking-[0.12em] text-faint">{areaLabel(view.goal.area)}</span> : null}
               <span className="ml-auto shrink-0 pl-6 font-mono text-xs text-dim">
@@ -79,10 +78,10 @@ function GoalRow({ at, tagged, view }: { at: number; tagged?: boolean; view: Goa
             </span>
           </span>
         </button>
-        <FindArchitect compact at={at} className="mt-2" goal={view.goal} />
-        <GoalActions className="mt-2" goal={view.goal} moving={view.live.length} />
+        <GoalOwner className="mt-2.5 w-44 shrink-0" view={view} />
+        <GoalActions className="mt-2" goal={view.goal} moving={view.live.length} phase={view.phase} />
       </div>
-      <AskLine at={at} className="mb-3 ml-7 mr-2" view={view} />
+      <UnresolvedLine className="mb-3 ml-7 mr-2" view={view} />
       {level !== "closed" ? (
         <div className="pb-3 pl-5">
           <GoalPackages at={at} level={level} view={view} onFull={showAll} />
