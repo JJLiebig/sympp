@@ -209,16 +209,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
   @doc """
   Checks a bound session's claim for a read without reclaiming it. A live
   claim with a live grant is renewed, and a stale one is left for the next
-  write to reclaim. A revoked grant or a paused or lost claim unbinds the
-  session as a write would, but the read still proceeds.
+  write to reclaim, as is the binding when the ledger cannot be checked. A
+  revoked grant or a paused or lost claim unbinds the session as a write
+  would, but the read still proceeds.
   """
   @spec refresh_current_session_claim_for_read(Server.t(), String.t(), map()) :: {:ok, Server.t()}
   def refresh_current_session_claim_for_read(%Server{} = server, method, params) do
     if bound_session_call?(server, method, params) do
-      case require_current_session_claim(server, false, false) do
+      case require_current_session_claim(server, true, false) do
         {:ok, %Server{} = refreshed} -> {:ok, refreshed}
         {:error, _code, _message, _data, %Server{} = unbound} -> {:ok, unbound}
-        _unavailable -> {:ok, server}
+        {:service_error, _reason} -> {:ok, server}
       end
     else
       {:ok, server}
