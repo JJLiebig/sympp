@@ -562,20 +562,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
+  defp create_work_request_payload(_repo, %WorkRequest{} = work_request, _terminal, false) do
+    %{
+      "status" => "created",
+      "work_request" => WorkRequestPayloads.work_request(work_request),
+      "next_action" => "hand #{work_request.id} to an architect; its first plan write makes it the owner"
+    }
+  end
+
   defp not_owned_payload(%WorkRequest{} = work_request, reason, next_action) do
     %{
       "status" => "created",
       "work_request" => WorkRequestPayloads.work_request(work_request),
       "ownership_error" => reason,
       "next_action" => next_action
-    }
-  end
-
-  defp create_work_request_payload(_repo, %WorkRequest{} = work_request, _terminal, false) do
-    %{
-      "status" => "created",
-      "work_request" => WorkRequestPayloads.work_request(work_request),
-      "next_action" => "hand #{work_request.id} to an architect; its first plan write makes it the owner"
     }
   end
 
