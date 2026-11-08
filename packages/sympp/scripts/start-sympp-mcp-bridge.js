@@ -871,7 +871,7 @@ async function backendHealth(origin) {
   try {
     const mcpUrl = `${trimOrigin(origin)}/mcp`;
     const response = await request(`${trimOrigin(origin)}/mcp/readiness`, "GET", null, { Accept: "application/json" }, HEALTH_PROBE_TIMEOUT_MS);
-    if (response.status === 404) return legacyBackendHealth(mcpUrl);
+    if (response.status === 404) return await legacyBackendHealth(mcpUrl);
     if (response.status === 401) return { healthy: false, status: 401, retryable: false };
     if (response.status < 200 || response.status >= 300 || !response.body) return null;
     const readiness = JSON.parse(response.body);
@@ -1374,7 +1374,7 @@ async function bridge(identity, state, runtimeFile) {
               const currentSchema = tools?.find(tool => tool.name === name)?.inputSchema;
               const fields = new Set([...Object.keys(JSON.parse(sessionTools.get(name)).properties || {}), ...Object.keys(currentSchema?.properties || {})]);
               const reason = payload.error.data?.reason;
-              const invalidArguments = reason === "invalid_tool_arguments" || [...fields].some(field => reason === `missing_${field}` || reason === `invalid_${field}`) ||
+              const invalidArguments = ["invalid_tool_arguments", "unexpected_argument"].includes(reason) || [...fields].some(field => reason === `missing_${field}` || reason === `invalid_${field}`) ||
                 payload.error.data?.validation_errors?.some(error => fields.has(error.field));
               if (tools && schemas(tools).get(name) !== sessionTools.get(name) && (payload.error.code === -32601 || invalidArguments)) {
                 payload.error.message = `${name.startsWith("sympp.") ? name : `sympp.${name}`} was updated and ${schemas(tools).has(name) ? "its schema changed" : "it was removed"}; restart the session to reload the sympp MCP bridge.`;

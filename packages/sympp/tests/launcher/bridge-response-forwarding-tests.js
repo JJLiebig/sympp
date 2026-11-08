@@ -19,6 +19,7 @@ const revision = "b".repeat(40);
 const contract = "c".repeat(64);
 let currentContract = contract;
 let failSchemaLookup = false;
+let failLegacyHealth = false;
 let server;
 let bridge;
 const productRoot = path.join(temporaryRoot, "product");
@@ -44,6 +45,7 @@ async function main() {
 
   server = http.createServer((request, response) => {
     if (request.method === "GET" && request.url === "/mcp/readiness") {
+      if (failLegacyHealth) return response.writeHead(404).end();
       return response.end(JSON.stringify({ status: "ok", factory_owned_worktrees: true,
         source: { mcp_contract: { fingerprint: currentContract } }, ledger: { reachable: true, identity: { kind: "sqlite", default_home: true } } }));
     }
@@ -75,6 +77,7 @@ async function main() {
     request.on("end", () => {
       const body = Buffer.concat(chunks).toString("utf8");
       const message = JSON.parse(body);
+      if (failLegacyHealth && message.method === "initialize") return request.socket.destroy();
       if (["create_work_request", "prepare_work_package_worktree"].includes(message.params?.name)) {
         response.writeHead(200, { "Content-Type": "application/json", "Mcp-Session-Id": "test-session" });
         return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id,
@@ -92,7 +95,7 @@ async function main() {
         response.writeHead(200, { "Content-Type": "application/json" });
         return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: {
           code: message.params.name === "test.removed" ? -32601 : ["test.arguments", "test.conflict"].includes(message.params.name) ? -32602 : -32000,
-          message: "original error", data: { tool: message.params.name, reason: message.params.name === "test.conflict" ? "idempotency_conflict" : "invalid_tool_arguments" },
+          message: "original error", data: { tool: message.params.name, reason: message.params.name === "test.conflict" ? "idempotency_conflict" : message.params.arguments?.removed_argument ? "unexpected_argument" : "invalid_tool_arguments" },
         } }));
       }
       const key = message.params && message.params.name === "record_work_package_delivery" && message.params.arguments.idempotency_key;
@@ -226,6 +229,14 @@ async function main() {
   bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 10, method: "tools/call", params: { name: "test.forward", arguments: {} } })}\n`);
   assert.equal((await responsePromise).result.content[0].text, "forwarded");
 
+  responsePromise = readResponse(22);
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 22, method: "tools/call", params: { name: "test.arguments", arguments: { removed_argument: true } } })}\n`);
+  assert.match((await responsePromise).error.message, /was updated.*restart the session/);
+  failLegacyHealth = true;
+  responsePromise = readResponse(23);
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 23, method: "tools/call", params: { name: "test.arguments", arguments: {} } })}\n`);
+  assert.equal((await responsePromise).error.message, "original error");
+  failLegacyHealth = false;
   failSchemaLookup = true;
   responsePromise = readResponse(19);
   bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 19, method: "tools/call", params: { name: "test.removed", arguments: {} } })}\n`);

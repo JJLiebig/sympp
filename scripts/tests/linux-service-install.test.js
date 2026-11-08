@@ -167,7 +167,8 @@ test('factory updates skip current and procedure-only revisions but rebuild unkn
   fs.writeFileSync(path.join(upstream, 'scripts/install-sympp-checkout.sh'), '#!/bin/sh\nprintf built > "$RECEIPT"\n');
   git('add', '.'); git('commit', '-qm', 'runtime'); git('clone', upstream, checkout);
   const running = git('rev-parse', 'HEAD');
-  const server = require('node:http').createServer((request, response) => response.end(JSON.stringify({ status: 'ok', ledger: { reachable: true }, source: { revision: running } })));
+  let serveReadiness = true;
+  const server = require('node:http').createServer((request, response) => serveReadiness ? response.end(JSON.stringify({ status: 'ok', ledger: { reachable: true }, source: { revision: running } })) : response.writeHead(404).end());
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.close());
   const fragment = path.join(root, 'config/systemd/user/qa.service');
@@ -177,7 +178,7 @@ test('factory updates skip current and procedure-only revisions but rebuild unkn
   fs.writeFileSync(environment, Object.entries(values).map(([key, value]) => JSON.stringify(key + '=' + value)).join(' '));
   fs.writeFileSync(path.join(bin, 'systemctl'), '#!/bin/sh\ncase "$*" in *Environment*) cat "$ENVIRONMENT_FILE";; *FragmentPath*) printf "%s\\n" "$FRAGMENT_FILE";; *) exit 1;; esac\n', { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'systemctl'), '#!/bin/sh\ncase "$*" in *Environment*) cat "$ENVIRONMENT_FILE";; *FragmentPath*) printf "%s\\n" "$FRAGMENT_FILE";; *MainPID*) printf "%s\\n" "$LISTENER_PID";; *) exit 1;; esac\n', { mode: 0o755 });
-  fs.writeFileSync(path.join(bin, 'ss'), '#!/bin/sh\nprintf "LISTEN 0 128 127.0.0.1:%s *:* users:(pid=%s,fd=1)\\n" "$LISTENER_PORT" "$LISTENER_PID"\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'ss'), '#!/bin/sh\nprintf "LISTEN 0 128 127.0.0.1:%s *:* users:(pid=%s,fd=1)\\n" "$LISTENER_PORT" "$LISTENER_PID"\nprintf "LISTEN 0 128 [::]:%s [::]:* users:(pid=1,fd=1) v6only:1\\n" "$LISTENER_PORT"\n', { mode: 0o755 });
   const env = { ...process.env, XDG_RUNTIME_DIR: root, PATH: bin + path.delimiter + process.env.PATH, LISTENER_PID: String(process.pid), LISTENER_PORT: values.SYMPP_BACKEND_PORT, ENVIRONMENT_FILE: environment, FRAGMENT_FILE: fragment, RECEIPT: receipt };
   const updater = path.resolve(__dirname, '../../packages/sympp/scripts/update-sympp-service.sh');
   const update = () => require('node:util').promisify(require('node:child_process').execFile)('bash', [updater, 'qa'], { cwd: root, env });
@@ -188,10 +189,12 @@ test('factory updates skip current and procedure-only revisions but rebuild unkn
   git('add', '.'); git('commit', '-qm', 'procedure');
   assert.match((await update()).stdout, /runtime unchanged/);
   assert.equal(fs.existsSync(receipt), false);
+  serveReadiness = false;
   env.LISTENER_PID = '0';
   await assert.rejects(update(), /belongs to another process/);
   assert.equal(fs.existsSync(receipt), false);
   env.LISTENER_PID = String(process.pid);
+  serveReadiness = true;
   fs.writeFileSync(path.join(upstream, 'unknown-runtime'), 'new runtime input');
   git('add', '.'); git('commit', '-qm', 'runtime');
   await update();

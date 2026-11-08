@@ -39,9 +39,9 @@ subprocess.run(['git', '-C', str(source), 'fetch', '--quiet', 'origin', ref], ch
 target = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'FETCH_HEAD'], text=True).strip()
 pid = subprocess.check_output(['systemctl', '--user', 'show', unit, '-p', 'MainPID', '--value'], text=True).strip()
 port = values.get('SYMPP_BACKEND_PORT', '19998')
-sockets = subprocess.check_output(['ss', '-H', '-ltnp', 'sport = :' + port], text=True)
+sockets = subprocess.check_output(['ss', '-H', '-ltnpe', 'sport = :' + port], text=True)
 local_addresses = {'127.0.0.1:' + port, '0.0.0.0:' + port, '*:' + port, '[::]:' + port}
-listeners = [line for line in sockets.splitlines() if line.split()[3] in local_addresses]
+listeners = [line for line in sockets.splitlines() if line.split()[3] in local_addresses and 'v6only:1' not in line]
 owns_listener = bool(listeners) and pid != '0' and all('pid=' + pid + ',' in line for line in listeners)
 if listeners and not owns_listener:
     raise SystemExit('Saved factory endpoint belongs to another process. Rerun setup with its service name.')

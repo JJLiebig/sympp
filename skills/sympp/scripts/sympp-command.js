@@ -103,7 +103,7 @@ function update() {
     if (!/^[a-zA-Z0-9_-]+$/.test(service)) throw new Error('Invalid remote service name. Run sympp setup again.');
     if (saved.setup.server.startsWith('http://')) {
       const endpoint = new URL(saved.setup.server);
-      if (process.platform === 'linux' && ['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname)) step('factory', 'bash', ['-s', '--', service, endpoint.port || '80'], { input: script });
+      if (process.platform === 'linux' && ['127.0.0.1', 'localhost'].includes(endpoint.hostname)) step('factory', 'bash', ['-s', '--', service, endpoint.port || '80'], { input: script });
     } else step('factory', 'ssh', ['-o', 'BatchMode=yes', saved.setup.server, `bash -s -- ${quote(service)}`], { input: script });
   }
   if (failures.length) throw new Error(failures.join(' '));
