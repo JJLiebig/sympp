@@ -337,8 +337,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
        ) do
     context = WorkPackageActivity.context(repo, delivery.work_package_id)
 
+    key = closeout_idempotency_key(delivery)
+
     event =
-      case PlanningRepository.get_progress_event_by_idempotency_key(repo, delivery.work_package_id, closeout_idempotency_key(delivery)) do
+      case PlanningRepository.get_progress_event_by_idempotency_key(repo, delivery.work_package_id, key) do
         {:ok, event} -> event
         {:error, _reason} -> nil
       end

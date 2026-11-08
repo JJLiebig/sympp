@@ -47,7 +47,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools08Test do
     assert get_in(progress_response, ["error", "data", "reason"]) == "revoked"
 
     assert {:ok, status_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-REVOKED-STATUS", kind: "mcp", status: "active"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-REVOKED-STATUS", kind: "mcp", status: "dispatched"))
 
     assert {:ok, status_minted} = AccessGrantService.mint_worker_grant(repo, status_package.id)
     assert {:ok, status_assignment} = AccessGrantService.claim(repo, status_minted.work_key.secret, claimed_by: "worker-1")

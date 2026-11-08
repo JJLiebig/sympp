@@ -76,7 +76,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     packages =
       for index <- 1..25 do
-        status = if index == 25, do: "planned", else: if(index == 2, do: "ready_for_worker", else: "reviewing")
+        status = if index == 25, do: "planned", else: "dispatched"
         create_work_package!(repo, work_request, id: "WP-CLOSED-#{index}", status: status)
       end
 
@@ -140,12 +140,45 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert length(full["reconciliation"]["results"]) == 25
     assert length(full["delivery_board"]["work_packages"]) == 25
     assert Map.delete(summary["reconciliation"], "results") == Map.delete(full["reconciliation"], "results")
-    assert Enum.count(full["reconciliation"]["results"], &(&1["reason"] == "already_closeout")) == 24
+    assert Enum.count(full["reconciliation"]["results"], &(&1["reason"] == "already_closeout")) == 25
     assert get_in(full, ["delivery_board", "work_packages", Access.at(0), "delivery", "no_pr_evidence"]) == "Accepted investigation evidence."
     IO.puts("25-package reconciliation JSON chars: rows_full=#{String.length(Jason.encode!(full["reconciliation"]))} rows_summary=#{String.length(Jason.encode!(summary["reconciliation"]))}")
 
     invalid = mcp_tool(repo, session, "reconcile_work_request", %{"work_request_id" => work_request.id, "detail" => "invalid"})
     assert invalid["error"]
+  end
+
+  test "any architect may finish another WorkRequest's package, but only its owner records other endings", %{repo: repo} do
+    {owned_request, _owned_slice, _owned_package} = linked_slice!(repo, work_request_id: "WR-MCP-FINISH-OWNER")
+    {other_request, other_slice, other_package} = linked_slice!(repo, work_request_id: "WR-MCP-FINISH-OTHER", work_package_status: "ready")
+    session = create_work_request_architect_session(repo, owned_request, ArchitectHandoff.capabilities())
+
+    refused = record_delivery(repo, session, no_pr_args(other_request, other_slice, "finish-other-no-pr", "Not my request."))
+    assert refused["error"]
+    assert repo.get!(WorkPackage, other_package.id).status == "ready"
+
+    finished =
+      record_delivery(repo, session, %{
+        "work_request_id" => other_request.id,
+        "work_package_id" => other_slice.id,
+        "outcome" => "finished",
+        "idempotency_key" => "finish-other"
+      })
+
+    assert get_in(finished, ["result", "structuredContent", "work_package_delivery", "outcome"]) == "finished"
+    assert repo.get!(WorkPackage, other_package.id).status == "ended"
+    assert %WorkRequest{completed_at: %DateTime{}} = repo.get!(WorkRequest, other_request.id)
+
+    conflict =
+      record_delivery(repo, session, %{
+        "work_request_id" => other_request.id,
+        "work_package_id" => other_slice.id,
+        "outcome" => "finished",
+        "idempotency_key" => "finish-other-again"
+      })
+
+    assert get_in(conflict, ["error", "data", "reason"]) == "delivery_outcome_conflict"
+    assert get_in(conflict, ["error", "data", "outcome"]) == "finished"
   end
 
   test "WR architect stale capabilities still read the delivery board and record closeout", %{
@@ -216,7 +249,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     assert get_in(read_closed_response, ["result", "structuredContent" | delivery_evidence_path]) =~ "[REDACTED]"
     refute get_in(read_closed_response, ["result", "structuredContent" | delivery_evidence_path]) =~ evidence_query_value
-    assert repo.get!(WorkPackage, linked_package.id).status == "closed"
+    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
 
     replay_response = record_delivery(repo, session, closeout_args)
 
@@ -233,7 +266,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     {work_request, work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-MCP-DELIVERY-RECONCILE-MERGED-STALE",
-        work_package_status: "ready_for_merge"
+        work_package_status: "ready"
       )
 
     session =
@@ -293,7 +326,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert get_in(apply_payload, ["reconciliation", "applied_count"]) == 1
     assert get_in(apply_payload, ["delivery_board", "counts", "delivered"]) == 1
     refute Map.has_key?(apply_payload["delivery_board"], "work_packages")
-    assert repo.get!(WorkPackage, linked_package.id).status == "merged"
+    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
     assert repo.get!(AccessGrant, minted.grant.id).revoked_at
   end
 
@@ -301,7 +334,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     {work_request, work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-MCP-DELIVERY-READONLY",
-        work_package_status: "ready_for_merge"
+        work_package_status: "ready"
       )
 
     session = create_work_request_architect_session(repo, work_request, ["read:work_request"])
@@ -357,7 +390,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     {work_request, work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-MCP-DELIVERY-LIVE-NARROWED",
-        work_package_status: "ready_for_merge"
+        work_package_status: "ready"
       )
 
     session =
@@ -422,7 +455,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     {work_request, _work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-MCP-DELIVERY-RECONCILE-WRITEONLY",
-        work_package_status: "ready_for_merge"
+        work_package_status: "ready"
       )
 
     session = create_work_request_architect_session(repo, work_request, ["write:work_request"])
@@ -459,7 +492,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
              "applied_count"
            ]) == 1
 
-    assert repo.get!(WorkPackage, linked_package.id).status == "merged"
+    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
   end
 
   test "WR architect abandons no-code failed dispatch after replacement delivery without explicit revoke or unrelated grants",
@@ -467,7 +500,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     {work_request, failed_slice, failed_package} =
       linked_slice!(repo,
         work_request_id: "WR-MCP-DELIVERY-ABANDON-FAILED-DISPATCH",
-        work_package_status: "ready_for_worker"
+        work_package_status: "dispatched"
       )
 
     session = create_work_request_architect_session(repo, work_request, ["write:work_request"])
@@ -487,7 +520,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     oracle_package =
       create_matching_work_package!(repo, work_request, approved_oracle,
         id: "WP-MCP-DELIVERY-ORACLE-ACTIVE",
-        status: "ready_for_worker"
+        status: "dispatched"
       )
 
     assert {:ok, _oracle_dispatch} =
@@ -518,7 +551,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     replacement_package =
       create_matching_work_package!(repo, work_request, approved_replacement,
         id: "WP-MCP-DELIVERY-REPLACEMENT",
-        status: "ready_for_merge"
+        status: "ready"
       )
 
     assert {:ok, dispatched_replacement} =
@@ -544,7 +577,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
              "outcome"
            ]) == "pr_merged"
 
-    assert repo.get!(WorkPackage, replacement_package.id).status == "merged"
+    assert repo.get!(WorkPackage, replacement_package.id).status == "ended"
 
     revoke_response =
       revoke_worker_key(
@@ -558,10 +591,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         )
       )
 
-    assert get_in(revoke_response, ["error", "data", "reason"]) ==
-             "work_package_not_closeout_ready"
-
-    refute repo.get!(AccessGrant, failed_minted.grant.id).revoked_at
+    assert get_in(revoke_response, ["result", "structuredContent", "revoked_worker_grant", "id"]) == failed_minted.grant.id
+    assert repo.get!(AccessGrant, failed_minted.grant.id).revoked_at
+    assert repo.get!(WorkPackage, failed_package.id).status == "dispatched"
 
     abandon_response =
       record_delivery(
@@ -582,73 +614,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
              "outcome"
            ]) == "abandoned"
 
-    assert repo.get!(WorkPackage, failed_package.id).status == "abandoned"
+    assert repo.get!(WorkPackage, failed_package.id).status == "ended"
     assert repo.get!(AccessGrant, failed_minted.grant.id).revoked_at
 
     refute repo.get!(AccessGrant, oracle_minted.grant.id).revoked_at
-    assert repo.get!(WorkPackage, oracle_package.id).status == "ready_for_worker"
-  end
-
-  test "abandoned delivery closeout accepts terminal packages with worker lifecycle history",
-       %{repo: repo} do
-    {work_request, work_package, linked_package} =
-      linked_slice!(
-        repo,
-        work_request_id: "WR-MCP-DELIVERY-ABANDONED-HISTORY",
-        work_package_status: "ready_for_worker"
-      )
-
-    for status <- ["blocked", "implementing", "reviewing", "abandoned"] do
-      assert {:ok, _event} =
-               PlanningRepository.append_progress_event(repo, %{
-                 work_package_id: linked_package.id,
-                 summary: "Worker lifecycle reached #{status}.",
-                 status: status,
-                 idempotency_key: "abandoned-worker-history-#{status}",
-                 payload: %{"next_status" => status}
-               })
-    end
-
-    assert {:ok, _abandoned_package} =
-             WorkPackageRepository.update(repo, linked_package.id, %{
-               status: "abandoned",
-               worktree_path: nil
-             })
-
-    session =
-      create_work_request_architect_session(repo, work_request, ArchitectHandoff.capabilities())
-
-    assert "terminal_package_without_delivery_outcome" in slice_by_id(delivery_board_payload_for(repo, session, work_request), work_package.id)[
-             "attention_reason_codes"
-           ]
-
-    response =
-      record_delivery(
-        repo,
-        session,
-        abandoned_args(
-          work_request,
-          work_package,
-          "delivery-mcp-abandoned-worker-history",
-          "The worker stopped and the package is already abandoned."
-        )
-      )
-
-    assert response["error"] == nil
-    payload = get_in(response, ["result", "structuredContent"])
-    assert payload["work_package_delivery"]["outcome"] == "abandoned"
-
-    assert slice_by_id(
-             delivery_board_payload_for(repo, session, work_request),
-             work_package.id
-           )["attention_reason_codes"] == []
-
-    assert repo.get!(WorkPackage, linked_package.id).status == "abandoned"
+    assert repo.get!(WorkPackage, oracle_package.id).status == "dispatched"
   end
 
   defp linked_slice!(repo, overrides) do
     request_id = Keyword.fetch!(overrides, :work_request_id)
-    work_package_status = Keyword.get(overrides, :work_package_status, "reviewing")
+    work_package_status = Keyword.get(overrides, :work_package_status, "dispatched")
     work_request = create_work_request!(repo, id: request_id, status: "ready_for_slicing")
     work_package = create_work_package!(repo, work_request, id: "WRS-#{request_id}")
 
@@ -905,26 +880,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
   defp revoke_worker_key(repo, session, arguments),
     do: mcp_tool(repo, session, "revoke_work_package_worker_key", arguments)
-
-  defp delivery_board_payload_for(repo, session, %WorkRequest{} = work_request) do
-    response =
-      mcp_tool(repo, session, "read_delivery_board", %{"detail" => "full", "work_request_id" => work_request.id})
-
-    assert response["error"] == nil
-    get_in(response, ["result", "structuredContent"])
-  end
-
-  defp slice_work_package(payload, work_package_id) do
-    payload
-    |> slice_by_id(work_package_id)
-    |> Map.get("work_package")
-  end
-
-  defp slice_by_id(payload, work_package_id) do
-    payload
-    |> get_in(["delivery_board", "work_packages"])
-    |> Enum.find(&(&1["id"] == work_package_id))
-  end
 
   defp insufficient_capability?(response) do
     get_in(response, ["error", "code"]) in [-32_001, -32_003] and

@@ -57,7 +57,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
 
     assert {:ok, _question} = RequestRepository.ask_question(repo, request.id, work_request_question_attrs([]))
 
-    package = repo.update!(Ecto.Changeset.change(hd(packages), status: "ready_for_worker"))
+    package = repo.update!(Ecto.Changeset.change(hd(packages), status: "dispatched"))
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "fixture-worker")
     worker = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -118,7 +118,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
     assert summary["work_request"]["human_description"] == description()
     assert summary["work_request"]["execution_status"] == "open"
     assert length(summary["work_packages"]) == 28
-    assert hd(summary["work_packages"])["next_action"] == "read_delivery_board"
+    assert hd(summary["work_packages"])["next_action"] == "wait"
     assert List.last(summary["work_packages"])["next_action"] == "dispatch_work_package"
     refute Map.has_key?(hd(summary["work_packages"]), "goal")
     assert length(summary["clarification_questions"]) == 1
@@ -158,13 +158,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
 
     # Existing delivery evidence must still drive the architect's next action.
     attach_tool(repo, worker, "attach_pr", %{"url" => "https://github.com/nextide/symphony-plus-plus/pull/123", "head_sha" => "abc123"})
-    repo.update!(Ecto.Changeset.change(Enum.at(packages, 1), status: "merged"))
+    repo.update!(Ecto.Changeset.change(Enum.at(packages, 1), status: "ended"))
     changed = mcp_tool(repo, architect, "read_work_request", %{"work_request_id" => request.id})["result"]["structuredContent"]
     assert hd(changed["work_packages"])["pr_url"] == "https://github.com/nextide/symphony-plus-plus/pull/123"
     assert Enum.at(changed["work_packages"], 1)["next_action"] == "reconcile_work_request"
+    repo.update!(Ecto.Changeset.change(Enum.at(packages, 1), status: "dispatched"))
 
     assert {:ok, _delivery} =
-             RequestRepository.record_work_package_delivery(repo, request.id, Enum.at(packages, 1).id, %{
+             CanonicalWorkPackageFixtures.end_work_package(repo, request.id, Enum.at(packages, 1).id, %{
                outcome: "pr_merged",
                idempotency_key: "fixture-merged",
                recorded_by: "fixture-architect",

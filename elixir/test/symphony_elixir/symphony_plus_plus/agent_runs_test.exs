@@ -49,7 +49,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
           Repo.update_all(
             from(work_package in WorkPackage, where: work_package.id == ^work_package_id),
-            set: [status: "merged", updated_at: DateTime.utc_now(:microsecond)]
+            set: [status: "ended", updated_at: DateTime.utc_now(:microsecond)]
           )
 
         _race ->
@@ -80,7 +80,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
   test "binds AgentRun to the grant for the issue assignee when multiple worker grants are claimed", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-ASSIGNEE", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-ASSIGNEE", status: "dispatched"))
 
     assert {:ok, other_grant} = AccessGrantService.mint_worker_grant(repo, work_package.id)
     assert {:ok, _other_assignment} = AccessGrantService.claim(repo, other_grant.work_key.secret, claimed_by: "agent-2")
@@ -96,7 +96,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
   test "terminal work package start race rejects atomically and retires the previous retry reservation", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-TERMINAL-RACE", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-TERMINAL-RACE", status: "dispatched"))
 
     assert {:ok, previous} =
              Repository.start_run(repo, %{
@@ -124,14 +124,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
       TerminalStartRaceRepo.disarm()
     end
 
-    assert repo.get!(WorkPackage, work_package.id).status == "merged"
+    assert repo.get!(WorkPackage, work_package.id).status == "ended"
     assert %AgentRun{status: "failed", reason: "work package became terminal before retry dispatch"} = repo.get!(AgentRun, previous.id)
     assert repo.aggregate(AgentRun, :count, :id) == 1
   end
 
   test "start run rolls back when completion clearing fails", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-CLEAR-LOCKED", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-CLEAR-LOCKED", status: "dispatched"))
 
     assert {:error, :database_busy} =
              Repository.start_run(CompletionClearLockedAgentRunRepo, %{
@@ -146,7 +146,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
   test "starting reservation blocks duplicate dispatch until promoted", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-STARTING", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-STARTING", status: "dispatched"))
 
     assert {:ok, starting} = Service.start_dispatch(repo, issue(work_package.id), status: "starting")
     assert starting.status == "starting"
@@ -159,7 +159,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
   test "stale starting reservation can be recovered before dispatch", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-STALE-STARTING", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-STALE-STARTING", status: "dispatched"))
 
     assert {:ok, starting} = Service.start_dispatch(repo, issue(work_package.id), status: "starting")
     stale_seen_at = DateTime.add(DateTime.utc_now(:microsecond), -5, :second)
@@ -181,7 +181,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
   test "replacement retry releases previous starting reservation by id", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-REPLACE-STARTING", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-REPLACE-STARTING", status: "dispatched"))
 
     assert {:ok, starting} = Service.start_dispatch(repo, issue(work_package.id), status: "starting")
 
@@ -197,7 +197,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
   test "retry reconciliation holds dispatch lock until replacement retry starts", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-RETRY-STOP", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-RETRY-STOP", status: "dispatched"))
 
     assert {:ok, run} = Service.start_dispatch(repo, issue(work_package.id))
 
@@ -220,10 +220,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
   test "running promotion revalidates terminal package state", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-PROMOTE-TERMINAL", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-PROMOTE-TERMINAL", status: "dispatched"))
 
     assert {:ok, run} = Repository.start_run(repo, %{work_package_id: work_package.id, status: "starting"})
-    assert {:ok, _terminal} = WorkPackageRepository.update(repo, work_package.id, %{status: "merged"})
+    work_package |> Ecto.Changeset.change(status: "ended") |> repo.update!()
 
     assert {:error, :work_package_terminal} = Service.mark_running(repo, run.id, "worker task started")
     assert {:ok, %AgentRun{status: "starting"}} = Repository.get(repo, run.id)
@@ -231,7 +231,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
   test "unassigned AgentRun does not bind an arbitrary claimed worker grant", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-UNASSIGNED", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-UNASSIGNED", status: "dispatched"))
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, work_package.id)
     assert {:ok, _assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "agent-1")
@@ -244,7 +244,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
   test "AgentRun grant binding requires worker assignment source of truth", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-NON-WORKER", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-NON-WORKER", status: "dispatched"))
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, work_package.id)
     assert {:ok, _assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "agent-1")
@@ -257,7 +257,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
   test "failed start does not orphan an active AgentRun", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-FAILED-START", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-FAILED-START", status: "dispatched"))
 
     assert {:ok, failed_run} = Service.start_dispatch(repo, issue(work_package.id))
     assert {:ok, failed_run} = Service.mark_failed(repo, failed_run.id, "failed to spawn agent")
@@ -271,7 +271,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
   test "stale running AgentRun is not released from heartbeat age alone", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-STALE", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-STALE", status: "dispatched"))
 
     assert {:ok, run} = Service.start_dispatch(repo, issue(work_package.id))
     stale_seen_at = DateTime.add(DateTime.utc_now(:microsecond), -5, :second)
@@ -291,7 +291,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
   test "replacement retry does not release a running attempt without liveness reconciliation", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-REPLACE", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-REPLACE", status: "dispatched"))
 
     assert {:ok, run} = Service.start_dispatch(repo, issue(work_package.id))
 
@@ -305,7 +305,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
   test "replacement retry can release running attempt after confirmed worker exit", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-REPLACE-DEAD", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-REPLACE-DEAD", status: "dispatched"))
 
     assert {:ok, run} = Service.start_dispatch(repo, issue(work_package.id))
 
@@ -328,7 +328,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
   test "retrying recovery age follows stored retry attempt backoff", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-RETRY-BACKOFF", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-RETRY-BACKOFF", status: "dispatched"))
 
     assert {:ok, run} = Service.start_dispatch(repo, issue(work_package.id), attempt: 3)
     assert {:ok, retrying} = Service.mark_retrying(repo, run.id, "worker exited")
@@ -377,7 +377,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
   test "terminal AgentRun rows reject late lifecycle updates", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-TERMINAL", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-TERMINAL", status: "dispatched"))
 
     assert {:ok, run} = Service.start_dispatch(repo, issue(work_package.id))
     assert {:ok, completed} = Service.mark_completed(repo, run.id, "worker completed")
@@ -393,7 +393,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
   test "replacement release rolls back when new AgentRun insert fails", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-ROLLBACK", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-ROLLBACK", status: "dispatched"))
 
     assert {:ok, run} = Service.start_dispatch(repo, issue(work_package.id))
 
@@ -420,7 +420,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
       identifier: id,
       title: "Run package",
       description: "Dispatch package",
-      state: "ready_for_worker",
+      state: "dispatched",
       assignee_id: "agent-1",
       assigned_to_worker: true
     }
@@ -432,7 +432,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
       identifier: id,
       title: "Run package",
       description: "Dispatch package",
-      state: "ready_for_worker",
+      state: "dispatched",
       assigned_to_worker: false
     }
   end
@@ -443,7 +443,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
       identifier: id,
       title: "Run package",
       description: "Dispatch package",
-      state: "ready_for_worker",
+      state: "dispatched",
       assignee_id: "agent-1",
       assigned_to_worker: false
     }

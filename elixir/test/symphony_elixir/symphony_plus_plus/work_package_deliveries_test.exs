@@ -22,7 +22,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackageDeliveriesTest d
     def update_all(_query, _updates), do: {0, nil}
 
     def get(WorkPackage, "WRS-RACE") do
-      %WorkPackage{id: "WRS-RACE", work_request_id: "WR-RACE", status: "closed"}
+      %WorkPackage{id: "WRS-RACE", work_request_id: "WR-RACE", status: "dispatched"}
     end
 
     def one(_query) do
@@ -76,17 +76,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackageDeliveriesTest d
     Process.delete(:delivery_unique_conflict_insert_attempted)
 
     try do
-      assert {:ok, ^existing} =
-               Repository.record_work_package_delivery(
-                 UniqueConflictRepo,
-                 "WR-RACE",
-                 "WRS-RACE",
-                 delivery_attrs(%{
-                   outcome: "completed_no_pr",
-                   idempotency_key: "delivery-race",
-                   no_pr_evidence: "Same no-PR evidence."
-                 })
-               )
+      assert {:ok, {:ok, ^existing}} =
+               UniqueConflictRepo.transaction(fn ->
+                 Repository.record_work_package_delivery_in_transaction(
+                   UniqueConflictRepo,
+                   "WR-RACE",
+                   "WRS-RACE",
+                   delivery_attrs(%{
+                     outcome: "completed_no_pr",
+                     idempotency_key: "delivery-race",
+                     no_pr_evidence: "Same no-PR evidence."
+                   })
+                 )
+               end)
     after
       Process.delete(:delivery_unique_conflict_existing)
       Process.delete(:delivery_unique_conflict_insert_attempted)
@@ -99,7 +101,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackageDeliveriesTest d
     work_package = create_work_package!(repo, work_request, id: "WRS-DELIVERY-SCOPED")
 
     assert {:error, :not_found} =
-             Repository.record_work_package_delivery(
+             CanonicalWorkPackageFixtures.end_work_package(
                repo,
                sibling_request.id,
                work_package.id,
@@ -114,7 +116,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackageDeliveriesTest d
     successor_slice = create_work_package!(repo, sibling_request, id: "WRS-DELIVERY-CROSS-SUCCESSOR")
 
     assert {:error, :not_found} =
-             Repository.record_work_package_delivery(
+             CanonicalWorkPackageFixtures.end_work_package(
                repo,
                work_request.id,
                work_package.id,
@@ -136,21 +138,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackageDeliveriesTest d
   defp create_work_package!(repo, work_request, overrides) do
     assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(overrides))
     work_package
-  end
-
-  defp create_dispatched_successor_slice!(repo, work_request, suffix) do
-    work_request
-    |> then(&create_work_package!(repo, &1, id: "SYMPP-DELIVERY-#{suffix}"))
-    |> then(&dispatch_work_package!(repo, &1))
-  end
-
-  defp dispatch_work_package!(repo, work_package) do
-    repo.update!(
-      Ecto.Changeset.change(work_package,
-        status: "ready_for_worker",
-        dispatched_at: DateTime.utc_now(:microsecond)
-      )
-    )
   end
 
   defp work_request_attrs(overrides) do

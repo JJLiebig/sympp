@@ -346,15 +346,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
 
     facts = %{
       dependencies_met?: unmet == [],
-      progress: if(get_in(summary, [:pr_signal, :status]) == "open", do: "review_ci", else: "implementing"),
+      progress: progress(summary, worker),
       attention?: checks_failing? or review[:status] == "inspection_needed"
     }
 
     %{action: action, actor: actor} = Lifecycle.next_action(work_package, facts)
     # Merge eligibility adds dependency reasons on top of ready.
-    action = if Lifecycle.ready?(work_package) and is_binary(eligibility[:next_action]), do: eligibility[:next_action], else: action
+    action = if Lifecycle.ready?(work_package) and not facts.attention? and is_binary(eligibility[:next_action]), do: eligibility[:next_action], else: action
 
     {waiting_reason(work_package, summary, review, worker, eligibility, unmet, checks_failing?), actor, action}
+  end
+
+  # Progress inside dispatched, from the signals observed today: a worker whose
+  # runtime went stale has exited; an open PR means review and CI are running.
+  defp progress(summary, worker) do
+    cond do
+      worker[:status] == "stale" -> "worker_exited"
+      get_in(summary, [:pr_signal, :status]) == "open" -> "review_ci"
+      true -> "implementing"
+    end
   end
 
   defp waiting_reason(work_package, summary, review, worker, eligibility, unmet, checks_failing?) do
@@ -363,6 +373,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
       unmet != [] -> "unmet_dependencies"
       get_in(summary, [:blocker_state, :active?]) -> "active_blocker"
       checks_failing? -> "validation_failed"
+      true -> runtime_waiting_reason(work_package, review, worker)
+    end
+  end
+
+  defp runtime_waiting_reason(work_package, review, worker) do
+    cond do
       worker[:status] == "stale" -> "runtime_stale"
       review[:status] == "inspection_needed" -> "review_head_changed"
       review[:next_action] == "wait" -> "review_in_progress"
@@ -375,8 +391,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   defp observation_state(%{active_agent_run_ids: [_ | _]}, _package), do: "current"
   defp observation_state(%{current_actor: actor}, _package) when is_map(actor), do: "current"
 
-  defp observation_state(_runtime, %{status: status})
-       when status in ["planned", "dispatched"] do
+  defp observation_state(_runtime, %{status: "planned"}) do
     "queued"
   end
 

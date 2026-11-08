@@ -6,7 +6,7 @@ import type { InspectorState } from "./types";
 
 describe("execution inspector rendering", () => {
   it("withholds merge readiness when canonical eligibility is absent", () => {
-    const qualified = { ...pkg("wp-a", "Qualified UI", "ready_for_merge"), operational_state: { key: "merge_ready", label: "Ready For Merge" } };
+    const qualified = { ...pkg("wp-a", "Qualified UI", "ready"), operational_state: { key: "merge_ready", label: "Ready For Merge" } };
     expect(stripAnsi(renderInspector(state([qualified]), 80, 20))).not.toMatch(/ready (for|to) merge/i);
   });
 
@@ -22,7 +22,7 @@ describe("execution inspector rendering", () => {
   });
 
   it("sanitizes ledger control characters and measures wide terminal cells", () => {
-    const current = pkg("wp-a", "Deploy 🚀 漢字\n\u001b]52;c;payload\u0007", "implementing");
+    const current = pkg("wp-a", "Deploy 🚀 漢字\n\u001b]52;c;payload\u0007", "dispatched");
     const next = pkg("wp-b", "Review 🧑‍💻", "planned");
     const value = state([current, next], [edge("wp-a", "wp-b")]);
     value.detail!.attention_keys = ["work_package:wp-a"];

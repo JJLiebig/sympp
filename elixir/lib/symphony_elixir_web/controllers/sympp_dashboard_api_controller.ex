@@ -464,8 +464,13 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       work_package_target(work_package_id),
       :operator_finish_work_package,
       fn repo ->
-        with {:ok, work_package} <- LocalOperatorActions.finish_work_package_for_local_operator(repo, work_package_id) do
-          json(conn, mutation_success_payload(%{work_package_id: work_package.id, status: work_package.status}, %{work_package_id: work_package.id}))
+        case LocalOperatorActions.finish_work_package_for_local_operator(repo, work_package_id) do
+          {:ok, work_package} ->
+            payload = %{work_package_id: work_package.id, status: work_package.status}
+            json(conn, mutation_success_payload(payload, %{work_package_id: work_package.id}))
+
+          {:error, reason} ->
+            {:error, reason}
         end
       end
     )

@@ -59,7 +59,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02BareOriginTest 
                  product_description: work_request.human_description,
                  allowed_file_globs: work_package.allowed_file_globs,
                  acceptance_criteria: work_package.acceptance_criteria,
-                 status: "ready_for_worker"
+                 status: "dispatched"
                )
              )
 

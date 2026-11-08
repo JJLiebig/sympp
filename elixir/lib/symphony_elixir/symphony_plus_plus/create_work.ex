@@ -71,8 +71,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   end
 
   defp activate_transaction(repo, work_package, policy) do
-    with {:ok, activated} <-
-           Lifecycle.transition(repo, work_package, :dispatch, expected_contract_revision: work_package.contract_revision),
+    revision = work_package.contract_revision
+
+    with {:ok, activated} <- Lifecycle.transition(repo, work_package, :dispatch, expected_contract_revision: revision),
          {:ok, _scope_node} <- append_scope_plan_node(repo, activated),
          {:ok, minted} <- mint_worker_grant(repo, activated.id, policy),
          {:ok, virtual_files} <- Renderer.render_all(repo, activated.id) do

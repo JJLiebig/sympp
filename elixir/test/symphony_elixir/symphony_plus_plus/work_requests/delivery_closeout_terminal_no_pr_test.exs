@@ -8,7 +8,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service, as: ClaimLeaseService
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -46,7 +45,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
   end
 
   test "superseded closeout retires unclaimed worker authority and stale claim lease", %{repo: repo} do
-    {work_request, work_package, linked_package} = linked_slice!(repo, status: "implementing")
+    {work_request, work_package, linked_package} = linked_slice!(repo, status: "dispatched")
     successor_slice = create_work_package!(repo, work_request, id: "WRS-DELIVERY-UNCLAIMED-SUCCESSOR")
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
@@ -79,7 +78,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
              )
 
     assert delivery.outcome == "superseded"
-    assert repo.get!(WorkPackage, linked_package.id).status == "closed"
+    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
     assert %AccessGrant{revoked_at: %DateTime{}, claimed_at: nil} = repo.get!(AccessGrant, minted.grant.id)
     assert %ClaimLease{status: "released", release_reason: "superseded_delivery_closeout"} = repo.get!(ClaimLease, claim_lease.id)
 
@@ -94,46 +93,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
     refute "work_package_active_after_delivery" in slice.attention_reason_codes
   end
 
-  test "repository blocker exception still rejects active runtime at closeout mutation", %{repo: repo} do
-    {work_request, work_package, linked_package} = linked_slice!(repo, status: "implementing")
-
-    assert {:ok, _blocker} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: linked_package.id,
-               summary: "Scope blocker still active",
-               status: "blocked",
-               idempotency_key: "delivery-recheck-active-blocker",
-               payload: %{
-                 type: "blocker",
-                 source_tool: "report_blocker",
-                 blocker_id: "spec-md-review-scope",
-                 active: true,
-                 reason: "Review scope was blocked before recut."
-               }
-             })
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
-    assert {:ok, _assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "active-worker")
-
-    assert {:error, :active_runtime} =
-             WorkPackageRepository.close_delivery_work_package(
-               repo,
-               work_request,
-               work_package,
-               "closed",
-               allow_active_blockers?: true
-             )
-
-    assert repo.get!(WorkPackage, linked_package.id).status == "implementing"
-    assert %AccessGrant{revoked_at: nil} = repo.get!(AccessGrant, minted.grant.id)
-  end
-
   test "abandoned closeout clears missing managed worktree after durable closeout", %{repo: repo} do
     {work_request, work_package, linked_package} =
       linked_slice!(
         repo,
         work_request_id: "WR-DELIVERY-ABANDONED-STALE-RUNTIME",
-        status: "ready_for_worker"
+        status: "dispatched"
       )
 
     fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-closeout-missing-worktree")
@@ -188,7 +153,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
 
       assert {:ok, delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
       assert delivery.outcome == "abandoned"
-      assert repo.get!(WorkPackage, linked_package.id).status == "abandoned"
+      assert repo.get!(WorkPackage, linked_package.id).status == "ended"
       assert :ok = WorktreeCleanupQueue.reconcile(repo, codex_home: codex_home)
       assert repo.get!(WorkPackage, linked_package.id).worktree_path == nil
       assert %AccessGrant{revoked_at: %DateTime{}, claimed_at: nil} = repo.get!(AccessGrant, minted.grant.id)
@@ -211,7 +176,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
       linked_slice!(
         repo,
         work_request_id: "WR-DELIVERY-ABANDONED-CLAIMED-WORKER",
-        status: "ready_for_worker"
+        status: "dispatched"
       )
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
@@ -230,16 +195,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
              )
 
     assert delivery.outcome == "abandoned"
-    assert repo.get!(WorkPackage, linked_package.id).status == "abandoned"
+    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
     assert %AccessGrant{revoked_at: %DateTime{}} = repo.get!(AccessGrant, minted.grant.id)
   end
 
-  test "abandoned closeout rejects packages that reached implementation states", %{repo: repo} do
-    for {status, request_id} <- [
-          {"blocked", "WR-DELIVERY-ABANDONED-BLOCKED"},
-          {"implementing", "WR-DELIVERY-ABANDONED-IMPLEMENTING"},
-          {"ready_for_merge", "WR-DELIVERY-ABANDONED-MERGE-READY"}
-        ] do
+  test "abandoned closeout is refused for planned packages, which are skipped instead", %{repo: repo} do
+    for {status, request_id} <- [{"planned", "WR-DELIVERY-ABANDONED-PLANNED"}] do
       {work_request, work_package, linked_package} =
         linked_slice!(
           repo,
@@ -247,7 +208,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
           status: status
         )
 
-      assert {:error, :work_package_not_abandonable} =
+      assert {:error, {:ending_not_allowed, "planned", "abandoned"}} =
                Service.record_work_package_delivery(
                  repo,
                  work_request.id,
@@ -267,7 +228,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
 
   defp linked_slice!(repo, overrides) do
     kind = Keyword.get(overrides, :kind, "mcp")
-    status = Keyword.get(overrides, :status, "reviewing")
+    status = Keyword.get(overrides, :status, "dispatched")
     request_id = Keyword.get_lazy(overrides, :work_request_id, fn -> "WR-DELIVERY-#{System.unique_integer([:positive])}" end)
 
     work_request = create_work_request!(repo, id: request_id, status: "ready_for_slicing")

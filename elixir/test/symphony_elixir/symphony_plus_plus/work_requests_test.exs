@@ -225,7 +225,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:ok, request} = Repository.create(repo, attrs(id: "WR-BLOCKER-ROLLBACK", status: "ready_for_slicing"))
     assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-BLOCKER-ROLLBACK"))
     assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, request.id, work_package.id, "planned")
-    linked_package = set_work_package_status!(repo, approved_slice, "merged")
+    linked_package = set_work_package_status!(repo, approved_slice, "ended")
     insert_delivery!(repo, approved_slice)
     assert {:ok, _completed} = Service.refresh_completion(repo, request.id)
     assert {:ok, archived} = Service.archive(repo, request.id)
@@ -355,7 +355,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
             repo.update!(Ecto.Changeset.change(package, dispatched_at: now))
 
           :legacy ->
-            repo.update!(Ecto.Changeset.change(package, status: "ready_for_worker"))
+            repo.update!(Ecto.Changeset.change(package, status: "dispatched"))
 
           :delivered ->
             insert_delivery!(repo, package, %{outcome: "abandoned", abandoned_rationale: "Historical attempt was abandoned."})
@@ -401,7 +401,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
 
     active = completed_delivered_request!(repo, "WR-RETENTION-DELETE-ACTIVE", recent_at)
 
-    scope_owner = create_activity_work_package!(repo, "WP-RETENTION-SCOPE-OWNER", status: "merged")
+    scope_owner = create_activity_work_package!(repo, "WP-RETENTION-SCOPE-OWNER", status: "ended")
     grant = insert_claimed_activity_grant!(repo, scope_owner, "worker", "retention-worker")
     insert_grant_scope!(repo, grant.id, "work_request", expired.id)
     insert_grant_scope!(repo, grant.id, "work_package", expired_slice_id)
@@ -462,29 +462,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert Enum.map(visible_requests, & &1.id) == [request.id, status_request.id]
   end
 
-  test "actual delivery survives lifecycle drift while new blocker events reopen attention", %{repo: repo} do
+  test "a recorded delivery keeps the request complete while new blocker events reopen attention", %{repo: repo} do
     assert {:ok, request} = Repository.create(repo, attrs(id: "WR-RETENTION-LINKED-REOPEN", status: "ready_for_slicing"))
     assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-RETENTION-LINKED-REOPEN"))
     assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, request.id, work_package.id, "planned")
-    linked_package = set_work_package_status!(repo, approved_slice, "merged")
+    linked_package = set_work_package_status!(repo, approved_slice, "ended")
     insert_delivery!(repo, linked_package)
     assert {:ok, completed} = Service.refresh_completion(repo, request.id)
     assert %DateTime{} = completed.completed_at
     assert {:ok, archived} = Service.archive(repo, request.id)
     assert %DateTime{} = archived.archived_at
 
-    assert {:ok, _closed_package} = WorkPackageRepository.update_status(repo, linked_package.id, "merged", "closed")
-    assert {:ok, still_archived} = Repository.get(repo, request.id)
-    assert still_archived.completed_at == archived.completed_at
-    assert still_archived.archived_at == archived.archived_at
-
-    assert {:ok, _reopened_package} = WorkPackageRepository.update_status(repo, linked_package.id, "closed", "planning")
-
-    assert {:ok, recompleted} = Service.refresh_completion(repo, request.id)
-    assert %DateTime{} = recompleted.completed_at
-
-    assert {:ok, archived_again} = Service.archive(repo, request.id)
-    assert %DateTime{} = archived_again.archived_at
+    archived_again = archived
 
     assert {:ok, _note} =
              PlanningRepository.append_progress_event(repo, %{
@@ -524,9 +513,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-RETENTION-GRANT-REVOKE"))
     assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, request.id, work_package.id, "planned")
 
-    dispatched_package = set_work_package_status!(repo, approved_slice, "ready_for_worker")
+    dispatched_package = set_work_package_status!(repo, approved_slice, "dispatched")
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, dispatched_package.id)
-    set_work_package_status!(repo, dispatched_package, "merged")
+    set_work_package_status!(repo, dispatched_package, "ended")
 
     expired_at = utc_usec(~U[2026-05-01 00:00:00Z])
 
@@ -552,9 +541,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-COMPLETE-UNNAMED-GRANT"))
     assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, request.id, work_package.id, "planned")
 
-    dispatched_package = set_work_package_status!(repo, approved_slice, "ready_for_worker")
+    dispatched_package = set_work_package_status!(repo, approved_slice, "dispatched")
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, dispatched_package.id)
-    set_work_package_status!(repo, dispatched_package, "merged")
+    set_work_package_status!(repo, dispatched_package, "ended")
 
     minted.grant
     |> Ecto.Changeset.change(claimed_at: DateTime.utc_now(:microsecond), claimed_by: nil)
@@ -573,7 +562,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:ok, ordered_request} = Repository.create(repo, attrs(id: "WR-COMPLETE-BLOCKER-ORDER", status: "ready_for_slicing"))
     assert {:ok, ordered_slice} = CanonicalWorkPackageFixtures.add_work_package(repo, ordered_request.id, work_package_attrs(id: "WRS-COMPLETE-BLOCKER-ORDER"))
     assert {:ok, ordered_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, ordered_request.id, ordered_slice.id, "planned")
-    ordered_package = set_work_package_status!(repo, ordered_slice, "merged")
+    ordered_package = set_work_package_status!(repo, ordered_slice, "ended")
 
     event_time = utc_usec(~U[2026-05-23 12:00:00Z])
     append_blocker_event!(repo, ordered_package.id, "blocker-order", true, created_at: DateTime.add(event_time, 10, :second))
@@ -594,7 +583,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
                worker_task_handle: "completion-runtime"
              })
 
-    set_work_package_status!(repo, runtime_slice, "merged")
+    set_work_package_status!(repo, runtime_slice, "ended")
 
     assert {:ok, with_runtime} = Service.refresh_completion(repo, runtime_request.id)
     assert with_runtime.completed_at == nil
@@ -644,7 +633,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
   test "historical cyclic, missing and foreign lineage cannot resolve delivery" do
     packages =
       Map.new(["original", "pointer", "recut", "leaf", "foreign"], fn id ->
-        {id, %WorkPackage{id: id, work_request_id: if(id == "foreign", do: "other", else: "wr"), status: "closed"}}
+        {id, %WorkPackage{id: id, work_request_id: if(id == "foreign", do: "other", else: "wr"), status: "ended"}}
       end)
 
     deliveries = %{
@@ -654,16 +643,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     }
 
     successors = %{"original" => ["recut", "pointer"]}
-    refute DeliveryResolution.resolved?("original", packages, deliveries, successors)
+    refute DeliveryResolution.resolves_work_request?("original", packages, deliveries, successors)
     deliveries = Map.put(deliveries, "leaf", %{outcome: "completed_no_pr"})
-    assert DeliveryResolution.resolved?("original", packages, deliveries, successors)
-    refute DeliveryResolution.resolved?("original", packages, deliveries, Map.put(successors, "recut", ["original"]))
-    refute DeliveryResolution.resolved?("original", packages, deliveries, Map.put(successors, "recut", ["missing"]))
-    refute DeliveryResolution.resolved?("original", packages, Map.put(deliveries, "foreign", %{outcome: "pr_merged"}), %{"original" => ["foreign"]})
+    assert DeliveryResolution.resolves_work_request?("original", packages, deliveries, successors)
+    refute DeliveryResolution.resolves_work_request?("original", packages, deliveries, Map.put(successors, "recut", ["original"]))
+    refute DeliveryResolution.resolves_work_request?("original", packages, deliveries, Map.put(successors, "recut", ["missing"]))
+    refute DeliveryResolution.resolves_work_request?("original", packages, Map.put(deliveries, "foreign", %{outcome: "pr_merged"}), %{"original" => ["foreign"]})
 
     # Historical actual delivery remains factual even after contradictory retirement annotations.
     delivered = Map.put(deliveries, "original", %{outcome: "pr_merged"})
-    assert DeliveryResolution.resolved?("original", packages, delivered, %{"original" => ["missing", "original"]})
+    assert DeliveryResolution.resolves_work_request?("original", packages, delivered, %{"original" => ["missing", "original"]})
   end
 
   test "completion loads same-request recuts alongside the immutable successor pointer", %{repo: repo} do
@@ -713,7 +702,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
         package
       end
 
-    set_work_package_status!(repo, recut, "skipped")
+    assert {:ok, _skipped} = CanonicalWorkPackageFixtures.end_work_package(repo, request.id, recut.id, %{outcome: "skipped"})
     insert_delivery!(repo, original, %{outcome: "superseded", successor_work_package_id: pointer.id, superseded_reason: "Delivered replacement."})
     insert_delivery!(repo, pointer)
     assert {:ok, archived} = Service.archive(repo, request.id)
@@ -733,7 +722,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
       assert {:ok, request} = Repository.create(repo, attrs(id: "WR-LINEAGE-#{completion}"))
       assert {:ok, source} = CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-LINEAGE-#{completion}"))
       assert {:ok, recut} = CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-LINEAGE-RECUT-#{completion}"))
-      set_work_package_status!(repo, recut, "skipped")
+      assert {:ok, _skipped} = CanonicalWorkPackageFixtures.end_work_package(repo, request.id, recut.id, %{outcome: "skipped"})
 
       if completion == "operator" do
         assert {:ok, _accepted} = Service.force_complete(repo, request.id)
@@ -767,20 +756,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert accepted.completion_source == "operator"
     assert {:ok, refreshed} = Service.refresh_completion(repo, request.id)
     assert refreshed.completed_at == accepted.completed_at
-    assert DeliveryResolution.resolved?(package.id, %{package.id => package}, %{package.id => %{outcome: "abandoned"}}) == false
+    assert DeliveryResolution.resolves_work_request?(package.id, %{package.id => package}, %{package.id => %{outcome: "abandoned"}}) == false
   end
 
   test "activity context derives active stale recycled and terminal runtime state", %{repo: repo} do
     now = DateTime.utc_now(:microsecond)
     stale_seen_at = DateTime.add(now, -10, :second)
 
-    active_package = create_activity_work_package!(repo, "WP-ACTIVITY-ACTIVE", status: "implementing")
-    stale_package = create_activity_work_package!(repo, "WP-ACTIVITY-STALE", status: "implementing")
-    mixed_package = create_activity_work_package!(repo, "WP-ACTIVITY-MIXED", status: "implementing")
-    recycled_package = create_activity_work_package!(repo, "WP-ACTIVITY-RECYCLED", status: "ready_for_worker")
-    ready_package = create_activity_work_package!(repo, "WP-ACTIVITY-READY", status: "ready_for_merge")
-    terminal_package = create_activity_work_package!(repo, "WP-ACTIVITY-TERMINAL", status: "implementing")
-    agent_package = create_activity_work_package!(repo, "WP-ACTIVITY-AGENT-STALE", status: "implementing")
+    active_package = create_activity_work_package!(repo, "WP-ACTIVITY-ACTIVE", status: "dispatched")
+    stale_package = create_activity_work_package!(repo, "WP-ACTIVITY-STALE", status: "dispatched")
+    mixed_package = create_activity_work_package!(repo, "WP-ACTIVITY-MIXED", status: "dispatched")
+    recycled_package = create_activity_work_package!(repo, "WP-ACTIVITY-RECYCLED", status: "dispatched")
+    ready_package = create_activity_work_package!(repo, "WP-ACTIVITY-READY", status: "ready")
+    terminal_package = create_activity_work_package!(repo, "WP-ACTIVITY-TERMINAL", status: "dispatched")
+    agent_package = create_activity_work_package!(repo, "WP-ACTIVITY-AGENT-STALE", status: "dispatched")
 
     assert {:ok, _active_lease} =
              ClaimLeaseService.claim(repo, active_package.id, activity_actor("active-worker"), stale_after_ms: 60_000)
@@ -839,7 +828,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
                last_seen_at: DateTime.add(now, -301, :second)
              })
 
-    terminal_package = set_work_package_status!(repo, terminal_package, "closed")
+    terminal_package = set_work_package_status!(repo, terminal_package, "ended")
 
     contexts =
       WorkPackageActivity.contexts(repo, [

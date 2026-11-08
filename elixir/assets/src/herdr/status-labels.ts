@@ -11,8 +11,7 @@ const STATUS_LABELS: Record<string, string> = {
   started_paused: "Started / Paused",
   completed: "Completed",
   merging: "Merging",
-  ready_for_merge: "Qualified",
-  ci_waiting: "CI Waiting",
+  ready: "Qualified",
 };
 
 export function statusLabel(status?: string | null) {

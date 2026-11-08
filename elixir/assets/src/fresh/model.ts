@@ -98,13 +98,13 @@ export type Settings = {
 export type Hydrated = { generated_at?: string; settings?: Settings | null; work_request_details?: Detail[] };
 type Timed = { event: HistoryEvent; at: number };
 
-const OUTCOMES: Record<string, Outcome> = { pr_merged: "merged", completed_no_pr: "finished", superseded: "dropped", abandoned: "dropped" };
+const OUTCOMES: Record<string, Outcome> = { pr_merged: "merged", completed_no_pr: "finished", finished: "finished", superseded: "dropped", abandoned: "dropped", skipped: "dropped" };
 // First match wins. Statuses are whatever agents wrote, so these are deliberately loose.
 const STATUS_RULES: Array<[RegExp, Stage]> = [
   [/^(merged|github_pr_merged)$/, "done"],
-  [/merge_ready|ready_for_merge|review_complete|^reviewed$|review_owner_accepted|acceptance|ready_for_close/, "merge"],
+  [/merge_ready|review_complete|^reviewed$|review_owner_accepted|acceptance|ready_for_close/, "merge"],
   [/review/, "review"],
-  [/validat|ci_waiting/, "checks"],
+  [/validat/, "checks"],
 ];
 
 export function buildGoals(hydrated: Hydrated, history: Record<string, HistoryEvent[]>): { goals: Goal[]; now: number } {

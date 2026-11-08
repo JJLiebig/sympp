@@ -7,7 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     assert {:ok, package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(id: "SYMPP-READY-GUARD-BOUNDED", kind: "mcp", status: "ready_for_worker")
+               WorkPackageFactory.attrs(id: "SYMPP-READY-GUARD-BOUNDED", kind: "mcp", status: "dispatched")
              )
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
@@ -17,7 +17,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     assert {1, nil} =
              repo.update_all(
                from(work_package in WorkPackage, where: work_package.id == ^package.id),
-               set: [status: "ready_for_merge"]
+               set: [status: "ready"]
              )
 
     now = DateTime.utc_now(:microsecond)

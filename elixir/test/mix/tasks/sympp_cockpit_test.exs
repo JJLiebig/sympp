@@ -12,6 +12,7 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
   alias SymphonyElixir.SymphonyPlusPlus.ReviewObservation
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.WorkPackageFactory
   alias SymphonyElixirWeb.Endpoint
@@ -104,7 +105,7 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
         response = Stdio.handle_payload(%{"jsonrpc" => "2.0", "id" => 1, "method" => "initialize"}, server)
         assert response["error"]["data"]["reason"] == "offline_sandbox"
 
-        package = %WorkPackage{id: "WP-OFFLINE", status: "active", worktree_path: File.cwd!(), review_requirement: %{"type" => "review-suite"}}
+        package = %WorkPackage{id: "WP-OFFLINE", status: "dispatched", worktree_path: File.cwd!(), review_requirement: %{"type" => "review-suite"}}
 
         assert ReviewObservation.observe([package],
                  find_executable: fn _name -> "/unused/probe" end,
@@ -415,15 +416,7 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
                stop_conditions: []
              })
 
-    assert {:ok, _skipped} = WorkRequestRepository.skip_work_package(Repo, request.id, slice.id)
-
-    assert {:ok, _delivery} =
-             WorkRequestRepository.record_work_package_delivery(Repo, request.id, slice.id, %{
-               outcome: "abandoned",
-               idempotency_key: "cockpit-retention-skipped-delivery",
-               recorded_by: "cockpit-test",
-               abandoned_rationale: "Skipped retention fixture has a terminal delivery record."
-             })
+    assert {:ok, _skipped} = WorkRequestService.skip_work_package(Repo, request.id, slice.id)
 
     request
     |> Ecto.Changeset.change(completed_at: utc_usec(completed_at))

@@ -111,7 +111,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
               {"FINISHED", %{worker_host: "build-desk", session_id: "session-finished", status: "completed", finished_at: now}}
             ],
             into: %{} do
-          package = create_dispatched_package!(repo, request, slice_id: "WRS-LABEL-#{suffix}", package_id: "WP-LABEL-#{suffix}", status: "implementing")
+          package = create_dispatched_package!(repo, request, slice_id: "WRS-LABEL-#{suffix}", package_id: "WP-LABEL-#{suffix}", status: "dispatched")
           attrs = Map.merge(%{work_package_id: package.id, status: "running", last_seen_at: now}, run_attrs)
           attrs |> AgentRun.create_changeset() |> repo.insert!()
           {suffix, package}
@@ -130,12 +130,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
         refute Map.has_key?(by_id[packages[suffix].id], "session_location")
       end
 
-      for status <- ["merged", "closed", "abandoned", "skipped"] do
-        packages["CURRENT"] |> Ecto.Changeset.change(status: status) |> repo.update!()
-        terminal = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/hydrated"), 200)
-        terminal_package = Enum.find(work_request_detail(terminal, request.id)["work_packages"], &(&1["id"] == packages["CURRENT"].id))
-        refute Map.has_key?(terminal_package, "session_location")
-      end
+      packages["CURRENT"] |> Ecto.Changeset.change(status: "ended") |> repo.update!()
+      terminal = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/hydrated"), 200)
+      terminal_package = Enum.find(work_request_detail(terminal, request.id)["work_packages"], &(&1["id"] == packages["CURRENT"].id))
+      refute Map.has_key?(terminal_package, "session_location")
 
       File.write!(
         config_path,
@@ -164,7 +162,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
   test "hydrated locations discover machines, allow renames, and hide private addresses", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       request = create_work_request!(repo, repo: "example-org/widget-service", status: "sliced")
-      package = create_dispatched_package!(repo, request, slice_id: "WRS-LOCATION", package_id: "WP-LOCATION", status: "implementing")
+      package = create_dispatched_package!(repo, request, slice_id: "WRS-LOCATION", package_id: "WP-LOCATION", status: "dispatched")
       observed_at = ~U[2026-10-01 09:00:00.000000Z]
 
       for {kind, id, role} <- [{"work_request", request.id, "coordinator"}, {"work_request", request.id, "architect"}, {"work_package", package.id, "worker"}] do
@@ -290,14 +288,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
         create_dispatched_package!(repo, archived_request,
           slice_id: "WRS-LOCAL-ARCHIVED-TERMINAL",
           package_id: "WP-LOCAL-ARCHIVED-TERMINAL",
-          status: "merged"
+          status: "ended"
         )
 
       stale_package =
         create_dispatched_package!(repo, archived_request,
           slice_id: "WRS-LOCAL-ARCHIVED-STALE",
           package_id: "WP-LOCAL-ARCHIVED-STALE",
-          status: "ready_for_worker"
+          status: "dispatched"
         )
 
       active_request =
@@ -312,7 +310,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
         create_dispatched_package!(repo, active_request,
           slice_id: "WRS-LOCAL-ACTIVE-LINK",
           package_id: "WP-LOCAL-ACTIVE-LINK",
-          status: "ready_for_worker"
+          status: "dispatched"
         )
 
       archived_at = DateTime.utc_now(:microsecond)
@@ -366,7 +364,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
           id: "SYMPP-WR-ARCH-DASHBOARD-DELIVERY",
           kind: "mcp",
           title: "Prefix-like delivery package",
-          status: "planning",
+          status: "dispatched",
           repo: anchor.repo,
           base_branch: anchor.base_branch
         )
@@ -386,7 +384,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
       delivered_package =
         create_work_package!(repo,
           id: "WP-LOCAL-ARCHIVE-UNLINKED",
-          status: "merged",
+          status: "ended",
           repo: "nextide/symphony-plus-plus",
           base_branch: "main"
         )
@@ -394,7 +392,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
       active_package =
         create_work_package!(repo,
           id: "WP-LOCAL-ARCHIVE-ACTIVE",
-          status: "implementing",
+          status: "dispatched",
           repo: delivered_package.repo,
           base_branch: delivered_package.base_branch
         )
@@ -417,7 +415,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
       refute delivered_package.id in dashboard_work_package_ids(dashboard_payload)
 
       assert {:ok, persisted_package} = WorkPackageRepository.get(repo, delivered_package.id)
-      assert persisted_package.status == "merged"
+      assert persisted_package.status == "ended"
     end)
   end
 

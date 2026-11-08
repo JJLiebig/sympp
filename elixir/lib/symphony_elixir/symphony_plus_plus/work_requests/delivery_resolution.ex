@@ -45,19 +45,38 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryResolution do
   end
 
   defp resolve(id, packages, deliveries, successors, mode, visited) do
-    package = Map.get(packages, id)
-    delivery = Map.get(deliveries, id)
-    outcome = value(delivery, :outcome)
+    case Map.get(packages, id) do
+      nil -> false
+      package -> resolve_ending(Map.get(deliveries, id), package, packages, deliveries, successors, mode, visited)
+    end
+  end
+
+  defp resolve_ending(delivery, package, packages, deliveries, successors, mode, visited) do
+    case value(delivery, :outcome) do
+      outcome when outcome in @delivered_outcomes ->
+        true
+
+      "finished" ->
+        mode == :work_request
+
+      "legacy" ->
+        value(delivery, :legacy_status) in @resolving_legacy_statuses
+
+      outcome when outcome in @traversed_outcomes ->
+        traverse(delivery, package, packages, deliveries, successors, mode, visited)
+
+      _outcome ->
+        false
+    end
+  end
+
+  defp traverse(delivery, package, packages, deliveries, successors, mode, visited) do
+    id = value(package, :id)
 
     cond do
-      is_nil(package) -> false
-      outcome in @delivered_outcomes -> true
-      outcome == "finished" -> mode == :work_request
-      outcome == "legacy" -> value(delivery, :legacy_status) in @resolving_legacy_statuses
-      outcome == "superseded" and is_nil(value(delivery, :successor_work_package_id)) -> false
+      value(delivery, :outcome) == "superseded" and is_nil(value(delivery, :successor_work_package_id)) -> false
       Map.has_key?(visited, id) -> false
-      outcome in @traversed_outcomes -> resolve_successors(package, packages, deliveries, successors, mode, Map.put(visited, id, true))
-      true -> false
+      true -> resolve_successors(package, packages, deliveries, successors, mode, Map.put(visited, id, true))
     end
   end
 

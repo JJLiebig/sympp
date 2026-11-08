@@ -2,8 +2,8 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.Runtime do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.Repo.MigrationFileLock
+  alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixirWeb.Endpoint
 
   @spec dashboard_ledger_database(module()) :: term()

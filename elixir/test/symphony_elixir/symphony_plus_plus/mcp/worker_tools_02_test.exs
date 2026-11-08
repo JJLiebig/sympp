@@ -38,7 +38,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
                  id: "WP-ARCH-DESCENDANT-PLANNING",
                  repo: "nextide/secondary-service",
                  base_branch: "release",
-                 status: "planning"
+                 status: "dispatched"
                )
              )
 

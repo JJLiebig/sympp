@@ -11,9 +11,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.MigrationFileLock do
   @lock_wait_observer_key :sympp_migration_lock_wait_observer
 
   @spec run(Path.t(), (-> term())) :: term()
-  @spec run(Path.t(), (-> term()), non_neg_integer() | :infinity) :: term()
-  def run(database_path, fun, retries \\ :infinity)
+  def run(database_path, fun), do: run(database_path, fun, :infinity)
 
+  @spec run(Path.t(), (-> term()), non_neg_integer() | :infinity) :: term()
   def run(_database_path, fun, 0) when is_function(fun, 0), do: {:error, :repo_migration_lock_busy}
 
   def run(database_path, fun, retries) when is_binary(database_path) and is_function(fun, 0) do

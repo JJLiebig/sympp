@@ -31,10 +31,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
+  alias SymphonyElixir.SymphonyPlusPlus.Repo.MigrationFileLock
   alias SymphonyElixir.SymphonyPlusPlus.SessionLocations
   alias SymphonyElixir.SymphonyPlusPlus.SessionLocations.Location
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Repository, as: SoloSessionRepository
-  alias SymphonyElixir.SymphonyPlusPlus.Repo.MigrationFileLock
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
@@ -490,7 +490,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     Enum.each(tasks, &Task.await(&1, 30_000))
 
     for package_id <- package_ids do
-      assert Repo.get!(WorkPackage, package_id).status == "ready_for_worker"
+      assert Repo.get!(WorkPackage, package_id).status == "dispatched"
 
       worker_grants =
         from(grant in AccessGrant,
@@ -795,7 +795,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
                  base_branch: "main",
                  branch_pattern: "agent/#{package_id}/worker",
                  worktree_path: local_claim_worktree_path(package_id),
-                 status: "ready_for_worker"
+                 status: "dispatched"
                )
              )
 
@@ -860,7 +860,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
                  base_branch: "main",
                  branch_pattern: "agent/#{package_id}/worker",
                  worktree_path: local_claim_worktree_path(package_id),
-                 status: "ready_for_worker"
+                 status: "dispatched"
                )
              )
 
@@ -948,7 +948,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
                  base_branch: "main",
                  branch_pattern: "agent/#{package_id}/worker",
                  worktree_path: local_claim_worktree_path(package_id),
-                 status: "ready_for_worker"
+                 status: "dispatched"
                )
              )
 

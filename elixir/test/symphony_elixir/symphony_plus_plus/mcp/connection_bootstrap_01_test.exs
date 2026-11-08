@@ -50,13 +50,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
 
   test "direct raw-proof session validation retires terminal worker authority", %{repo: repo} do
     assert {:ok, package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-AUTH-TERMINAL", kind: "mcp", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-AUTH-TERMINAL", kind: "mcp", status: "dispatched"))
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
-    assert {:ok, _terminal_package} = WorkPackageRepository.update(repo, package.id, %{status: "merged"})
+    package |> Ecto.Changeset.change(status: "ended") |> repo.update!()
 
     assert Auth.require_session(session, repo) == {:error, {:unauthorized, :work_package_terminal}}
   end
@@ -66,7 +66,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
 
     assert {:ok, _live_session} = Auth.require_session(session, repo)
 
-    assert {:ok, _terminal_package} = WorkPackageRepository.update(repo, package.id, %{status: "merged"})
+    package |> Ecto.Changeset.change(status: "ended") |> repo.update!()
 
     assert Auth.require_session(session, repo) == {:error, {:unauthorized, :work_package_terminal}}
   end
@@ -77,7 +77,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
     {anchor, session, grant} =
       create_work_request_handoff_architect_session(repo, work_request, ArchitectHandoff.capabilities())
 
-    assert {:ok, _terminal_anchor} = WorkPackageRepository.update(repo, anchor.id, %{status: "merged"})
+    anchor |> Ecto.Changeset.change(status: "ended") |> repo.update!()
     assert {:ok, live_session} = Auth.require_session(session, repo)
     assert live_session.assignment.grant_id == grant.id
 
@@ -444,7 +444,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
       assert {:ok, package} =
                WorkPackageRepository.create(
                  Repo,
-                 WorkPackageFactory.attrs(id: "SYMPP-P3-001", status: "ready_for_worker")
+                 WorkPackageFactory.attrs(id: "SYMPP-P3-001", status: "dispatched")
                )
 
       assert {:ok, _minted} = AccessGrantService.mint_worker_grant(Repo, package.id)

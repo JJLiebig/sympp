@@ -90,13 +90,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
   def transition(repo, %WorkPackage{} = work_package, event, opts \\ []) when is_atom(repo) and is_list(opts) do
     with {:ok, {from_statuses, next_status}} <- fetch_transition(event),
          :ok <- require_source(work_package, event, from_statuses, opts) do
-      repo.transaction(fn ->
-        case write_status(repo, work_package, next_status, opts) do
-          {:ok, updated} -> apply_effects(repo, event, updated)
-          {:error, reason} -> repo.rollback(reason)
-        end
-      end)
+      repo.transaction(fn -> write_with_effects(repo, work_package, event, next_status, opts) end)
       |> broadcast(repo)
+    end
+  end
+
+  defp write_with_effects(repo, work_package, event, next_status, opts) do
+    case write_status(repo, work_package, next_status, opts) do
+      {:ok, updated} -> apply_effects(repo, event, updated)
+      {:error, reason} -> repo.rollback(reason)
     end
   end
 
@@ -157,11 +159,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
     * `:dependencies_met?` - false while a prerequisite is undelivered;
     * `:progress` - derived progress inside `dispatched`: `"launching"`,
       `"implementing"`, `"worker_exited"` or `"review_ci"`;
-    * `:attention?` - CI failed or review findings on the current head;
+    * `:attention?` - CI failed, or review findings or a review that no longer
+      covers the current head;
     * `:worker_idle?` - the worker terminal is idle;
     * `:merge_rights?` - false when the PR targets a repository sympp cannot merge.
   """
-  @spec next_action(WorkPackage.t() | map() | String.t() | nil, map()) :: %{action: String.t() | nil, actor: String.t() | nil}
+  @spec next_action(WorkPackage.t() | map() | String.t() | nil, map()) ::
+          %{action: String.t() | nil, actor: String.t() | nil}
   def next_action(package_or_status, facts \\ %{}) when is_map(facts) do
     case status(package_or_status) do
       @planned -> planned_next_action(facts)
@@ -186,6 +190,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
   defp review_ci_next_action(%{attention?: true, worker_idle?: true}), do: %{action: "inspect_worker", actor: "architect"}
   defp review_ci_next_action(_facts), do: %{action: "wait", actor: "worker"}
 
+  # A ready package whose CI failed or whose review no longer covers its head is
+  # re-synced, which unqualifies it.
+  defp ready_next_action(%{attention?: true}), do: %{action: "sync_pr", actor: "architect"}
   defp ready_next_action(%{merge_rights?: false}), do: %{action: "finish", actor: "operator"}
   defp ready_next_action(_facts), do: %{action: "merge_pr", actor: "architect"}
 

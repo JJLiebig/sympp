@@ -21,8 +21,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, WorkPackage, WorkPackageActivity}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
 
   @spec sync(module(), Session.t(), WorkPackage.t(), map()) :: {:ok, map()} | {:error, term()} | {:tool_error, term()}
   def sync(repo, %Session{} = session, %WorkPackage{} = work_package, arguments)
@@ -84,7 +84,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
            {:ok, candidate_head} <- candidate_head(repo, current),
            :ok <- append_snapshot(repo, session, current, payload),
            {:ok, graph} <- ExecutionGraph.evaluate(repo, current.work_request_id),
-           qualification = Lifecycle.qualification(qualification_facts(current, graph, pr_facts, candidate_head, payload)),
+           facts = qualification_facts(current, graph, pr_facts, candidate_head, payload),
+           qualification = Lifecycle.qualification(facts),
            {:ok, updated} <- reconcile_qualification(repo, session, current, qualification, payload) do
         %{status: updated.status, head_sha: payload["head_sha"], readiness_reasons: qualification_reasons(qualification)}
       else
@@ -107,16 +108,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
 
   # A ready package's candidate head is frozen; a dispatched package has none.
   defp candidate_head(repo, %WorkPackage{} = package) do
-    if Lifecycle.ready?(package) do
-      with {:ok, state} <- PlanningRepository.get_state(repo, package.id) do
-        case PullRequestProgress.current_pr_state(state.progress_events) do
-          {:ok, current} -> {:ok, current.payload["head_sha"]}
-          {:error, :missing_attached_pr} -> {:ok, nil}
-          {:error, reason} -> {:error, reason}
-        end
+    if Lifecycle.ready?(package), do: attached_head(repo, package), else: {:ok, nil}
+  end
+
+  defp attached_head(repo, %WorkPackage{} = package) do
+    with {:ok, state} <- PlanningRepository.get_state(repo, package.id) do
+      case PullRequestProgress.current_pr_state(state.progress_events) do
+        {:ok, current} -> {:ok, current.payload["head_sha"]}
+        {:error, :missing_attached_pr} -> {:ok, nil}
+        {:error, reason} -> {:error, reason}
       end
-    else
-      {:ok, nil}
     end
   end
 
@@ -164,16 +165,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
   end
 
   defp require_merged_handoff(repo, %WorkPackage{} = package, payload) do
-    if Lifecycle.planned?(package) do
-      {:error, :invalid_work_package_status}
+    if Lifecycle.planned?(package),
+      do: {:error, :invalid_work_package_status},
+      else: require_same_pr(repo, package, payload)
+  end
+
+  defp require_same_pr(repo, %WorkPackage{} = package, payload) do
+    with {:ok, state} <- PlanningRepository.get_state(repo, package.id),
+         {:ok, current} <- PullRequestProgress.current_pr_state(state.progress_events),
+         true <- PullRequestProgress.same_pr?(payload, current.ref) do
+      :ok
     else
-      with {:ok, state} <- PlanningRepository.get_state(repo, package.id),
-           {:ok, current} <- PullRequestProgress.current_pr_state(state.progress_events) do
-        if PullRequestProgress.same_pr?(payload, current.ref), do: :ok, else: {:error, :pr_reference_mismatch}
-      else
-        {:error, :missing_attached_pr} -> :ok
-        error -> error
-      end
+      false -> {:error, :pr_reference_mismatch}
+      {:error, :missing_attached_pr} -> :ok
+      error -> error
     end
   end
 

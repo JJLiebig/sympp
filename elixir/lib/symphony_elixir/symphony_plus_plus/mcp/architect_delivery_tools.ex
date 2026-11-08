@@ -419,8 +419,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   end
 
   defp work_package_delivery_attrs(arguments, outcome, idempotency_key, recorded_by) do
-    with {:ok, evidence} <- required_object(arguments, "evidence"),
-         {:ok, evidence_attrs} <- work_package_delivery_evidence_attrs(evidence, outcome) do
+    with {:ok, evidence} <- optional_object_argument(arguments, "evidence"),
+         {:ok, evidence_attrs} <- work_package_delivery_evidence_attrs(evidence || %{}, outcome) do
       {:ok,
        Map.merge(
          %{

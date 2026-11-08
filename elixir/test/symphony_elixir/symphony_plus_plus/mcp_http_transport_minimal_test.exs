@@ -82,7 +82,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
                  base_branch: "main",
                  branch_pattern: "agent/#{package_id}/worker",
                  worktree_path: local_claim_worktree_path(package_id),
-                 status: "ready_for_worker"
+                 status: "dispatched"
                )
              )
 
@@ -167,7 +167,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
                  base_branch: "main",
                  branch_pattern: "agent/#{package_id}/worker",
                  worktree_path: local_claim_worktree_path(package_id),
-                 status: "ready_for_worker"
+                 status: "dispatched"
                )
              )
 
@@ -419,7 +419,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
                  base_branch: "main",
                  branch_pattern: "agent/SYMPP-HTTP-MINIMAL-CLAIM/worker",
                  worktree_path: local_claim_worktree_path("SYMPP-HTTP-MINIMAL-CLAIM"),
-                 status: "ready_for_worker"
+                 status: "dispatched"
                )
              )
 

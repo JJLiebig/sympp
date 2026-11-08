@@ -28,9 +28,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperationalLineageTest do
   end
 
   test "stored recut, successor and oracle lineage preserve branch snapshots and dashboard attention", %{repo: repo} do
-    original = create_package!(repo, id: "SYMPP-LINEAGE-ORIGINAL", status: "planning", branch_pattern: "agent/original")
-    recut = create_package!(repo, id: "SYMPP-LINEAGE-RECUT", status: "implementing", branch_pattern: "agent/recut")
-    replacement = create_package!(repo, id: "SYMPP-LINEAGE-REPLACEMENT", status: "ready_for_worker", branch_pattern: "agent/replacement")
+    original = create_package!(repo, id: "SYMPP-LINEAGE-ORIGINAL", status: "dispatched", branch_pattern: "agent/original")
+    recut = create_package!(repo, id: "SYMPP-LINEAGE-RECUT", status: "dispatched", branch_pattern: "agent/recut")
+    replacement = create_package!(repo, id: "SYMPP-LINEAGE-REPLACEMENT", status: "dispatched", branch_pattern: "agent/replacement")
     original_id = original.id
     recut_id = recut.id
     replacement_id = replacement.id
@@ -89,14 +89,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperationalLineageTest do
     original =
       create_package!(repo,
         id: "SYMPP-LINEAGE-VISIBLE-ORIGINAL",
-        status: "planning",
+        status: "dispatched",
         branch_pattern: "agent/visible-original"
       )
 
     successor =
       create_package!(repo,
         id: "SYMPP-LINEAGE-VISIBLE-SUCCESSOR",
-        status: "implementing",
+        status: "dispatched",
         branch_pattern: "agent/visible-successor"
       )
 
@@ -193,7 +193,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperationalLineageTest do
   end
 
   test "does not project cleanup attention when related original status is unavailable", %{repo: repo} do
-    target = create_package!(repo, id: "SYMPP-LINEAGE-MISSING-TARGET", status: "implementing")
+    target = create_package!(repo, id: "SYMPP-LINEAGE-MISSING-TARGET", status: "dispatched")
 
     assert {:ok, _event} =
              PlanningRepository.append_progress_event(repo, %{
@@ -231,7 +231,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperationalLineageTest do
                      title: "Lineage package",
                      repo: "sympp",
                      base_branch: "main",
-                     status: "ready_for_worker",
+                     status: "dispatched",
                      policy_template: "mcp"
                    ],
                    overrides

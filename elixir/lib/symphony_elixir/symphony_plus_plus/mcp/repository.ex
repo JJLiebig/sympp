@@ -2,8 +2,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Repository do
   @moduledoc false
 
   alias Ecto.Adapters.SQL
-  alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.Repo.MigrationFileLock
+  alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
 
   @cache_table __MODULE__
   @cache_owner SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore

@@ -12,6 +12,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
+  @lifecycle_capability "worker:lifecycle.transition"
+
   @type repo :: module()
   @type mcp_error :: {:error, integer(), String.t(), map()}
 
@@ -24,6 +26,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     repo
     |> run_worker_transaction(fn ->
       with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
+           :ok <- require_lifecycle_capability(session),
            :ok <- lock_work_package(repo, Session.work_package_id(session)),
            {:ok, blocker_closeout} <- apply_blocker_closeout.(repo, session, blocker_closeout_plan),
            {:ok, state} <- PlanningRepository.get_state(repo, Session.work_package_id(session)),
@@ -68,6 +71,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       {1, _rows} -> :ok
       {0, _rows} -> {:error, :not_found}
     end
+  end
+
+  defp require_lifecycle_capability(%Session{assignment: assignment}) do
+    if @lifecycle_capability in List.wrap(assignment.capabilities), do: :ok, else: {:error, :missing_lifecycle_capability}
   end
 
   defp require_policy(%WorkPackage{} = work_package) do

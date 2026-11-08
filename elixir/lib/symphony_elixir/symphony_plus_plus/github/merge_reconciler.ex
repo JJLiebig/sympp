@@ -269,20 +269,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
   end
 
   defp transition_merged(repo, %WorkPackage{} = work_package, payload, metadata) do
-    with {:ok, updated} <- transition_merged_transaction(repo, work_package, payload, metadata) do
-      work_package
-      |> base_result(payload)
-      |> Map.merge(%{
-        status: "merged",
-        reason: "github_pr_merged",
-        before_status: work_package.status,
-        after_status: updated.status,
-        merged_at: Map.get(metadata, "merged_at"),
-        merge_commit_sha: Map.get(metadata, "merge_commit_sha")
-      })
-    else
-      {:error, :stale_status} -> skipped_result(work_package, payload, "stale_status")
-      {:error, reason} -> error_result(work_package, payload, reason)
+    case transition_merged_transaction(repo, work_package, payload, metadata) do
+      {:ok, updated} ->
+        work_package
+        |> base_result(payload)
+        |> Map.merge(%{
+          status: "merged",
+          reason: "github_pr_merged",
+          before_status: work_package.status,
+          after_status: updated.status,
+          merged_at: Map.get(metadata, "merged_at"),
+          merge_commit_sha: Map.get(metadata, "merge_commit_sha")
+        })
+
+      {:error, :stale_status} ->
+        skipped_result(work_package, payload, "stale_status")
+
+      {:error, reason} ->
+        error_result(work_package, payload, reason)
     end
   end
 

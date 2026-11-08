@@ -34,7 +34,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
     assert {:ok, package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(id: "SYMPP-PR-LEGACY-REPLAY", kind: "mcp", repo: "example-org/widget-service", status: "ci_waiting")
+               WorkPackageFactory.attrs(id: "SYMPP-PR-LEGACY-REPLAY", kind: "mcp", repo: "example-org/widget-service", status: "dispatched")
              )
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
@@ -101,7 +101,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
 
   defp sync_package(repo, id, number, head_sha, overrides \\ []) do
     attrs =
-      [id: id, kind: "mcp", repo: "nextide/repo", status: "ci_waiting"]
+      [id: id, kind: "mcp", repo: "nextide/repo", status: "dispatched"]
       |> Keyword.merge(overrides)
 
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(attrs))
