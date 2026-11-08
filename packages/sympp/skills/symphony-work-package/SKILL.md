@@ -1,6 +1,6 @@
 ---
 name: symphony-work-package
-description: Optional scoped MCP adapter for a sympp worker; ordinary assignments and PR delivery need no worker ledger calls.
+description: Worker contract for a dispatched sympp WorkPackage; workers make no ledger calls and deliver through a normal PR or evidence handoff.
 ---
 
 # sympp Work Package
@@ -10,40 +10,14 @@ The parent's assignment is the worker contract. Follow
 the PR or direct evidence. The architect owns ledger coordination and acceptance.
 No worker MCP call is required to start or deliver work.
 
-## Optional MCP Use
+## MCP Access
 
-Use these tools only when scoped ledger access adds useful execution context.
-The server remains the permission boundary; an assignment alone grants no MCP
-write authority.
-
-- In a dedicated MCP-enabled session on the dispatch ledger, claim the assigned
-  WorkPackage with `claim_local_assignment({"work_package_id":"<id>"})`.
-  Include `claimed_by` only when the parent supplies a stable identity.
-  Inside Herdr, the client bridge reports the session location automatically.
-  Outside Herdr, optionally add `session_description` to this existing claim,
-  for example `"Terminal window: widget implementation"`. Do not add an MCP
-  call just to report a location.
-- Reuse the returned assignment. Recheck binding with `get_current_assignment`
-  only after reconnect, denial, or conflicting identity. A different owner
-  requires the parent; never bypass a denial or mint a replacement.
-- `read_context` and `read_work_package_document` read current scoped state.
-  The latter supports `context.md`, `acceptance.md`, `review.md`, `handoff.md`,
-  `findings.md`, `progress.md`, and `task_plan.md`. Histories may have older pages;
-  use `next_before_sequence` only when the missing history matters.
-  Large progress pages return five recent event summaries and omission counts.
-  Use `detail: "full"` with the same document and cursor for the complete page,
-  including evidence bodies. Other documents and resource reads keep their full
-  payloads.
-- Optional task-plan, finding, progress, branch/PR, and readiness tools
-  remain available to authenticated workers. Do not call them just to repeat
-  native GitHub, review, or conversational evidence.
-- While watching your PR's CI, call `sync_pr` when checks start, pass, fail,
-  or restart, including after review pushes. Attach the PR before the first sync
-  and the current branch/head after each push. Each transition needs a fresh call
-  (and a new idempotency key if used). The factory fetches GitHub's `check_summary`; do not supply it
-  yourself. If scoped MCP access is unavailable or denied, tell the parent.
-- TOON is presentation only. Send schema-native JSON; `structuredContent` is the
-  canonical result. Do not use business CLI commands or private ledger files.
+Workers make no sympp calls and hold no ledger authority. Every write is owned by
+the terminal that owns the WorkRequest, normally the architect; a worker's write
+fails `owned_by_other_terminal`. When ledger context helps, any trusted session
+may read `read_work_request`, `read_plan`, `read_task_plan`, or the
+`sympp://work-packages/<id>/<document>.md` resources. Return everything else in
+the normal handoff.
 
 Questions stay in the conversation. Workers do not declare or resolve work
 blockers. Asking, waiting, or escalating to a human does not change blocker state.
@@ -63,16 +37,12 @@ means last-known or unknown, never a work blocker or permission to take over.
 
 ## Safety
 
-Worker MCP grants and claim leases authorize exactly one WorkPackage. Workers
-cannot mint keys, approve scope, dispatch siblings, merge PRs, or use architect
-operations. A `state_key` preserves initialized transport continuity only.
-
-Never print, store, commit, or paste raw grant secrets, private handoff payloads,
-bearer/API/GitHub/Linear/MCP tokens, secret-bearing commands, grant verifiers,
-or claim lease internals.
+Workers cannot approve scope, dispatch siblings, merge PRs, or write to the ledger.
+Never print, store, commit, or paste bearer/API/GitHub/Linear/MCP tokens or
+secret-bearing commands.
 
 ## References
 
 - Assignment template: `references/worker_prompt.md`.
-- Optional MCP setup/repair: `references/mcp_wiring.md`.
+- MCP connection setup/repair: `references/mcp_wiring.md`.
 - Handoff examples: `references/handoff.md`.

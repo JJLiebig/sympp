@@ -1,13 +1,9 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
   alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
-  alias SymphonyElixir.SymphonyPlusPlus.Chiefs
-  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
     BlockerProjection,
@@ -242,13 +238,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     safe_read(fn -> build_phase_board(repo, phase_id, filters) end)
   end
 
-  @spec phase_board_for_grant(repo(), String.t(), AccessGrant.t()) :: {:ok, map()} | {:error, dashboard_error()}
-  def phase_board_for_grant(repo, phase_id, %AccessGrant{} = grant) when is_atom(repo) and is_binary(phase_id) do
-    with {:ok, filters} <- phase_board_filters_for_grant(grant) do
-      phase_board(repo, phase_id, filters)
-    end
-  end
-
   @spec work_requests(repo()) :: {:ok, map()} | {:error, dashboard_error()}
   def work_requests(repo) when is_atom(repo) do
     work_requests(repo, [])
@@ -421,53 +410,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     Enum.flat_map(work_requests, &Map.get(work_packages_by_request, &1.id, []))
   end
 
-  @spec work_request_filters_for_grant(repo(), AccessGrant.t()) :: {:ok, keyword()} | {:error, dashboard_error()}
-  def work_request_filters_for_grant(repo, %AccessGrant{} = grant) when is_atom(repo) do
-    case phase_board_filters_for_grant(grant) do
-      {:ok, []} -> legacy_work_request_filters_for_grant(repo, grant)
-      result -> result
-    end
-  end
-
-  @spec phase_board_filters_for_grant(AccessGrant.t()) :: {:ok, keyword()} | {:error, :forbidden}
-  def phase_board_filters_for_grant(%AccessGrant{} = grant) do
-    if explicit_phase_architect_grant?(grant) do
-      with {:ok, repo} <- frozen_scope_value(grant.scope_repo),
-           {:ok, base_branch} <- frozen_scope_value(grant.scope_base_branch) do
-        {:ok, repo: repo, base_branch: base_branch}
-      else
-        {:error, :forbidden} -> {:error, :forbidden}
-      end
-    else
-      {:ok, []}
-    end
-  end
-
-  @spec require_phase_board_anchor_scope(WorkPackage.t(), AccessGrant.t(), String.t()) :: :ok | {:error, :forbidden}
-  def require_phase_board_anchor_scope(%WorkPackage{} = anchor, %AccessGrant{} = grant, phase_id) when is_binary(phase_id) do
-    cond do
-      anchor.phase_id != phase_id ->
-        {:error, :forbidden}
-
-      explicit_phase_architect_grant?(grant) ->
-        require_frozen_scope_match(anchor, grant)
-
-      true ->
-        :ok
-    end
-  end
-
-  @spec require_phase_board_work_package_scope(WorkPackage.t(), AccessGrant.t()) :: :ok | {:error, :forbidden}
-  def require_phase_board_work_package_scope(%WorkPackage{} = work_package, %AccessGrant{} = grant) do
-    with {:ok, filters} <- phase_board_filters_for_grant(grant) do
-      if phase_work_package_matches_filters?(work_package, filters) do
-        :ok
-      else
-        {:error, :forbidden}
-      end
-    end
-  end
-
   @spec detail(repo(), String.t()) :: {:ok, map()} | {:error, dashboard_error()}
   def detail(repo, work_package_id) when is_atom(repo) and is_binary(work_package_id) do
     detail(repo, work_package_id, [])
@@ -477,11 +419,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   def detail(repo, work_package_id, opts) when is_atom(repo) and is_binary(work_package_id) and is_list(opts) do
     safe_read(fn ->
       with {:ok, state} <- planning_state(repo, work_package_id),
-           {:ok, grants} <- AccessGrantRepository.list_for_work_package(repo, work_package_id),
            {:ok, agent_runs} <- AgentRunRepository.list_for_work_package(repo, work_package_id) do
         repo_identity_catalog = repo_identity_catalog_from_opts(opts, [state.work_package.repo])
         blockers = OperationalProjection.blockers(state.progress_events)
-        summary = summary(state, grants, agent_runs, blockers)
+        summary = summary(state, agent_runs, blockers)
 
         {:ok,
          %{
@@ -493,7 +434,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
            progress: Enum.map(state.progress_events, &progress_event/1),
            artifacts: Enum.map(state.artifacts, &artifact/1),
            blockers: blockers,
-           grants: Enum.map(grants, &grant/1),
            agent_runs: Enum.map(agent_runs, &agent_run/1),
            metadata: MetadataProjection.metadata(state.progress_events),
            alert_indicators: OperationalProjection.alert_indicators(repo, state, summary.runtime)
@@ -521,13 +461,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     with {:ok, status_summary} <- PlanningRepository.get_status_summary(repo, work_package.id),
          {:ok, progress_events} <- PlanningRepository.list_progress_events(repo, work_package.id),
          {:ok, readiness_collections} <- readiness_collections(repo, work_package),
-         {:ok, agent_runs} <- AgentRunRepository.list_for_work_package(repo, work_package.id),
-         {:ok, grants} <- AccessGrantRepository.list_for_work_package(repo, work_package.id) do
+         {:ok, agent_runs} <- AgentRunRepository.list_for_work_package(repo, work_package.id) do
       %{artifacts: artifacts, findings: findings} = readiness_collections
-      claim_leases = grouped_claim_leases(repo, [work_package.id]) |> Map.get(work_package.id, [])
-
-      activity_context =
-        WorkPackageActivity.project_context(grants, agent_runs, claim_leases, progress_events, work_package)
+      activity_context = WorkPackageActivity.project_context(agent_runs, progress_events, work_package)
 
       {:ok,
        build_card_context(repo, work_package, repo_identity_catalog, %{
@@ -538,7 +474,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
          findings: findings,
          finding_count: status_summary.finding_count,
          agent_runs: agent_runs,
-         grants: grants,
          lineage: lineage,
          worker_signal: activity_context.worker_signal
        })}
@@ -551,7 +486,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     artifacts = context.artifacts
     findings = context.findings
     agent_runs = context.agent_runs
-    grants = context.grants
     lineage = context.lineage
     blockers = OperationalProjection.blockers(progress_events)
     runtime = OperationalProjection.runtime_summary(agent_runs)
@@ -568,7 +502,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
         runtime: runtime,
         metadata: metadata,
         readiness_context: readiness_context,
-        grants: grants,
         lineage: lineage,
         worker_signal: context.worker_signal
       })
@@ -875,51 +808,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     end)
   end
 
-  defp explicit_phase_architect_grant?(%AccessGrant{grant_role: "architect", phase_id: phase_id}) when is_binary(phase_id) do
-    String.trim(phase_id) != ""
-  end
-
-  defp explicit_phase_architect_grant?(%AccessGrant{}), do: false
-
-  defp legacy_work_request_filters_for_grant(repo, %AccessGrant{
-         grant_role: "architect",
-         work_package_id: work_package_id,
-         phase_id: nil
-       })
-       when is_binary(work_package_id) do
-    case WorkPackageRepository.get(repo, work_package_id) do
-      {:ok, %WorkPackage{} = anchor} -> repo_base_filters(anchor.repo, anchor.base_branch)
-      {:error, :not_found} -> {:error, :forbidden}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp legacy_work_request_filters_for_grant(_repo, %AccessGrant{}), do: {:error, :forbidden}
-
-  defp repo_base_filters(repo, base_branch) do
-    with {:ok, repo} <- frozen_scope_value(repo),
-         {:ok, base_branch} <- frozen_scope_value(base_branch) do
-      {:ok, repo: repo, base_branch: base_branch}
-    end
-  end
-
-  defp frozen_scope_value(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> {:error, :forbidden}
-      trimmed -> {:ok, trimmed}
-    end
-  end
-
-  defp frozen_scope_value(_value), do: {:error, :forbidden}
-
-  defp require_frozen_scope_match(%WorkPackage{} = anchor, %AccessGrant{} = grant) do
-    if repo_scope_match?(grant.scope_repo, anchor.repo) and grant.scope_base_branch == anchor.base_branch do
-      :ok
-    else
-      {:error, :forbidden}
-    end
-  end
-
   defp repo_scope_match?(expected_repo, actual_repo) when is_binary(expected_repo) and is_binary(actual_repo) do
     RepoIdentity.scope_match?(expected_repo, actual_repo,
       trusted_remotes: configured_trusted_repo_remotes(),
@@ -1215,7 +1103,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
   defp group_statuses(groups) when is_map(groups), do: Enum.uniq(Lifecycle.statuses() ++ Map.keys(groups))
 
-  defp summary(%State{} = state, grants, agent_runs, blockers) do
+  defp summary(%State{} = state, agent_runs, blockers) do
     runtime = OperationalProjection.runtime_summary(agent_runs)
 
     %{
@@ -1223,8 +1111,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       finding_count: length(state.findings),
       progress_event_count: length(state.progress_events),
       active_blocker_count: Enum.count(blockers, & &1.active),
-      grant_count: length(grants),
-      active_grant_count: Enum.count(grants, &active_grant?/1),
       agent_run_count: length(agent_runs),
       active_agent_run_count: Enum.count(agent_runs, &(&1.status in AgentRun.active_statuses())),
       queued_agent_run_count: runtime.queued_count,
@@ -1340,7 +1226,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       updated_at: timestamp(work_package.updated_at)
     }
     |> put_package_detail_fields(work_package, opts)
-    |> Chiefs.put_attribution(:dispatched_by, work_package.dispatched_by)
+    |> put_attribution(:dispatched_by, work_package.dispatched_by)
     |> maybe_put_dispatch_details(work_package, work_package_statuses, opts)
   end
 
@@ -1436,8 +1322,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     artifacts_by_id = grouped_artifacts(repo, work_package_ids)
     findings_by_id = grouped_findings(repo, work_package_ids)
     agent_runs_by_id = grouped_agent_runs(repo, work_package_ids)
-    grants_by_id = grouped_access_grants(repo, work_package_ids)
-    claim_leases_by_id = grouped_claim_leases(repo, work_package_ids)
     lineages_by_id = OperationalProjection.package_lineages(repo, work_packages)
 
     delivery_successors_by_id =
@@ -1452,11 +1336,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       artifacts = Map.get(artifacts_by_id, work_package.id, [])
       findings = Map.get(findings_by_id, work_package.id, [])
       agent_runs = Map.get(agent_runs_by_id, work_package.id, [])
-      grants = Map.get(grants_by_id, work_package.id, [])
-      claim_leases = Map.get(claim_leases_by_id, work_package.id, [])
-
-      activity_context =
-        WorkPackageActivity.project_context(grants, agent_runs, claim_leases, progress_events, work_package)
+      activity_context = WorkPackageActivity.project_context(agent_runs, progress_events, work_package)
 
       blockers = OperationalProjection.blockers(progress_events)
       runtime = OperationalProjection.runtime_summary(agent_runs)
@@ -1482,7 +1362,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
           runtime: runtime,
           metadata: metadata,
           readiness_context: readiness_context,
-          grants: grants,
           lineage: lineage,
           worker_signal: activity_context.worker_signal
         })
@@ -1495,7 +1374,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
          artifacts: artifacts,
          findings: findings,
          agent_runs: agent_runs,
-         grants: grants,
          lineage: lineage,
          delivery_successor_ids: Map.get(delivery_successors_by_id, work_package.id, []),
          blocker_state: activity_context.blocker_state,
@@ -1557,28 +1435,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
         from(agent_run in AgentRun,
           where: agent_run.work_package_id in ^work_package_id_chunk,
           order_by: [asc: agent_run.work_package_id, asc: agent_run.started_at, asc: agent_run.inserted_at]
-        )
-      )
-    end)
-  end
-
-  defp grouped_access_grants(repo, work_package_ids) do
-    chunked_records_by_work_package_id(work_package_ids, fn work_package_id_chunk ->
-      repo.all(
-        from(access_grant in AccessGrant,
-          where: access_grant.work_package_id in ^work_package_id_chunk,
-          order_by: [asc: access_grant.work_package_id, asc: access_grant.inserted_at]
-        )
-      )
-    end)
-  end
-
-  defp grouped_claim_leases(repo, work_package_ids) do
-    chunked_records_by_work_package_id(work_package_ids, fn work_package_id_chunk ->
-      repo.all(
-        from(claim_lease in ClaimLease,
-          where: claim_lease.work_package_id in ^work_package_id_chunk,
-          order_by: [asc: claim_lease.work_package_id, asc: claim_lease.inserted_at, asc: claim_lease.id]
         )
       )
     end)
@@ -1647,8 +1503,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       body: redacted_text(finding.body),
       severity: finding.severity,
       sequence: finding.sequence,
-      created_at: timestamp(finding.created_at),
-      access_grant_id: finding.access_grant_id
+      created_at: timestamp(finding.created_at)
     }
   end
 
@@ -1675,22 +1530,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       uri: redacted_uri(artifact.uri),
       sequence: artifact.sequence,
       created_at: timestamp(artifact.created_at)
-    }
-  end
-
-  defp grant(%AccessGrant{} = grant) do
-    %{
-      id: grant.id,
-      work_package_id: grant.work_package_id,
-      phase_id: grant.phase_id,
-      display_key: grant.display_key,
-      grant_role: grant.grant_role,
-      capabilities: grant.capabilities || [],
-      expires_at: timestamp(grant.expires_at),
-      revoked_at: timestamp(grant.revoked_at),
-      claimed_at: timestamp(grant.claimed_at),
-      claimed_by: grant.claimed_by,
-      status: grant_status(grant)
     }
   end
 
@@ -1739,23 +1578,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   defp context_work_package_status(_work_package_context), do: nil
 
   defp actor(event), do: BlockerProjection.actor(event)
-  defp grant_status(%AccessGrant{revoked_at: %DateTime{}}), do: "revoked"
-
-  defp grant_status(%AccessGrant{expires_at: %DateTime{} = expires_at} = grant) do
-    if DateTime.compare(expires_at, DateTime.utc_now(:microsecond)) != :gt do
-      "expired"
-    else
-      claimed_grant_status(grant)
-    end
-  end
-
-  defp grant_status(%AccessGrant{} = grant), do: claimed_grant_status(grant)
-
-  defp claimed_grant_status(%AccessGrant{claimed_at: nil}), do: "unclaimed"
-  defp claimed_grant_status(%AccessGrant{claimed_by: nil}), do: "unclaimed"
-  defp claimed_grant_status(%AccessGrant{}), do: "active"
-
-  defp active_grant?(%AccessGrant{} = grant), do: grant_status(grant) == "active"
+  @doc "Adds a chief attribution (`dispatched_by`) to a payload when one was recorded."
+  @spec put_attribution(map(), atom() | String.t(), map() | nil) :: map()
+  def put_attribution(payload, _key, nil), do: payload
+  def put_attribution(payload, key, attribution), do: Map.put(payload, key, Sanitizer.redacted_json(attribution))
 
   @doc false
   @spec redacted_json(term()) :: term()

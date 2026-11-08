@@ -1,11 +1,8 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedTools do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, FailedCall, ToolCatalog}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, FailedCall}
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-
-  @spec enabled?(map()) :: boolean()
-  def enabled?(server), do: authorize(server, "tools/list") == :ok
 
   @spec authorize(map(), String.t()) :: :ok | {:error, integer(), String.t(), map()}
   def authorize(
@@ -25,21 +22,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedTools do
 
   def authorize(%{initialized: false}, tool), do: {:error, -32_000, "Server error", %{"tool" => tool, "reason" => "server_not_initialized"}}
 
+  # A stdio server is a local process started by the caller itself.
+  def authorize(%{config: %Config{mode: :stdio}}, _tool), do: :ok
+
   def authorize(%{config: %Config{mode: :http}, state_key_explicit: false}, tool),
     do: {:error, -32_001, "Unauthorized", %{"tool" => tool, "reason" => "local_mcp_session_required"}}
 
   def authorize(%{config: %Config{mode: :http}}, tool),
     do: {:error, -32_001, "Unauthorized", %{"tool" => tool, "reason" => "local_daemon_trust_required"}}
-
-  def authorize(_server, tool), do: {:error, -32_001, "Unauthorized", %{"tool" => tool, "reason" => "local_mcp_required"}}
-
-  @spec tool_specs(Config.t()) :: [ToolCatalog.tool_spec()]
-  def tool_specs(%Config{} = config) do
-    unbound_specs = ToolCatalog.unbound_tool_specs_for_config(config)
-    bootstrap_names = ToolCatalog.bootstrap_tools()
-
-    Enum.filter(unbound_specs, &(&1["name"] in bootstrap_names)) ++ ToolCatalog.local_operator_tool_specs()
-  end
 
   @spec failed_call_summary(Config.t()) :: map()
   def failed_call_summary(%Config{} = config) do

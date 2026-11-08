@@ -4,9 +4,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   import Ecto.Query, only: [from: 2]
 
   alias Ecto.Changeset
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Assignment
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
@@ -23,8 +22,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   @type repo :: module()
   @type planning_record :: PlanNode.t() | Finding.t() | ProgressEvent.t() | Artifact.t()
   @type error ::
-          :assignment_mismatch
-          | :assignment_revoked
+          :idempotency_scope_conflict
           | :expired
           | :conflicting_key_forms
           | :idempotency_scope_conflict
@@ -77,71 +75,41 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  @spec append_audit_progress_event(repo(), Assignment.t(), map()) :: {:ok, ProgressEvent.t()} | {:error, error()}
-  @spec append_audit_progress_event(repo(), Assignment.t(), map(), keyword()) ::
+  @doc "Appends a progress event attributed to a terminal; replays with the same key return the original event."
+  @spec append_audit_progress_event_for_work_package(repo(), Actor.t(), String.t(), map(), keyword()) ::
           {:ok, ProgressEvent.t()} | {:error, error()}
-  def append_audit_progress_event(repo, assignment, attrs) do
-    append_audit_progress_event(repo, assignment, attrs, [])
-  end
-
-  @spec append_audit_progress_event(repo(), Assignment.t(), map(), keyword()) ::
-          {:ok, ProgressEvent.t()} | {:error, error()}
-  def append_audit_progress_event(repo, %Assignment{} = assignment, attrs, opts)
-      when is_atom(repo) and is_map(attrs) and is_list(opts) do
-    append_audit_progress_event_for_work_package(repo, assignment, assignment.work_package_id, attrs, opts)
-  end
-
-  @spec append_audit_progress_event_for_work_package(repo(), Assignment.t(), String.t(), map()) ::
-          {:ok, ProgressEvent.t()} | {:error, error()}
-  def append_audit_progress_event_for_work_package(repo, assignment, work_package_id, attrs) do
-    append_audit_progress_event_for_work_package(repo, assignment, work_package_id, attrs, [])
-  end
-
-  @spec append_audit_progress_event_for_work_package(repo(), Assignment.t(), String.t(), map(), keyword()) ::
-          {:ok, ProgressEvent.t()} | {:error, error()}
-  def append_audit_progress_event_for_work_package(repo, %Assignment{} = assignment, work_package_id, attrs, opts)
+  def append_audit_progress_event_for_work_package(repo, %Actor{} = actor, work_package_id, attrs, opts \\ [])
       when is_atom(repo) and is_binary(work_package_id) and is_map(attrs) and is_list(opts) do
     repo.transaction(fn ->
-      attrs = audit_attrs(assignment, attrs, opts)
-      attrs = Map.put(attrs, "work_package_id", work_package_id)
+      attrs = actor |> audit_attrs(attrs, opts) |> Map.put("work_package_id", work_package_id)
 
       with :not_found <- existing_progress_event_by_idempotency_key_with_retry(repo, attrs, append_retry_attempts()),
-           :ok <- lock_valid_assignment(repo, assignment),
            {:ok, event} <-
              append_progress_event_in_transaction(
                repo,
                attrs,
                &ProgressEvent.create_changeset(&1, trusted_audit_metadata: true),
-               trusted_audit_metadata: true,
-               allow_archived: Keyword.get(opts, :allow_archived, false)
+               trusted_audit_metadata: true
              ),
-           :ok <- validate_replayed_event_scope(assignment, event) do
+           :ok <- validate_replayed_event_scope(actor, event) do
         event
       else
-        {:ok, event} ->
-          return_scoped_replay(repo, assignment, event)
-
-        {:error, reason} ->
-          repo.rollback(reason)
+        {:ok, %ProgressEvent{} = event} -> replayed_event(repo, actor, event)
+        {:error, reason} -> repo.rollback(reason)
       end
     end)
   end
 
-  defp return_scoped_replay(repo, %Assignment{} = assignment, %ProgressEvent{} = event) do
-    with :ok <- validate_replay_assignment(repo, assignment),
-         :ok <- validate_replayed_event_scope(assignment, event) do
-      event
-    else
+  defp replayed_event(repo, actor, event) do
+    case validate_replayed_event_scope(actor, event) do
+      :ok -> event
       {:error, reason} -> repo.rollback(reason)
     end
   end
 
   # Callers hold a transaction, so the archive check and the insert are atomic.
-  # Audits of releasing, revoking or reclaiming runtime authority pass
-  # `allow_archived: true` (only those trusted paths do), so a worker left
-  # running on an archived WorkRequest can still be stopped.
   defp append_progress_event_in_transaction(repo, attrs, changeset_fun, opts) do
-    with :ok <- require_writable_progress(repo, attrs, Keyword.get(opts, :allow_archived, false)),
+    with :ok <- require_writable_progress(repo, attrs),
          {:ok, attrs} <- normalize_append_attrs(attrs, Keyword.fetch!(opts, :trusted_audit_metadata)),
          :not_found <-
            existing_progress_event_by_idempotency_key_with_retry(repo, attrs, append_retry_attempts()) do
@@ -206,7 +174,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
       if trusted_audit_metadata? do
         {:ok, attrs}
       else
-        {:ok, Map.drop(attrs, [:actor_id, :actor_type, :access_grant_id, :agent_run_id, "actor_id", "actor_type", "access_grant_id", "agent_run_id"])}
+        {:ok, Map.drop(attrs, [:actor_id, :actor_type, :idempotency_scope, :agent_run_id, "actor_id", "actor_type", "idempotency_scope", "agent_run_id"])}
       end
     end
   end
@@ -233,16 +201,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
     Map.has_key?(attrs, key) and Map.has_key?(attrs, Atom.to_string(key))
   end
 
-  defp audit_attrs(%Assignment{} = assignment, attrs, opts) do
+  defp audit_attrs(%Actor{} = actor, attrs, opts) do
     attrs = normalize_keys(attrs)
     payload = Map.get(attrs, "payload", %{})
 
     attrs
     |> Map.take(["summary", "body", "status", "idempotency_key"])
-    |> Map.put("work_package_id", assignment.work_package_id)
-    |> Map.put("actor_id", assignment.claimed_by)
-    |> Map.put("actor_type", assignment.grant_role)
-    |> Map.put("access_grant_id", assignment.grant_id)
+    |> Map.put("actor_id", actor.id)
+    |> Map.put("actor_type", actor.type)
+    |> Map.put("idempotency_scope", actor.idempotency_scope)
     |> Map.put("payload", payload)
     |> put_trusted_agent_run_id(Keyword.get(opts, :agent_run_id))
   end
@@ -289,9 +256,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   defp require_writable_insert(repo, _schema, attrs),
     do: WorkRequestPhase.require_writable_package(repo, Map.get(attrs, "work_package_id"))
 
-  defp require_writable_progress(_repo, _attrs, true), do: :ok
-
-  defp require_writable_progress(repo, attrs, false) do
+  defp require_writable_progress(repo, attrs) do
     attrs = normalize_keys(attrs)
     WorkRequestPhase.require_writable_package(repo, Map.get(attrs, "work_package_id"))
   end
@@ -433,13 +398,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
     end)
   end
 
-  def get_progress_event_by_idempotency_key(repo, work_package_id, idempotency_key, access_grant_id)
-      when is_atom(repo) and is_binary(work_package_id) and is_binary(idempotency_key) and is_binary(access_grant_id) do
+  def get_progress_event_by_idempotency_key(repo, work_package_id, idempotency_key, idempotency_scope)
+      when is_atom(repo) and is_binary(work_package_id) and is_binary(idempotency_key) and
+             is_binary(idempotency_scope) do
     safe_one(repo, fn ->
       from(progress_event in ProgressEvent,
         where: progress_event.work_package_id == ^work_package_id,
         where: progress_event.idempotency_key == ^idempotency_key,
-        where: progress_event.idempotency_scope == ^access_grant_id,
+        where: progress_event.idempotency_scope == ^idempotency_scope,
         limit: 1
       )
     end)
@@ -655,11 +621,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   defp existing_progress_event_by_idempotency_key(repo, attrs) do
     with work_package_id when is_binary(work_package_id) <- attr(attrs, :work_package_id),
          idempotency_key when is_binary(idempotency_key) <- attr(attrs, :idempotency_key),
-         access_grant_id <- attr(attrs, :access_grant_id),
+         idempotency_scope <- attr(attrs, :idempotency_scope),
          idempotency_key <- String.trim(idempotency_key),
          false <- idempotency_key == "",
          {:ok, progress_event} <-
-           get_progress_event_by_idempotency_key(repo, work_package_id, idempotency_key, access_grant_id) do
+           get_progress_event_by_idempotency_key(repo, work_package_id, idempotency_key, idempotency_scope) do
       {:ok, progress_event}
     else
       {:error, :not_found} -> :not_found
@@ -682,13 +648,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   defp fetch_after_idempotency_conflict({:error, :idempotency_key_conflict}, repo, attrs) do
     with work_package_id when is_binary(work_package_id) <- attr(attrs, :work_package_id),
          idempotency_key when is_binary(idempotency_key) <- attr(attrs, :idempotency_key),
-         access_grant_id <- attr(attrs, :access_grant_id),
+         idempotency_scope <- attr(attrs, :idempotency_scope),
          idempotency_key <- String.trim(idempotency_key) do
       get_progress_event_by_idempotency_key_with_retry(
         repo,
         work_package_id,
         idempotency_key,
-        access_grant_id,
+        idempotency_scope,
         append_retry_attempts()
       )
     else
@@ -702,10 +668,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
          repo,
          work_package_id,
          idempotency_key,
-         access_grant_id,
+         idempotency_scope,
          attempts_left
        ) do
-    case get_progress_event_by_idempotency_key(repo, work_package_id, idempotency_key, access_grant_id) do
+    case get_progress_event_by_idempotency_key(repo, work_package_id, idempotency_key, idempotency_scope) do
       {:error, :database_busy} when attempts_left > 0 ->
         Process.sleep(retry_delay_ms(attempts_left, append_retry_attempts()))
 
@@ -713,7 +679,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
           repo,
           work_package_id,
           idempotency_key,
-          access_grant_id,
+          idempotency_scope,
           attempts_left - 1
         )
 
@@ -722,90 +688,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
     end
   end
 
-  defp lock_valid_assignment(repo, %Assignment{} = assignment) do
-    if is_nil(assignment.claimed_at) or is_nil(assignment.claimed_by) do
-      {:error, :assignment_mismatch}
-    else
-      case repo.update_all(valid_assignment_query(assignment), set: [claimed_by: assignment.claimed_by]) do
-        {1, _rows} -> :ok
-        {0, _rows} -> assignment_error(repo, assignment.grant_id)
-      end
-    end
-  end
-
-  defp valid_assignment_query(%Assignment{} = assignment) do
-    now = DateTime.utc_now(:microsecond)
-
-    from(grant in AccessGrant,
-      where: grant.id == ^assignment.grant_id,
-      where: grant.work_package_id == ^assignment.work_package_id,
-      where: grant.display_key == ^assignment.display_key,
-      where: grant.grant_role == ^assignment.grant_role,
-      where: grant.capabilities == ^assignment.capabilities,
-      where: grant.claimed_at == ^assignment.claimed_at,
-      where: grant.claimed_by == ^assignment.claimed_by,
-      where: not is_nil(grant.claimed_at),
-      where: not is_nil(grant.claimed_by),
-      where: is_nil(grant.revoked_at),
-      where: is_nil(grant.expires_at) or grant.expires_at > ^now
-    )
-  end
-
-  defp validate_replay_assignment(repo, %Assignment{} = assignment) do
-    if is_nil(assignment.claimed_at) or is_nil(assignment.claimed_by) do
-      {:error, :assignment_mismatch}
-    else
-      case repo.one(matching_assignment_query(assignment)) do
-        %AccessGrant{} -> :ok
-        nil -> assignment_error(repo, assignment.grant_id)
-      end
-    end
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp matching_assignment_query(%Assignment{} = assignment) do
-    now = DateTime.utc_now(:microsecond)
-
-    from(grant in AccessGrant,
-      where: grant.id == ^assignment.grant_id,
-      where: grant.work_package_id == ^assignment.work_package_id,
-      where: grant.display_key == ^assignment.display_key,
-      where: grant.grant_role == ^assignment.grant_role,
-      where: grant.capabilities == ^assignment.capabilities,
-      where: grant.claimed_at == ^assignment.claimed_at,
-      where: grant.claimed_by == ^assignment.claimed_by,
-      where: not is_nil(grant.claimed_at),
-      where: not is_nil(grant.claimed_by),
-      where: is_nil(grant.revoked_at),
-      where: is_nil(grant.expires_at) or grant.expires_at > ^now,
-      limit: 1
-    )
-  end
-
-  defp assignment_error(repo, grant_id) do
-    case repo.get(AccessGrant, grant_id) do
-      %AccessGrant{revoked_at: %DateTime{}} -> {:error, :assignment_revoked}
-      %AccessGrant{expires_at: %DateTime{} = expires_at} -> expired_assignment_error(expires_at)
-      _grant -> {:error, :assignment_mismatch}
-    end
-  end
-
-  defp expired_assignment_error(%DateTime{} = expires_at) do
-    if DateTime.compare(expires_at, DateTime.utc_now(:microsecond)) == :gt do
-      {:error, :assignment_mismatch}
-    else
-      {:error, :expired}
-    end
-  end
-
-  defp validate_replayed_event_scope(%Assignment{} = assignment, %ProgressEvent{} = event) do
-    if event.access_grant_id == assignment.grant_id and event.actor_id == assignment.claimed_by and
-         event.actor_type == assignment.grant_role do
-      :ok
-    else
-      {:error, :idempotency_scope_conflict}
-    end
+  defp validate_replayed_event_scope(%Actor{} = actor, %ProgressEvent{} = event) do
+    if event.idempotency_scope == actor.idempotency_scope and event.actor_id == actor.id and event.actor_type == actor.type,
+      do: :ok,
+      else: {:error, :idempotency_scope_conflict}
   end
 
   defp omitted_count(repo, schema, work_package_id, loaded_rows) do

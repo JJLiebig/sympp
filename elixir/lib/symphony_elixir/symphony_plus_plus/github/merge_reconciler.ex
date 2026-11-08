@@ -73,9 +73,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
     end
   end
 
-  defp merge_ready_candidate?(%WorkPackage{work_request_id: request_id, kind: kind} = work_package) when is_binary(request_id) do
-    Lifecycle.in_flight?(work_package) and kind in WorkPackage.executable_kinds()
-  end
+  defp merge_ready_candidate?(%WorkPackage{work_request_id: request_id} = work_package) when is_binary(request_id),
+    do: Lifecycle.in_flight?(work_package)
 
   defp merge_ready_candidate?(%WorkPackage{}), do: false
 

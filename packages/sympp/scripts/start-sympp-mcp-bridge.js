@@ -44,7 +44,7 @@ const HERDR_METADATA_SOURCE = "symphony-plus-plus";
 const HERDR_METADATA_COMMAND_TIMEOUT_MS = 5000;
 const HERDR_METADATA_TTL_MS = 150000;
 const HERDR_METADATA_REFRESH_MS = 60000;
-const HERDR_METADATA_TOKENS = ["sympp_role", "sympp_work_request_id", "sympp_work_package_id", "sympp_show_inspector", "sympp_endpoint", "sympp_session_location_id"];
+const HERDR_METADATA_TOKENS = ["sympp_role", "sympp_work_request_id", "sympp_work_package_id", "sympp_show_inspector", "sympp_endpoint"];
 const HERDR_INSPECTOR_PLUGIN = "symphony-plus-plus.execution-inspector";
 
 function trace(event, fields) {
@@ -174,7 +174,6 @@ function herdrMetadataArgs(binding, backend) {
     sympp_work_package_id: binding.work_package_id,
     sympp_show_inspector: String(binding.show_inspector === true),
     sympp_endpoint: trimOrigin(backend),
-    sympp_session_location_id: sessionLocation.clientId,
   };
   const args = ["--ttl-ms", String(HERDR_METADATA_TTL_MS)];
   for (const name of HERDR_METADATA_TOKENS) {
@@ -257,6 +256,18 @@ function updateHerdrBinding(response, backend) {
     herdrInspectorRevision += 1;
   }
   reportHerdrBinding(changed);
+  if (!herdrRefresh) {
+    herdrRefresh = setInterval(() => reportHerdrBinding(), HERDR_METADATA_REFRESH_MS);
+    herdrRefresh.unref();
+  }
+}
+
+// A terminal labelled as a chief reports a chief session once its identity is verified, so the
+// Herdr panel can check it like any bound agent before the chief writes to a WorkRequest.
+function ensureChiefBinding() {
+  if (!sessionLocation.native || herdrBinding || !sessionLocation.chief()) return;
+  herdrBinding = { role: "chief", show_inspector: false };
+  reportHerdrBinding(true);
   if (!herdrRefresh) {
     herdrRefresh = setInterval(() => reportHerdrBinding(), HERDR_METADATA_REFRESH_MS);
     herdrRefresh.unref();
@@ -832,6 +843,7 @@ function responseLines(response) {
 async function mcpPost(url, body, sessionId, protocol, timeoutMs) {
   try {
     body = await sessionLocation.attach(body);
+    ensureChiefBinding();
   } catch (error) {
     error.symppRequestMayHaveReachedBackend = false;
     throw error;
@@ -960,7 +972,11 @@ async function ensureRuntimeHealth(runtimeFile, state, identity, clientId) {
 
 async function clientLease(mcpUrl, clientId, action, required) {
   try {
-    const response = await request(`${trimOrigin(mcpUrl)}/client-lease`, "POST", JSON.stringify({ client_id: clientId, action }), { "Content-Type": "application/json" }, required ? HEALTH_PROBE_TIMEOUT_MS : 2000);
+    // A bridge in a Herdr terminal names it, so the factory knows that terminal's liveness and can
+    // end its ownership on a clean detach.
+    const terminal = sessionLocation.terminal();
+    const payload = { client_id: clientId, action, ...(terminal ? { terminal } : {}) };
+    const response = await request(`${trimOrigin(mcpUrl)}/client-lease`, "POST", JSON.stringify(payload), { "Content-Type": "application/json" }, required ? HEALTH_PROBE_TIMEOUT_MS : 2000);
     if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`);
     const result = response.body ? JSON.parse(response.body) : {};
     if (action === "attach" && required && typeof result.factory_owned_worktrees !== "boolean") {
@@ -1103,11 +1119,13 @@ async function bridge(identity, state, runtimeFile) {
     if (heartbeat) clearInterval(heartbeat);
     heartbeat = null;
     if (closing) return;
-    const requested = Math.max(5, Math.min(540, Number(process.env.SYMPP_MCP_CLIENT_HEARTBEAT_SEC || 300))) * 1000;
+    const requested = Math.max(5, Math.min(540, Number(process.env.SYMPP_MCP_CLIENT_HEARTBEAT_SEC || 60))) * 1000;
     const stale = Number(attachedResponse && attachedResponse.stale_after_ms) || 0;
     const interval = stale > 1000 ? Math.min(requested, Math.max(1000, stale - Math.min(60000, Math.max(1000, Math.floor(stale / 10))))) : requested;
     heartbeat = setInterval(() => {
       clientLease(current.mcpUrl, clientId, "heartbeat", false).then((response) => {
+        // A heartbeat records the lease too, so a remote bridge whose first attach failed still detaches.
+        if (response && remoteConnection) attached = true;
         if (!response && !closing && current.state.backend.managed === true) {
           trace("backend_recovery_trigger", { source: "heartbeat", session_present: Boolean(sessionId) });
           recover("heartbeat").catch((error) => {
@@ -1282,6 +1300,14 @@ async function bridge(identity, state, runtimeFile) {
       diagnostic(`sympp MCP bridge attached: backend=${confirmed.backend} dashboard=${confirmed.dashboard ? confirmed.dashboard + "/sympp/board" : "disabled"} runtime=${runtimeFile}`);
 
     }
+    // A remote factory never elects this client, but a bridge in a Herdr terminal still heartbeats
+    // and detaches there: that is how a factory that can't see this machine knows the terminal.
+    if (remoteConnection && sessionLocation.native) {
+      await sessionLocation.refresh();
+      const leaseResponse = await clientLease(current.mcpUrl, clientId, "attach", false);
+      if (leaseResponse) attached = true;
+      scheduleHeartbeat(leaseResponse);
+    }
     input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity, terminal: false });
     input.once("close", () => sessionLocation.close());
     for await (const line of input) {
@@ -1398,7 +1424,9 @@ async function bridge(identity, state, runtimeFile) {
     cancelPreparation();
     if (recoveryPromise) { try { await recoveryPromise; } catch (_) { } }
     if (localLease) { try { fs.unlinkSync(localLease); } catch (_) { } }
-    if (attached) await clientLease(current.mcpUrl, clientId, "detach", false);
+    // A remote bridge in a Herdr terminal always detaches, even if its lease never registered: the
+    // factory can't see this terminal, and the detach is how it learns the agent exited.
+    if (attached || (remoteConnection && sessionLocation.terminal())) await clientLease(current.mcpUrl, clientId, "detach", false);
     closeGenerationWatchers();
     if (cleanupAllowed && cleanupScript) await cleanupLastDetach(runtimeFile, current.identity.runtimeKey, cleanupScript);
     await clearHerdrBindingAndDrain();

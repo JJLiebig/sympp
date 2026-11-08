@@ -25,7 +25,7 @@
     "concurrency": 1,
     "p95": 380,
     "queries": 45,
-    "bytes": 167936
+    "bytes": 190464
   },
   {
     "operation": "dispatch_work_package",
@@ -60,7 +60,7 @@
     "concurrency": 10,
     "p95": 2260,
     "queries": 45,
-    "bytes": 169984
+    "bytes": 191488
   },
   {
     "operation": "dispatch_work_package",

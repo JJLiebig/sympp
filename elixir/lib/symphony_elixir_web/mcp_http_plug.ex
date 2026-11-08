@@ -5,6 +5,7 @@ defmodule SymphonyElixirWeb.MCPHTTPPlug do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{ClientLeases, Config, FailedCall, Health, HerdrBinding}
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{HTTPStateStore, HTTPTransport}
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixirWeb.Endpoint
   alias SymphonyElixirWeb.SymppDashboardApi.Runtime
@@ -48,7 +49,7 @@ defmodule SymphonyElixirWeb.MCPHTTPPlug do
          {:ok, _trusted?} <- validate_local_request(conn),
          :ok <- validate_origin(conn),
          {:ok, payload, conn} <- read_json_body(conn),
-         {:ok, result} <- ClientLeases.handle_payload(payload) do
+         {:ok, result} <- ClientLeases.handle_payload(payload, &end_detached_ownership/1) do
       send_json(conn, 200, %{
         "status" => "ok",
         "factory_owned_worktrees" => is_binary(SymphonyElixir.Config.factory_repos_root()),
@@ -67,6 +68,10 @@ defmodule SymphonyElixirWeb.MCPHTTPPlug do
   end
 
   def call(%Conn{} = conn, _opts), do: conn
+
+  # The last bridge in a Herdr terminal exited cleanly: end that terminal's
+  # ownership, unless the factory's own herdr-core still sees it live.
+  defp end_detached_ownership(terminal_key), do: Runtime.with_dashboard_repo(&Ownership.detached(&1, terminal_key))
 
   defp dispatch(%Conn{method: "POST"} = conn, local_daemon_trusted?) do
     case read_json_body(conn) do

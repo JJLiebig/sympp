@@ -7,15 +7,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
   exactly one ending row (`WorkPackageDelivery`), which is the only record of
   how it ended; `DeliveryCloseout` writes that row and ends the package through
   `transition/4` in the same transaction.
-
-  Architect anchors (kind `delegation`) keep their own `planning` status and
-  never pass through this module.
   """
 
   import Ecto.Query, only: [from: 2]
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
@@ -140,9 +138,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
   end
 
   @doc """
-  Terminal effects for packages that just ended: resolve the blockers on them
-  (their own untargeted blockers and any blocker that targets them) and queue
-  their worktree cleanup. A blocker an ended package raised against another
+  Terminal effects for packages that just ended: end their worked-on rows,
+  resolve the blockers on them (their own untargeted blockers and any blocker
+  that targets them) and queue their worktree cleanup. A blocker an ended package raised against another
   package stays active, because it describes that other package.
   """
   @spec apply_terminal_effects(module(), WorkPackage.t() | [WorkPackage.t()]) :: :ok | {:error, term()}
@@ -150,6 +148,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
   def apply_terminal_effects(_repo, []), do: :ok
 
   def apply_terminal_effects(repo, work_packages) when is_atom(repo) and is_list(work_packages) do
+    Enum.each(work_packages, &Ownership.end_subject(repo, "work_package", &1.id))
+
     with :ok <- resolve_active_blockers(repo, Enum.map(work_packages, & &1.id)) do
       WorktreeCleanupQueue.enqueue_terminal(repo, work_packages)
     end

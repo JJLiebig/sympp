@@ -3,49 +3,21 @@
 Read only the section needed for the current operation. Normal dispatch and
 delivery invariants remain in `../procedure.md`.
 
-## Bootstrap recovery
+## Ownership recovery
 
-An unbound trusted local architect session can acquire an unclaimed WorkRequest
-or reclaim an expired claim implicitly on a write that names its
-`work_request_id`. Reads never claim; with an explicit id they read that object
-whatever the session holds. Known scope survives connection loss and is reused on reconnect. A bound session does not implicitly
-switch to another WorkRequest. A different live owner blocks the claim without
-changing ownership.
-
-When a chief owns WorkRequest A and creates WorkRequest B (including in another
-repository), creation returns B's bootstrap but leaves the session bound to A:
-
-1. Call `claim_local_architect_assignment` with B's returned
-   `local_architect_claim_arguments` before planning B.
-2. Read `read_work_request` and `read_plan` for B, then perform B's scoped work.
-3. To resume A, call `claim_local_architect_assignment` with A's
-   `work_request_id` and the same `claimed_by` used for A's original claim,
-   then read A's current state before continuing.
-
-Switching releases the previous session assignment after acquiring the new one;
-it does not override another architect's ownership. Keep the original bootstrap
-arguments for each request when switching back. If claiming fails, report the blocker.
-
-A local architect claim can recover stale handoff scope when the ledger proves
-one matching WorkRequest, repo, base branch, anchor, and grant. For
-`phase_scope_not_available`, follow returned `missing_evidence` and `action`.
-For `work_request_archived`, ask the local operator to restore the WorkRequest.
-For `work_request_terminal` (completed by the operator), start a new one. Do not
-invent state or bypass a binding denial.
+When a write fails `owned_by_other_terminal`, the response names the owning
+terminal, its working/idle state and `next_action`. Ask that terminal, or wait
+until it finishes; do not work around it. If the owner crashed on a machine the
+factory can't see, ask the operator to press Release on the board; your next
+owner-gated write then takes the WorkRequest. A chief that creates a WorkRequest
+for an architect passes `own: false`, so the architect's first plan write owns it.
+For `work_request_archived`, ask the operator to restore the WorkRequest or start
+a new one.
 
 ## Planning operations
 
-Once a WorkRequest is bound, current-WR lifecycle tools may omit
-`work_request_id`: `slice_work_request`,
-`update_work_package`,
-`upsert_group`,
-`delete_group`,
-`upsert_dependency`,
-`delete_dependency`, and
-`skip_work_package`, plus delivery board/reconcile, work-package
-delivery closeout, runtime cleanup, worker-key revocation, and dispatch. Keep
-intentional sibling reads, status/question tools, durable decisions, and package
-tools explicit.
+Pass `work_request_id` to planning tools. Tools that also name a
+`work_package_id` may omit it and use that package's WorkRequest.
 
 `slice_work_request` atomically creates one or more planned canonical
 WorkPackages. The selected WorkRequest supplies the default primary delivery
@@ -67,15 +39,6 @@ completion or blocker closeout.
 Skip stale or superseded planned WorkPackages. The atomic planning call advances
 the WorkRequest to its planned state; there is no separate approval or finish step.
 
-## Claim repair
-
-If a replacement worker is blocked by an old claim, call
-`force_release_work_package_claim` with `work_package_id` and `reason`, then
-deliver the ordinary assignment to the replacement worker. Only an optional
-worker MCP workflow retries `claim_local_assignment`. Any authenticated architect can release a
-worker claim across WorkRequests, including active claims. The old
-worker loses session authority; package status and delivery evidence stay intact.
-
 ## UI collaboration and candidates
 
 Use this lane when human UI iteration establishes product intent. Chief ownership
@@ -92,11 +55,9 @@ does not determine role. Ordinary workers still own their review cycle.
    guidance; only affected work waits.
 3. When the collaborator finishes and another actor will own technical review,
    first obtain its final head, approved decision IDs, checks/review references,
-   unresolved findings and explicit fix owner. Stop its mutations, then transfer an
-   active package through [claim repair](#claim-repair): architect releases the old
-   claim, reviewer claims the same WP and reads its context/history. Confirm the
-   new claim before continuing. This changes execution authority, not the contract
-   or readiness. Do not leave two actors writing. A separate review package must
+   unresolved findings and explicit fix owner. Stop the collaborator, then launch
+   the reviewer on the same WP branch with that context and history. This changes
+   who executes, not the contract or readiness. Do not leave two actors writing. A separate review package must
    name its implementation owner; already-ready changed work needs a successor.
 4. Verify the backend worker's exact-head checks and native review handoff, then
    set `upsert_dependency(candidate_head_sha: "<40-character backend head>")`
@@ -106,9 +67,9 @@ does not determine role. Ordinary workers still own their review cycle.
    overlapping pinned/unpinned edges all apply. A prerequisite Group cannot name
    one candidate. Across repositories use these explicit edges, not a Git branch stack.
 5. Dispatch the wiring/review worker against that selection. Its native handoff
-   names both backend pin and final UI head; it records consumed inputs through
-   the [WorkPackage procedure](../../symphony-work-package/procedure.md#candidate-inputs)
-   before readiness. Requalify only evidence whose relevant inputs changed.
+   names both backend pin and final UI head; record those consumed inputs with
+   scoped `append_progress` dependency provenance before readiness (see the
+   [WorkPackage procedure](../../symphony-work-package/procedure.md#parent-reconciliation)). Requalify only evidence whose relevant inputs changed.
    Repinning A to B never revives A's consumed evidence. Clearing a consumed pin
    also requires fresh selection after prerequisite delivery.
 6. Ready candidates are immutable. If backend or UI candidate A must change,

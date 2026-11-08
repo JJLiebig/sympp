@@ -66,9 +66,9 @@ higher port. `SYMPP_BACKEND_PORT` requests a preferred port. Installed dashboard
 and MCP share the backend; a separate Vite server is for source development.
 
 Verify `sympp` tools in the actual model session before ledger
-work. A health probe does not restore a claim. After reconnect, reclaim the
-same assignment and inspect its canonical history before retrying uncertain
-mutations. Required native review stays with its declared provider: use the
+work. `sympp.health` shows the caller's Herdr terminal and the WorkRequests it
+owns. After reconnect, inspect canonical history before retrying uncertain
+mutations; ownership stays with the same terminal. Required native review stays with its declared provider: use the
 same declared base for review creation and status, discover the installed
 provider, and return its review reference without a duplicate receipt.
 
@@ -88,7 +88,7 @@ repair. If home resolution fails, choose explicit absolute home/database paths.
 Keep the installed skill separate from developer checkouts. Do not set
 `SYMPP_REPO_ROOT` or use a source-root hint as installed proof.
 No runtime manifest override is needed. Source validation stays in isolated
-developer homes. Do not put tokens or grant secrets in shared configurations.
+developer homes. Do not put tokens or secrets in shared configurations.
 
 ## Explicit Developer HTTP Connection
 
@@ -114,26 +114,16 @@ claude mcp add --transport http --scope local sympp http://127.0.0.1:19998/mcp
 ```
 
 Substitute the actual endpoint. URL-only configuration requires an already
-listening backend and cannot follow managed dynamic ports or launch it. Each
-host needs its own initialized session and claim on the intended ledger.
-Do not treat a stateless URL probe as recovered worker authority.
+listening backend and cannot follow managed dynamic ports or launch it. Without
+the sympp bridge there is no Herdr terminal identity, so a URL-only connection
+is read-only.
 
-## Optional Worker MCP Claim
+## Herdr Terminal Identity
 
-Ordinary workers need no MCP connection or claim. When a worker chooses scoped
-MCP access, authenticate by calling `claim_local_assignment` in a dedicated sympp MCP
-session connected to the same ledger as dispatch. Pass `work_package_id` and,
-when provided, `claimed_by`. Before claim, `get_current_assignment()` succeeds
-with `assignment: null` and a claim or reclaim action. Reuse the successful claim
-assignment; recheck only if binding evidence conflicts or the session reconnects.
-Claims never change the package status; only a dispatched or ready package can be claimed.
-Release changes authorization and scope without changing the advertised tool
-catalog.
-
-Replaying the same claim heartbeats the current claim lease. If the prior lease
-is stale, the server may reclaim it and records audit evidence without
-rewriting the current package lifecycle. If another active owner still has
-authority, stop and ask the
-architect/operator to repair that state. A configured `state_key` only
-preserves initialized handshake continuity for stateless transports; it does
-not restore worker authorization by itself.
+Writes need the Herdr terminal identity that the sympp bridge verifies against
+its local herdr-core and sends with each call (core id plus terminal address,
+and the `sympp.role`/`sympp.domain` labels). Callers without it get reads only
+and writes fail `read_only_outside_herdr`. The identity excludes the process id,
+so restarting, compacting or clearing an agent in the same terminal keeps the
+WorkRequests it owns. The bridge heartbeats every 60 seconds and detaches on a
+clean exit; a lapsed heartbeat leaves ownership in place.

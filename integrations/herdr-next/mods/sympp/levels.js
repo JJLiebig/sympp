@@ -186,12 +186,12 @@ export function chiefsFor(topic, chiefs, desk, repoTopics) {
   return free.filter((c) => c.repos.some((repo) => topicsOfRepo(repo, desk, repoTopics).some((t) => t.id === topic.id)));
 }
 
-// The latest started chief and its registration are one entry even before a helper check succeeds.
-// The registered terminal is only an identity for dedupe; liveness still comes from chiefAgent.
-export function chiefEntries(topic, chiefs, latest, machineList, terminalList, now) {
+// The latest started chief and its labelled terminal are one entry even before a helper check succeeds.
+// The labelled terminal is only an identity for dedupe; liveness still comes from chiefAgent.
+export function chiefEntries(topic, chiefs, latest, terminalList, now) {
   const running = chiefRunning(latest, terminalList, now);
   const entries = chiefs.filter(({ chief, agent }) => !running ||
-    (agent.binding?.address ?? chiefTerminal(chief, machineList, terminalList)) !== latest.terminal)
+    (agent.binding?.address ?? chiefTerminal(chief, terminalList)) !== latest.terminal)
     .map(({ chief, agent }) => ({ domain: chief.domain, terminal: agent.state === "live" ? agent.binding.address : null }));
   return running ? [{ domain: topic.name, terminal: latest.terminal }, ...entries] : entries;
 }

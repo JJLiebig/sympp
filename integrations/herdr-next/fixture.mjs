@@ -1,7 +1,7 @@
 // A small hydrated board: one PR job across every stage, one job without PRs, one still being
 // shaped and one across two repositories that needs the person, with a Herdr chief that created the
-// first and dispatched packages in both, and a Live chief with no location. Shapes follow
-// GET /api/v1/sympp/herdr/dashboard; deskFixture() is the matching Herdr topics and spaces.
+// first and dispatched packages in both. Shapes follow GET /api/v1/sympp/herdr/dashboard;
+// deskFixture() is the matching Herdr topics and spaces, chiefTerminals() the chiefs' terminals.
 export const NOW = Date.parse('2026-10-25T13:00:00Z');
 const at = (minutesAgo) => new Date(NOW - minutesAgo * 60e3).toISOString();
 
@@ -9,26 +9,26 @@ const pkg = (id, title, sequence, board, extra = {}) => ({
   id, work_package_id: id, title, sequence, repo: 'owner/web', inserted_at: at(600), board_state: board, ...extra,
 });
 
+// The chiefs Start chief labelled: Herdr in t7, Live in t5, and a finished one that no longer counts.
+export function chiefTerminals() {
+  return [
+    { address: 't7', pid: 70, state: 'live', labels: { 'sympp.role': 'chief', 'sympp.domain': 'Herdr' } },
+    { address: 't5', pid: 50, state: 'live', labels: { 'sympp.role': 'chief', 'sympp.domain': 'Live' } },
+    { address: 't3', pid: 30, state: 'finished', labels: { 'sympp.role': 'chief', 'sympp.domain': 'Tools' } },
+    { address: 't2', pid: 20, state: 'live', labels: { 'sympp.domain': 'Tools' } },
+  ];
+}
+
 export function boardPayload() {
   return {
     generated_at: new Date(NOW).toISOString(),
     runtime: { offline: false },
-    chiefs: [
-      {
-        domain: 'Herdr', repos: ['owner/web'], registered_at: at(4000),
-        session_location: {
-          label: 'build-desk', role: 'chief', source: 'herdr_next', description: 'Terminal: Herdr chief', last_seen_at: at(15),
-          herdr: { core_id: 'core-1', terminal_id: 't7', pid: 70, process_id: 71, client_id: 'chief-herdr' },
-        },
-      },
-      { domain: 'Live', repos: [], registered_at: at(100), session_location: null },
-    ],
     work_packages: [{ id: 'wp-build', active_agent_run: { attempt: 2, last_seen_at: at(3), stale: false } }],
     work_request_details: [
       {
         work_request: {
           id: 'wr-pr', title: 'Native job tab', repo: 'owner/web', phase: 'active', base_branch: 'main',
-          inserted_at: at(3000), architect_session_location: { label: 'Herdr', role: 'architect', last_seen_at: at(20) },
+          inserted_at: at(3000), worked_on: { address: 'build-desk/t4', role: 'architect', liveness: 'live', since: at(20) },
           dispatched_by: { kind: 'chief', domain: 'herdr' },
         },
         product_tree: { execution_graph: { effective_edges: [

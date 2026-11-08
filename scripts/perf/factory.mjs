@@ -5,6 +5,9 @@ const base = `http://127.0.0.1:${process.env.PERF_PORT}`;
 const raw = [];
 let id = 0;
 let dispatch = 0;
+// Every client is the same architect terminal, so its writes share ownership of
+// the fixture WorkRequest. The fake core is one the factory cannot see.
+const herdr = { core_id: "factory-perf-core", core_name: "factory-perf", terminal_id: "t-perf", labels: {} };
 function measurement(response, text, start) {
   const queries = response.headers.get("x-perf-queries");
   return { ms: performance.now() - start, bytes: Buffer.byteLength(text), queries: queries === null ? null : Number(queries) };
@@ -15,7 +18,7 @@ function client(concurrency) {
     const start = performance.now();
     const response = await fetch(`${base}/mcp`, { method: "POST", headers: {
       "content-type": "application/json", ...(session ? { "mcp-session-id": session } : {}),
-    }, body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }) });
+    }, body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params: method === "tools/call" ? { ...params, _meta: { herdr } } : params }) });
     session = response.headers.get("mcp-session-id") || session;
     const text = await response.text();
     let result;
@@ -34,7 +37,6 @@ try {
     const clients = await Promise.all(Array.from({ length: concurrency }, async () => {
       const call = client(concurrency);
       await call("initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "factory-perf", version: "1" } });
-      await call("tools/call", { name: "claim_local_architect_assignment", arguments: { work_request_id: "WR-FIXTURE-FANOUT", claimed_by: "factory-perf" } });
       return call;
     }));
     for (const operation of ["list_work_requests", "read_plan", "read_work_request", "board", "dispatch_work_package"]) {

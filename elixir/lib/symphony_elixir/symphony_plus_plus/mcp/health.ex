@@ -6,21 +6,55 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     Config,
     HandleStateStore,
-    LocalTrustedTools,
-    Session,
     ToolCatalog
   }
+
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer, as: PlanningRenderer
   alias SymphonyElixir.SymphonyPlusPlus.Repo
 
   @protocol_version "2025-03-26"
-  @assignment_resource "sympp://assignment/current"
   @version_resource "sympp://health/version"
-  @bootstrap_tools ToolCatalog.bootstrap_tools()
   @mcp_contract_schema_version ToolCatalog.mcp_contract_schema_version()
   @mcp_contract_health_fields ToolCatalog.mcp_contract_health_fields()
   @mcp_contract_identity_key {__MODULE__, :mcp_contract_identity}
+
+  @doc """
+  Health plus the caller: its Herdr terminal and the WorkRequests it owns, or
+  `access: read_only` outside Herdr.
+  """
+  @spec health(map(), Terminal.t() | nil) :: map()
+  def health(server, terminal) do
+    health = health(server)
+    Map.put(health, "caller", caller(server.config, terminal, health["ledger"]["reachable"] == true))
+  end
+
+  defp caller(_config, nil, _reachable?), do: %{"access" => "read_only", "reason" => "outside_herdr"}
+
+  defp caller(%Config{repo: repo}, %Terminal{} = terminal, reachable?) do
+    %{"access" => "write", "terminal" => terminal.display_address, "role" => terminal.role}
+    |> then(fn caller -> if terminal.domain, do: Map.put(caller, "domain", terminal.domain), else: caller end)
+    |> Map.put("owns", if(reachable?, do: owned(repo, terminal.key), else: []))
+  end
+
+  defp owned(repo, terminal_key) do
+    repo
+    |> Ownership.owned_by(terminal_key)
+    |> Enum.map(fn row ->
+      title =
+        case repo.get(WorkRequest, row.subject_id) do
+          %WorkRequest{title: title} -> title
+          nil -> nil
+        end
+
+      %{"work_request_id" => row.subject_id, "title" => title, "since" => DateTime.to_iso8601(row.started_at)}
+    end)
+  rescue
+    _error -> []
+  end
 
   @spec health(map()) :: map()
   def health(%{config: %Config{health_ledger_mode: :configured_identity} = config}) do
@@ -107,36 +141,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
       "protocol_version" => @protocol_version,
       "resources" => resource_contract_material(),
       "schema_version" => @mcp_contract_schema_version,
-      "startup_tool_sets" =>
+      "tool_sets" =>
         Map.new([:full, :worker, :architect, :coordinator, :solo], fn profile ->
           {Atom.to_string(profile), ToolCatalog.startup_tool_specs(profile, config)}
         end),
-      "tool_sets" => %{
-        "architect" => ToolCatalog.architect_session_tool_specs(current_work_request?: false),
-        "architect_current_work_request" => ToolCatalog.architect_session_tool_specs(current_work_request?: true),
-        "claimable" => ToolCatalog.claimable_tool_specs(config),
-        "local_operator" => LocalTrustedTools.tool_specs(config),
-        "unbound" => hide_trusted_local_tool_specs(ToolCatalog.unbound_tool_specs_for_config(config)),
-        "worker" => ToolCatalog.worker_session_tool_specs()
-      }
+      "owner_gated_tools" => Enum.filter(ToolCatalog.known_tools(), &ToolCatalog.owner_gated_call?(&1, %{"apply" => true}))
     }
   end
 
   defp resource_contract_material do
     %{
-      "list_sets" => %{
-        "architect" => base_resource_specs() ++ current_assignment_resource_specs(),
-        "unbound" => base_resource_specs(),
-        "worker" => base_resource_specs() ++ current_assignment_resource_specs() ++ work_package_resource_template_specs()
-      },
+      "list" => base_resource_specs(),
+      "templates" => work_package_resource_template_specs(),
       "read_payloads" => %{
         "sympp://work-packages/{work_package_id}/worker-bootstrap.json" => %{
           "mimeType" => "application/json",
           "fields" => ["type", "assignment", "coordinates", "required_skills", "preferred_skill_set", "supported_skill_sets", "launch_prompt"]
-        },
-        @assignment_resource => %{
-          "fields" => Session.public_assignment_fields(),
-          "mimeType" => "application/json"
         },
         @version_resource => %{
           "fields" => [
@@ -150,7 +170,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
         },
         "sympp://work-packages/{work_package_id}/{file_name}" => %{
           "file_names" => PlanningRenderer.virtual_files(),
-          "mimeType" => "text/markdown"
+          "mimeType" => "text/vnd.toon"
         }
       }
     }
@@ -600,10 +620,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
 
   defp unknown_ledger_identity(source), do: %{"kind" => "unknown", "source" => source}
 
-  defp hide_trusted_local_tool_specs(specs) do
-    Enum.reject(specs, &(&1["name"] in @bootstrap_tools))
-  end
-
   defp base_resource_specs do
     [
       %{
@@ -614,22 +630,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
     ]
   end
 
-  defp current_assignment_resource_specs do
-    [
-      %{
-        "uri" => @assignment_resource,
-        "name" => "Current sympp assignment",
-        "mimeType" => "application/json"
-      }
-    ]
-  end
-
   defp work_package_resource_template_specs do
     Enum.map(PlanningRenderer.virtual_files(), fn file_name ->
       %{
         "uri_template" => "sympp://work-packages/{work_package_id}/#{file_name}",
         "name" => file_name,
-        "mimeType" => "text/markdown"
+        "mimeType" => "text/vnd.toon"
       }
     end)
   end

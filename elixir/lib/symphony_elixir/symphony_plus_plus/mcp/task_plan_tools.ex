@@ -4,13 +4,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
   import Ecto.Query, only: [from: 2]
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.Auth
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.Session
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer, as: PlanningRenderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @terminal_work_package_statuses ["ended"]
@@ -21,26 +18,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
   @type repo :: module()
   @type result :: {:ok, map()} | {:tool_error, term()} | {:error, term()}
 
-  @spec read_task_plan(repo(), Session.t() | nil) :: result()
-  def read_task_plan(repo, session) do
-    with {:ok, session} <- Auth.require_session(session, repo),
-         :ok <- require_worker_assignment(session.assignment) do
-      read_task_plan_for_package(repo, Session.work_package_id(session))
-    end
-  end
-
-  @spec read_task_plan_for_work_package(repo(), Session.t(), String.t()) :: result()
-  def read_task_plan_for_work_package(repo, %Session{} = session, work_package_id) when is_binary(work_package_id) do
-    with {:ok, _session} <- Auth.require_session(session, repo),
-         :ok <- require_architect_assignment(session.assignment) do
-      read_task_plan_for_package(repo, work_package_id)
-    end
-  end
-
-  @doc "Reads one WorkPackage task plan by id for a trusted local session."
-  @spec local_trusted_read_task_plan(repo(), String.t()) :: result()
-  def local_trusted_read_task_plan(repo, work_package_id) when is_binary(work_package_id),
-    do: read_task_plan_for_package(repo, work_package_id)
+  @doc "Reads one WorkPackage task plan by id."
+  @spec read_task_plan(repo(), String.t()) :: result()
+  def read_task_plan(repo, work_package_id) when is_binary(work_package_id), do: read_task_plan_for_package(repo, work_package_id)
 
   defp read_task_plan_for_package(repo, work_package_id) do
     with {:ok, state} <- PlanningRepository.get_task_plan_render_state(repo, work_package_id),
@@ -56,25 +36,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
     end
   end
 
-  @spec update_task_plan(repo(), Session.t(), map()) :: result()
-  def update_task_plan(repo, %Session{} = session, arguments) do
-    update_task_plan_for_package(repo, session, Session.work_package_id(session), arguments)
-  end
-
-  @spec update_task_plan_for_work_package(repo(), Session.t(), String.t(), map()) :: result()
-  def update_task_plan_for_work_package(repo, %Session{} = session, work_package_id, arguments)
-      when is_binary(work_package_id) and is_map(arguments) do
-    with :ok <- require_architect_assignment(session.assignment) do
-      update_task_plan_for_package(repo, session, work_package_id, arguments)
-    end
-  end
-
-  defp update_task_plan_for_package(repo, %Session{} = session, work_package_id, arguments) do
+  @doc "Replaces task plan nodes of one WorkPackage, checking the expected plan version."
+  @spec update_task_plan(repo(), String.t(), map()) :: result()
+  def update_task_plan(repo, work_package_id, arguments) when is_binary(work_package_id) and is_map(arguments) do
     with {:ok, expected_version} <- required_integer(arguments, "expected_version"),
          {:ok, nodes} <- required_nodes(arguments),
-         :ok <- require_update_task_plan_keys(arguments),
-         {:ok, plan_nodes, version} <-
-           transaction_plan_update(repo, session.assignment, work_package_id, expected_version, nodes) do
+         :ok <- require_update_task_plan_keys(Map.drop(arguments, ["work_package_id", "work_request_id"])),
+         {:ok, plan_nodes, version} <- transaction_plan_update(repo, work_package_id, expected_version, nodes) do
       {:ok,
        ToolResult.agent_tool_result(%{
          "plan_nodes" => Enum.map(plan_nodes, &plan_node_payload/1),
@@ -83,15 +51,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
     end
   end
 
-  defp require_worker_assignment(%{grant_role: "worker"}), do: :ok
-  defp require_worker_assignment(_assignment), do: {:error, :worker_grant_required}
-
-  defp require_architect_assignment(%{grant_role: "architect"}), do: :ok
-  defp require_architect_assignment(_assignment), do: {:error, :architect_grant_required}
-
-  defp transaction_plan_update(repo, assignment, work_package_id, expected_version, nodes) do
+  defp transaction_plan_update(repo, work_package_id, expected_version, nodes) do
     transaction_fun = fn ->
-      transaction_result(repo, assignment, work_package_id, expected_version, nodes)
+      transaction_result(repo, work_package_id, expected_version, nodes)
     end
 
     case repo.transaction(transaction_fun) do
@@ -100,11 +62,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
     end
   end
 
-  defp transaction_result(repo, assignment, work_package_id, expected_version, nodes) do
-    with :ok <- PlanningService.require_valid_assignment(repo, assignment),
-         :ok <- lock_work_package(repo, work_package_id),
+  defp transaction_result(repo, work_package_id, expected_version, nodes) do
+    with :ok <- lock_work_package(repo, work_package_id),
          {:ok, state} <- PlanningRepository.get_state(repo, work_package_id),
-         :ok <- reject_terminal_architect_target(assignment, state.work_package),
+         :ok <- reject_terminal_target(state.work_package),
          :ok <- reject_ready_work_package(state.work_package),
          plan_nodes = state.plan_nodes,
          :ok <- require_plan_version(plan_nodes, expected_version),
@@ -127,14 +88,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
     end
   end
 
-  defp reject_terminal_architect_target(
-         %{grant_role: "architect"},
-         %WorkPackage{status: status}
-       )
-       when status in @terminal_work_package_statuses,
-       do: {:error, :work_package_terminal}
+  defp reject_terminal_target(%WorkPackage{status: status}) when status in @terminal_work_package_statuses,
+    do: {:error, :work_package_terminal}
 
-  defp reject_terminal_architect_target(_assignment, %WorkPackage{}), do: :ok
+  defp reject_terminal_target(%WorkPackage{}), do: :ok
 
   defp prepare_plan_updates(nodes, plan_nodes) do
     nodes
@@ -198,7 +155,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
     result =
       case update do
         {:create, attrs} -> PlanningRepository.append_plan_node(repo, Map.put(attrs, "work_package_id", work_package_id))
-        {:update, %PlanNode{id: id}, attrs} -> PlanningService.update_plan_node(repo, id, attrs)
+        {:update, %PlanNode{id: id}, attrs} -> PlanningRepository.update_plan_node(repo, id, attrs)
       end
 
     case result do

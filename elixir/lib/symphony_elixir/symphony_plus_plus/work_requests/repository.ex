@@ -786,7 +786,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   end
 
   defp validate_executable_work_package_kind(%{"kind" => kind}) do
-    if kind in WorkPackage.executable_kinds(), do: :ok, else: {:error, :invalid_work_package}
+    if kind in WorkPackage.kinds(), do: :ok, else: {:error, :invalid_work_package}
   end
 
   defp validate_product_tree_node(_repo, _work_request_id, nil), do: :ok

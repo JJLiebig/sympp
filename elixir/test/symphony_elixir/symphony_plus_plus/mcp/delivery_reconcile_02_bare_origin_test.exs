@@ -16,13 +16,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02BareOriginTest 
     codex_home = Path.join(fixture.root, "codex-home")
     config = Config.default(repo: repo, repo_root: fixture.repo_root)
 
-    {anchor, session, _grant} =
-      create_phase_architect_session(
-        repo,
-        "SYMPP-ARCHITECT-WORKTREE-BARE-ORIGIN",
-        ["dispatch:work_request"],
-        repo: "sympp"
-      )
+    anchor = %{repo: "sympp", base_branch: "symphony-plus-plus/beta"}
 
     work_request =
       create_work_request!(repo,
@@ -73,7 +67,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02BareOriginTest 
       prepare_response =
         mcp_tool(
           repo,
-          session,
+          "t1",
           "prepare_work_package_worktree",
           %{
             "work_package_id" => package.id
@@ -93,7 +87,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02BareOriginTest 
       legacy_prepare_response =
         mcp_tool(
           repo,
-          session,
+          "t1",
           "prepare_work_package_worktree",
           %{
             "work_package_id" => package.id

@@ -74,7 +74,7 @@ test("remote bridge forwards MCP with authentication, sessions and metadata with
   assert.equal(replies[1].result.extra, "preserved");
   const tool = received.find(r => r.body?.method === "tools/call");
   assert.equal(tool.headers["mcp-session-id"], "remote-session");
-  assert.ok(tool.body.params._meta, "session location accompanies the tool request");
+  assert.equal(tool.body.params._meta?.herdr, undefined, "outside Herdr no terminal identity accompanies the request");
   assert.deepEqual(received.map(r => r.url), ["/mcp/readiness", "/mcp", "/mcp"]);
   assert.equal(received[0].headers.authorization, "Bearer fixture-token");
   const ambiguous = await run("fixture-token", "ambiguous_mutation");

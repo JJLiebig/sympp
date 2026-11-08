@@ -3,9 +3,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog
 
-  @assignment_release_tool ToolCatalog.assignment_release_tool()
-  @local_architect_assignment_claim_tool ToolCatalog.local_architect_assignment_claim_tool()
-
   @type arguments :: %{optional(String.t()) => term()}
   @type tool_call_result :: {:ok, arguments()} | {:error, integer(), String.t(), map()}
   @type tool_error :: {:tool_error, String.t()}
@@ -15,41 +12,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
     case Map.get(params, "arguments", %{}) do
       arguments when is_map(arguments) ->
         validate_solo_arguments(name, arguments)
-
-      _arguments ->
-        {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "invalid_tool_arguments"}}
-    end
-  end
-
-  @spec worker_tool_arguments(map(), String.t()) :: tool_call_result()
-  def worker_tool_arguments(params, name) do
-    case Map.get(params, "arguments", %{}) do
-      arguments when is_map(arguments) ->
-        validate_worker_arguments(name, arguments)
-
-      _arguments ->
-        {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "invalid_tool_arguments"}}
-    end
-  end
-
-  @spec local_architect_assignment_claim_tool_arguments(map()) :: tool_call_result()
-  def local_architect_assignment_claim_tool_arguments(params) do
-    schema_tool_arguments(
-      params,
-      @local_architect_assignment_claim_tool,
-      ToolCatalog.local_architect_assignment_claim_tool_input_schema()
-    )
-  end
-
-  @spec assignment_release_tool_arguments(map()) :: tool_call_result()
-  def assignment_release_tool_arguments(params) do
-    schema_tool_arguments(params, @assignment_release_tool, ToolCatalog.assignment_release_tool_input_schema())
-  end
-
-  defp schema_tool_arguments(params, name, schema) do
-    case Map.get(params, "arguments", %{}) do
-      arguments when is_map(arguments) ->
-        validate_schema_arguments(name, schema, arguments)
 
       _arguments ->
         {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "invalid_tool_arguments"}}
@@ -249,19 +211,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
     end)
   end
 
-  defp validate_worker_arguments("read_work_package_document", arguments), do: {:ok, arguments}
-
-  defp validate_worker_arguments(name, arguments) do
-    allowed = MapSet.new(allowed_worker_argument_keys(name))
-    unexpected = arguments |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
-
-    if unexpected == [] do
-      normalize_implied_status(name, arguments)
-    else
-      {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "unexpected_argument", "arguments" => unexpected}}
-    end
-  end
-
   defp validate_solo_arguments(name, arguments) do
     allowed = MapSet.new(allowed_solo_argument_keys(name))
     unexpected = arguments |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
@@ -270,20 +219,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
       {:ok, arguments}
     else
       {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "unexpected_argument", "arguments" => unexpected}}
-    end
-  end
-
-  defp validate_schema_arguments(name, schema, arguments) do
-    allowed = schema |> Map.get("properties", %{}) |> Map.keys() |> MapSet.new()
-    unexpected = arguments |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
-
-    if unexpected != [] do
-      {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "unexpected_argument", "arguments" => unexpected}}
-    else
-      case validate_tool_required_arguments(schema, arguments) do
-        :ok -> {:ok, arguments}
-        {:error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => reason}}
-      end
     end
   end
 
@@ -377,7 +312,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
 
   defp validate_bootstrap_arguments(name, arguments) do
     allowed = MapSet.new(allowed_bootstrap_argument_keys(name))
-    arguments = if name == "register_chief", do: Map.take(arguments, MapSet.to_list(allowed)), else: arguments
     unexpected = arguments |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
 
     if unexpected != [] do
@@ -397,14 +331,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
     |> ToolCatalog.solo_tool_input_schema()
     |> Map.get("properties", %{})
     |> Map.keys()
-  end
-
-  defp allowed_worker_argument_keys(name) do
-    name
-    |> ToolCatalog.worker_tool_input_schema()
-    |> Map.get("properties", %{})
-    |> Map.keys()
-    |> Kernel.++(ToolCatalog.hidden_worker_argument_keys(name))
   end
 
   defp allowed_local_operator_argument_keys(name) do

@@ -7,44 +7,26 @@ const fs = require("fs");
 const path = require("path");
 const { connectCore } = require("./sympp-herdr.js");
 
-function locationFromEnvironment(env, hostname, clientId) {
-  const location = { client_id: clientId, machine_id: hostname.trim().toLowerCase(), machine_label: hostname };
-  if (!(env.HC_TERMINAL_ID && env.HC_TERMINAL_SOCKET) && env.HERDR_ENV === "1" && env.HERDR_PANE_ID) {
-    location.herdr = {
-      workspace_id: env.HERDR_WORKSPACE_ID,
-      tab_id: env.HERDR_TAB_ID,
-      pane_id: env.HERDR_PANE_ID,
-      session: env.HERDR_SESSION,
-      socket_path: env.HERDR_SOCKET_PATH,
-      native_session_id: env.CODEX_THREAD_ID,
-      native_session_agent: env.CODEX_THREAD_ID ? "codex" : undefined,
-    };
-  }
-  return location;
+const META_LABELS = ["sympp.role", "sympp.domain"];
+
+// The verified terminal as `_meta.herdr`: core id and name, terminal address, and the two sympp
+// labels the factory reads (chief role and domain). The pid is checked, never sent: the factory keys
+// ownership on core id plus address, so restarting an agent in the same terminal keeps its identity.
+function terminalMeta(identity) {
+  if (!identity) return null;
+  const labels = Object.fromEntries(META_LABELS.filter((key) => typeof identity.labels?.[key] === "string" && identity.labels[key].trim())
+    .map((key) => [key, identity.labels[key].trim()]));
+  return { core_id: identity.core_id, ...(identity.core_name ? { core_name: identity.core_name } : {}),
+    terminal_id: identity.terminal_id, ...(Object.keys(labels).length ? { labels } : {}) };
 }
 
-function withSnapshot(location, response) {
-  const snapshot = response && response.result && response.result.snapshot;
-  if (!snapshot || !location.herdr) return location;
-  const panes = snapshot.panes || [];
-  const pane = panes.find((item) => item.tokens && item.tokens.sympp_session_location_id === location.client_id) ||
-    panes.find((item) => item.pane_id === location.herdr.pane_id);
-  if (!pane) return location;
-  const workspace = (snapshot.workspaces || []).find((item) => item.workspace_id === pane.workspace_id);
-  const tab = (snapshot.tabs || []).find((item) => item.tab_id === pane.tab_id);
-  return { ...location, herdr: { ...location.herdr,
-    workspace_id: pane.workspace_id, workspace_label: workspace && workspace.label,
-    tab_id: pane.tab_id, tab_label: tab && tab.label, pane_id: pane.pane_id,
-    native_session_id: location.herdr.native_session_id || (pane.agent_session?.kind === "id" ? pane.agent_session.value : undefined),
-    native_session_agent: location.herdr.native_session_agent || (pane.agent_session?.kind === "id" ? pane.agent_session.agent : undefined),
-  } };
-}
-
-function withLocation(body, location) {
+function withTerminal(body, identity) {
+  const herdr = terminalMeta(identity);
+  if (!herdr) return body;
   try {
     const payload = JSON.parse(body);
     if (!payload || Array.isArray(payload) || !["initialize", "tools/call"].includes(payload.method)) return body;
-    payload.params = { ...payload.params, _meta: { ...payload.params?._meta, sympp_session_location: location } };
+    payload.params = { ...payload.params, _meta: { ...payload.params?._meta, herdr } };
     return JSON.stringify(payload);
   } catch (_) { return body; }
 }
@@ -94,12 +76,11 @@ async function remoteArguments(body, factoryOwned) {
     const input = params?.arguments;
     if (payload?.method !== "tools/call" || !input || typeof input !== "object" || Array.isArray(input)) return payload;
     let args = { ...input };
-    if (["create_work_request", "claim_local_architect_assignment", "solo_attach", "solo_list"].includes(params.name)) args = await repoObject(args);
+    if (["create_work_request", "solo_attach", "solo_list"].includes(params.name)) args = await repoObject(args);
     if (params.name === "create_work_request") {
       if (!Object.hasOwn(args, "repo")) args.repo = await origin(process.cwd());
       if (Array.isArray(args.repo_scopes)) args.repo_scopes = await Promise.all(args.repo_scopes.map(repoObject));
     }
-    if (params.name === "register_chief" && Array.isArray(args.repos)) args.repos = await Promise.all(args.repos.map(repo));
     if (params.name === "slice_work_request" && Array.isArray(args.work_packages)) args.work_packages = await Promise.all(args.work_packages.map(repoObject));
     if (params.name === "update_work_package") args.patch = await repoObject(args.patch);
     if (params.name === "prepare_work_package_worktree") delete args.target_repo_root;
@@ -132,7 +113,7 @@ function remoteWorktreeResponse(body, env = process.env) {
 
 function createReporter(env = process.env, connect = selected => connectCore(undefined, "hc", [], selected)) {
   const clientId = randomUUID();
-  let location = locationFromEnvironment(env, os.hostname(), clientId);
+  let identity = null;
   let factoryOwned = false;
   const native = Boolean(env.HC_TERMINAL_ID && env.HC_TERMINAL_SOCKET);
   const file = path.resolve(env.SYMPP_HOME || path.join(os.homedir(), ".agents", "splusplus"), "herdr-sessions", `${clientId}.json`);
@@ -142,6 +123,9 @@ function createReporter(env = process.env, connect = selected => connectCore(und
   let revision = 0;
   let closed = false;
 
+  // Verifies this terminal against the local herdr-core: same core, live, same address, a real pid.
+  // A different core never replaces the identity. A pid change keeps it, but receipts stay tied to
+  // the first pid, so a bridge outliving its agent cannot label the terminal's next agent.
   async function withCore(action) {
     const core = connect({ ...env, HC_SOCKET: env.HC_TERMINAL_SOCKET });
     let timer;
@@ -152,15 +136,24 @@ function createReporter(env = process.env, connect = selected => connectCore(und
           const terminal = await core.call("terminal.get", { terminal: env.HC_TERMINAL_ID });
           if (!hello?.core?.id || terminal.address !== env.HC_TERMINAL_ID || terminal.state !== "live" ||
               !Number.isSafeInteger(terminal.pid) || terminal.pid <= 0) return;
-          const previous = location.herdr;
-          if (previous?.core_id && (previous.core_id !== hello.core.id || previous.pid !== terminal.pid)) return;
-          location = { ...location, herdr: { core_id: hello.core.id, terminal_id: terminal.address,
-            pid: terminal.pid, process_id: process.pid, client_id: clientId } };
+          if (identity && identity.core_id !== hello.core.id) return;
+          identity = { core_id: hello.core.id, core_name: typeof hello.core.name === "string" ? hello.core.name : null,
+            terminal_id: terminal.address, labels: terminal.labels ?? {}, pid: identity?.pid ?? terminal.pid,
+            current_pid: terminal.pid, process_id: process.pid, client_id: clientId };
           await action(core, terminal);
         })(),
         new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("core unavailable")), 1000); }),
       ]);
     } finally { clearTimeout(timer); core.close(); }
+  }
+
+  // Refreshes the identity at most once a minute; a missing core never holds up MCP calls.
+  async function refresh() {
+    if (native && Date.now() >= refreshAt && !pending) {
+      refreshAt = Date.now() + 60000;
+      pending = withCore(async () => {}).catch(() => {}).finally(() => { pending = null; });
+    }
+    if (pending) await pending;
   }
 
   function clear() {
@@ -172,15 +165,20 @@ function createReporter(env = process.env, connect = selected => connectCore(und
     clientId,
     native,
     setFactoryOwned(value) { factoryOwned = value; },
+    // The terminal named in client leases, once verified.
+    terminal() { return identity ? { core_id: identity.core_id, terminal_id: identity.terminal_id } : null; },
+    // Whether the verified terminal is labelled as a chief.
+    chief() { return identity?.labels?.["sympp.role"] === "chief"; },
     clear,
     close() { closed = true; clear(); },
     report(binding, probe) {
       if (!native || closed || !binding || !probe?.pipe || !probe?.token) return Promise.resolve();
       const current = ++revision;
       reports = reports.then(() => withCore(async (core, terminal) => {
-        if (closed || current !== revision) return;
+        if (closed || current !== revision || terminal.pid !== identity.pid) return;
         // Session receipts share the verifier, without changing a worker's original launch receipt.
-        const receipt = { schema_version: 1, kind: "session", launch_id: clientId, ...location.herdr,
+        const receipt = { schema_version: 1, kind: "session", launch_id: clientId, core_id: identity.core_id,
+          terminal_id: identity.terminal_id, pid: identity.pid, process_id: identity.process_id, client_id: clientId,
           provider: "agent", cwd: terminal.cwd || process.cwd(), role: binding.role,
           work_request_id: binding.work_request_id || null, work_package_id: binding.work_package_id || null,
           process_liveness_pipe: probe.pipe, process_liveness_token: probe.token };
@@ -199,27 +197,12 @@ function createReporter(env = process.env, connect = selected => connectCore(und
       })).catch(() => {});
       return reports;
     },
+    refresh,
     async attach(body) {
-      // Labels are best effort; a missing Herdr must not hold up MCP calls.
-      if (native && Date.now() >= refreshAt && !pending) {
-        refreshAt = Date.now() + 60000;
-        pending = withCore(async () => {}).catch(() => {}).finally(() => { pending = null; });
-      } else if (!native && location.herdr && Date.now() >= refreshAt && !pending) {
-        refreshAt = Date.now() + 60000;
-        pending = new Promise((resolve) => {
-          execFile(env.HERDR_BIN_PATH || (process.platform === "win32" ? "herdr.exe" : "herdr"), ["api", "snapshot"],
-            { env, timeout: 1000, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout) => {
-              if (!error) {
-                try { location = withSnapshot(location, JSON.parse(stdout)); } catch (_) { }
-              }
-              resolve();
-            });
-        }).finally(() => { pending = null; });
-      }
-      if (pending) await pending;
-      return withLocation(await remoteArguments(body, factoryOwned), location);
+      await refresh();
+      return withTerminal(await remoteArguments(body, factoryOwned), identity);
     },
   };
 }
 
-module.exports = { locationFromEnvironment, withSnapshot, withLocation, createReporter, remoteArguments, remoteWorktreeResponse };
+module.exports = { terminalMeta, withTerminal, createReporter, remoteArguments, remoteWorktreeResponse };

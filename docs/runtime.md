@@ -56,10 +56,11 @@ Closing one host leaves the other usable. The backend stops after the last clien
 detaches. The verified archive cache avoids downloading unchanged bytes.
 
 For a connection failure, keep healthy sessions running. Check the recorded
-endpoint and host error, then reconnect the affected host. Reclaim the same worker
-assignment in the actual session before retrying an uncertain write. The
-[WorkPackage procedure](../packages/sympp/skills/symphony-work-package/SKILL.md)
-owns that recovery.
+endpoint and host error, then reconnect the affected host. Ownership stays with
+the same Herdr terminal across reconnects; read the canonical history before
+retrying an uncertain write. The
+[connection procedure](../packages/sympp/skills/symphony-work-package/references/mcp_wiring.md)
+covers that recovery.
 
 For inspection, [Copy and View](portable-skills.md#copy-convert-and-view-an-offline-ledger)
 uses SQLite online backup, a durable offline marker and a separate home and port.

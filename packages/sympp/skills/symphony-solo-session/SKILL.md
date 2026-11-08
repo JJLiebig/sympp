@@ -11,8 +11,7 @@ Persistence is optional; ordinary repo work may proceed without a sympp
 backend when no ledger state is requested.
 
 Do not use this as authority for assigned WorkPackages, WorkRequests,
-architect orchestration, bound MCP planning resources, ledger-backed claims, or
-merge gates. Use
+architect orchestration, or merge gates. Use
 `symphony-plus-plus-mcp:symphony-work-package` for WorkPackages and
 `symphony-plus-plus-mcp:symphony-architect` for WorkRequest orchestration.
 
@@ -23,14 +22,14 @@ The Solo Session ledger replaces local `task_plan.md`, `findings.md`, and
 Do not create local `task_plan.md`, `findings.md`, or `progress.md` files for
 Solo Session state.
 
-Never store raw API keys, bearer/GitHub/Linear/MCP tokens, worker secrets, raw
-WorkKeys, access grants, private handoff payloads, access-grant verifiers,
-secret hashes, secret-bearing commands, or claim lease internals.
+Never store raw API keys, bearer/GitHub/Linear/MCP tokens, secret hashes, or
+secret-bearing commands.
 
 ## Tools
 
-Use configured MCP tools from the `sympp` namespace in an
-unbound session for every ledger read and write. The exposed tool names are:
+Use configured MCP tools from the `sympp` namespace for every ledger read and
+write. Solo writes need a Herdr terminal; outside Herdr they fail
+`read_only_outside_herdr`. The exposed tool names are:
 
 ```text
 solo_attach

@@ -9,7 +9,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
 
   import Ecto.Query, only: [from: 2]
 
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
@@ -608,7 +607,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
        }},
       {"SYMPP-DEMO-WP-QUEUED",
        %{
-         plan: [{"Dispatch contract approved", "done"}, {"Worker claim pending", "pending"}],
+         plan: [{"Dispatch contract approved", "done"}, {"Worker launch pending", "pending"}],
          progress: [{"Queued for worker", "ready_for_worker", %{"handoff" => "synthetic"}}],
          findings: [{"Worker handoff intentionally synthetic", "info"}],
          artifacts: [{"Dispatch packet", "sympp://demo/worker-handoff"}]
@@ -819,7 +818,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
 
   defp normalize_demo_timestamps do
     Enum.each(
-      [AccessGrant, WorkRequest, WorkPackage, ClarificationQuestion, SoloSession],
+      [WorkRequest, WorkPackage, ClarificationQuestion, SoloSession],
       fn schema -> Repo.update_all(schema, set: [inserted_at: @demo_now, updated_at: @demo_now]) end
     )
 

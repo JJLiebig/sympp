@@ -1,21 +1,14 @@
 Code.require_file("../../support/mcp_harness.exs", __DIR__)
-Code.require_file("../../support/symphony_plus_plus/mcp_session_helpers.exs", __DIR__)
 
 defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
   use ExUnit.Case, async: false
 
-  import SymphonyElixir.SymphonyPlusPlus.MCPCase.SessionHelpers,
-    only: [create_phase_architect_session: 4, create_work_request_handoff_architect_session: 3]
-
   alias SymphonyElixir.MCPHarness
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.GrantScope
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
-  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, Session}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.Config
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
-  alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
@@ -23,10 +16,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
 
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{
-    ArchitectHandoff,
-    WorkRequest
-  }
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.WorkPackageFactory
@@ -47,9 +37,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
       ProgressEvent,
       WorkPackageDelivery,
       WorkPackage,
-      ClaimLease,
-      GrantScope,
-      AccessGrant,
+      WorkedOn,
       WorkRequest,
       WorkPackage,
       Phase
@@ -64,10 +52,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
   test "an ended plan with abandoned scope reads as unresolved everywhere and reconciliation keeps full evidence on demand", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-CLOSED-EXECUTION")
-    session = create_work_request_architect_session(repo, work_request, ArchitectHandoff.capabilities())
 
     read = fn tool, args ->
-      response = mcp_tool(repo, session, tool, args)
+      response = mcp_tool(repo, "t1", tool, args)
       assert response["error"] == nil
       get_in(response, ["result", "structuredContent"])
     end
@@ -125,8 +112,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert native.work_request.phase == "unresolved"
     assert native.work_request.completed_at == nil
 
-    summary_response = mcp_tool(repo, session, "reconcile_work_request", %{"work_request_id" => work_request.id})
-    full_response = mcp_tool(repo, session, "reconcile_work_request", %{"work_request_id" => work_request.id, "detail" => "full"})
+    summary_response = mcp_tool(repo, "t1", "reconcile_work_request", %{"work_request_id" => work_request.id})
+    full_response = mcp_tool(repo, "t1", "reconcile_work_request", %{"work_request_id" => work_request.id, "detail" => "full"})
     summary = get_in(summary_response, ["result", "structuredContent"])
     full = get_in(full_response, ["result", "structuredContent"])
     assert summary["reconciliation"]["results"] == []
@@ -140,21 +127,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert get_in(full, ["delivery_board", "work_packages", Access.at(0), "delivery", "no_pr_evidence"]) == "Accepted investigation evidence."
     IO.puts("25-package reconciliation JSON chars: rows_full=#{String.length(Jason.encode!(full["reconciliation"]))} rows_summary=#{String.length(Jason.encode!(summary["reconciliation"]))}")
 
-    invalid = mcp_tool(repo, session, "reconcile_work_request", %{"work_request_id" => work_request.id, "detail" => "invalid"})
+    invalid = mcp_tool(repo, "t1", "reconcile_work_request", %{"work_request_id" => work_request.id, "detail" => "invalid"})
     assert invalid["error"]
   end
 
-  test "any architect may finish another WorkRequest's package, but only its owner records other endings", %{repo: repo} do
-    {owned_request, _owned_slice, _owned_package} = linked_slice!(repo, work_request_id: "WR-MCP-FINISH-OWNER")
+  test "any architect may finish another terminal's package, but only its owner records other endings", %{repo: repo} do
     {other_request, other_slice, other_package} = linked_slice!(repo, work_request_id: "WR-MCP-FINISH-OTHER", work_package_status: "ready")
-    session = create_work_request_architect_session(repo, owned_request, ArchitectHandoff.capabilities())
+    assert {:ok, _row, :acquired} = Ownership.acquire(repo, other_request.id, terminal("t2"))
+    terminal = "t1"
 
-    refused = record_delivery(repo, session, no_pr_args(other_request, other_slice, "finish-other-no-pr", "Not my request."))
-    assert refused["error"]
+    refused = record_delivery(repo, terminal, no_pr_args(other_request, other_slice, "finish-other-no-pr", "Not my request."))
+    assert get_in(refused, ["error", "data", "reason"]) == "owned_by_other_terminal"
     assert repo.get!(WorkPackage, other_package.id).status == "ready"
 
     finished =
-      record_delivery(repo, session, %{
+      record_delivery(repo, terminal, %{
         "work_request_id" => other_request.id,
         "work_package_id" => other_slice.id,
         "outcome" => "finished",
@@ -166,7 +153,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert {:ok, %{phase: "done"}} = SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase.load_one(repo, repo.get!(WorkRequest, other_request.id))
 
     conflict =
-      record_delivery(repo, session, %{
+      record_delivery(repo, terminal, %{
         "work_request_id" => other_request.id,
         "work_package_id" => other_slice.id,
         "outcome" => "finished",
@@ -175,21 +162,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     assert get_in(conflict, ["error", "data", "reason"]) == "delivery_outcome_conflict"
     assert get_in(conflict, ["error", "data", "outcome"]) == "finished"
+    assert Ownership.owner(repo, other_request.id).display_address == "testbox/t2"
   end
 
-  test "WR architect stale capabilities still read the delivery board and record closeout", %{
-    repo: repo
-  } do
+  test "architect reads the delivery board and records a redacted, replayable closeout", %{repo: repo} do
     {work_request, work_package, linked_package} =
       linked_slice!(repo, work_request_id: "WR-MCP-DELIVERY-READ-CLOSE")
 
-    session =
-      repo
-      |> create_work_request_architect_session(work_request, ArchitectHandoff.capabilities())
-      |> stale_session_capabilities(limited_work_request_architect_capabilities())
+    terminal = "t1"
 
     board_response =
-      mcp_tool(repo, session, "read_delivery_board", %{"detail" => "full", "work_request_id" => work_request.id})
+      mcp_tool(repo, terminal, "read_delivery_board", %{"detail" => "full", "work_request_id" => work_request.id})
 
     board_payload = get_in(board_response, ["result", "structuredContent"])
 
@@ -207,7 +190,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         "Operator confirmed #{evidence_url} completed without a PR."
       )
 
-    closeout_response = record_delivery(repo, session, closeout_args)
+    closeout_response = record_delivery(repo, terminal, closeout_args)
     closeout_payload = get_in(closeout_response, ["result", "structuredContent"])
 
     assert closeout_payload["work_package_delivery"]["outcome"] == "completed_no_pr"
@@ -215,7 +198,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     refute inspect(closeout_response) =~ evidence_query_value
 
     read_closed_response =
-      mcp_tool(repo, session, "read_delivery_board", %{"detail" => "full", "work_request_id" => work_request.id})
+      mcp_tool(repo, terminal, "read_delivery_board", %{"detail" => "full", "work_request_id" => work_request.id})
 
     assert get_in(read_closed_response, [
              "result",
@@ -247,7 +230,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     refute get_in(read_closed_response, ["result", "structuredContent" | delivery_evidence_path]) =~ evidence_query_value
     assert repo.get!(WorkPackage, linked_package.id).status == "ended"
 
-    replay_response = record_delivery(repo, session, closeout_args)
+    replay_response = record_delivery(repo, terminal, closeout_args)
 
     assert get_in(replay_response, ["result", "structuredContent", "work_package_delivery", "id"]) ==
              closeout_payload["work_package_delivery"]["id"]
@@ -258,23 +241,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
   end
 
-  test "WR architect reconciles merged PR evidence over stale package grant state", %{repo: repo} do
+  test "architect reconciles merged PR evidence into the ending record", %{repo: repo} do
     {work_request, work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-MCP-DELIVERY-RECONCILE-MERGED-STALE",
         work_package_status: "ready"
       )
 
-    session =
-      create_work_request_architect_session(repo, work_request, [
-        "read:work_request",
-        "write:work_request"
-      ])
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
-
-    assert {:ok, _assignment} =
-             AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-stale-after-merge")
+    terminal = "t1"
 
     assert {:ok, _pr} =
              PlanningRepository.append_progress_event(repo, %{
@@ -295,7 +269,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
                }
              })
 
-    dry_run_response = reconcile_request(repo, session, %{"work_request_id" => work_request.id})
+    dry_run_response = reconcile_request(repo, terminal, %{"work_request_id" => work_request.id})
     dry_run_payload = get_in(dry_run_response, ["result", "structuredContent", "reconciliation"])
 
     assert dry_run_payload["mode"] == "dry_run"
@@ -311,10 +285,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     assert proposed_slice_id == work_package.id
     assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
-    refute repo.get!(AccessGrant, minted.grant.id).revoked_at
 
     apply_response =
-      reconcile_request(repo, session, %{"work_request_id" => work_request.id, "apply" => true})
+      reconcile_request(repo, terminal, %{"work_request_id" => work_request.id, "apply" => true})
 
     apply_payload = get_in(apply_response, ["result", "structuredContent"])
 
@@ -323,175 +296,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert get_in(apply_payload, ["delivery_board", "counts", "delivered"]) == 1
     refute Map.has_key?(apply_payload["delivery_board"], "work_packages")
     assert repo.get!(WorkPackage, linked_package.id).status == "ended"
-    assert repo.get!(AccessGrant, minted.grant.id).revoked_at
   end
 
-  test "WR architect read-only grants cannot mutate delivery closeout state", %{repo: repo} do
-    {work_request, work_package, linked_package} =
-      linked_slice!(repo,
-        work_request_id: "WR-MCP-DELIVERY-READONLY",
-        work_package_status: "ready"
-      )
-
-    session = create_work_request_architect_session(repo, work_request, ["read:work_request"])
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
-
-    dry_run_response = reconcile_request(repo, session, %{"work_request_id" => work_request.id})
-
-    assert get_in(dry_run_response, ["result", "structuredContent", "reconciliation", "mode"]) ==
-             "dry_run"
-
-    apply_response =
-      reconcile_request(repo, session, %{"work_request_id" => work_request.id, "apply" => true})
-
-    assert insufficient_capability?(apply_response)
-
-    invalid_closeout_response = record_delivery(repo, session, %{})
-    assert insufficient_capability?(invalid_closeout_response)
-
-    closeout_response =
-      record_delivery(
-        repo,
-        session,
-        no_pr_args(
-          work_request,
-          work_package,
-          "delivery-mcp-readonly-closeout",
-          "Read-only architects cannot close delivery."
-        )
-      )
-
-    assert insufficient_capability?(closeout_response)
-
-    revoke_response =
-      revoke_worker_key(
-        repo,
-        session,
-        revoke_args(
-          work_request,
-          work_package,
-          minted.grant.id,
-          "Read-only architects cannot revoke worker grants."
-        )
-      )
-
-    assert insufficient_capability?(revoke_response)
-    refute repo.get!(AccessGrant, minted.grant.id).revoked_at
-    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
-  end
-
-  test "WR architect live grant narrowing overrides stale session write capabilities", %{
-    repo: repo
-  } do
-    {work_request, work_package, linked_package} =
-      linked_slice!(repo,
-        work_request_id: "WR-MCP-DELIVERY-LIVE-NARROWED",
-        work_package_status: "ready"
-      )
-
-    session =
-      create_work_request_architect_session(repo, work_request, [
-        "read:work_request",
-        "write:work_request"
-      ])
-
-    assert :ok =
-             update_grant_capabilities(repo, session.assignment.grant_id, ["read:work_request"])
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
-
-    dry_run_response = reconcile_request(repo, session, %{"work_request_id" => work_request.id})
-
-    assert get_in(dry_run_response, ["result", "structuredContent", "reconciliation", "mode"]) ==
-             "dry_run"
-
-    apply_response =
-      reconcile_request(repo, session, %{"work_request_id" => work_request.id, "apply" => true})
-
-    assert insufficient_capability?(apply_response)
-
-    closeout_response =
-      record_delivery(
-        repo,
-        session,
-        no_pr_args(
-          work_request,
-          work_package,
-          "delivery-mcp-live-narrowed-closeout",
-          "Live grant narrowing blocks stale write sessions."
-        )
-      )
-
-    assert insufficient_capability?(closeout_response)
-
-    revoke_response =
-      revoke_worker_key(
-        repo,
-        session,
-        revoke_args(
-          work_request,
-          work_package,
-          minted.grant.id,
-          "Live grant narrowing blocks stale write sessions."
-        )
-      )
-
-    assert insufficient_capability?(revoke_response)
-
-    invalid_revoke_response = revoke_worker_key(repo, session, %{})
-    assert insufficient_capability?(invalid_revoke_response)
-
-    refute repo.get!(AccessGrant, minted.grant.id).revoked_at
-    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
-  end
-
-  test "WR architect write-only grants can apply reconciliation without dry-run read", %{
-    repo: repo
-  } do
-    {work_request, _work_package, linked_package} =
-      linked_slice!(repo,
-        work_request_id: "WR-MCP-DELIVERY-RECONCILE-WRITEONLY",
-        work_package_status: "ready"
-      )
-
-    session = create_work_request_architect_session(repo, work_request, ["write:work_request"])
-
-    assert {:ok, _pr} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: linked_package.id,
-               summary: "Merged PR attached",
-               status: "pr_attached",
-               payload: %{
-                 type: "pr",
-                 source_tool: "attach_pr",
-                 url: "https://github.com/#{linked_package.repo}/pull/92",
-                 repository: linked_package.repo,
-                 number: 92,
-                 base_branch: linked_package.base_branch,
-                 head_sha: "head-writeonly",
-                 merged: true,
-                 merged_at: "2026-05-28T12:00:00Z",
-                 merge_commit_sha: "merge-92"
-               }
-             })
-
-    dry_run_response = reconcile_request(repo, session, %{"work_request_id" => work_request.id})
-    assert insufficient_capability?(dry_run_response)
-
-    apply_response =
-      reconcile_request(repo, session, %{"work_request_id" => work_request.id, "apply" => true})
-
-    assert get_in(apply_response, [
-             "result",
-             "structuredContent",
-             "reconciliation",
-             "applied_count"
-           ]) == 1
-
-    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
-  end
-
-  test "WR architect abandons no-code failed dispatch after replacement delivery without explicit revoke or unrelated grants",
+  test "architect abandons a no-code failed dispatch after its replacement is delivered, leaving other packages alone",
        %{repo: repo} do
     {work_request, failed_slice, failed_package} =
       linked_slice!(repo,
@@ -499,9 +306,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         work_package_status: "dispatched"
       )
 
-    session = create_work_request_architect_session(repo, work_request, ["write:work_request"])
-
-    assert {:ok, failed_minted} = AccessGrantService.mint_worker_grant(repo, failed_package.id)
+    terminal = "t1"
 
     oracle_slice = create_work_package!(repo, work_request, id: "WRS-MCP-DELIVERY-ORACLE-ACTIVE")
 
@@ -527,11 +332,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
                "approved",
                oracle_package.id
              )
-
-    assert {:ok, oracle_minted} = AccessGrantService.mint_worker_grant(repo, oracle_package.id)
-
-    assert {:ok, _oracle_assignment} =
-             AccessGrantService.claim(repo, oracle_minted.work_key.secret, claimed_by: "oracle-worker")
 
     replacement_slice =
       create_work_package!(repo, work_request, id: "WRS-MCP-DELIVERY-REPLACEMENT")
@@ -562,7 +362,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     replacement_response =
       record_delivery(
         repo,
-        session,
+        terminal,
         pr_merged_args(work_request, dispatched_replacement, "delivery-mcp-replacement-pr")
       )
 
@@ -575,26 +375,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     assert repo.get!(WorkPackage, replacement_package.id).status == "ended"
 
-    revoke_response =
-      revoke_worker_key(
-        repo,
-        session,
-        revoke_args(
-          work_request,
-          failed_slice,
-          failed_minted.grant.id,
-          "Failed bootstrap before implementation."
-        )
-      )
-
-    assert get_in(revoke_response, ["result", "structuredContent", "revoked_worker_grant", "id"]) == failed_minted.grant.id
-    assert repo.get!(AccessGrant, failed_minted.grant.id).revoked_at
-    assert repo.get!(WorkPackage, failed_package.id).status == "dispatched"
-
     abandon_response =
       record_delivery(
         repo,
-        session,
+        terminal,
         abandoned_args(
           work_request,
           failed_slice,
@@ -611,9 +395,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
            ]) == "abandoned"
 
     assert repo.get!(WorkPackage, failed_package.id).status == "ended"
-    assert repo.get!(AccessGrant, failed_minted.grant.id).revoked_at
-
-    refute repo.get!(AccessGrant, oracle_minted.grant.id).revoked_at
     assert repo.get!(WorkPackage, oracle_package.id).status == "dispatched"
   end
 
@@ -654,14 +435,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     work_request
   end
 
-  defp sibling_work_request!(repo, work_request, id) do
-    create_work_request!(repo,
-      id: id,
-      repo: work_request.repo,
-      base_branch: work_request.base_branch
-    )
-  end
-
   defp create_work_package!(repo, work_request, overrides) do
     assert {:ok, work_package} =
              CanonicalWorkPackageFixtures.add_work_package(
@@ -671,18 +444,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
              )
 
     work_package
-  end
-
-  defp approve_slice!(%WorkPackage{} = work_package, repo, %WorkRequest{} = work_request) do
-    assert {:ok, approved_slice} =
-             CanonicalWorkPackageFixtures.approve_work_package(
-               repo,
-               work_request.id,
-               work_package.id,
-               "planned"
-             )
-
-    approved_slice
   end
 
   defp create_matching_work_package!(repo, work_request, work_package, overrides) do
@@ -702,65 +463,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     assert {:ok, work_package} = WorkPackageRepository.create(repo, attrs)
     work_package
-  end
-
-  defp create_work_request_architect_session(repo, %WorkRequest{} = work_request, capabilities) do
-    phase_id = ArchitectHandoff.phase_id_for_work_request(work_request)
-
-    assert {:ok, _phase} =
-             PhaseRepository.create(repo, %{
-               id: phase_id,
-               title: "Architect handoff for #{work_request.id}"
-             })
-
-    anchor_attrs =
-      [
-        id: ArchitectHandoff.anchor_id_for_work_request(work_request),
-        kind: "delegation",
-        title: "Architect handoff",
-        repo: work_request.repo,
-        base_branch: work_request.base_branch,
-        phase_id: phase_id,
-        status: "planning",
-        allowed_file_globs: ["elixir/lib", "elixir/lib/**"],
-        acceptance_criteria: ["Own the WorkRequest architecture."]
-      ]
-      |> WorkPackageFactory.attrs()
-
-    assert {:ok, anchor} = WorkPackageRepository.create(repo, anchor_attrs)
-
-    assert {:ok, minted} =
-             AccessGrantService.mint_architect_grant(repo, phase_id,
-               work_package_id: anchor.id,
-               capabilities: capabilities
-             )
-
-    assert {:ok, assignment} =
-             AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "architect-1")
-
-    MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-  end
-
-  defp update_grant_capabilities(repo, grant_id, capabilities) do
-    grant = repo.get!(AccessGrant, grant_id)
-
-    case repo.update(AccessGrant.changeset(grant, %{capabilities: capabilities})) do
-      {:ok, _grant} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp stale_session_capabilities(%Session{} = session, capabilities) do
-    %{session | assignment: %{session.assignment | capabilities: capabilities}}
-  end
-
-  defp create_worker_session(repo, %WorkPackage{} = work_package) do
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, work_package.id)
-
-    assert {:ok, assignment} =
-             AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-
-    MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
   end
 
   defp no_pr_args(work_request, work_package, idempotency_key, evidence) do
@@ -800,17 +502,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
       "evidence" => %{"abandoned" => %{"abandoned_rationale" => rationale}}
     }
   end
-
-  defp revoke_args(work_request, work_package, grant_id, reason) do
-    %{
-      "work_request_id" => work_request.id,
-      "work_package_id" => work_package.id,
-      "grant_id" => grant_id,
-      "reason" => reason
-    }
-  end
-
-  defp limited_work_request_architect_capabilities, do: ["read:work_request", "write:work_request"]
 
   defp superseded_args(work_request, work_package, idempotency_key, successor_work_package_id, reason) do
     %{
@@ -867,22 +558,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     Enum.into(overrides, defaults)
   end
 
-  defp record_delivery(repo, session, arguments),
-    do: mcp_tool(repo, session, "record_work_package_delivery", arguments)
+  defp record_delivery(repo, terminal, arguments),
+    do: mcp_tool(repo, terminal, "record_work_package_delivery", arguments)
 
-  defp reconcile_request(repo, session, arguments),
-    do: mcp_tool(repo, session, "reconcile_work_request", arguments)
+  defp reconcile_request(repo, terminal, arguments),
+    do: mcp_tool(repo, terminal, "reconcile_work_request", arguments)
 
-  defp revoke_worker_key(repo, session, arguments),
-    do: mcp_tool(repo, session, "revoke_work_package_worker_key", arguments)
+  defp terminal(address), do: Terminal.from_meta(MCPHarness.herdr_meta(address))
 
-  defp insufficient_capability?(response) do
-    get_in(response, ["error", "code"]) in [-32_001, -32_003] and
-      get_in(response, ["error", "data", "reason"]) == "insufficient_capability" and
-      get_in(response, ["error", "data", "reason_code"]) in [nil, "insufficient_capability"]
-  end
-
-  defp mcp_tool(repo, %Session{} = session, name, arguments) do
+  defp mcp_tool(repo, terminal, name, arguments) do
     MCPHarness.request(
       %{
         "jsonrpc" => "2.0",
@@ -891,7 +575,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         "params" => %{"name" => name, "arguments" => arguments}
       },
       config: Config.default(repo: repo, repo_root: test_repo_root()),
-      session: session
+      terminal: terminal
     )
   end
 

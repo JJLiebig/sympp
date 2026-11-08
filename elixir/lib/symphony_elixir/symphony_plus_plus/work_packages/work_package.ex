@@ -16,7 +16,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
   @primary_key {:id, :string, autogenerate: false}
   @foreign_key_type :string
 
-  @executable_kinds [
+  @kinds [
     "standard_pr",
     "quick_fix",
     "hotfix",
@@ -27,11 +27,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
     "skill",
     "hooks"
   ]
-  @anchor_kinds ["delegation"]
-  @kinds @executable_kinds ++ @anchor_kinds
-  # Architect anchors are not executable work; they keep this status until the
-  # anchors are replaced by WorkRequest ownership.
-  @anchor_status "planning"
   @type t :: %__MODULE__{
           id: String.t() | nil,
           work_request_id: String.t() | nil,
@@ -100,12 +95,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
 
   @spec kinds() :: [String.t()]
   def kinds, do: @kinds
-
-  @spec executable_kinds() :: [String.t()]
-  def executable_kinds, do: @executable_kinds
-
-  @spec anchor_status() :: String.t()
-  def anchor_status, do: @anchor_status
 
   @spec repo(map(), t()) :: String.t() | nil
   def repo(work_request, %__MODULE__{} = work_package) do
@@ -178,10 +167,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
     |> validate_review_requirement()
   end
 
-  defp validate_status(changeset) do
-    allowed = if get_field(changeset, :kind) in @anchor_kinds, do: [@anchor_status], else: Lifecycle.statuses()
-    validate_inclusion(changeset, :status, allowed)
-  end
+  defp validate_status(changeset), do: validate_inclusion(changeset, :status, Lifecycle.statuses())
 
   defp validate_branch_pattern(changeset) do
     validate_change(changeset, :branch_pattern, fn :branch_pattern, value ->

@@ -16,16 +16,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCall do
   @safe_reasons ~w(
     already_initialized
     already_ready
-    architect_grant_required
     batch_not_supported
     branch_scope_mismatch
     body_read_failed
     body_too_large
-    claim_required
     dangerous_action_requires_operator
     empty_batch
     initialize_must_be_standalone
-    insufficient_capability
     insufficient_role
     invalid_client_key
     invalid_json
@@ -38,31 +35,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCall do
     invalid_transition
     ledger_unavailable
     local_daemon_trust_required
-    local_mcp_required
     local_mcp_session_required
     method_not_found
     missing_method
     missing_protocol_version
+    missing_work_request_id
     missing_session
     missing_session_id
     not_found
+    operator_report_moved
+    owned_by_other_terminal
     outside_session_scope
     params_must_be_object
     params_must_be_object_or_array
     precondition_failed
+    read_only_outside_herdr
     request_must_be_object
-    runtime_lease_conflict
     scope_mismatch
     server_not_initialized
     state_update_lost
     target_ambiguous
     target_not_found
+    terminal_not_live
     unexpected_argument
     unhandled_tool_failure
     unknown_action
     unknown_state_key
-    worker_grant_required
     work_package_contract_frozen
+    work_request_archived
     worktree_cleanup_failed
   )
 
@@ -404,7 +404,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCall do
 
   defp safe_tool_metadata(_context, _payload), do: {"unknown", [], 0, 0}
 
-  defp tool_specs(%{config: %Config{}} = server), do: Surface.tool_specs_for_server(server)
+  defp tool_specs(%{config: %Config{} = config}), do: {:ok, Surface.tool_specs(config)}
   defp tool_specs(%Config{}), do: {:error, :server_context_required}
 
   defp safe_argument_keys(%{"arguments" => arguments}, %{"inputSchema" => %{"properties" => properties}})

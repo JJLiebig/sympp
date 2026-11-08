@@ -16,7 +16,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
 
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings
-  alias SymphonyElixir.SymphonyPlusPlus.SessionLocations
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
@@ -31,7 +31,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   @archivable_phases ["done", "unresolved"]
   @default_archive_after_days 3
   @completed_visible_limit 10
-  @delete_work_request_chunk_size 500
 
   @type retention_summary :: %{
           archived_count: non_neg_integer(),
@@ -278,6 +277,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
                from(work_request in WorkRequest, where: work_request.id == ^id and is_nil(work_request.archived_at)),
                set: [archived_at: now, archive_reason: archive_reason, updated_at: now]
              ),
+           # An archived WorkRequest has no live owner.
+           :ok <- Ownership.end_subject(repo, "work_request", id),
            :ok <- WorktreeCleanupQueue.enqueue_terminal(repo, linked_work_packages(repo, id)),
            {:ok, archived} <- Repository.get(repo, id) do
         archived
@@ -401,9 +402,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
 
   defp delete_work_request_dependents(repo, work_request_ids, work_package_ids) do
     with :ok <- preserve_archived_work_package_hides(repo, work_package_ids),
-         :ok <- SessionLocations.delete_for_targets(repo, "work_request", work_request_ids),
-         :ok <- SessionLocations.delete_for_targets(repo, "work_package", work_package_ids) do
-      delete_archived_grant_scopes(repo, work_request_ids, work_package_ids)
+         :ok <- Ownership.delete_subjects(repo, "work_request", work_request_ids) do
+      Ownership.delete_subjects(repo, "work_package", work_package_ids)
     end
   end
 
@@ -422,36 +422,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
       {:error, reason} ->
         {:error, reason}
     end
-  end
-
-  defp delete_archived_grant_scopes(repo, work_request_ids, work_package_ids) do
-    with {:ok, _work_request_count} <- delete_grant_scope_ids(repo, "work_request", work_request_ids),
-         {:ok, _work_package_count} <- delete_grant_scope_ids(repo, "work_package", work_package_ids) do
-      :ok
-    end
-  end
-
-  defp delete_grant_scope_ids(_repo, _scope_type, []), do: {:ok, 0}
-
-  defp delete_grant_scope_ids(repo, scope_type, scope_ids) do
-    scope_ids
-    |> Enum.uniq()
-    |> Enum.chunk_every(@delete_work_request_chunk_size)
-    |> Enum.reduce({:ok, 0}, fn
-      _ids, {:error, reason} ->
-        {:error, reason}
-
-      ids, {:ok, deleted_count} ->
-        {count, _rows} =
-          repo.delete_all(
-            from(scope in "sympp_access_grant_scopes",
-              where: scope.scope_type == ^scope_type,
-              where: scope.scope_id in ^ids
-            )
-          )
-
-        {:ok, deleted_count + count}
-    end)
   end
 
   defp enqueue_worktrees_for_deletion(repo, work_packages) do

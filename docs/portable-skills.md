@@ -78,7 +78,7 @@ files, operator settings and downloaded artifacts stay in the offline home;
 inherited runtime selections do not redirect the viewer.
 
 Complete, archive, restore, delete and retention affect only this copy. MCP,
-dispatch, session focus, worktree preparation/cleanup and external provider or
+dispatch, worktree preparation/cleanup and external provider or
 review probes are disabled. Never connect agents to the copy, clear its marker,
 or promote it to live. Marker-aware runtimes refuse ordinary startup of the
 copy; older runtimes cannot enforce that protection. The copy retains private
@@ -147,7 +147,7 @@ remain manual qualification.
 
 The installed offline path is also exercised with a synthetic populated
 old-schema WAL ledger: unchanged source bytes and records, staged conversion,
-the offline marker, populated board data, denied MCP/dispatch/focus, untouched
+the offline marker, populated board data, denied MCP/dispatch, untouched
 external-command sentinels, Ctrl+C shutdown, stopped refresh and refusal of
 ordinary startup. This uses the selected branch artifact, not a local source build.
 

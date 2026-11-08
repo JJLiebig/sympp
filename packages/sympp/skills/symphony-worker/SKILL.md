@@ -6,8 +6,8 @@ description: Use when assigned a bounded implementation, investigation, docs, or
 # sympp Worker
 
 Implement the assignment, run its required native checks and review, and return
-a normal PR or evidence handoff. No sympp MCP calls, claim, progress ledger,
-question record, or duplicate review receipt are required.
+a normal PR or evidence handoff. Make no sympp MCP calls: no progress ledger,
+question record, or duplicate review receipt.
 
 Read the bootstrap's `assignment` alongside `launch_prompt`; the prompt does
 not repeat the assignment. Within `assignment`, a `*_ref` JSON pointer supplies
@@ -74,18 +74,16 @@ The parent reconciles readiness and delivery from that handoff and authoritative
 GitHub/review evidence. Optional Herdr/OSC observations augment last-known state;
 absence means unknown and does not block work or authorize takeover.
 
-Use scoped worker MCP tools only when they help an explicitly chosen workflow;
-see [the optional adapter](../symphony-work-package/SKILL.md). Authentication and
-scope denials still apply when using those tools. Never substitute business CLI
-commands or private state files for required parent ledger operations.
+Ledger writes belong to the terminal that owns the WorkRequest; see
+[the WorkPackage contract](../symphony-work-package/SKILL.md). Never substitute
+business CLI commands or private state files for parent ledger operations.
 
 When Herdr-next execution is explicitly chosen, the parent can launch Codex,
 Claude or OpenCode with the [optional execution helper](references/herdr-execution.md).
 It accepts an existing redacted assignment or an ordinary untracked task;
-it never dispatches or claims ledger work.
+it never dispatches ledger work.
 
 ## Safety
 
 Never print, store, commit, or paste raw API keys, bearer tokens, GitHub tokens,
-Linear tokens, MCP auth tokens, worker secrets, raw WorkKeys, private handoff
-payloads, grant verifiers, claim lease internals, or secret-bearing commands.
+Linear tokens, MCP auth tokens, private handoff payloads, or secret-bearing commands.

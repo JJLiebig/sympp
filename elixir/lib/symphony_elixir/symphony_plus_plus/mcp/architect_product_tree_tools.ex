@@ -15,17 +15,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.Payloads, only: [json_safe_payload: 1]
 
-  alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
-  alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.HumanDecisionPrompt
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
-    Auth,
     Config,
-    CurrentWorkRequest,
     ErrorDetails,
-    Session,
     ToolResult,
     WorkRequestPayloads,
     WorkRequestScope
@@ -60,23 +56,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   @spec tools() :: [String.t()]
   def tools, do: @tools
 
-  @spec call(String.t(), Config.t(), Session.t() | nil, map()) :: {:ok, map()} | {:error, integer(), String.t(), map()}
-  def call("ask_question", %Config{} = config, session, arguments) do
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
+  @spec call(String.t(), Config.t(), Terminal.t(), map()) :: {:ok, map()} | {:error, integer(), String.t(), map()}
+  def call("ask_question", %Config{} = config, _terminal, arguments) do
+    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, category} <- required_argument(arguments, "category"),
          {:ok, question} <- required_argument(arguments, "question"),
          {:ok, why_needed} <- required_argument(arguments, "why_needed"),
          {:ok, decision_prompt} <- optional_decision_prompt_argument(arguments, "decision_prompt"),
          {:ok, asked_by_agent_run_id} <- optional_string_argument(arguments, "asked_by_agent_run_id"),
-         {:ok, _work_request, filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(
-             config.repo,
-             session,
-             work_request_id,
-             :question_create,
-             "ask_question"
-           ),
+         {:ok, _work_request, _filters, scope} <- scoped_work_request(config.repo, work_request_id),
          {:ok, question_record} <-
            WorkRequestService.ask_question(
              config.repo,
@@ -92,7 +80,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
              )
              |> optional_put("asked_by_agent_run_id", asked_by_agent_run_id)
            ),
-         {:ok, updated_work_request} <- WorkRequestScope.scoped_work_request(config.repo, work_request_id, filters) do
+         {:ok, updated_work_request} <- WorkRequestScope.scoped_work_request(config.repo, work_request_id) do
       {:ok,
        ToolResult.tool_result(%{
          "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
@@ -109,17 +97,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  def call("record_decision", %Config{} = config, session, arguments) do
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
+  def call("record_decision", %Config{} = config, terminal, arguments) do
+    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, source_type} <- required_argument(arguments, "source_type"),
          {:ok, decision} <- required_argument(arguments, "decision"),
          {:ok, rationale} <- required_argument(arguments, "rationale"),
          {:ok, scope_impact} <- required_argument(arguments, "scope_impact"),
-         {:ok, created_by} <- optional_string_argument(arguments, "created_by", session_claimed_by(session)),
+         {:ok, created_by} <- optional_string_argument(arguments, "created_by", terminal_name(terminal)),
          {:ok, source_id} <- optional_string_argument(arguments, "source_id"),
-         {:ok, _work_request, filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :decision_record, "record_decision"),
+         {:ok, _work_request, _filters, scope} <- scoped_work_request(config.repo, work_request_id),
          {:ok, decision_record} <-
            WorkRequestService.record_decision(
              config.repo,
@@ -136,7 +122,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
                source_id
              )
            ),
-         {:ok, updated_work_request} <- WorkRequestScope.scoped_work_request(config.repo, work_request_id, filters) do
+         {:ok, updated_work_request} <- WorkRequestScope.scoped_work_request(config.repo, work_request_id) do
       {:ok,
        ToolResult.tool_result(%{
          "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
@@ -150,15 +136,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  def call("slice_work_request", %Config{} = config, session, arguments) do
+  def call("slice_work_request", %Config{} = config, terminal, arguments) do
     tool = "slice_work_request"
 
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
+    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, work_packages} <- optional_list_argument(arguments, "work_packages"),
          :ok <- require_work_package_batch(work_packages),
          {:ok, work_request, _filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_package_create, tool),
+           scoped_work_request(config.repo, work_request_id),
          :ok <- require_work_package_authoring_status(work_request),
          :ok <- require_complete_work_package_contracts(work_packages),
          {:ok, {result, detail}} <-
@@ -166,7 +151,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
              config.repo,
              work_request_id,
              tool,
-             session_claimed_by(session),
+             terminal_name(terminal),
              fn ->
                WorkRequestService.slice_work_request(
                  config.repo,
@@ -189,30 +174,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  def call("update_work_package", %Config{} = config, session, arguments) do
+  def call("update_work_package", %Config{} = config, terminal, arguments) do
     tool = "update_work_package"
 
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
+    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
          {:ok, expected_revision} <- optional_positive_integer_argument(arguments, "expected_contract_revision"),
          {:ok, patch} <- required_object(arguments, "patch"),
          :ok <- require_positive_revision(expected_revision),
          {:ok, work_request, work_package, _filters, scope} <-
-           WorkRequestScope.authorized_work_package_scope(
-             config.repo,
-             session,
-             work_request_id,
-             work_package_id,
-             :work_package_update,
-             tool
-           ),
+           scoped_work_package(config.repo, work_request_id, work_package_id),
          :ok <- require_contract_revision(work_package, expected_revision),
          :ok <- require_work_package_authoring_status(work_request, work_package.contract_revision),
          :ok <- require_mutable_work_package_contract(work_package),
          :ok <- require_complete_work_package_contracts([effective_work_package_contract(work_package, patch)]),
          {:ok, work_package} <-
-           mutate_product_tree(config.repo, work_request_id, tool, session_claimed_by(session), fn ->
+           mutate_product_tree(config.repo, work_request_id, tool, terminal_name(terminal), fn ->
              update_work_package(
                config.repo,
                work_request_id,
@@ -236,20 +213,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  def call("upsert_group", %Config{} = config, session, arguments) do
+  def call("upsert_group", %Config{} = config, terminal, arguments) do
     tool = "upsert_group"
     parent_group_id_supplied? = Map.has_key?(arguments, "parent_group_id")
     description_supplied? = Map.has_key?(arguments, "description")
 
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
+    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, group_id} <- optional_string_argument(arguments, "group_id"),
          {:ok, title} <- optional_string_argument(arguments, "title"),
          {:ok, description} <- optional_string_argument(arguments, "description"),
          {:ok, kind} <- optional_string_argument(arguments, "kind"),
          {:ok, parent_group_id} <- optional_string_argument(arguments, "parent_group_id"),
          {:ok, position} <- optional_nonnegative_integer_argument(arguments, "position"),
-         {:ok, created_by} <- optional_string_argument(arguments, "created_by", session_claimed_by(session)),
+         {:ok, created_by} <- optional_string_argument(arguments, "created_by", terminal_name(terminal)),
          :ok <-
            require_group_mutation(
              group_id,
@@ -260,7 +236,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
              position
            ),
          {:ok, work_request, _filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, tool),
+           scoped_work_request(config.repo, work_request_id),
          :ok <- require_work_package_authoring_status(work_request),
          attrs =
            %{"work_request_id" => work_request_id}
@@ -290,17 +266,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  def call("delete_group", %Config{} = config, session, arguments) do
-    mutate_graph_record(config, session, arguments, "delete_group", "group_id", fn work_request_id, group_id ->
+  def call("delete_group", %Config{} = config, terminal, arguments) do
+    mutate_graph_record(config, terminal, arguments, "delete_group", "group_id", fn work_request_id, group_id ->
       ProductTree.delete_group(config.repo, work_request_id, group_id)
     end)
   end
 
-  def call("upsert_dependency", %Config{} = config, session, arguments) do
+  def call("upsert_dependency", %Config{} = config, terminal, arguments) do
     tool = "upsert_dependency"
 
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
+    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, dependency_id} <- optional_string_argument(arguments, "dependency_id"),
          {:ok, candidate_head_sha} <- optional_string_argument(arguments, "candidate_head_sha"),
          {:ok, dependent} <- required_object(arguments, "dependent"),
@@ -309,9 +284,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, {target_kind, target_id}} <- dependency_endpoint(prerequisite),
          {:ok, reason} <- optional_string_argument(arguments, "reason"),
          {:ok, decision_ref} <- optional_object_argument(arguments, "decision_ref"),
-         {:ok, created_by} <- optional_string_argument(arguments, "created_by", session_claimed_by(session)),
+         {:ok, created_by} <- optional_string_argument(arguments, "created_by", terminal_name(terminal)),
          {:ok, work_request, _filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, tool),
+           scoped_work_request(config.repo, work_request_id),
          :ok <- require_work_package_authoring_status(work_request),
          attrs =
            %{
@@ -347,31 +322,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  def call("delete_dependency", %Config{} = config, session, arguments) do
-    mutate_graph_record(config, session, arguments, "delete_dependency", "dependency_id", fn work_request_id, dependency_id ->
+  def call("delete_dependency", %Config{} = config, terminal, arguments) do
+    mutate_graph_record(config, terminal, arguments, "delete_dependency", "dependency_id", fn work_request_id, dependency_id ->
       ProductTree.delete_dependency_edge(config.repo, work_request_id, dependency_id)
     end)
   end
 
-  def call("skip_work_package", %Config{} = config, session, arguments) do
+  def call("skip_work_package", %Config{} = config, terminal, arguments) do
     tool = "skip_work_package"
 
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
+    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
          {:ok, work_request, work_package, _filters, scope} <-
-           WorkRequestScope.authorized_work_package_scope(
-             config.repo,
-             session,
-             work_request_id,
-             work_package_id,
-             :work_package_skip,
-             tool
-           ),
+           scoped_work_package(config.repo, work_request_id, work_package_id),
          :ok <- require_work_package_authoring_status(work_request, work_package.contract_revision),
          :ok <- require_mutable_work_package_contract(work_package),
          {:ok, work_package} <-
-           mutate_product_tree(config.repo, work_request_id, tool, session_claimed_by(session), fn ->
+           mutate_product_tree(config.repo, work_request_id, tool, terminal_name(terminal), fn ->
              WorkRequestService.skip_work_package(config.repo, work_request_id, work_package_id)
            end) do
       {:ok,
@@ -387,14 +354,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  defp mutate_graph_record(%Config{} = config, session, arguments, tool, id_key, mutation_fun) do
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
+  defp mutate_graph_record(%Config{} = config, terminal, arguments, tool, id_key, mutation_fun) do
+    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, id} <- required_argument(arguments, id_key),
          {:ok, work_request, _filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, tool),
+           scoped_work_request(config.repo, work_request_id),
          :ok <- require_work_package_authoring_status(work_request),
-         created_by = session_claimed_by(session),
+         created_by = terminal_name(terminal),
          {:ok, {deleted, detail}} <-
            mutate_product_tree_with_projection(config.repo, work_request_id, tool, created_by, fn ->
              mutation_fun.(work_request_id, id)
@@ -605,14 +571,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   defp optional_put_present(attrs, key, value, true), do: Map.put(attrs, key, value)
   defp optional_put_present(attrs, _key, _value, false), do: attrs
 
-  defp session_claimed_by(%Session{assignment: %{claimed_by: claimed_by}}) when is_binary(claimed_by) do
-    case String.trim(claimed_by) do
-      "" -> "architect"
-      trimmed -> trimmed
+  defp terminal_name(%Terminal{display_address: address}), do: address
+
+  defp scoped_work_request(repo, work_request_id) do
+    with {:ok, work_request, filters} <- WorkRequestScope.work_request_scope(repo, work_request_id) do
+      {:ok, work_request, filters, WorkRequestPayloads.redacted_work_request_scope(work_request)}
     end
   end
 
-  defp session_claimed_by(%Session{}), do: "architect"
+  defp scoped_work_package(repo, work_request_id, work_package_id) do
+    case WorkRequestScope.work_package_scope(repo, work_request_id, work_package_id) do
+      {:ok, work_request, work_package} ->
+        scope = WorkRequestPayloads.redacted_work_request_scope(work_request)
+        {:ok, work_request, work_package, %{}, scope}
+
+      error ->
+        error
+    end
+  end
 
   defp filled_string?(value), do: is_binary(value) and String.trim(value) != ""
 
@@ -665,15 +641,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   defp architect_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
   defp architect_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)
-  defp architect_error(:expired, resource), do: auth_error({:unauthorized, :expired}, resource)
-  defp architect_error(:assignment_revoked, resource), do: auth_error({:unauthorized, :revoked}, resource)
-  defp architect_error(:architect_grant_required, resource), do: auth_error({:unauthorized, :architect_grant_required}, resource)
-  defp architect_error(:insufficient_capability, resource), do: auth_error({:unauthorized, :insufficient_capability}, resource)
-  defp architect_error({:authorization_policy_denied, %Decision{} = decision}, resource), do: MCPError.from_decision(decision, resource)
-  defp architect_error({:authorization_policy_denied, code, message, data}, _resource), do: {:error, code, message, data}
-  defp architect_error(:phase_scope_not_available, resource), do: auth_error(:forbidden, resource)
-  defp architect_error({:phase_scope_not_available, _missing_evidence}, resource), do: auth_error(:forbidden, resource)
-  defp architect_error(:ambiguous_phase_scope, resource), do: auth_error(:forbidden, resource)
 
   defp architect_error({:work_request_archived, revision}, tool) do
     ErrorDetails.lifecycle_error(tool, :work_request_archived, optional_put(%{"phase" => "archived"}, "current_contract_revision", revision))

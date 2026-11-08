@@ -101,8 +101,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase do
   @spec load(module(), [WorkRequest.t()], [WorkPackage.t()]) ::
           {:ok, %{optional(String.t()) => summary()}} | {:error, term()}
   def load(repo, work_requests, work_packages) when is_atom(repo) and is_list(work_requests) and is_list(work_packages) do
-    kinds = WorkPackage.executable_kinds()
-    work_packages = Enum.filter(work_packages, &(&1.kind in kinds))
     deliveries = deliveries(repo, Enum.map(work_packages, & &1.id))
 
     with {:ok, successors} <- OperationalLineage.delivery_successors(repo, work_packages) do
@@ -166,12 +164,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase do
   defp completed_at(%WorkRequest{}, _phase, _packages, _deliveries), do: nil
 
   defp work_packages(repo, work_request_ids) do
-    kinds = WorkPackage.executable_kinds()
-
     work_request_ids
     |> Enum.chunk_every(@chunk_size)
     |> Enum.flat_map(fn chunk ->
-      repo.all(from(package in WorkPackage, where: package.work_request_id in ^chunk and package.kind in ^kinds))
+      repo.all(from(package in WorkPackage, where: package.work_request_id in ^chunk))
     end)
   end
 

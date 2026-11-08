@@ -52,8 +52,6 @@ defmodule SymphonyElixirWeb.Router do
     get("/api/v1/sympp/herdr/work-requests/:work_request_id", SymppDashboardApiController, :herdr_work_request_detail)
     post("/api/v1/sympp/operator/settings", SymppDashboardApiController, :operator_update_settings)
     post("/api/v1/sympp/operator/github/sync-prs", SymppDashboardApiController, :operator_sync_github_prs)
-    post("/api/v1/sympp/operator/work-packages/:work_package_id/focus", SymppDashboardApiController, :operator_focus_work_package)
-    post("/api/v1/sympp/operator/work-requests/:work_request_id/focus", SymppDashboardApiController, :operator_focus_work_request)
     get("/api/v1/sympp/operator/work-packages/:work_package_id", SymppDashboardApiController, :operator_package_detail)
     get("/api/v1/sympp/operator/solo-sessions/:solo_session_id", SymppDashboardApiController, :operator_solo_session_detail)
     post("/api/v1/sympp/operator/work-requests", SymppDashboardApiController, :operator_create_work_request)
@@ -62,6 +60,7 @@ defmodule SymphonyElixirWeb.Router do
     post("/api/v1/sympp/operator/work-requests/:work_request_id/archive", SymppDashboardApiController, :operator_archive_work_request)
     post("/api/v1/sympp/operator/work-requests/:work_request_id/delete", SymppDashboardApiController, :operator_delete_work_request)
     post("/api/v1/sympp/operator/work-requests/:work_request_id/restore", SymppDashboardApiController, :operator_restore_work_request)
+    post("/api/v1/sympp/operator/work-requests/:work_request_id/release", SymppDashboardApiController, :operator_release_work_request)
     post("/api/v1/sympp/operator/work-packages/:work_package_id/finish", SymppDashboardApiController, :operator_finish_work_package)
     post("/api/v1/sympp/operator/work-packages/:work_package_id/blockers/:blocker_id/clear", SymppDashboardApiController, :operator_clear_work_package_blocker)
     post("/api/v1/sympp/operator/work-packages/:work_package_id/archive", SymppDashboardApiController, :operator_archive_work_package)
@@ -70,12 +69,6 @@ defmodule SymphonyElixirWeb.Router do
       "/api/v1/sympp/operator/work-requests/:work_request_id/questions/:question_id/answer",
       SymppDashboardApiController,
       :operator_answer_question
-    )
-
-    post(
-      "/api/v1/sympp/operator/work-requests/:work_request_id/architect-handoff",
-      SymppDashboardApiController,
-      :operator_create_architect_handoff
     )
 
     post(
@@ -105,8 +98,6 @@ defmodule SymphonyElixirWeb.Router do
     match(:*, "/api/v1/sympp/operator/work-packages/:work_package_id/blockers/:blocker_id/clear", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-packages/:work_package_id/archive", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/github/sync-prs", ObservabilityApiController, :method_not_allowed)
-    match(:*, "/api/v1/sympp/operator/work-packages/:work_package_id/focus", ObservabilityApiController, :method_not_allowed)
-    match(:*, "/api/v1/sympp/operator/work-requests/:work_request_id/focus", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-packages/:work_package_id", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/solo-sessions/:solo_session_id", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-requests", ObservabilityApiController, :method_not_allowed)
@@ -114,6 +105,7 @@ defmodule SymphonyElixirWeb.Router do
     match(:*, "/api/v1/sympp/operator/work-requests/:work_request_id/archive", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-requests/:work_request_id/delete", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-requests/:work_request_id/restore", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/sympp/operator/work-requests/:work_request_id/release", ObservabilityApiController, :method_not_allowed)
 
     post("/api/v1/refresh", ObservabilityApiController, :refresh)
     match(:*, "/api/v1/refresh", ObservabilityApiController, :method_not_allowed)

@@ -31,7 +31,7 @@ test('agents are Live only after a fresh matching helper check, else last seen, 
   assert.equal(worker([binding], fresh, NOW + J.LIVE_FOR + 2000).state, 'seen', 'a check goes stale');
   assert.equal(worker([binding], {}).at, NOW - 3 * 60e3, 'last seen is the active run heartbeat');
   const people = J.participants(job, [], {}, NOW);
-  assert.deepEqual(people.find((p) => p.role === 'Architect'), { key: 'architect', role: 'Architect', subject: null, provider: null, state: 'seen', at: NOW - 20 * 60e3, where: 'Herdr' });
+  assert.deepEqual(people.find((p) => p.role === 'Architect'), { key: 'architect', role: 'Architect', subject: null, provider: null, state: 'seen', at: NOW - 20 * 60e3, where: 'build-desk/t4' });
   assert.equal(people.find((p) => p.pkgId === 'wp-queued'), undefined, 'queued work has no worker yet');
   const review = people.find((p) => p.role === 'Review');
   assert.deepEqual(review, { key: 'review:review_suite:fast', role: 'Review', provider: 'Review suite · fast', reviewing: 1, state: 'provider' });

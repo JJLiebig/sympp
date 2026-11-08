@@ -5,8 +5,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorAudit do
 
   import Ecto.Changeset
 
-  alias SymphonyElixir.SymphonyPlusPlus.Authorization.Target
   alias SymphonyElixir.SymphonyPlusPlus.Id
+  alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit.Target
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
 
   @primary_key {:id, :string, autogenerate: false}

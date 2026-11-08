@@ -55,7 +55,7 @@ function Write-Usage {
   Write-Host "  SYMPP_FRONTEND_STARTUP_TIMEOUT_SEC   Frontend startup wait. Defaults to 20."
   Write-Host "  SYMPP_MCP_HTTP_TIMEOUT_SEC           Per-request bridge timeout. Defaults to 300."
   Write-Host "  SYMPP_STARTUP_LOCK_TIMEOUT_SEC       Local startup lock wait. Defaults to the configured startup waits plus 30 seconds, with a 120-second floor."
-  Write-Host "  SYMPP_MCP_CLIENT_HEARTBEAT_SEC       Bridge client lease heartbeat interval. Defaults to 300; max 540."
+  Write-Host "  SYMPP_MCP_CLIENT_HEARTBEAT_SEC       Bridge client lease heartbeat interval. Defaults to 60; max 540."
   Write-Host ""
   Write-Host "Installed skills use their bundled launcher and published stable runtime."
 }
@@ -653,7 +653,6 @@ function Invoke-McpPostWithLeaseHeartbeat([string]$Url, [string]$Body, [string]$
 }
 
 function Invoke-McpPost([string]$Url, [string]$Body, [string]$SessionId, [string]$ProtocolVersion, [int]$TimeoutSec, [string]$LeaseClientId = $null, [int]$LeaseHeartbeatIntervalMs = 0) {
-  $Body = Add-SymppSessionLocation $Body
   if (-not [string]::IsNullOrWhiteSpace($LeaseClientId) -and $LeaseHeartbeatIntervalMs -gt 0) {
     return Invoke-McpPostWithLeaseHeartbeat $Url $Body $SessionId $ProtocolVersion $TimeoutSec $LeaseClientId $LeaseHeartbeatIntervalMs
   }
@@ -2485,7 +2484,7 @@ if (-not $ValidateOnly -and -not $PrepareRuntimeOnly -and $bridgeMode -eq "http"
   $warmBackendPort = Get-EnvInteger "SYMPP_BACKEND_PORT" $DefaultBackendPort 0 65535
   $warmDashboardPort = Get-EnvInteger "SYMPP_DASHBOARD_PORT" $DefaultDashboardPort 0 65535
   $warmBridgeTimeout = Get-EnvInteger "SYMPP_MCP_HTTP_TIMEOUT_SEC" 300 1 3600
-  $warmHeartbeatInterval = Get-EnvInteger "SYMPP_MCP_CLIENT_HEARTBEAT_SEC" 300 5 540
+  $warmHeartbeatInterval = Get-EnvInteger "SYMPP_MCP_CLIENT_HEARTBEAT_SEC" 60 5 540
   if (Invoke-WarmAttachFromRuntimeState $runtimeFile $pluginRoot $warmBackendPort $warmDashboardPort $warmBackendPortExplicit $warmDashboardPortExplicit $env:SYMPP_BACKEND_URL $env:SYMPP_DASHBOARD_ORIGIN $warmBridgeTimeout $warmHeartbeatInterval) {
     exit 0
   }
@@ -2596,7 +2595,7 @@ $backendPortReleaseTimeout = Get-EnvInteger "SYMPP_BACKEND_PORT_RELEASE_TIMEOUT_
 $frontendInstallTimeout = Get-EnvInteger "SYMPP_FRONTEND_INSTALL_TIMEOUT_SEC" 180 1 1800
 $frontendTimeout = Get-EnvInteger "SYMPP_FRONTEND_STARTUP_TIMEOUT_SEC" 20 1 600
 $bridgeTimeout = Get-EnvInteger "SYMPP_MCP_HTTP_TIMEOUT_SEC" 300 1 3600
-$clientHeartbeatInterval = Get-EnvInteger "SYMPP_MCP_CLIENT_HEARTBEAT_SEC" 300 5 540
+$clientHeartbeatInterval = Get-EnvInteger "SYMPP_MCP_CLIENT_HEARTBEAT_SEC" 60 5 540
 $startupLockMinimum = 30
 if ($autostartBackend) {
   $startupLockMinimum += ($elixirSetupTimeout * 2)

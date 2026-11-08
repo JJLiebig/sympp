@@ -1,44 +1,30 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
   use ExUnit.Case, async: false
 
-  import Ecto.Query, only: [from: 2]
   import ExUnit.CaptureLog
   import Phoenix.ConnTest
   import Plug.Conn, only: [get_resp_header: 2, put_req_header: 3]
 
   alias Phoenix.Endpoint.RenderErrors
 
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Assignment
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
-  alias SymphonyElixir.SymphonyPlusPlus.Chiefs.Registration
-  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
-  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service, as: ClaimLeaseService
-
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     ClientLeases,
-    Config,
     FailedCall,
-    HerdrBinding,
-    HTTPStateStore,
-    Session,
-    SessionBinding,
-    SessionRecovery
+    HTTPStateStore
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Server
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.Repo.MigrationFileLock
-  alias SymphonyElixir.SymphonyPlusPlus.SessionLocations
-  alias SymphonyElixir.SymphonyPlusPlus.SessionLocations.Location
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Repository, as: SoloSessionRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.WorkPackageFactory
   alias SymphonyElixirWeb.Endpoint
@@ -66,46 +52,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     def config, do: [hostname: "ledger-http.example.test", port: 15_432, database: "sympp"]
     def query("PRAGMA database_list", _params, _opts), do: {:error, :unsupported}
     def query(_sql, _params, _opts), do: {:ok, %{rows: [[1]]}}
-  end
-
-  defmodule LocationBusyRepo do
-    def get_by(_schema, _filters), do: raise("database busy")
-  end
-
-  test "optional location storage cannot turn a successful tool call into a retry" do
-    server = %Server{config: Config.default(repo: LocationBusyRepo), session: claimed_session()}
-    payload = tool_call_request("location-busy", "get_current_assignment", %{}) |> with_location("busy-client", "build-desk", %{})
-    response = %{"result" => %{"structuredContent" => %{}}}
-    assert SessionLocations.observe(payload, response, server) == server
-  end
-
-  test "successful native tool observations retain separate terminal and MCP process identities" do
-    id = "native-location-#{System.unique_integer([:positive])}"
-    server = %Server{config: Config.default(repo: Repo)}
-
-    native = %{
-      "core_id" => "core-one",
-      "terminal_id" => "t8",
-      "pid" => 123,
-      "process_id" => 456,
-      "client_id" => "client-native",
-      "process_liveness_token" => "private-token",
-      "socket_path" => "private-selector"
-    }
-
-    payload = tool_call_request("native-location", "create_work_request", %{}) |> with_location("client-native", "build-desk", native)
-    response = %{"result" => %{"structuredContent" => %{"work_request" => %{"id" => id}}}}
-
-    assert SessionLocations.observe(payload, response, server).client_location["herdr"] == native
-    location = SessionLocations.get(Repo, "work_request", id)
-    assert location.source == "herdr_next"
-    assert location.herdr["pid"] == 123
-    assert location.herdr["process_id"] == 456
-    public = SessionLocations.public(location, %{})
-    assert public["herdr"]["core_id"] == "core-one"
-    assert public["herdr"]["terminal_id"] == "t8"
-    refute inspect(public) =~ "private-"
-    refute Map.has_key?(location.herdr, "process_liveness_token")
   end
 
   setup_all do
@@ -145,8 +91,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     if Process.whereis(HTTPStateStore) == nil, do: start_supervised!(HTTPStateStore)
     HTTPStateStore.reset!()
     Repo.delete_all(OperatorSettings)
-    Repo.delete_all(Location)
-    Repo.delete_all(Registration)
+    Repo.delete_all(WorkedOn)
     FailedCall.reset()
     :ok
   end
@@ -241,7 +186,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
         assert get_local(path, [{"authorization", "Bearer wrong"}], remote).status == 401
       end
 
-      for path <- ["/api/v1/sympp/operator/settings", "/api/v1/sympp/operator/work-requests/example/archive", "/api/v1/sympp/operator/work-requests/example/focus", "/mcp/client-lease"] do
+      for path <- ["/api/v1/sympp/operator/settings", "/api/v1/sympp/operator/work-requests/example/archive", "/api/v1/sympp/operator/work-requests/example/release", "/mcp/client-lease"] do
         assert post_json(%{}, [], Keyword.put(remote, :path, path)).status == 401
       end
     end
@@ -307,137 +252,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     end
   end
 
-  test "chief registration supersedes by domain and attributes only the current session's work" do
-    first = [{"mcp-session-id", unbound_startup_handshake(1)}]
-    native = %{"core_id" => "core-chief", "terminal_id" => "t9", "pid" => 321, "process_id" => 654, "client_id" => "chief-client"}
-    claims_before = Repo.aggregate(ClaimLease, :count)
-
-    registration =
-      tool_call_request("chief", "register_chief", %{"domain" => " Kraken ", "repos" => ["nextide/example"], "future_field" => true})
-      |> with_location("chief-client", "build-desk", native)
-      |> post_json(first)
-
-    [binding] = get_resp_header(registration, "sympp-herdr-binding")
-    assert binding |> Base.url_decode64!(padding: false) |> Jason.decode!() == %{"role" => "chief", "domain" => "Kraken"}
-    registered = json_response(registration, 200)
-    chief_id = get_in(registered, ["result", "structuredContent", "chief", "id"])
-    assert is_binary(chief_id)
-    assert Repo.aggregate(ClaimLease, :count) == claims_before
-    assert SessionLocations.get(Repo, "chief", chief_id).role == "chief"
-
-    denied = chief_call(first, "dispatch_work_package", %{"work_request_id" => "not-owned", "work_package_id" => "not-owned"})
-    assert denied["error"]
-
-    request_args = %{
-      "repo" => "nextide/example",
-      "base_branch" => "main",
-      "title" => "Chief work",
-      "request_kind" => "docs",
-      "description" => "A bounded chief request",
-      "workflow_mode" => "single_package",
-      "creator_name" => "original-agent"
-    }
-
-    created = chief_call(first, "create_work_request", request_args)
-    request_id = get_in(created, ["result", "structuredContent", "work_request", "id"])
-    assert is_binary(request_id)
-    attribution = %{"kind" => "chief", "domain" => "Kraken"}
-    request = Repo.get!(SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest, request_id)
-    assert request.dispatched_by == attribution
-    assert request.creator_name == "original-agent"
-
-    sliced =
-      chief_call(first, "slice_work_request", %{
-        "work_request_id" => request_id,
-        "work_packages" => [
-          WorkPackageFactory.attrs(goal: "Deliver chief work", allowed_file_globs: ["docs/**"], validation_steps: [], stop_conditions: []),
-          WorkPackageFactory.attrs(goal: "Deliver more chief work", allowed_file_globs: ["docs/**"], validation_steps: [], stop_conditions: [])
-        ]
-      })
-
-    assert sliced["result"], inspect(sliced)
-    assert [one, two] = get_in(sliced, ["result", "structuredContent", "work_package_ids"])
-    dispatched = chief_call(first, "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => one})
-    assert dispatched["result"]
-    assert Repo.get!(WorkPackage, one).dispatched_by == attribution
-
-    board = get_local("/api/v1/sympp/herdr/dashboard") |> json_response(200)
-    assert [%{"domain" => "Kraken", "repos" => ["nextide/example"], "session_location" => location}] = board["chiefs"]
-    assert location["role"] == "chief"
-    assert location["source"] == "herdr_next"
-    assert location["herdr"] == native
-
-    second = [{"mcp-session-id", unbound_startup_handshake(2)}]
-    replacement = chief_call(second, "register_chief", %{"domain" => "KRAKEN", "session_description" => "Terminal: new chief"})
-    assert get_in(replacement, ["result", "structuredContent", "chief", "id"]) != chief_id
-    assert Repo.get!(Registration, chief_id).superseded_at
-    assert Repo.aggregate(Registration, :count) == 2
-
-    assert chief_call(first, "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => two})["result"]
-    assert Repo.get!(WorkPackage, two).dispatched_by == nil
-    plain_headers = [{"mcp-session-id", unbound_startup_handshake(3)}]
-    plain = chief_call(plain_headers, "create_work_request", request_args)
-    plain_id = get_in(plain, ["result", "structuredContent", "work_request", "id"])
-    assert Repo.get!(SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest, plain_id).dispatched_by == nil
-
-    current = chief_call(second, "create_work_request", request_args)
-    current_id = get_in(current, ["result", "structuredContent", "work_request", "id"])
-    assert Repo.get!(SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest, current_id).dispatched_by == %{"kind" => "chief", "domain" => "KRAKEN"}
-
-    board = get_local("/api/v1/sympp/herdr/dashboard") |> json_response(200)
-    assert [%{"domain" => "KRAKEN", "repos" => [], "session_location" => current_location}] = board["chiefs"]
-    assert current_location["role"] == "chief"
-    assert current_location["description"] == "Terminal: new chief"
-    refute Map.has_key?(current_location, "live")
-    board_request = Enum.find(board["work_request_details"], &(&1["work_request"]["id"] == request_id))
-    assert board_request["work_request"]["dispatched_by"] == attribution
-
-    detail = get_local("/api/v1/sympp/herdr/work-requests/#{request_id}") |> json_response(200)
-    assert detail["work_request"]["dispatched_by"] == attribution
-    assert Enum.find(detail["work_packages"], &(&1["id"] == one))["dispatched_by"] == attribution
-    assert get_local("/api/v1/sympp/herdr/dashboard", [], remote_ip: {10, 0, 0, 2}) |> response(401)
-  end
-
-  test "chief registration rejects invalid inputs and untrusted transports", %{database_path: database} do
-    headers = [{"mcp-session-id", unbound_startup_handshake(1)}]
-
-    for arguments <- [%{"domain" => " "}, %{"domain" => "Kraken", "repos" => "not-an-array"}, %{"domain" => "Kraken", "repos" => [42]}] do
-      assert chief_call(headers, "register_chief", arguments)["error"]["code"] == -32_602
-    end
-
-    assert Repo.aggregate(Registration, :count) == 0
-
-    for config <- [Config.default(repo: Repo), Config.default(mode: :http, repo: Repo, database: database)] do
-      server = Server.new(config, initialized: true, state_key: Ecto.UUID.generate())
-      result = Server.handle(tool_call_request("untrusted-chief", "register_chief", %{"domain" => "Kraken"}), server)
-      assert result["error"]["code"] == -32_001
-    end
-
-    config = Config.default(mode: :http, repo: Repo, database: database, local_daemon_trusted: true)
-
-    for profile <- [:worker, :solo] do
-      server = Server.new(%{config | surface_profile: profile}, initialized: true, state_key: Ecto.UUID.generate())
-      result = Server.handle(tool_call_request("non-chief-role", "register_chief", %{"domain" => "Kraken"}), server)
-      assert result["error"]["code"] == -32_001
-    end
-
-    claims_before = Repo.aggregate(ClaimLease, :count)
-
-    for profile <- [:architect, :coordinator] do
-      server = Server.new(%{config | surface_profile: profile}, initialized: true, state_key: Ecto.UUID.generate())
-      result = Server.handle(tool_call_request("chief-role", "register_chief", %{"domain" => "Kraken"}), server)
-      assert get_in(result, ["result", "structuredContent", "chief", "domain"]) == "Kraken"
-    end
-
-    assert Repo.aggregate(ClaimLease, :count) == claims_before
-  end
-
-  test "ten architect sessions dispatch distinct packages concurrently and duplicate dispatch returns an MCP error" do
+  test "ten MCP sessions in the owning terminal dispatch distinct packages concurrently and duplicate dispatch returns an MCP error" do
     init = post_json(initialize_request("dispatch-init"))
     headers = [{"mcp-session-id", hd(get_resp_header(init, "mcp-session-id"))}]
 
     created =
-      chief_call(headers, "create_work_request", %{
+      terminal_call(headers, "t1", "create_work_request", %{
         "repo" => "nextide/example",
         "base_branch" => "main",
         "title" => "Concurrent dispatch",
@@ -450,7 +270,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     assert is_binary(request_id), inspect(created)
 
     sliced =
-      chief_call(headers, "slice_work_request", %{
+      terminal_call(headers, "t1", "slice_work_request", %{
         "work_request_id" => request_id,
         "work_packages" =>
           Enum.map(1..11, fn n ->
@@ -461,24 +281,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     [blocked_id | package_ids] = get_in(sliced, ["result", "structuredContent", "work_package_ids"])
     assert length(package_ids) == 10
 
-    initial_claim = chief_call(headers, "claim_local_architect_assignment", %{"work_request_id" => request_id})
-    owner = get_in(initial_claim, ["result", "structuredContent", "local_claim", "claimed_by"])
-    assert is_binary(owner), inspect(initial_claim)
-
+    # Each agent restart or reconnect in the owning terminal opens its own MCP session.
     clients =
       Enum.map(package_ids, fn package_id ->
         conn = post_json(initialize_request(Ecto.UUID.generate()))
-        client = [{"mcp-session-id", hd(get_resp_header(conn, "mcp-session-id"))}]
-        claim = chief_call(client, "claim_local_architect_assignment", %{"work_request_id" => request_id, "claimed_by" => owner})
-        assert claim["result"], inspect(claim)
-        {client, package_id}
+        {[{"mcp-session-id", hd(get_resp_header(conn, "mcp-session-id"))}], package_id}
       end)
 
     tasks =
       Enum.map(clients, fn {client, package_id} ->
         Task.async(fn ->
           receive do: (:dispatch -> :ok)
-          result = chief_call(client, "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => package_id})
+          result = terminal_call(client, "t1", "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => package_id})
           assert result["result"], inspect(result)
           refute result["result"]["isError"], inspect(result)
         end)
@@ -489,19 +303,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
     for package_id <- package_ids do
       assert Repo.get!(WorkPackage, package_id).status == "dispatched"
-
-      worker_grants =
-        from(grant in AccessGrant,
-          where: grant.work_package_id == ^package_id,
-          where: grant.grant_role == "worker"
-        )
-
-      assert Repo.aggregate(worker_grants, :count) == 1
     end
 
     {client, package_id} = hd(clients)
-    duplicate = chief_call(client, "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => package_id})
+    duplicate = terminal_call(client, "t1", "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => package_id})
     assert duplicate["error"]["data"]["reason"] == "invalid_work_package_status"
+
+    other_terminal = terminal_call(client, "t2", "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => blocked_id})
+    assert other_terminal["error"]["data"]["reason"] == "owned_by_other_terminal"
 
     parent = self()
 
@@ -519,7 +328,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     assert_receive :writer_locked
 
     try do
-      busy = chief_call(client, "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => blocked_id})
+      busy = terminal_call(client, "t1", "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => blocked_id})
       assert busy["error"]["data"]["reason"] == "database_busy"
       assert busy["error"]["data"]["remediation"] =~ "Read the WorkPackage status"
     after
@@ -530,9 +339,87 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     assert Repo.get!(WorkPackage, blocked_id).status == "planned"
   end
 
-  defp chief_call(headers, name, arguments) do
-    tool_call_request(Ecto.UUID.generate(), name, arguments) |> post_json(headers) |> json_response(200)
+  test "the Herdr binding header follows owner-gated writes, never reads" do
+    init = post_json(initialize_request("binding-init"))
+    headers = [{"mcp-session-id", hd(get_resp_header(init, "mcp-session-id"))}]
+
+    created =
+      tool_call_request("create", "create_work_request", %{
+        "repo" => "nextide/example",
+        "base_branch" => "main",
+        "title" => "Binding",
+        "request_kind" => "docs",
+        "description" => "Label the owning pane"
+      })
+      |> with_terminal("t1")
+      |> post_json(headers)
+
+    request_id = get_in(json_response(created, 200), ["result", "structuredContent", "work_request", "id"])
+    assert herdr_binding(created) == %{"role" => "architect", "work_request_id" => request_id, "show_inspector" => true}
+
+    read =
+      tool_call_request("read", "read_work_request", %{"work_request_id" => request_id})
+      |> with_terminal("t2")
+      |> post_json(headers)
+
+    assert json_response(read, 200)["result"]
+    assert get_resp_header(read, "sympp-herdr-binding") == []
+
+    refused =
+      tool_call_request("report", "set_report", %{"work_request_id" => request_id, "brief" => "Not mine"})
+      |> with_terminal("t2")
+      |> post_json(headers)
+
+    assert json_response(refused, 200)["error"]["data"]["reason"] == "owned_by_other_terminal"
+    assert get_resp_header(refused, "sympp-herdr-binding") == []
+
+    # A write naming only the package binds the terminal to the package's WorkRequest.
+    sliced =
+      terminal_call(headers, "t1", "slice_work_request", %{
+        "work_request_id" => request_id,
+        "work_packages" => [WorkPackageFactory.attrs(goal: "Bind by package", allowed_file_globs: ["docs/**"], validation_steps: [], stop_conditions: [])]
+      })
+
+    [package_id] = get_in(sliced, ["result", "structuredContent", "work_package_ids"])
+
+    progress =
+      tool_call_request("progress", "append_progress", %{"work_package_id" => package_id, "summary" => "Started", "idempotency_key" => "bind-1"})
+      |> with_terminal("t1")
+      |> post_json(headers)
+
+    assert json_response(progress, 200)["result"]
+    assert herdr_binding(progress)["work_request_id"] == request_id
   end
+
+  test "a clean bridge detach ends its terminal's ownership" do
+    {:ok, work_request} = WorkRequestRepository.create(Repo, work_request_attrs(%{}))
+    terminal = Terminal.from_meta(terminal_meta("t4"))
+    assert {:ok, _row, :acquired} = Ownership.acquire(Repo, work_request.id, terminal)
+    lease = %{"client_id" => "bridge-detach-test", "terminal" => terminal_meta("t4")}
+
+    for action <- ["attach", "heartbeat"] do
+      assert %{"status" => "ok"} = json_response(post_json(Map.put(lease, "action", action), [], path: "/mcp/client-lease"), 200)
+    end
+
+    assert ClientLeases.terminal_live?(terminal.key)
+    assert Ownership.public(Ownership.owner(Repo, work_request.id))["liveness"] == "live"
+
+    assert %{"status" => "ok"} = json_response(post_json(Map.put(lease, "action", "detach"), [], path: "/mcp/client-lease"), 200)
+    refute ClientLeases.terminal_live?(terminal.key)
+    assert Ownership.owner(Repo, work_request.id) == nil
+  end
+
+  defp terminal_call(headers, terminal, name, arguments) do
+    Ecto.UUID.generate()
+    |> tool_call_request(name, arguments)
+    |> with_terminal(terminal)
+    |> post_json(headers)
+    |> json_response(200)
+  end
+
+  defp terminal_meta(address), do: %{"core_id" => "endpoint-core", "core_name" => "testbox", "terminal_id" => address}
+
+  defp with_terminal(payload, address), do: put_in(payload, ["params", "_meta"], %{"herdr" => terminal_meta(address)})
 
   test "POST /mcp starts the HTTP state store when endpoint runtime omitted it" do
     restore_mode = remove_http_state_store_for_test()
@@ -595,7 +482,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       assert_receive {:startup_ready, ^pid}, 5_000
     end)
 
-    session_ids =
+    _session_ids =
       try do
         {results, query_count} =
           count_queries(fn ->
@@ -619,9 +506,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
         send(repo_holder_pid, :release_repo)
         assert {:ok, :ok} = Task.await(repo_holder, 5_000)
       end
-
-    binding_ids = Enum.map(session_ids, &SessionBinding.binding_id(@client_key, &1))
-    assert Repo.aggregate(from(binding in SessionBinding, where: binding.id in ^binding_ids), :count) == 0
   end
 
   test "readiness creates no transport state and rejects a non-loopback peer", %{database_path: database_path} do
@@ -655,7 +539,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
              "local_only"
   end
 
-  test "steady HTTP health requests perform no SQLite work inside the recovery heartbeat" do
+  test "steady HTTP health requests perform no SQLite work" do
     init = post_json(initialize_request("steady-health-init"))
     [session_id] = get_resp_header(init, "mcp-session-id")
 
@@ -709,332 +593,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     assert "sympp.health" in tool_names(json_response(conn, 200))
   end
 
-  test "failed assignment release keeps the active Herdr binding" do
-    response = %{
-      "jsonrpc" => "2.0",
-      "id" => "release",
-      "result" => %{
-        "structuredContent" => %{
-          "action" => "release_current_assignment",
-          "binding_cleared" => false
-        }
-      }
-    }
-
-    binding =
-      HerdrBinding.response_binding(
-        tool_call_request("release", "release_current_assignment", %{"reason" => "done"}),
-        response,
-        %Server{config: nil, session: claimed_session()}
-      )
-
-    assert binding["role"] == "worker"
-    assert binding["work_package_id"] == "SYMPP-MCP-HTTP"
-    assert binding["show_inspector"] == false
-  end
-
-  test "batch assignment release clears the Herdr binding" do
-    payload = [tool_call_request("release", "release_current_assignment", %{"reason" => "done"})]
-
-    response = [
-      %{
-        "jsonrpc" => "2.0",
-        "id" => "release",
-        "result" => %{
-          "structuredContent" => %{
-            "action" => "release_current_assignment",
-            "binding_cleared" => true
-          }
-        }
-      }
-    ]
-
-    assert HerdrBinding.response_binding(payload, response, %Server{config: nil}) == :clear
-  end
-
-  test "assignment release notifications clear the Herdr binding from final server state" do
-    notification = %{
-      "jsonrpc" => "2.0",
-      "method" => "tools/call",
-      "params" => %{"name" => "release_current_assignment", "arguments" => %{"reason" => "done"}}
-    }
-
-    assert HerdrBinding.response_binding(notification, nil, %Server{config: nil}) == :clear
-    assert HerdrBinding.response_binding(notification, nil, %Server{config: nil, session: claimed_session()}) == nil
-  end
-
-  test "bound batch metadata ignores unrelated WorkRequest calls" do
-    payload = [
-      tool_call_request("read", "read_work_request", %{"detail" => "full", "work_request_id" => "WR-UNRELATED"}),
-      tool_call_request("claim", "claim_local_assignment", %{"work_package_id" => "SYMPP-MCP-HTTP"})
-    ]
-
-    response = [
-      %{"jsonrpc" => "2.0", "id" => "read", "result" => %{"structuredContent" => %{"work_request_id" => "WR-UNRELATED"}}},
-      %{"jsonrpc" => "2.0", "id" => "claim", "result" => %{"structuredContent" => %{"status" => "claimed"}}}
-    ]
-
-    binding = HerdrBinding.response_binding(payload, response, %Server{config: nil, session: claimed_session()})
-
-    refute Map.has_key?(binding, "work_request_id")
-    assert binding["work_package_id"] == "SYMPP-MCP-HTTP"
-  end
-
-  test "near-expiry secretless binding refreshes on recovery without replacing its claim" do
-    package_id = "SYMPP-HTTP-REHYDRATE-WORKER"
-
-    assert {:ok, work_package} =
-             WorkPackageRepository.create(
-               Repo,
-               WorkPackageFactory.attrs(
-                 id: package_id,
-                 kind: "mcp",
-                 repo: "nextide/symphony-plus-plus",
-                 base_branch: "main",
-                 branch_pattern: "agent/#{package_id}/worker",
-                 worktree_path: local_claim_worktree_path(package_id),
-                 status: "dispatched"
-               )
-             )
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(Repo, work_package.id)
-
-    init = post_json(initialize_request("local-worker-init"))
-    [session_id] = get_resp_header(init, "mcp-session-id")
-
-    claim =
-      post_json(
-        tool_call_request(
-          "local-worker-claim",
-          "claim_local_assignment",
-          local_assignment_claim_args(work_package, %{
-            "caller_id" => "codex-http-rehydrate-worker",
-            "claimed_by" => "local-worker-http-rehydrate"
-          })
-        ),
-        [{"mcp-session-id", session_id}]
-      )
-
-    claim_payload = get_in(json_response(claim, 200), ["result", "structuredContent"])
-    assert get_in(claim_payload, ["assignment", "work_package_id"]) == work_package.id
-    assert get_in(claim_payload, ["local_claim", "claim_lease_action"]) == "created"
-    claim_lease_id = get_in(claim_payload, ["local_claim", "claim_lease_id"])
-
-    binding = Repo.get!(SessionBinding, SessionBinding.binding_id(@client_key, session_id))
-    assert binding.recoverable
-    refute inspect(binding) =~ minted.work_key.secret
-    refute inspect(binding) =~ minted.grant.secret_hash
-
-    near_expiry_seen_at = DateTime.add(DateTime.utc_now(:microsecond), -82_800_000, :millisecond)
-
-    assert {1, nil} =
-             Repo.update_all(
-               from(stored_binding in SessionBinding, where: stored_binding.id == ^binding.id),
-               set: [last_seen_at: near_expiry_seen_at]
-             )
-
-    reset_mcp_runtime_state()
-
-    assignment =
-      post_json(tool_call_request("local-worker-assignment", "get_current_assignment", %{}), [{"mcp-session-id", session_id}])
-
-    assert get_in(json_response(assignment, 200), ["result", "structuredContent", "assignment", "work_package_id"]) == work_package.id
-    assert DateTime.compare(Repo.get!(SessionBinding, binding.id).last_seen_at, near_expiry_seen_at) == :gt
-
-    assert [%ClaimLease{id: ^claim_lease_id, actor_display_name: "local-worker-http-rehydrate"}] = active_claim_leases(work_package.id)
-    assert %Server{session: %Session{assignment: %{work_package_id: ^package_id}}} = stored_http_server()
-  end
-
-  test "POST /mcp clears stale recovery binding when local claim metadata cannot be verified" do
-    package_id = "SYMPP-HTTP-STALE-BIND"
-
-    assert {:ok, work_package} =
-             WorkPackageRepository.create(
-               Repo,
-               WorkPackageFactory.attrs(
-                 id: package_id,
-                 kind: "mcp",
-                 repo: "nextide/symphony-plus-plus",
-                 base_branch: "main",
-                 branch_pattern: "agent/#{package_id}/worker",
-                 worktree_path: local_claim_worktree_path(package_id),
-                 status: "dispatched"
-               )
-             )
-
-    assert {:ok, _minted} = AccessGrantService.mint_worker_grant(Repo, work_package.id)
-
-    init = post_json(initialize_request("stale-binding-init"))
-    [session_id] = get_resp_header(init, "mcp-session-id")
-
-    claim =
-      post_json(
-        tool_call_request(
-          "stale-binding-claim",
-          "claim_local_assignment",
-          local_assignment_claim_args(work_package, %{
-            "caller_id" => "codex-http-stale-binding-worker",
-            "claimed_by" => "local-worker-http-stale-binding"
-          })
-        ),
-        [{"mcp-session-id", session_id}]
-      )
-
-    claim_payload = get_in(json_response(claim, 200), ["result", "structuredContent"])
-    assert get_in(claim_payload, ["assignment", "work_package_id"]) == work_package.id
-    claim_lease_id = get_in(claim_payload, ["local_claim", "claim_lease_id"])
-
-    assert Repo.get!(SessionBinding, SessionBinding.binding_id(@client_key, session_id)).recoverable
-
-    stale_session =
-      Session.new(%Assignment{
-        grant_id: "grant-stale-binding",
-        work_package_id: work_package.id,
-        phase_id: nil,
-        display_key: work_package.id,
-        grant_role: "worker",
-        capabilities: ["read:assignment"],
-        claimed_at: DateTime.utc_now(:microsecond),
-        claimed_by: "different-worker"
-      })
-
-    config = Config.default(mode: :http, repo: Repo, local_daemon_trusted: true)
-
-    SessionRecovery.remember(
-      config,
-      @client_key,
-      session_id,
-      tool_call_request("stale-binding-unverified-claim", "claim_local_assignment", %{}),
-      Server.new(config, initialized: true, local_daemon_trusted: true, session: stale_session, state_key: session_id),
-      %{
-        "result" => %{
-          "structuredContent" => %{
-            "assignment" => %{"work_package_id" => work_package.id},
-            "local_claim" => %{"claim_lease_id" => claim_lease_id}
-          }
-        }
-      }
-    )
-
-    binding = Repo.get!(SessionBinding, SessionBinding.binding_id(@client_key, session_id))
-    refute binding.recoverable
-    assert binding.access_grant_id == nil
-    assert binding.claim_lease_id == nil
-
-    reset_mcp_runtime_state()
-
-    assignment =
-      post_json(tool_call_request("stale-binding-assignment", "get_current_assignment", %{}), [{"mcp-session-id", session_id}])
-
-    assignment_payload = get_in(json_response(assignment, 200), ["result", "structuredContent"])
-    assert assignment_payload["assignment"] == nil
-    assert get_in(assignment_payload, ["binding", "state"]) == "unbound"
-    assert assignment_payload["next_action"] == "claim_assignment"
-    assert [%ClaimLease{id: ^claim_lease_id, actor_display_name: "local-worker-http-stale-binding"}] = active_claim_leases(work_package.id)
-  end
-
-  test "POST /mcp refreshes stale durable binding before cleanup" do
-    package_id = "SYMPP-HTTP-STALE-TOUCH"
-
-    assert {:ok, work_package} =
-             WorkPackageRepository.create(
-               Repo,
-               WorkPackageFactory.attrs(
-                 id: package_id,
-                 kind: "mcp",
-                 repo: "nextide/symphony-plus-plus",
-                 base_branch: "main",
-                 branch_pattern: "agent/#{package_id}/worker",
-                 worktree_path: local_claim_worktree_path(package_id),
-                 status: "dispatched"
-               )
-             )
-
-    assert {:ok, _minted} = AccessGrantService.mint_worker_grant(Repo, work_package.id)
-
-    init = post_json(initialize_request("stale-touch-init"))
-    [session_id] = get_resp_header(init, "mcp-session-id")
-
-    claim =
-      post_json(
-        tool_call_request(
-          "stale-touch-claim",
-          "claim_local_assignment",
-          local_assignment_claim_args(work_package, %{
-            "caller_id" => "codex-http-stale-touch-worker",
-            "claimed_by" => "local-worker-http-stale-touch"
-          })
-        ),
-        [{"mcp-session-id", session_id}]
-      )
-
-    assert get_in(json_response(claim, 200), ["result", "structuredContent", "assignment", "work_package_id"]) == work_package.id
-
-    binding_id = SessionBinding.binding_id(@client_key, session_id)
-    stale_seen_at = DateTime.add(DateTime.utc_now(:microsecond), -172_800_000, :millisecond)
-
-    assert {1, nil} =
-             Repo.update_all(
-               from(binding in SessionBinding, where: binding.id == ^binding_id),
-               set: [last_seen_at: stale_seen_at]
-             )
-
-    :sys.replace_state(HTTPStateStore, fn state ->
-      due = System.monotonic_time(:millisecond) - 1
-      %{state | deadlines: Map.new(state.deadlines, fn {key, _deadline} -> {key, due} end)}
-    end)
-
-    touch =
-      post_json(tool_call_request("stale-touch-assignment", "get_current_assignment", %{}), [{"mcp-session-id", session_id}])
-
-    assert get_in(json_response(touch, 200), ["result", "structuredContent", "assignment", "work_package_id"]) == work_package.id
-    assert DateTime.compare(Repo.get!(SessionBinding, binding_id).last_seen_at, stale_seen_at) == :gt
-
-    reset_mcp_runtime_state()
-
-    assignment =
-      post_json(tool_call_request("stale-touch-rehydrated-assignment", "get_current_assignment", %{}), [{"mcp-session-id", session_id}])
-
-    assert get_in(json_response(assignment, 200), ["result", "structuredContent", "assignment", "work_package_id"]) == work_package.id
-  end
-
-  test "retained architect binding recovers a separately released lease after state reset" do
-    assert {:ok, work_request} =
-             WorkRequestRepository.create(
-               Repo,
-               work_request_attrs(%{
-                 id: "WR-HTTP-REHYDRATE-ARCHITECT"
-               })
-             )
-
-    assert {:ok, handoff} =
-             ArchitectHandoff.create_or_replay(Repo, work_request.id,
-               local_operator?: true,
-               handoff_opts: local_architect_handoff_opts()
-             )
-
-    init = post_json(initialize_request("local-architect-init"))
-    [session_id] = get_resp_header(init, "mcp-session-id")
-
-    claim =
-      post_json(
-        tool_call_request("local-architect-auto-claim", "upsert_group", %{"work_request_id" => work_request.id, "title" => "Auto claim"}),
-        [{"mcp-session-id", session_id}]
-      )
-
-    claim_payload = get_in(json_response(claim, 200), ["result", "structuredContent"])
-    assert is_binary(claim_payload["group"]["id"])
-    assert [%ClaimLease{id: claim_lease_id, actor_display_name: owner}] = active_claim_leases(handoff.anchor_package.id)
-
-    assert {:ok, _released} = ClaimLeaseService.release(Repo, claim_lease_id, reason: "connection recovery regression")
-    reset_mcp_runtime_state()
-
-    recovered = post_json(tool_call_request("local-architect-recover-scope", "upsert_group", %{"title" => "Recovered scope"}), [{"mcp-session-id", session_id}])
-    assert is_binary(get_in(json_response(recovered, 200), ["result", "structuredContent", "group", "id"]))
-    assert [%ClaimLease{id: replacement_id, actor_display_name: ^owner}] = active_claim_leases(handoff.anchor_package.id)
-    refute replacement_id == claim_lease_id
-  end
-
   test "cleanup startup and the first MCP write share the migration file lock" do
     database_path = WorkPackageFactory.database_path()
     workspace_path = solo_workspace_path("startup-migration")
@@ -1082,7 +640,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
                 "base_branch" => "beta",
                 "workspace_path" => workspace_path,
                 "caller_id" => "startup-test"
-              }),
+              })
+              |> with_terminal("t1"),
               [{"mcp-session-id", session_id}]
             )
           end)
@@ -1128,7 +687,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
             "base_branch" => "main",
             "workspace_path" => workspace_path,
             "caller_id" => "codex-local"
-          }),
+          })
+          |> with_terminal("t1"),
           [{"mcp-session-id", session_id}]
         )
 
@@ -1269,40 +829,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       assert get_in(json_response(version_resource, 200), ["result", "contents", Access.at(0), "uri"]) == "sympp://health/version"
       assert json_response(protected_resource, 503) == json_rpc_error("protected", -32_000, "Server error", "ledger_unavailable")
       assert get_in(json_response(unknown, 404), ["error", "data", "reason"]) == "unknown_state_key"
-    end)
-  end
-
-  test "POST /mcp routes claimed tools/list through the dashboard lazy repo seam" do
-    database_path = WorkPackageFactory.database_path()
-    mismatch_database_path = WorkPackageFactory.database_path()
-    original_repo_config = Application.get_env(:symphony_elixir, LazyHTTPRepo)
-    original_database = Application.get_env(:symphony_elixir, :sympp_repo_database)
-
-    Application.delete_env(:symphony_elixir, :sympp_repo_database)
-    Application.put_env(:symphony_elixir, LazyHTTPRepo, database: database_path)
-
-    on_exit(fn ->
-      if pid = Process.whereis(LazyHTTPRepo), do: GenServer.stop(pid, :normal, 5_000)
-      restore_app_env(LazyHTTPRepo, original_repo_config)
-      restore_sympp_repo_database(original_database)
-      File.rm(database_path)
-      File.rm(mismatch_database_path)
-    end)
-
-    with_endpoint_repo(LazyHTTPRepo, fn ->
-      init = post_json(initialize_request("init"))
-      [session_id] = get_resp_header(init, "mcp-session-id")
-      config = Config.default(mode: :http, repo: LazyHTTPRepo, database: database_path)
-      %Server{} = server = HTTPStateStore.get(config, @client_key, session_id)
-
-      assert :ok = HTTPStateStore.put(config, @client_key, session_id, %{server | session: claimed_session()})
-
-      {:ok, mismatch_repo} = LazyHTTPRepo.start_link(database: mismatch_database_path, pool_size: 1)
-      Process.unlink(mismatch_repo)
-
-      conn = post_json(tools_list_request("claimed-tools"), [{"mcp-session-id", session_id}])
-
-      assert json_response(conn, 503) == json_rpc_error("claimed-tools", -32_000, "Server error", "ledger_unavailable")
     end)
   end
 
@@ -1468,7 +994,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     end
   end
 
-  defp post_raw(body, headers \\ [], opts \\ []) do
+  defp post_raw(body, headers, opts) do
     headers = [{"content-type", "application/json"}, {"accept", "application/json, text/event-stream"} | headers]
     path = Keyword.get(opts, :path, "/mcp")
 
@@ -1478,7 +1004,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     |> post(path, body)
   end
 
-  defp local_conn(opts \\ []) do
+  defp local_conn(opts) do
     build_conn()
     |> Map.put(:host, Keyword.get(opts, :host, "localhost"))
     |> Map.put(:port, Keyword.get(opts, :port, 4000))
@@ -1552,26 +1078,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     end)
   end
 
-  defp stored_http_server do
-    %{entries: entries} = :sys.get_state(HTTPStateStore)
-
-    entries
-    |> Map.values()
-    |> Enum.map(fn {server, _touched_at} -> server end)
-    |> List.first()
-  end
-
   defp resource_uris(payload) do
     payload
     |> get_in(["result", "resources"])
     |> Enum.map(& &1["uri"])
     |> Enum.sort()
-  end
-
-  defp resource_payload(payload) do
-    payload
-    |> get_in(["result", "contents", Access.at(0), "text"])
-    |> Jason.decode!()
   end
 
   defp herdr_binding(conn) do
@@ -1584,58 +1095,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     |> Kernel.<>(padding)
     |> Base.decode64!()
     |> Jason.decode!()
-  end
-
-  defp local_assignment_claim_args(%WorkPackage{} = package, overrides) do
-    %{
-      "repo" => package.repo,
-      "base_branch" => package.base_branch,
-      "work_package_id" => package.id,
-      "branch" => package.branch_pattern,
-      "worktree_path" => package.worktree_path,
-      "caller_id" => "codex-local-http-test",
-      "claimed_by" => "local-worker-http"
-    }
-    |> Map.merge(overrides)
-  end
-
-  defp with_location(payload, client_id, machine_id, herdr) do
-    put_in(payload, ["params", "_meta"], %{
-      "sympp_session_location" => %{
-        "client_id" => client_id,
-        "machine_id" => machine_id,
-        "machine_label" => machine_id,
-        "herdr" => herdr,
-        "unknown_future_field" => true
-      }
-    })
-  end
-
-  defp local_claim_worktree_path(work_package_id) do
-    Path.expand(Path.join(System.tmp_dir!(), "sympp-http-local-claim-#{work_package_id}"))
-  end
-
-  defp local_architect_handoff_opts do
-    [
-      claimed_by: ArchitectHandoff.claimed_by(),
-      database: Repo.database_path(),
-      local_architect_claim?: true
-    ]
-  end
-
-  defp active_claim_leases(work_package_id) do
-    Repo.all(
-      from(claim_lease in ClaimLease,
-        where: claim_lease.work_package_id == ^work_package_id,
-        where: claim_lease.status in ^ClaimLease.active_statuses(),
-        order_by: [asc: claim_lease.inserted_at, asc: claim_lease.id]
-      )
-    )
-  end
-
-  defp reset_mcp_runtime_state do
-    HTTPStateStore.reset!()
-    reset_server_response_state()
   end
 
   defp work_request_attrs(overrides) do
@@ -1670,19 +1129,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     Agent.update(handle_state_agent, fn _store -> %{} end)
   catch
     :exit, _reason -> :ok
-  end
-
-  defp claimed_session do
-    Session.new(%Assignment{
-      grant_id: "grant-http-claimed",
-      work_package_id: "SYMPP-MCP-HTTP",
-      phase_id: nil,
-      display_key: "SYMPP-MCP-HTTP",
-      grant_role: "worker",
-      capabilities: ["read:assignment"],
-      claimed_at: DateTime.utc_now(:microsecond),
-      claimed_by: "codex-local"
-    })
   end
 
   defp restore_sympp_repo_database(nil), do: Application.delete_env(:symphony_elixir, :sympp_repo_database)

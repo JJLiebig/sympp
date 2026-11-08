@@ -3,7 +3,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
 
   alias SymphonyElixir.FakeGitHubClient
   alias SymphonyElixir.GitHubPullRequestFixtures
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
 
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{ChecksBackstop, MergeReconciler, PullRequestProgress}
 
@@ -42,7 +41,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
   setup %{repo: repo} do
     repo.delete_all(Artifact)
     repo.delete_all(ProgressEvent)
-    repo.delete_all(AccessGrant)
     repo.delete_all(WorkPackageDelivery)
     repo.delete_all(WorkPackage)
     repo.delete_all(WorkRequest)

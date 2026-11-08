@@ -8,12 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
 
   @moduletag :ci_slow
 
-  test "WorkPackage worktree MCP prepare fails closed for direct phase packages", %{repo: repo} do
-    {_anchor, session, _grant} =
-      create_phase_architect_session(repo, "SYMPP-ARCHITECT-WORKTREE-SCOPE", [
-        "dispatch:work_request"
-      ])
-
+  test "WorkPackage worktree MCP prepare refuses packages outside a WorkRequest", %{repo: repo} do
     assert {:ok, unlinked_package} =
              WorkPackageRepository.create(
                repo,
@@ -21,7 +16,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
              )
 
     prepare_response =
-      mcp_tool(repo, session, "prepare_work_package_worktree", %{
+      mcp_tool(repo, "t1", "prepare_work_package_worktree", %{
         "work_package_id" => unlinked_package.id,
         "target_repo_root" => test_repo_root()
       })
@@ -36,13 +31,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
     codex_home = Path.join(fixture.root, "codex-home")
     config = Config.default(repo: repo, repo_root: test_repo_root())
 
-    {anchor, session, _grant} =
-      create_phase_architect_session(
-        repo,
-        "SYMPP-ARCHITECT-WORKTREE-DELIVERY-BASE",
-        ["dispatch:work_request"],
-        repo: fixture.origin
-      )
+    anchor = %{repo: fixture.origin, base_branch: "symphony-plus-plus/beta"}
 
     work_request =
       create_work_request!(repo,
@@ -86,39 +75,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
     assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
     assert {:ok, _linked_slice} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", package.id)
 
-    {_delivery_anchor, delivery_scoped_session, _grant} =
-      create_phase_architect_session(
-        repo,
-        "SYMPP-ARCHITECT-WORKTREE-DELIVERY-BASE-SCOPED",
-        ["dispatch:work_request"],
-        repo: fixture.origin,
-        base_branch: delivery_base
-      )
-
     previous_codex_home = System.get_env("CODEX_HOME")
 
     try do
       System.put_env("CODEX_HOME", codex_home)
 
-      delivery_scoped_prepare_response =
-        mcp_tool(
-          repo,
-          delivery_scoped_session,
-          "prepare_work_package_worktree",
-          %{
-            "work_package_id" => package.id,
-            "target_repo_root" => fixture.repo_root
-          },
-          config: config
-        )
-
-      assert get_in(delivery_scoped_prepare_response, ["error", "code"]) == -32_004
-      assert get_in(delivery_scoped_prepare_response, ["error", "data", "reason"]) == "not_found"
-
       wrong_branch_response =
         mcp_tool(
           repo,
-          session,
+          "t1",
           "prepare_work_package_worktree",
           %{
             "work_package_id" => package.id,
@@ -134,7 +99,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
       prepare_response =
         mcp_tool(
           repo,
-          session,
+          "t1",
           "prepare_work_package_worktree",
           %{
             "work_package_id" => package.id,
@@ -164,7 +129,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
       stale_response =
         mcp_tool(
           repo,
-          session,
+          "t1",
           "prepare_work_package_worktree",
           %{"work_package_id" => package.id, "target_repo_root" => fixture.repo_root, "branch" => stale_branch},
           config: config
@@ -181,7 +146,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
       default_response =
         mcp_tool(
           repo,
-          session,
+          "t1",
           "prepare_work_package_worktree",
           %{"work_package_id" => package.id, "target_repo_root" => fixture.repo_root},
           config: config
@@ -210,13 +175,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
     codex_home = Path.join(fixture.root, "codex-home")
     config = Config.default(repo: repo, repo_root: test_repo_root())
 
-    {anchor, session, _grant} =
-      create_phase_architect_session(
-        repo,
-        "SYMPP-ARCHITECT-WORKTREE-TEMPLATE",
-        ["dispatch:work_request"],
-        repo: fixture.origin
-      )
+    anchor = %{repo: fixture.origin, base_branch: "symphony-plus-plus/beta"}
 
     work_request =
       create_work_request!(repo,
@@ -267,7 +226,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
       wrong_branch_response =
         mcp_tool(
           repo,
-          session,
+          "t1",
           "prepare_work_package_worktree",
           %{
             "work_package_id" => package.id,
@@ -285,7 +244,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
       prepare_response =
         mcp_tool(
           repo,
-          session,
+          "t1",
           "prepare_work_package_worktree",
           %{
             "work_package_id" => package.id,
@@ -319,13 +278,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
 
     previous_trusted_remotes = Application.get_env(:symphony_elixir, :sympp_repo_identity_trusted_remotes)
 
-    {anchor, session, _grant} =
-      create_phase_architect_session(
-        repo,
-        "SYMPP-ARCHITECT-WORKTREE-BARE-REPO",
-        ["dispatch:work_request"],
-        repo: "frontend"
-      )
+    anchor = %{repo: "frontend", base_branch: "symphony-plus-plus/beta"}
 
     work_request =
       create_work_request!(repo,
@@ -372,7 +325,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
       Application.put_env(:symphony_elixir, :sympp_repo_identity_trusted_remotes, ["JJLiebig/frontend"])
 
       response =
-        mcp_tool(repo, session, "prepare_work_package_worktree", %{
+        mcp_tool(repo, "t1", "prepare_work_package_worktree", %{
           "work_package_id" => package.id,
           "target_repo_root" => target_repo_root
         })
@@ -402,13 +355,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
     config = Config.default(repo: repo, repo_root: host_repo_root)
     other_owner_config = Config.default(repo: repo, repo_root: other_host_repo_root)
 
-    {anchor, session, _grant} =
-      create_phase_architect_session(
-        repo,
-        "SYMPP-ARCHITECT-WORKTREE-HOST-CONFLICT",
-        ["dispatch:work_request"],
-        repo: "frontend"
-      )
+    anchor = %{repo: "frontend", base_branch: "symphony-plus-plus/beta"}
 
     work_request =
       create_work_request!(repo,
@@ -459,7 +406,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
       host_checkout_response =
         mcp_tool(
           repo,
-          session,
+          "t1",
           "prepare_work_package_worktree",
           %{
             "work_package_id" => package.id,
@@ -481,7 +428,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
         conflicting_checkout_response =
           mcp_tool(
             repo,
-            session,
+            "t1",
             "prepare_work_package_worktree",
             %{
               "work_package_id" => package.id,
@@ -498,7 +445,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
       prepare_response =
         mcp_tool(
           repo,
-          session,
+          "t1",
           "prepare_work_package_worktree",
           %{
             "work_package_id" => package.id,
@@ -515,7 +462,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
       other_owner_response =
         mcp_tool(
           repo,
-          session,
+          "t1",
           "prepare_work_package_worktree",
           %{
             "work_package_id" => package.id,
