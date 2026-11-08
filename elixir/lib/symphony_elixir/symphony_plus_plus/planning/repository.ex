@@ -16,6 +16,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase, as: WorkRequestPhase
 
+  @runtime_authority_statuses [
+    "claim_lease_reclaimed",
+    "worker_claim_released",
+    "work_package_worker_key_revoked",
+    "work_request_runtime_cleanup"
+  ]
   @default_append_retry_attempts 200
   @default_state_read_retry_attempts 50
   @state_item_limit 100
@@ -48,23 +54,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
 
   @spec append_plan_node(repo(), map()) :: {:ok, PlanNode.t()} | {:error, error()}
   def append_plan_node(repo, attrs) when is_atom(repo) and is_map(attrs) do
-    with :ok <- require_writable_package(repo, attrs) do
-      insert_with_allocated_value(
-        repo,
-        drop_ordering(attrs, :position),
-        PlanNode,
-        :position,
-        &PlanNode.create_changeset/1
-      )
-    end
+    insert_with_allocated_value(
+      repo,
+      drop_ordering(attrs, :position),
+      PlanNode,
+      :position,
+      &PlanNode.create_changeset/1
+    )
   end
 
   @spec append_finding(repo(), map()) :: {:ok, Finding.t()} | {:error, error()}
   def append_finding(repo, attrs) when is_atom(repo) and is_map(attrs) do
-    with :ok <- require_writable_package(repo, attrs) do
-      attrs = drop_ordering(attrs, :sequence)
-      insert_with_allocated_value(repo, attrs, Finding, :sequence, &Finding.create_changeset/1)
-    end
+    insert_with_allocated_value(repo, drop_ordering(attrs, :sequence), Finding, :sequence, &Finding.create_changeset/1)
   end
 
   @spec append_progress_event(repo(), map()) :: {:ok, ProgressEvent.t()} | {:error, error()}
@@ -141,8 +142,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   end
 
   defp append_progress_event_in_transaction(repo, attrs, changeset_fun, opts) do
-    with :ok <- require_writable_package(repo, attrs),
-         {:ok, attrs} <- normalize_append_attrs(attrs, Keyword.fetch!(opts, :trusted_audit_metadata)),
+    with {:ok, attrs} <- normalize_append_attrs(attrs, Keyword.fetch!(opts, :trusted_audit_metadata)),
          :not_found <-
            existing_progress_event_by_idempotency_key_with_retry(repo, attrs, append_retry_attempts()) do
       repo
@@ -282,9 +282,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
     |> update(repo)
   end
 
-  # Planning records belong to a package; an archived WorkRequest takes no new ones.
-  defp require_writable_package(repo, attrs) do
-    WorkRequestPhase.require_writable_package(repo, Map.get(attrs, :work_package_id) || Map.get(attrs, "work_package_id"))
+  # Planning records belong to a package, and an archived WorkRequest takes no new
+  # ones. Audits of releasing or revoking runtime authority stay possible, so a
+  # worker left running on an archived WorkRequest can still be stopped.
+  defp require_writable_insert(_repo, ProgressEvent, %{"status" => status}) when status in @runtime_authority_statuses,
+    do: :ok
+
+  defp require_writable_insert(repo, _schema, attrs),
+    do: WorkRequestPhase.require_writable_package(repo, Map.get(attrs, "work_package_id"))
+
+  defp update_writable_plan_node(repo, %PlanNode{} = plan_node, changeset) do
+    repo.transaction(fn ->
+      with :ok <- WorkRequestPhase.require_writable_package(repo, plan_node.work_package_id),
+           {:ok, updated} <- update(changeset, repo) do
+        updated
+      else
+        {:error, reason} -> repo.rollback(reason)
+      end
+    end)
   end
 
   @spec update_plan_node_status(repo(), String.t(), String.t()) :: {:ok, PlanNode.t()} | {:error, error()}
@@ -295,11 +310,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
         {:error, :not_found}
 
       %PlanNode{} = plan_node ->
-        with :ok <- WorkRequestPhase.require_writable_package(repo, plan_node.work_package_id) do
-          plan_node
-          |> PlanNode.status_changeset(%{status: status})
-          |> update(repo)
-        end
+        update_writable_plan_node(repo, plan_node, PlanNode.status_changeset(plan_node, %{status: status}))
     end
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
@@ -313,11 +324,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
         {:error, :not_found}
 
       %PlanNode{} = plan_node ->
-        with :ok <- WorkRequestPhase.require_writable_package(repo, plan_node.work_package_id) do
-          plan_node
-          |> PlanNode.update_changeset(attrs)
-          |> update(repo)
-        end
+        update_writable_plan_node(repo, plan_node, PlanNode.update_changeset(plan_node, attrs))
     end
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
@@ -835,12 +842,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
 
   defp insert_transaction(repo, attrs, schema, field, changeset_fun, auto_allocate?) do
     repo.transaction(fn ->
-      attrs
-      |> maybe_put_next_value(repo, schema, field, auto_allocate?)
-      |> changeset_fun.()
-      |> insert(repo)
-      |> case do
-        {:ok, row} -> row
+      with :ok <- require_writable_insert(repo, schema, attrs),
+           {:ok, row} <-
+             attrs
+             |> maybe_put_next_value(repo, schema, field, auto_allocate?)
+             |> changeset_fun.()
+             |> insert(repo) do
+        row
+      else
         {:error, reason} -> repo.rollback(reason)
       end
     end)

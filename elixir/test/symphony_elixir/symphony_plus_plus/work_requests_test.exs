@@ -156,6 +156,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:error, :work_request_archived} =
              PlanningRepository.append_progress_event(repo, %{work_package_id: package.id, summary: "Late note", status: "recorded", idempotency_key: "late"})
 
+    # Stopping a worker that is still running stays possible and audited.
+    assert {:ok, _audit} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: package.id,
+               summary: "Worker claim released",
+               status: "worker_claim_released",
+               idempotency_key: "release-after-archive"
+             })
+
     assert {:error, :work_request_archived} = Repository.slice_work_request(repo, request.id, [work_package_attrs(id: "WRS-ARCHIVED-NEW")])
     assert {:error, :work_request_archived} = Service.complete(repo, request.id)
     assert {:ok, ^archived} = Repository.get(repo, request.id)

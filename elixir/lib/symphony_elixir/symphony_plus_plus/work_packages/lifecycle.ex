@@ -89,14 +89,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
   @spec transition(module(), WorkPackage.t(), event(), keyword()) :: {:ok, WorkPackage.t()} | {:error, error()}
   def transition(repo, %WorkPackage{} = work_package, event, opts \\ []) when is_atom(repo) and is_list(opts) do
     with {:ok, {from_statuses, next_status}} <- fetch_transition(event),
-         :ok <- require_source(work_package, event, from_statuses, opts),
-         :ok <- WorkRequestPhase.require_writable_package(repo, work_package.id) do
+         :ok <- require_source(work_package, event, from_statuses, opts) do
       repo.transaction(fn -> write_with_effects(repo, work_package, event, next_status, opts) end)
       |> broadcast(repo)
     end
   end
 
   defp write_with_effects(repo, work_package, event, next_status, opts) do
+    with {:error, reason} <- WorkRequestPhase.require_writable_package(repo, work_package.id), do: repo.rollback(reason)
+
     case write_status(repo, work_package, next_status, opts) do
       {:ok, updated} -> apply_effects(repo, event, updated)
       {:error, reason} -> repo.rollback(reason)

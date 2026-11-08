@@ -218,8 +218,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       |> Map.put("work_request_id", work_request_id)
       |> Map.put("status", "open")
 
-    with {:ok, %WorkRequest{} = work_request} <- get(repo, work_request_id),
-         :ok <- Phase.require_writable(work_request) do
+    with {:ok, %WorkRequest{}} <- get(repo, work_request_id) do
       insert_with_sequence(repo, attrs, &next_question_sequence/2, &ClarificationQuestion.create_changeset/1)
     end
   end
@@ -243,8 +242,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   def answer_question(repo, id, current_status, attrs)
       when is_atom(repo) and is_binary(id) and is_binary(current_status) and is_map(attrs) do
     with :ok <- validate_question_status(current_status),
-         {:ok, answer} <- normalize_answer(attrs),
-         :ok <- require_writable_question(repo, id) do
+         {:ok, answer} <- normalize_answer(attrs) do
       answer_valid_question(repo, id, current_status, answer)
     end
   end
@@ -252,8 +250,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   @spec close_question(repo(), String.t(), String.t()) :: {:ok, ClarificationQuestion.t()} | {:error, error()}
   def close_question(repo, id, current_status)
       when is_atom(repo) and is_binary(id) and is_binary(current_status) do
-    with :ok <- validate_question_status(current_status),
-         :ok <- require_writable_question(repo, id) do
+    with :ok <- validate_question_status(current_status) do
       close_valid_question(repo, id, current_status)
     end
   end
@@ -267,9 +264,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       |> Map.drop(["sequence", "inserted_at", "updated_at"])
       |> Map.put("work_request_id", work_request_id)
 
-    with :ok <- require_writable_if_present(repo, work_request_id) do
-      insert_with_sequence(repo, attrs, &next_decision_sequence/2, &DecisionLogEntry.create_changeset/1)
-    end
+    insert_with_sequence(repo, attrs, &next_decision_sequence/2, &DecisionLogEntry.create_changeset/1)
   end
 
   # A missing WorkRequest is left to the foreign key, as before.
@@ -472,6 +467,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
 
   defp insert_sequence_transaction(repo, attrs, next_sequence, changeset_fun) do
     repo.transaction(fn ->
+      with {:error, reason} <- require_writable_if_present(repo, Map.fetch!(attrs, "work_request_id")), do: repo.rollback(reason)
       attrs = Map.put(attrs, "sequence", next_sequence.(repo, Map.fetch!(attrs, "work_request_id")))
 
       attrs
@@ -569,6 +565,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     now = DateTime.utc_now(:microsecond)
 
     repo.transaction(fn ->
+      with {:error, reason} <- require_writable_question(repo, id), do: repo.rollback(reason)
+
       id
       |> answer_question_query(current_status)
       |> repo.update_all(
@@ -594,6 +592,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     now = DateTime.utc_now(:microsecond)
 
     repo.transaction(fn ->
+      with {:error, reason} <- require_writable_question(repo, id), do: repo.rollback(reason)
+
       id
       |> close_question_query(current_status)
       |> repo.update_all(set: [status: "closed", updated_at: now])
