@@ -1424,7 +1424,9 @@ async function bridge(identity, state, runtimeFile) {
     cancelPreparation();
     if (recoveryPromise) { try { await recoveryPromise; } catch (_) { } }
     if (localLease) { try { fs.unlinkSync(localLease); } catch (_) { } }
-    if (attached) await clientLease(current.mcpUrl, clientId, "detach", false);
+    // A remote bridge in a Herdr terminal always detaches, even if its lease never registered: the
+    // factory can't see this terminal, and the detach is how it learns the agent exited.
+    if (attached || (remoteConnection && sessionLocation.terminal())) await clientLease(current.mcpUrl, clientId, "detach", false);
     closeGenerationWatchers();
     if (cleanupAllowed && cleanupScript) await cleanupLastDetach(runtimeFile, current.identity.runtimeKey, cleanupScript);
     await clearHerdrBindingAndDrain();
