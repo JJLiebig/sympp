@@ -73,7 +73,7 @@ test('a supported disposable offline snapshot denies MCP and dispatch without ch
   expect((await client.operator(`/api/v1/sympp/operator/work-requests/${request}/work-packages/${wp}/dispatch`, {})).status).toBe(403);
   const restarted = processes.factory();
   const original = architect.reconnect(await restarted.endpoint);
-  expect((await original.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages[0].status).toBe('ready_for_worker');
+  expect((await original.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages[0].status).toBe('dispatched');
   expect((await original.call('read_work_request', { detail: 'full', work_request_id: request })).decision_log_entries).toEqual([]);
 });
 

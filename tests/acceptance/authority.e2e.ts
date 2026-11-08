@@ -343,7 +343,7 @@ test('plan views give a reader bound to another request the same complete plan a
     await (await worker(factory, wp)).call('mark_ready');
     await close(architect, wp);
   }
-  await assertComplete('closed');
+  await assertComplete('ended');
 });
 
 test('worker mutations and resources remain confined to its package while explicit local decisions preserve provenance', async ({ processes }) => {
@@ -435,10 +435,9 @@ test('explicit revocation retires live worker calls resources and persisted reco
   const assignment = (await client.call('get_current_assignment')).assignment;
   const first = (await client.call('append_progress', { summary: 'Before revocation', idempotency_key: 'revoked-once' })).progress_event;
   const revoked = await architect.call('revoke_work_package_worker_key', { work_package_id: wp, grant_id: assignment.grant_id, reason: 'Scope was recut' });
-  expect(revoked.work_package.status).toBe('blocked');
+  expect(revoked.work_package.status).toBe('dispatched');
   expect(revoked.revoked_worker_grant.id).toBe(assignment.grant_id);
-  expect(revoked.closeout_affordance.previous_work_package_status).toBe('active');
-  expect(revoked.closeout_affordance.reason_codes).toEqual(['worker_recycled', 'work_package_worker_key_revoked', 'work_package_blocked_for_recycle']);
+  expect(revoked.closeout_affordance.reason_codes).toEqual(['worker_recycled', 'work_package_worker_key_revoked']);
   expect(revoked.next_action).toBe('retry_record_work_package_delivery');
   expect(revoked.audit_event.id).toBeTruthy();
   const staleMutation = await client.raw(tool('append_progress', { summary: 'Before revocation', idempotency_key: 'revoked-once' }));
@@ -462,7 +461,7 @@ test('explicit revocation retires live worker calls resources and persisted reco
   expect((await retired.rpc('resources/read', { uri: 'sympp://assignment/current' })).error.data.reason).toBe('missing_session');
   expect((await peer.reconnect(await restarted.endpoint).call('get_current_assignment')).assignment.work_package_id).toBe(sibling);
   const recoveredArchitect = architect.reconnect(await restarted.endpoint);
-  expect((await recoveredArchitect.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages.find((entry: any) => entry.id === wp).status).toBe('blocked');
+  expect((await recoveredArchitect.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages.find((entry: any) => entry.id === wp).status).toBe('dispatched');
   await close(recoveredArchitect, wp, 'superseded', { successor_work_package_id: sibling, superseded_reason: 'The sibling owns the recut scope.' });
   expect((await row(recoveredArchitect, request, wp)).delivery_outcome).toBe('superseded');
   expect((await peer.reconnect(await restarted.endpoint).call('get_current_assignment')).assignment.work_package_id).toBe(sibling);
@@ -481,8 +480,8 @@ test('superseded and no-PR delivery retire live claims and prevent terminal work
   const old = await worker(factory, superseded);
   const research = await worker(factory, completed, 'research-worker');
   await old.call('mark_ready');
-  await architect.call('update_work_package', { work_package_id: superseded, expected_contract_revision: 1, patch: { goal: 'The scope needs an implementing revision before supersession.' } });
-  expect((await row(architect, request, superseded)).raw_status).toBe('implementing');
+  await architect.reject('update_work_package', { work_package_id: superseded, expected_contract_revision: 1, patch: { goal: 'A ready contract is frozen.' } }, 'contract_frozen');
+  expect((await row(architect, request, superseded)).raw_status).toBe('ready');
   const supersede = (wp: string) => close(architect, wp, 'superseded', { successor_work_package_id: successor, superseded_reason: 'A bounded successor owns this scope.' });
   const invalidSuccessor = await factory.client();
   await invalidSuccessor.request('Foreign successor owner');
@@ -494,7 +493,7 @@ test('superseded and no-PR delivery retire live claims and prevent terminal work
   expect((await old.call('get_current_assignment')).assignment.work_package_id).toBe(superseded);
   await supersede(superseded);
   await supersede(unclaimed);
-  expect((await research.call('mark_ready')).work_package.status).toBe('ready_for_merge');
+  expect((await research.call('mark_ready')).work_package.status).toBe('ready');
   await close(architect, completed);
   for (const [client, wp] of [[old, superseded], [research, completed]] as const) {
     expect((await client.rpc('tools/call', { name: 'append_progress', arguments: { summary: 'Terminal mutation', idempotency_key: 'terminal' } })).error).toBeTruthy();
@@ -550,15 +549,11 @@ deliveryTest('architect merged recovery retires real claimed workers and preserv
   expect((await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).progress.filter((event: any) => event.summary === 'Late mutation')).toEqual([]);
   const revised = await worker(factory, implementing, 'revised-worker');
   await revised.call('mark_ready');
-  await architect.call('update_work_package', { work_package_id: implementing, expected_contract_revision: 1, patch: { title: 'Revised delivery scope' } });
-  await revised.call('attach_branch', { branch: 'feature/authority', head_sha: head('b') });
-  await revised.call('attach_pr', { url: prUrl(326), head_sha: head('b') });
-  provider.set(326, pr(326, head('b'), { headRefName: 'feature/authority', state: 'MERGED', mergedAt, mergeCommit: { oid: head('f') } }));
-  await revised.call('sync_pr');
-  expect((await row(architect, request, implementing)).raw_status).toBe('implementing');
+  await architect.reject('update_work_package', { work_package_id: implementing, expected_contract_revision: 1, patch: { title: 'Revised delivery scope' } }, 'contract_frozen');
+  expect((await row(architect, request, implementing)).raw_status).toBe('ready');
   await close(architect, implementing, 'pr_merged', { pr_url: prUrl(326), pr_number: 326, pr_repository: 'example/service', pr_merged_at: mergedAt, merge_commit_sha: head('f') });
   const delivered = await row(architect, request, implementing);
-  expect(delivered.raw_status).toBe('merged');
+  expect(delivered.raw_status).toBe('ended');
   expect(delivered.work_package.runtime_state['active?']).toBe(false);
   expect(delivered.work_package.runtime_state.reason_codes).not.toContain('claim_lease_active');
   expect((await revised.rpc('tools/call', { name: 'append_progress', arguments: { summary: 'Late revised mutation', idempotency_key: 'late-revised' } })).error).toBeTruthy();
@@ -831,7 +826,7 @@ deliveryTest('worker provider evidence resists spoofing mismatch failure and rep
   await client.call('attach_pr', { url: prUrl(302), head_sha: head('b'), idempotency_key: 'reattach-after-sync' });
   expect((await client.reject('mark_ready', {}, 'readiness_failed')).missing).toContain('current_pr_state');
   await client.call('sync_pr', { recovery: { ...recovery, head_sha: head('b') }, idempotency_key: 'current-state-after-reattach' });
-  expect((await client.call('mark_ready')).work_package.status).toBe('ready_for_merge');
+  expect((await client.call('mark_ready')).work_package.status).toBe('ready');
   const beforeReadyReplay = provider.calls.length;
   expect((await client.call('sync_pr', args)).progress_event.id).toBe(observed.id);
   expect(provider.calls).toHaveLength(beforeReadyReplay);
@@ -885,7 +880,7 @@ deliveryTest('worker metadata replay and short-head matching preserve distinct r
   expect((await architect.inspect(`/api/v1/sympp/operator/work-packages/${ids[0]}`)).metadata.pr.url).toBe(prUrl(304));
   expect((await full.call('attach_pr', prArgs)).progress_event.id).toBe(attached.id);
   await full.reject('attach_pr', { ...prArgs, number: 305 }, 'idempotency_conflict');
-  expect((await full.call('mark_ready')).work_package.status).toBe('ready_for_merge');
+  expect((await full.call('mark_ready')).work_package.status).toBe('ready');
   for (const [index, length, ready] of [[1, 7, true], [2, 3, false]] as const) {
     const client = await worker(factory, ids[index], `head-worker-${index}`);
     await client.call('attach_branch', { branch: 'feature/authority', head_sha: head('b').slice(0, length) });
@@ -899,22 +894,22 @@ deliveryTest('worker metadata replay and short-head matching preserve distinct r
   await hotfix.call('attach_pr', { url: prUrl(307), head_sha: head('c') });
   provider.set(307, pr(307, head('c'), { headRefName: 'feature/authority' }));
   await hotfix.call('sync_pr');
-  expect((await hotfix.call('mark_ready')).work_package.status).toBe('ready_for_merge');
+  expect((await hotfix.call('mark_ready')).work_package.status).toBe('ready');
   const canonical = await worker(factory, ids[4], 'canonical-worker');
   await canonical.call('attach_branch', { branch: 'feature/authority', head_sha: head('d') });
   await canonical.call('attach_pr', { url: prUrl(308), metadata: { head_sha: head('d'),
     check_summary: { conclusion: 'success' }, review_state: { state: 'approved' }, merge_state: { state: 'clean' } } });
-  expect((await canonical.call('mark_ready')).work_package.status).toBe('ready_for_merge');
+  expect((await canonical.call('mark_ready')).work_package.status).toBe('ready');
   const legacy = await worker(factory, ids[5], 'url-worker');
   await legacy.call('attach_branch', { branch: 'feature/authority', head_sha: head('e') });
   await legacy.call('attach_pr', { url: 'https://git.example.com/service/pulls/8', head_sha: head('e') });
-  expect((await legacy.call('mark_ready')).work_package.status).toBe('ready_for_merge');
+  expect((await legacy.call('mark_ready')).work_package.status).toBe('ready');
   const legacyState = await worker(factory, ids[6], 'legacy-state-worker');
   await legacyState.call('attach_branch', { branch: 'feature/authority', head_sha: head('e') });
   await legacyState.call('attach_pr', { url: 'https://git.example.com/service/pulls/9', head_sha: head('e'), metadata: {
     check_summary: { conclusion: 'success' }, review_state: { state: 'approved' }, merge_state: { state: 'clean' },
   } });
-  expect((await legacyState.call('mark_ready')).work_package.status).toBe('ready_for_merge');
+  expect((await legacyState.call('mark_ready')).work_package.status).toBe('ready');
   for (const [index, changeHead] of [[7, true], [8, false]] as const) {
     const client = await worker(factory, ids[index], `recovery-policy-${index}`);
     await client.call('attach_branch', { branch: 'feature/authority', head_sha: head('a') });
@@ -948,11 +943,11 @@ test('docs and investigation workers become ready with truthful evidence', async
   for (const id of ids) await architect.call('dispatch_work_package', { work_package_id: id });
   const docs = await worker(factory, ids[0], 'docs-worker');
   const investigation = await worker(factory, ids[1], 'investigation-worker');
-  expect((await docs.call('mark_ready')).work_package.status).toBe('ready_for_merge');
+  expect((await docs.call('mark_ready')).work_package.status).toBe('ready');
   const missing = await investigation.reject('mark_ready', {}, 'readiness_failed');
   expect(missing.missing).toContain('findings_documented');
   await investigation.call('append_finding', { title: 'Cause found', body: 'No code change is necessary.', idempotency_key: 'research' });
-  expect((await investigation.call('mark_ready')).work_package.status).toBe('ready_for_merge');
+  expect((await investigation.call('mark_ready')).work_package.status).toBe('ready');
 });
 
 test('claim scope hints reject different repository branch and request before granting worker authority', async ({ processes }) => {
@@ -971,7 +966,7 @@ test('claim scope hints reject different repository branch and request before gr
     const client = await factory.client();
     await client.reject('claim_local_assignment', { work_package_id: wp, claimed_by: 'scope-attacker', ...hints }, reason);
     expect((await client.call('get_current_assignment')).assignment).toBeNull();
-    expect((await architect.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages[0].status).toBe('ready_for_worker');
+    expect((await architect.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages[0].status).toBe('dispatched');
   }
   const valid = await worker(factory, wp);
   expect((await valid.call('read_context')).work_package.id).toBe(wp);
@@ -995,9 +990,6 @@ test('explicit runtime cleanup validates delivery scope before retiring a live w
   const client = await worker(factory, wp);
   const peer = await worker(factory, sibling, 'peer-worker');
   await client.call('mark_ready');
-  await architect.call('update_work_package', { work_package_id: wp, expected_contract_revision: 1, patch: { title: 'Revised obsolete scope' } });
-  await architect.reject('cleanup_work_request_work_package_runtime', { work_package_id: wp, outcome: 'abandoned',
-    abandoned_rationale: 'Must not classify implemented work as unstarted', reason: 'Invalid abandonment' }, 'work_package_not_abandonable');
   const grant = (await client.call('get_current_assignment')).assignment.grant_id;
   const cleanup = { work_package_id: wp, outcome: 'superseded', successor_work_package_id: successor,
     superseded_reason: 'The successor owns the revised scope.', reason: 'Retire the obsolete worker before closeout.' };
@@ -1014,7 +1006,7 @@ test('explicit runtime cleanup validates delivery scope before retiring a live w
   expect(retired.runtime_cleanup.revoked_worker_grant_ids).toContain(grant);
   expect(retired.runtime_cleanup.released_claim_lease_ids).toHaveLength(1);
   expect(retired.runtime_cleanup.cleared_mcp_session_binding_ids).toHaveLength(1);
-  expect(retired.work_package.status).toBe('implementing');
+  expect(retired.work_package.status).toBe('ready');
   expect((await row(architect, request, wp)).delivery_outcome).toBeNull();
   expect((await client.rpc('tools/call', { name: 'append_progress', arguments: { summary: 'Must not persist', idempotency_key: 'after-cleanup' } })).error).toBeTruthy();
   expect((await peer.call('get_current_assignment')).assignment.work_package_id).toBe(sibling);
