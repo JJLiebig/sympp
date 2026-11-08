@@ -38,6 +38,8 @@ test("setup repairs unterminated owned Codex tables without changing user config
   }
   const leading = '# user comment before any table\r\n\r\n';
   assert.equal(codexConfig('# BEGIN sympp Skills MCP\n' + leading + '[mcp_servers.sympp]\ncommand = "old"\n', registration), leading + block);
+  const settings = 'model = "custom"\n\n# user settings\n';
+  assert.equal(codexConfig('# BEGIN sympp Skills MCP\n' + settings, registration), settings + block);
   const instructions = 'instructions = """\n[mcp_servers.notes]\n# END sympp Skills MCP\n"""\n';
   assert.equal(codexConfig('# BEGIN sympp Skills MCP\n[mcp_servers.sympp]\n' + instructions, registration), block);
   const nextBlock = '# BEGIN sympp Skills MCP\n[mcp_servers.sympp]\ncommand = "old"\n';
