@@ -37,6 +37,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
     end
   end
 
+  @doc "Reads one WorkPackage task plan by id for a trusted local session."
+  @spec local_trusted_read_task_plan(repo(), String.t()) :: result()
+  def local_trusted_read_task_plan(repo, work_package_id) when is_binary(work_package_id),
+    do: read_task_plan_for_package(repo, work_package_id)
+
   defp read_task_plan_for_package(repo, work_package_id) do
     with {:ok, state} <- PlanningRepository.get_task_plan_render_state(repo, work_package_id),
          {:ok, markdown} <- PlanningRenderer.render_state(state, "task_plan.md"),

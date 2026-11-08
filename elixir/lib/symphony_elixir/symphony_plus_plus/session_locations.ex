@@ -94,7 +94,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.SessionLocations do
   end
 
   defp location_binding(%{"params" => %{"name" => name}} = payload, response, server) when name in @assignment_tools,
-    do: HerdrBinding.response_binding(payload, response, server)
+    do: HerdrBinding.response_binding(payload, response, server, :location)
 
   defp location_binding(%{"params" => %{"name" => name, "arguments" => %{"work_request_id" => id}}}, _response, _server)
        when name in @local_operator_tools,

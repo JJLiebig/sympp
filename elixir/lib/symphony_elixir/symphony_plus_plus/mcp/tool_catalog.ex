@@ -132,6 +132,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "revoke_work_package_worker_key"
   ]
   @work_request_product_tree_views ["groups_only", "groups_with_work_package_refs", "groups_with_work_packages"]
+  # Every tool is a write unless listed here. Only write calls may claim an
+  # assignment, set session role labels or record a session location; the same
+  # split drives the MCP readOnlyHint annotation.
+  @read_tools [
+    @health_tool,
+    "get_current_assignment",
+    "list_work_requests",
+    "read_work_request",
+    "read_plan",
+    "read_delivery_board",
+    "read_context",
+    "read_work_package_document",
+    "read_task_plan",
+    "solo_list",
+    "solo_show",
+    "summarize_failed_mcp_calls"
+  ]
   @type tool_name :: String.t()
   @type input_schema :: map()
   @type tool_spec :: map()
@@ -194,6 +211,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   @spec architect_tools() :: [tool_name()]
   def architect_tools, do: @architect_tools
+
+  @spec tool_access(tool_name()) :: :read | :write
+  def tool_access(name) when name in @read_tools, do: :read
+  def tool_access(_name), do: :write
+
+  @doc """
+  Whether one call only reads. A reconcile without `apply: true` is a dry run
+  of a write tool and reads like any other read.
+  """
+  @spec read_call?(tool_name(), map()) :: boolean()
+  def read_call?("reconcile_work_request", arguments) when is_map(arguments), do: Map.get(arguments, "apply") != true
+  def read_call?(name, _arguments), do: tool_access(name) == :read
 
   @spec known_tool?(term()) :: boolean()
   def known_tool?(name), do: name in @known_tools

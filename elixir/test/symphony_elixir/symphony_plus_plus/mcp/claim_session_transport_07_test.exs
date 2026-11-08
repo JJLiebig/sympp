@@ -63,16 +63,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport07Test do
                config,
                [
                  %{"jsonrpc" => "2.0", "id" => "release-before-auto-claim", "method" => "tools/call", "params" => %{"name" => "release_current_assignment", "arguments" => %{}}},
-                 %{"jsonrpc" => "2.0", "id" => "batch-auto-claim", "method" => "tools/call", "params" => %{"name" => "reconcile_work_request", "arguments" => %{"work_request_id" => work_request.id}}}
+                 %{
+                   "jsonrpc" => "2.0",
+                   "id" => "batch-auto-claim",
+                   "method" => "tools/call",
+                   "params" => %{"name" => "upsert_group", "arguments" => %{"work_request_id" => work_request.id, "title" => "Batch claim"}}
+                 }
                ],
                client_key: client_key,
                state_key: state_key
              )
 
-    assert get_in(Enum.at(rebound.response, 1), ["result", "structuredContent", "work_request", "id"]) == work_request.id
+    assert is_binary(get_in(Enum.at(rebound.response, 1), ["result", "structuredContent", "group", "id"]))
     HTTPStateStore.reset!()
-    recovered = http!(config, client_key, state_key, "batch-binding-recovered", "tools/call", %{"name" => "reconcile_work_request", "arguments" => %{}})
-    assert get_in(recovered.response, ["result", "structuredContent", "work_request", "id"]) == work_request.id
+    recovered = http!(config, client_key, state_key, "batch-binding-recovered", "tools/call", %{"name" => "upsert_group", "arguments" => %{"title" => "Recovered binding"}})
+    assert is_binary(get_in(recovered.response, ["result", "structuredContent", "group", "id"]))
     assert {:ok, lease} = ClaimLeaseService.current_for_work_package(repo, handoff.anchor_package.id)
 
     assert {:ok, competing_init} =
@@ -82,9 +87,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport07Test do
                client_key: "competing-architect"
              )
 
-    reconcile_params = %{"name" => "reconcile_work_request", "arguments" => %{"work_request_id" => work_request.id}}
+    write_params = %{"name" => "upsert_group", "arguments" => %{"work_request_id" => work_request.id, "title" => "Contended claim"}}
 
-    conflict = http!(config, "competing-architect", competing_init.state_key, "live-owner", "tools/call", reconcile_params)
+    conflict = http!(config, "competing-architect", competing_init.state_key, "live-owner", "tools/call", write_params)
     assert get_in(conflict.response, ["error", "data", "reason"]) == "claim_lease_active_for_other_actor"
     assert {:ok, unchanged_lease} = ClaimLeaseService.current_for_work_package(repo, handoff.anchor_package.id)
     assert unchanged_lease == lease
@@ -93,14 +98,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport07Test do
     |> ClaimLease.update_changeset(%{last_seen_at: DateTime.add(DateTime.utc_now(:microsecond), -6, :minute)})
     |> repo.update!()
 
-    reclaimed = http!(config, "competing-architect", competing_init.state_key, "stale-owner", "tools/call", reconcile_params)
-    assert get_in(reclaimed.response, ["result", "structuredContent", "work_request", "id"]) == work_request.id
+    reclaimed = http!(config, "competing-architect", competing_init.state_key, "stale-owner", "tools/call", write_params)
+    assert is_binary(get_in(reclaimed.response, ["result", "structuredContent", "group", "id"]))
     assert {:ok, replacement} = ClaimLeaseService.current_for_work_package(repo, handoff.anchor_package.id)
     refute replacement.id == lease.id
     refute replacement.actor_id == lease.actor_id
 
     HTTPStateStore.reset!()
-    omitted_scope_params = %{"name" => "reconcile_work_request", "arguments" => %{}}
+    omitted_scope_params = %{"name" => "upsert_group", "arguments" => %{"title" => "Known scope"}}
     recovered_conflict = http!(config, client_key, state_key, "known-scope-live-owner", "tools/call", omitted_scope_params)
     assert get_in(recovered_conflict.response, ["error", "data", "reason"]) == "claim_lease_active_for_other_actor"
 
@@ -109,7 +114,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport07Test do
     |> repo.update!()
 
     recovered_owner = http!(config, client_key, state_key, "known-scope-expired-owner", "tools/call", omitted_scope_params)
-    assert get_in(recovered_owner.response, ["result", "structuredContent", "work_request", "id"]) == work_request.id
+    assert is_binary(get_in(recovered_owner.response, ["result", "structuredContent", "group", "id"]))
     assert {:ok, current_lease} = ClaimLeaseService.current_for_work_package(repo, handoff.anchor_package.id)
     assert current_lease.actor_display_name == lease.actor_display_name
 

@@ -362,11 +362,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
       worker[:status] == "stale" -> {"runtime_stale", "architect", "inspect_runtime"}
       review[:status] == "inspection_needed" -> {"review_head_changed", "architect", "inspect_changed_since_review"}
       review[:next_action] not in [nil, "none"] -> {if(review[:next_action] == "wait", do: "review_in_progress"), "worker", review[:next_action]}
-      work_package.status == "ready_for_merge" -> {"awaiting_integration", "architect", eligibility[:next_action]}
-      work_package.status == "ci_waiting" -> {"validation_pending", "worker", "check_validation"}
-      true -> {nil, nil, nil}
+      true -> status_activity(work_package.status, eligibility)
     end
   end
+
+  defp status_activity("ready_for_merge", eligibility), do: {"awaiting_integration", "architect", eligibility[:next_action]}
+  defp status_activity("ci_waiting", _eligibility), do: {"validation_pending", "worker", "check_validation"}
+  defp status_activity("planned", _eligibility), do: {nil, "architect", "dispatch_work_package"}
+  defp status_activity(_status, _eligibility), do: {nil, nil, nil}
 
   defp observation_state(%{stale?: true}, _package), do: "stale"
   defp observation_state(%{active_agent_run_ids: [_ | _]}, _package), do: "current"
