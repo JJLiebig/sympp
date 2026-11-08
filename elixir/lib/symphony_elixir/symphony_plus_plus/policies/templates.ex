@@ -60,7 +60,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
   end
 
   @doc "The policy template that governs a WorkPackage: its explicit template, else its kind."
-  @spec for_work_package(%{policy_template: String.t() | nil, kind: String.t() | nil}) ::
+  @spec for_work_package(map()) ::
           {:ok, template()} | {:error, :unknown_policy_template}
   def for_work_package(%{policy_template: policy_template}) when is_binary(policy_template) and policy_template != "",
     do: expand(policy_template)
