@@ -114,8 +114,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
         work_type: "feature",
         human_description: "Create one canonical package identity.",
         constraints: %{"allowed_paths" => ["elixir/lib"], "forbidden_paths" => [], "requires_secret" => false},
-        desired_dispatch_shape: "single_package",
-        status: "ready_for_slicing"
+        desired_dispatch_shape: "single_package"
       })
 
     assert {:ok, work_request} = Repository.create(repo, attrs)

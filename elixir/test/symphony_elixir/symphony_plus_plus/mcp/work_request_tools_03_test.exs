@@ -7,8 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     work_request =
       create_work_request!(repo,
         id: "WR-MCP-WR-SLICE-EXPLICIT",
-        base_branch: "symphony-plus-plus/beta",
-        status: "ready_for_slicing"
+        base_branch: "symphony-plus-plus/beta"
       )
 
     assert {:ok, work_package} =
@@ -56,12 +55,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert persisted_package.title == "Updated explicit package"
   end
 
-  test "WorkRequest MCP work-package mutations require an authoring parent status", %{repo: repo} do
-    work_request =
-      create_work_request!(repo,
-        id: "WR-MCP-WR-AUTHORING-STATUS",
-        status: "ready_for_slicing"
-      )
+  test "WorkRequest MCP work-package mutations refuse an archived parent", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-MCP-WR-AUTHORING-STATUS")
 
     assert {:ok, work_package} =
              CanonicalWorkPackageFixtures.add_work_package(
@@ -70,7 +65,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
                work_request_work_package_attrs(id: "WP-MCP-WR-AUTHORING-STATUS")
              )
 
-    repo.update_all(from(request in WorkRequest, where: request.id == ^work_request.id), set: [status: "completed"])
+    repo.update_all(from(request in WorkRequest, where: request.id == ^work_request.id), set: [archived_at: DateTime.utc_now(:microsecond), archive_reason: "manual"])
 
     update_response =
       mcp_tool(repo, "t1", "update_work_package", %{
@@ -81,8 +76,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       })
 
     assert get_in(update_response, ["error", "code"]) == -32_009
-    assert get_in(update_response, ["error", "data", "reason"]) == "work_request_terminal"
-    assert get_in(update_response, ["error", "data", "recovery", "next_action"]) == "no_change"
+    assert get_in(update_response, ["error", "data", "reason"]) == "work_request_archived"
+    assert get_in(update_response, ["error", "data", "recovery", "next_action"]) == "restore"
 
     skip_response =
       mcp_tool(repo, "t1", "skip_work_package", %{
@@ -91,8 +86,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       })
 
     assert get_in(skip_response, ["error", "code"]) == -32_009
-    assert get_in(skip_response, ["error", "data", "reason"]) == "work_request_terminal"
-    assert get_in(skip_response, ["error", "data", "recovery", "next_action"]) == "no_change"
+    assert get_in(skip_response, ["error", "data", "reason"]) == "work_request_archived"
+    assert get_in(skip_response, ["error", "data", "recovery", "next_action"]) == "restore"
 
     persisted = repo.get!(WorkPackage, work_package.id)
     assert persisted.title == work_package.title

@@ -19,7 +19,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
       end
     end)
 
-    work_request = create_work_request!(repo, repo: "nextide/repo", base_branch: "main", status: "sliced")
+    work_request = create_work_request!(repo, repo: "nextide/repo", base_branch: "main")
 
     assert {:ok, package} =
              WorkPackageRepository.create(

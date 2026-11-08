@@ -29,6 +29,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport do
       nil ->
         repo.rollback(:not_found)
 
+      %WorkRequest{archived_at: %DateTime{}} ->
+        repo.rollback(:work_request_archived)
+
       %WorkRequest{} = work_request ->
         now = DateTime.utc_now(:microsecond) |> DateTime.to_iso8601()
         repo.update!(Ecto.Changeset.change(work_request, report: apply_patch(work_request.report || %{}, patch, now)))

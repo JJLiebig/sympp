@@ -12,7 +12,7 @@ test('dispatch and delivery board payload measurements for a 25-package request'
   ].join(' ').repeat(4);
   const created = await architect.call('create_work_request', {
     repo: 'example/service', base_branch: 'beta', title: 'Service rollout payload measurement',
-    description, request_kind: 'feature', status: 'ready_for_slicing',
+    description, request_kind: 'feature',
   });
   const request = created.work_request.id;
   architect.workRequest = request;
@@ -91,14 +91,16 @@ test('skipping every planned package leaves the goal unfinished in persisted and
   const request = await architect.request('Skipped scope');
   const ids = (await architect.call('slice_work_request', { work_packages: [contract('Retired first scope'), contract('Retired second scope')] })).work_package_ids;
   for (const work_package_id of ids) await architect.call('skip_work_package', { work_package_id });
-  expect((await architect.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.completed_at).toBeNull();
+  const detail = (await architect.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request;
+  expect(detail.phase).toBe('unresolved');
+  expect(detail.completed_at).toBeNull();
   const hydrated = await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated');
   expect(hydrated.work_request_details.find((detail: any) => detail.work_request.id === request).work_request.completed_at).toBeNull();
 });
 
 test('a clarified request becomes a revised plan and ordinary worker assignment', async ({ factory }) => {
   const architect = await factory.client();
-  const id = await architect.request('Clarified planning', 'human_info_needed');
+  const id = await architect.request('Clarified planning');
   const question = await architect.call('ask_question', {
     work_request_id: id, category: 'scope', question: 'Which behavior should ship?',
     why_needed: 'Agree on the bounded outcome before slicing.',
@@ -110,10 +112,10 @@ test('a clarified request becomes a revised plan and ordinary worker assignment'
     work_request_id: id, question_id: question.clarification_question.id,
     expected_question_status: 'open', answer: 'Ship the agreed behavior.', answered_by: 'human-operator',
   });
-  expect((await architect.call('read_work_request', { detail: 'full', work_request_id: id })).work_request.status).toBe('human_info_needed');
+  expect((await architect.call('read_work_request', { detail: 'full', work_request_id: id })).work_request.phase).toBe('intake');
 
   const sliced = await architect.call('slice_work_request', { work_packages: [contract('Agreed scope')] });
-  expect(sliced.status.work_request_status).toBe('sliced');
+  expect((await architect.call('read_work_request', { work_request_id: id })).work_request.phase).toBe('planned');
   const [wp] = sliced.work_package_ids;
   const before = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
   expect(before.work_packages).toHaveLength(1);
@@ -176,9 +178,7 @@ test('a clarified request becomes a revised plan and ordinary worker assignment'
 
 test('invalid batches are atomic and secondary delivery preserves repository and branch boundaries', async ({ factory }) => {
   const architect = await factory.client();
-  const id = await architect.request('Repository scope', 'draft', 'main');
-  await architect.reject('slice_work_request', { work_packages: [contract('Premature draft')] }, 'work_request_not_authorable');
-  await architect.call('set_work_request_status', { work_request_id: id, current_status: 'draft', next_status: 'ready_for_slicing' });
+  const id = await architect.request('Repository scope', 'main');
   const secondary = contract('Secondary implementation', { repo: 'example/client', base_branch: 'integration' });
   const invalid = { ...secondary };
   delete invalid.base_branch;

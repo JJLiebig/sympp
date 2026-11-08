@@ -21,6 +21,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     Config,
+    ErrorDetails,
     ToolCatalog,
     ToolResult,
     WorkRequestPayloads,
@@ -35,6 +36,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Service, as: WorkPackageService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -43,7 +45,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     "read_work_request",
     "read_plan",
     "read_delivery_board",
-    "set_work_request_status",
     "answer_question",
     "answer_question_and_record_decision",
     "close_question",
@@ -64,23 +65,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   end
 
   defp call_tool("list_work_requests", config, _terminal, arguments, _opts) do
-    with {:ok, status} <- optional_work_request_status(arguments),
+    with {:ok, phase} <- optional_work_request_phase(arguments),
          {:ok, pagination} <- list_pagination(arguments),
-         filters = WorkRequestScope.work_request_list_filters(%{}, status),
+         filters = WorkRequestScope.work_request_list_filters(%{}, phase),
          {:ok, work_requests, next_cursor} <-
            local_work_request_page(
              config.repo,
              WorkRequestScope.work_request_repository_filters(filters),
              pagination
-           ) do
-      cards = WorkRequestPayloads.work_request_cards(config.repo, work_requests)
-
+           ),
+         {:ok, cards} <- WorkRequestPayloads.work_request_cards(config.repo, work_requests) do
       {:ok,
        ToolResult.agent_tool_result(
          work_request_list_payload(
            cards,
            %{"visibility" => "local_ledger"},
-           status,
+           phase,
            pagination.limit,
            next_cursor
          )
@@ -123,9 +123,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
          {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, work_request, _filters} <- WorkRequestScope.work_request_scope(config.repo, work_request_id),
          {:ok, work_packages} <- WorkRequestService.list_work_packages(config.repo, work_request_id),
-         {:ok, delivery_board} <- WorkRequestScope.scoped_delivery_board(config.repo, work_request, work_packages) do
+         {:ok, delivery_board} <- WorkRequestScope.scoped_delivery_board(config.repo, work_request, work_packages),
+         {:ok, work_request_payload} <- WorkRequestPayloads.put_phase(WorkRequestPayloads.work_request_mutation(work_request), config.repo, work_request) do
       payload = %{
-        "work_request" => Map.put(WorkRequestPayloads.work_request_mutation(work_request), "execution_status", delivery_board.execution_status),
+        "work_request" => work_request_payload,
         "delivery_board" => WorkRequestPayloads.delivery_board(delivery_board, detail),
         "detail" => detail,
         "scope" => WorkRequestPayloads.redacted_work_request_scope(work_request)
@@ -136,29 +137,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_delivery_board", "reason" => reason}}
       {:error, :not_found} -> not_found_error("read_delivery_board")
       {:error, reason} -> architect_error(reason, "read_delivery_board")
-    end
-  end
-
-  defp call_tool("set_work_request_status", config, _terminal, arguments, _opts) do
-    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, current_status} <- required_argument(arguments, "current_status"),
-         {:ok, next_status} <- required_argument(arguments, "next_status"),
-         {:ok, work_request, _filters} <- WorkRequestScope.work_request_scope(config.repo, work_request_id),
-         scope = WorkRequestPayloads.redacted_work_request_scope(work_request),
-         {:ok, updated_work_request} <- WorkRequestService.update_status(config.repo, work_request_id, current_status, next_status) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
-         "scope" => scope,
-         "status" => %{
-           "previous_status" => current_status,
-           "current_status" => updated_work_request.status
-         }
-       })}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "set_work_request_status", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("set_work_request_status")
-      {:error, reason} -> architect_error(reason, "set_work_request_status")
     end
   end
 
@@ -183,7 +161,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
          "clarification_question" => WorkRequestPayloads.clarification_question(question_record),
          "scope" => scope,
          "status" => %{
-           "work_request_status" => updated_work_request.status,
            "previous_question_status" => expected_question_status,
            "question_status" => question_record.status
          }
@@ -229,7 +206,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
          "decision_log_entry" => WorkRequestPayloads.decision_log_entry(decision_record),
          "scope" => scope,
          "status" => %{
-           "work_request_status" => updated_work_request.status,
            "previous_question_status" => expected_question_status,
            "question_status" => question_record.status
          }
@@ -256,7 +232,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
          "clarification_question" => WorkRequestPayloads.clarification_question(question_record),
          "scope" => scope,
          "status" => %{
-           "work_request_status" => updated_work_request.status,
            "previous_question_status" => expected_question_status,
            "question_status" => question_record.status
          }
@@ -342,8 +317,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   defp read_plan_transaction(repo, work_request, scope, view, detail) do
     with {:ok, work_request} <- WorkRequestService.get(repo, work_request.id),
          {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request.id),
-         {:ok, delivery_board} <- operational_delivery_board(repo, work_request, work_packages) do
-      payload = WorkRequestPayloads.work_request_product_tree(repo, work_request, work_packages, delivery_board, view)
+         {:ok, delivery_board} <- operational_delivery_board(repo, work_request, work_packages),
+         {:ok, payload} <-
+           WorkRequestPayloads.work_request_product_tree(repo, work_request, work_packages, delivery_board, view) do
       payload = Map.put(payload, "scope", scope)
 
       if detail == "full" do
@@ -440,22 +416,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     "worktree_lifecycle:#{source_tool}:#{work_package_id}:#{fingerprint}"
   end
 
-  defp optional_work_request_status(arguments) do
-    case Map.fetch(arguments, "status") do
+  defp optional_work_request_phase(arguments) do
+    case Map.fetch(arguments, "phase") do
       :error ->
         {:ok, nil}
 
-      {:ok, status} when is_binary(status) ->
-        status = String.trim(status)
+      {:ok, phase} when is_binary(phase) ->
+        phase = String.trim(phase)
+        if phase in Phase.phases(), do: {:ok, phase}, else: {:tool_error, "invalid_phase"}
 
-        if status in WorkRequest.statuses() do
-          {:ok, status}
-        else
-          {:tool_error, "invalid_status"}
-        end
-
-      {:ok, _status} ->
-        {:tool_error, "invalid_status"}
+      {:ok, _phase} ->
+        {:tool_error, "invalid_phase"}
     end
   end
 
@@ -506,12 +477,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   defp list_cursor_position(%WorkRequest{inserted_at: %DateTime{} = inserted_at, id: id}) when is_binary(id),
     do: {inserted_at, id}
 
-  defp work_request_list_payload(cards, scope, status, limit, next_cursor) do
+  defp work_request_list_payload(cards, scope, phase, limit, next_cursor) do
     %{
       "work_requests" => cards,
       "total_count" => length(cards),
       "scope" => scope,
-      "filters" => WorkRequestPayloads.work_request_filter(status),
+      "filters" => WorkRequestPayloads.work_request_filter(phase),
       "limit" => limit
     }
     |> maybe_put_next_cursor(next_cursor)
@@ -611,6 +582,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   defp architect_error(:database_busy, tool), do: service_error(:database_busy, tool)
   defp architect_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp architect_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
+
+  defp architect_error(:work_request_archived, tool),
+    do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"phase" => "archived"})
 
   defp architect_error(reason, tool) when reason in [:invalid_repo_root, :missing_repo_root] do
     invalid_params_error(tool, reason)
@@ -739,7 +713,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     text_payload =
       payload
       |> Map.take(~w(work_request summary omitted help))
-      |> Map.update!("work_request", &Map.take(&1, ~w(id title status execution_status)))
+      |> Map.update!("work_request", &Map.take(&1, ~w(id title phase next_action)))
 
     ToolResult.with_text_profile(:full, fn ->
       ToolResult.agent_tool_result(payload, fn -> WorkerContext.encode_tool_payload(text_payload) end)

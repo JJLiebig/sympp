@@ -7,7 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases
 
   setup %{repo: repo} do
-    work_request = create_work_request!(repo, %{"title" => "Ownership", "status" => "ready_for_slicing"})
+    work_request = create_work_request!(repo, %{"title" => "Ownership"})
     on_exit(fn -> Application.put_env(:symphony_elixir, :sympp_herdr_core, nil) end)
     {:ok, work_request: work_request}
   end
@@ -102,7 +102,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
   end
 
   test "a clean detach ends ownership unless the factory's core still sees the terminal live", %{repo: repo, work_request: work_request} do
-    other = create_work_request!(repo, %{"title" => "Other", "status" => "ready_for_slicing"})
+    other = create_work_request!(repo, %{"title" => "Other"})
     own!(repo, work_request.id, "t1")
     own!(repo, other.id, "t9")
 

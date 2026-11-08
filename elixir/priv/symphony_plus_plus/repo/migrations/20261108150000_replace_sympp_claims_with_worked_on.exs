@@ -47,7 +47,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.ReplaceSymppClaimsWith
 
     fold_operator_reports()
 
-    execute("DELETE FROM sympp_work_packages WHERE kind = 'delegation' AND id LIKE '#{@anchor_prefix}%'")
+    # Every `delegation` package is an architect anchor; the kind is removed.
+    execute("DELETE FROM sympp_work_packages WHERE kind = 'delegation'")
     execute("DELETE FROM sympp_phases WHERE id LIKE '#{@phase_prefix}%'")
 
     drop(table(:sympp_mcp_session_bindings))

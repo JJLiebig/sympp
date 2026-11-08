@@ -237,7 +237,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
   defp next_action(%{"status" => %{} = status}) do
     cond do
       present?(Map.get(status, "current_status")) -> Map.get(status, "current_status")
-      present?(Map.get(status, "work_request_status")) -> Map.get(status, "work_request_status")
       present?(Map.get(status, "work_package_status")) -> Map.get(status, "work_package_status")
       true -> "inspect_status"
     end

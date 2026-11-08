@@ -8,7 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -72,7 +72,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   def record_in_transaction(repo, work_request_id, work_package_id, attrs)
       when is_atom(repo) and is_binary(work_request_id) and is_binary(work_package_id) and
              is_map(attrs) do
-    with {:ok, work_package} <-
+    with {:ok, work_request} <- Repository.get(repo, work_request_id),
+         :ok <- Phase.require_writable(work_request),
+         {:ok, work_package} <-
            Repository.get_work_package(repo, work_request_id, work_package_id),
          {:ok, delivery} <- validate_delivery_input(work_request_id, work_package_id, attrs),
          :ok <-
@@ -82,7 +84,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
              delivery,
              delivery_closeout_opts(attrs)
            ),
-         {:ok, work_request} <- Repository.get(repo, work_request_id),
          {:ok, delivery} <-
            Repository.record_work_package_delivery_in_transaction(
              repo,
@@ -328,7 +329,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
 
   defp refresh_replayed_closeout(
          repo,
-         %WorkRequest{} = work_request,
+         %WorkRequest{},
          %WorkPackageDelivery{} = delivery
        ) do
     context = WorkPackageActivity.context(repo, delivery.work_package_id)
@@ -341,9 +342,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
         {:error, _reason} -> nil
       end
 
-    with {:ok, _refreshed} <- Completion.refresh_in_transaction(repo, work_request.id) do
-      {:ok, {delivery, replay_closeout_context(context, event)}}
-    end
+    {:ok, {delivery, replay_closeout_context(context, event)}}
   end
 
   defp replay_closeout_context(context, event) do
@@ -373,8 +372,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
              delivery,
              closeout,
              closeout_context
-           ),
-         {:ok, _refreshed} <- Completion.refresh_in_transaction(repo, work_request.id) do
+           ) do
       {:ok, {delivery, closeout_context}}
     end
   end

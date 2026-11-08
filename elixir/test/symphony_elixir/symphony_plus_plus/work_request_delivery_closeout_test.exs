@@ -10,6 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -143,7 +144,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
 
     assert {:ok, replay} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
     assert replay.id == delivery.id
-    assert %WorkRequest{completed_at: %DateTime{}} = repo.get!(WorkRequest, work_request.id)
+    assert {:ok, %{phase: "done"}} = Phase.load_one(repo, repo.get!(WorkRequest, work_request.id))
   end
 
   test "colliding closeout progress does not bypass validation or terminal mutation", %{repo: repo} do
@@ -245,7 +246,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
     status = Keyword.get(overrides, :status, "dispatched")
     request_id = Keyword.get_lazy(overrides, :work_request_id, fn -> "WR-DELIVERY-#{System.unique_integer([:positive])}" end)
 
-    work_request = create_work_request!(repo, id: request_id, status: "ready_for_slicing")
+    work_request = create_work_request!(repo, id: request_id)
     work_package_id = Keyword.get(overrides, :work_package_id, "WP-#{request_id}")
     work_package = create_work_package!(repo, work_request, id: work_package_id, kind: kind)
 

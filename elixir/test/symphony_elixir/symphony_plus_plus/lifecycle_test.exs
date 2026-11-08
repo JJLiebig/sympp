@@ -12,6 +12,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryResolution
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.WorkPackageFactory
 
@@ -40,8 +41,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
                work_type: "feature",
                human_description: "Lifecycle request.",
                constraints: %{},
-               desired_dispatch_shape: "single_package",
-               status: "sliced"
+               desired_dispatch_shape: "single_package"
              })
 
     {:ok, work_request: work_request}
@@ -111,6 +111,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     event_count = repo.aggregate(ProgressEvent, :count, :id)
     assert :ok = Lifecycle.apply_terminal_effects(repo, Repo.get!(WorkPackage, package.id))
     assert repo.aggregate(ProgressEvent, :count, :id) == event_count
+  end
+
+  test "a blocker raised from an archived WorkRequest stays frozen, lets the blocked package end and resolves on restore", %{repo: repo, work_request: request} do
+    assert {:ok, other} =
+             WorkRequestRepository.create(repo, %{
+               title: "Archived source",
+               repo: "nextide/example",
+               base_branch: "main",
+               work_type: "feature",
+               human_description: "Source.",
+               desired_dispatch_shape: "single_package"
+             })
+
+    source = package!(repo, other, "dispatched")
+    target = package!(repo, request, "dispatched")
+    blocker!(repo, source.id, "cross-request-blocker", %{kind: "work_package", id: target.id})
+    repo.update!(Ecto.Changeset.change(repo.get!(WorkRequest, other.id), operator_completed_at: DateTime.utc_now(:microsecond), archived_at: DateTime.utc_now(:microsecond)))
+
+    assert {:ok, _delivery} = DeliveryCloseout.record(repo, request.id, target.id, ending("finished"))
+    assert repo.get!(WorkPackage, target.id).status == "ended"
+    assert WorkPackageActivity.context(repo, source.id).blocker_state.active_ids == ["cross-request-blocker"]
+
+    assert {:ok, _restored} = WorkRequestService.restore(repo, other.id)
+    assert WorkPackageActivity.context(repo, source.id).blocker_state.active_ids == []
+
+    # A target that was deleted while the source was archived counts as settled too.
+    blocker!(repo, source.id, "deleted-target-blocker", %{kind: "work_package", id: "WP-DELETED"})
+    assert {:ok, _archived} = WorkRequestService.archive(repo, other.id)
+    assert {:ok, _restored} = WorkRequestService.restore(repo, other.id)
+    assert WorkPackageActivity.context(repo, source.id).blocker_state.active_ids == []
   end
 
   test "qualification fails on each predicate that does not hold" do

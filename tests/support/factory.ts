@@ -191,11 +191,11 @@ export class Client {
     return body;
   }
 
-  async request(title: string, status = 'ready_for_slicing', baseBranch = 'beta', repo = 'example/service', extraScopes: object[] = []) {
+  async request(title: string, baseBranch = 'beta', repo = 'example/service', extraScopes: object[] = []) {
     const created = await this.call('create_work_request', {
       repo, base_branch: baseBranch, title,
       description: 'Synthetic acceptance request; no external work is executed.',
-      request_kind: 'feature', status,
+      request_kind: 'feature',
       repo_scopes: [{ repo: 'example/client', base_branch: 'integration' }, ...extraScopes],
     });
     expect(created.status).toBe('created');
@@ -203,7 +203,7 @@ export class Client {
     expect(created.worked_on.address).toBe(this.address);
     const id = created.work_request.id;
     const read = await this.call('read_work_request', { detail: 'full', work_request_id: id });
-    expect(read.work_request.status).toBe(status);
+    expect(read.work_request.phase).toBe('intake');
     expect(read.work_request.creator).toEqual({ kind: 'agent', name: this.address, via: 'mcp' });
     this.workRequest = id;
     return id;

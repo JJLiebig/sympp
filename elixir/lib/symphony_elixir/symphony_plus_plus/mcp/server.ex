@@ -403,8 +403,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp ownership_result({:error, :not_found}, name), do: not_found_error(name)
 
-  defp ownership_result({:error, :work_request_archived}, name),
-    do: {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "work_request_archived", "state" => "archived", "next_action" => "restore"}}
+  defp ownership_result({:error, :work_request_archived}, name), do: tool_error(:work_request_archived, name)
 
   defp ownership_result({:error, :database_busy}, name),
     do: {:error, -32_000, "Ledger busy", %{"tool" => name, "reason" => "database_busy", "remediation" => "Another ledger writer held the lock. Retry the call."}}
@@ -437,6 +436,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
       {:error, :not_found} ->
         not_found_error("set_report")
+
+      {:error, :work_request_archived} ->
+        tool_error(:work_request_archived, "set_report")
 
       {:error, _reason} ->
         service_error("set_report")
@@ -471,12 +473,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
        ToolResult.tool_result(%{
          "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
          "decision_log_entry" => WorkRequestPayloads.decision_log_entry(decision_record),
-         "provenance" => operator_note_provenance(created_by, source_id),
-         "status" => %{"work_request_status" => work_request.status}
+         "provenance" => operator_note_provenance(created_by, source_id)
        })}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "record_work_request_operator_decision", "reason" => reason}}
       {:error, :not_found} -> not_found_error("record_work_request_operator_decision")
+      {:error, :work_request_archived} -> tool_error(:work_request_archived, "record_work_request_operator_decision")
       {:error, _reason} -> service_error("record_work_request_operator_decision")
     end
   end
@@ -518,7 +520,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, workflow_mode} <- optional_string_argument(arguments, "workflow_mode", "architect_led_feature_branch"),
          {:ok, repo_scopes} <- optional_list_argument(arguments, "repo_scopes"),
          {:ok, constraints} <- optional_object_argument(arguments, "constraints"),
-         {:ok, status} <- optional_string_argument(arguments, "status", "ready_for_clarification"),
          {:ok, creator_kind} <- optional_string_argument(arguments, "creator_kind", "agent"),
          {:ok, creator_name} <- optional_string_argument(arguments, "creator_name", terminal.display_address),
          {:ok, created_via} <- optional_string_argument(arguments, "created_via", "mcp") do
@@ -532,7 +533,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          "desired_dispatch_shape" => workflow_mode,
          "repo_scopes" => repo_scopes || [],
          "constraints" => constraints || %{},
-         "status" => status,
          "creator_kind" => creator_kind,
          "creator_name" => creator_name,
          "created_via" => created_via,
@@ -553,9 +553,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:ok, row, _how} ->
         %{"status" => "created", "work_request" => WorkRequestPayloads.work_request(work_request), "worked_on" => Ownership.public(row)}
 
-      {:error, _reason} ->
-        %{"status" => "created", "work_request" => WorkRequestPayloads.work_request(work_request)}
+      # The WorkRequest exists either way; say why this terminal doesn't own it yet.
+      {:error, {:owned_by_other_terminal, owner}} ->
+        not_owned_payload(work_request, "owned_by_other_terminal", owner["next_action"])
+
+      {:error, reason} ->
+        not_owned_payload(work_request, reason_text(reason), "retry an owner-gated write on #{work_request.id} to take ownership")
     end
+  end
+
+  defp not_owned_payload(%WorkRequest{} = work_request, reason, next_action) do
+    %{
+      "status" => "created",
+      "work_request" => WorkRequestPayloads.work_request(work_request),
+      "ownership_error" => reason,
+      "next_action" => next_action
+    }
   end
 
   defp create_work_request_payload(_repo, %WorkRequest{} = work_request, _terminal, false) do
@@ -607,6 +620,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp tool_error(:database_busy, tool), do: service_error(tool)
   defp tool_error({:storage_failed, _reason}, tool), do: service_error(tool)
   defp tool_error({:migration_failed, _reason}, tool), do: service_error(tool)
+
+  defp tool_error(:work_request_archived, tool),
+    do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"phase" => "archived"})
+
   defp tool_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
   defp not_found_error(tool), do: {:error, -32_004, "Not found", %{"tool" => tool, "reason" => "not_found"}}

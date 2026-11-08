@@ -95,7 +95,7 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
                  })
 
         path = origin <> "/api/v1/sympp/operator/work-requests/#{request.id}"
-        assert Req.post!(path <> "/state", json: %{state: "completed"}, headers: browser_api_headers()).status == 200
+        assert Req.post!(path <> "/complete", json: %{}, headers: browser_api_headers()).status == 200
         assert Req.post!(path <> "/archive", json: %{}, headers: browser_api_headers()).status == 200
         assert Req.post!(path <> "/delete", json: %{}, headers: browser_api_headers()).status == 200
         assert Repo.get(WorkRequest, request.id) == nil
@@ -398,8 +398,7 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
                work_type: "feature",
                human_description: "Already done.",
                constraints: %{},
-               desired_dispatch_shape: "single_package",
-               status: "ready_for_slicing"
+               desired_dispatch_shape: "single_package"
              })
 
     assert {:ok, slice} =
@@ -419,7 +418,7 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
     assert {:ok, _skipped} = WorkRequestService.skip_work_package(Repo, request.id, slice.id)
 
     request
-    |> Ecto.Changeset.change(completed_at: utc_usec(completed_at))
+    |> Ecto.Changeset.change(operator_completed_at: utc_usec(completed_at))
     |> Repo.update!()
   end
 

@@ -28,15 +28,19 @@ to wrap one package. Dependencies between packages or Groups expand into one
 effective package graph for cycle detection, unmet prerequisites, and dispatch
 readiness. Visual card order and grouping do not create dependencies.
 
-WorkRequest completion requires actual `pr_merged` or `completed_no_pr` delivery
-for its current required scope and closed questions. Planned skipped packages
-retire obsolete scope; skipping every package does not deliver a WorkRequest.
-Abandoned work remains unresolved unless delivered successors replace it.
-Superseded work requires every successor from both its immutable delivery
-pointer and same-request `superseded_by`/`recut_as` lineage to deliver. Missing
-or cyclic successors remain unresolved. Later retirement annotations never
-erase actual historical delivery. Explicit operator completion remains available.
-`sliced` remains the stored planning status; delivery does not change it.
+A WorkRequest's phase is derived on read from its packages and their endings;
+only the operator overrides are stored. The first match wins: `archived`
+(archived by the operator or retention), `done` (completed by the operator),
+`intake` (no packages), `active` (a package is dispatched or ready), `planned`
+(a package is still planned, even beside ended ones), `unresolved` (every
+package ended, but every one was skipped or one does not resolve the goal) and
+`done` (every package that was not skipped resolves the goal). Finished,
+merged and no-PR endings resolve a goal; abandoned work does not, unless
+delivered successors replace it. Superseded work requires every successor from
+both its immutable delivery pointer and same-request `superseded_by`/`recut_as`
+lineage to resolve; missing or cyclic successors leave the goal unresolved.
+Open questions never change the phase. Writes to an archived WorkRequest are
+refused until the operator restores it; nothing restores it implicitly.
 
 Solo Sessions do not create a WorkRequest, WorkPackage, or dispatch.
 All ledger operations, including Solo, use MCP. The packaged
@@ -51,8 +55,8 @@ WorkRequest, and the dashboard and `read_work_request` expose it as
 other fields; resuming parked work keeps the reason and its times. A human
 question the architect raised before reports moved stays visible as a pending
 question until answered. New human questions use `ask_question`. Reports neither
-create/clear blockers nor complete/reopen work: `completed_at` remains delivery
-truth. There is no worker reporting cadence.
+create/clear blockers nor change the WorkRequest phase. There is no worker
+reporting cadence.
 
 A declared review requirement identifies a provider and optional arguments,
 such as `review-suite` with its selected mode. It can also name another plugin
@@ -166,8 +170,8 @@ uses TOON. See the [architect procedure](../packages/sympp/skills/symphony-archi
 `reconcile_work_request` defaults to counts plus proposed, applied and error
 rows; `detail: "full"` restores skipped rows and complete delivery-board evidence.
 Terminal packages have no pending merge next action. WorkRequest reads expose
-`execution_status: "closed"` when a nonempty plan is entirely terminal, otherwise
-`"open"`. This is separate from raw planning status and goal completion: abandoned
-scope can close execution without fulfilling the goal. Native Herdr views show
-closed execution as Done and retain the dropped-package count.
+the derived `phase`, plus `next_action` when the operator has to act
+(`complete_or_archive` for `unresolved`, `restore` for `archived`). Native Herdr
+views show `done` and `unresolved` goals as Done and retain the dropped-package
+count.
 These contract changes require updated Skills and fresh MCP sessions after upgrade.

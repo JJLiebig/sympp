@@ -42,10 +42,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
 
   @spec work_request_list_filters(filters(), String.t() | nil) :: filters()
   def work_request_list_filters(filters, nil), do: filters
-  def work_request_list_filters(filters, status), do: Map.put(filters, "status", status)
+  def work_request_list_filters(filters, phase), do: Map.put(filters, "phase", phase)
 
   @spec work_request_repository_filters(filters()) :: map()
-  def work_request_repository_filters(filters), do: Map.take(filters, ["repo", "base_branch", "status"])
+  def work_request_repository_filters(filters), do: Map.take(filters, ["repo", "base_branch", "phase"])
 
   @spec scoped_work_request_question(repo(), String.t(), String.t()) ::
           {:ok, ClarificationQuestion.t()} | {:error, term()}

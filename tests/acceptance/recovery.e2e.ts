@@ -11,7 +11,7 @@ test('competing terminals end with one owner, Release hands over and ownership s
   const chief = await factory.client(nextTerminal(), { 'sympp.role': 'chief', 'sympp.domain': 'Acceptance' });
   const created = await chief.call('create_work_request', {
     repo: 'example/service', base_branch: 'beta', title: 'Contended request', description,
-    request_kind: 'feature', status: 'ready_for_slicing', own: false,
+    request_kind: 'feature', own: false,
   });
   const request = created.work_request.id;
   expect(created.worked_on).toBeUndefined();

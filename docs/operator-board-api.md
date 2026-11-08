@@ -82,9 +82,8 @@ This does not protect against an untrusted process already running locally.
 Minimal intake JSON is
 `{"title":"Widget","repo":"example/service","base_branch":"beta","human_description":"Build the agreed widget."}`.
 Optional fields use existing operator defaults: `work_type: "feature"`,
-`desired_dispatch_shape: "architect_led_feature_branch"`, `constraints: {}`,
-and `status: "ready_for_clarification"`. Intake creates the request with no owner
-and starts no agent. Unknown request fields are ignored.
+`desired_dispatch_shape: "architect_led_feature_branch"` and `constraints: {}`. Intake creates the request with no
+owner and starts no agent. Unknown request fields are ignored.
 
 Read persisted questions from
 `work_request_details[].clarification_questions[]`: `id`, `work_request_id`,
@@ -189,8 +188,11 @@ Example package fragment (invented repository):
 Use `work_request_details[].product_tree`: `root_node_ids` and each node's
 `parent_id` describe nesting; `position` orders siblings, while `root_node_ids`
 provides the ordered root identifiers. Nodes include empty groups and `work_package_ids`; root packages appear
-in `root_work_package_ids`. WorkRequest `completed_at` remains the canonical
-delivery time. Deploy observations and repository default branches are not
+in `root_work_package_ids`. Each `work_request` carries its derived `phase`
+(`intake`, `planned`, `active`, `unresolved`, `done` or `archived`),
+`completed_at` (when its work became done: the operator's completion or its
+latest package ending, otherwise null), `operator_completed_at`, `archived_at`
+and `archive_reason`. Deploy observations and repository default branches are not
 included by this change.
 
 `GET /api/v1/sympp/operator/events` is a notification-only server-sent event
@@ -210,8 +212,9 @@ client attaches.
 ## Finished goal retention and operator actions
 
 `settings.work_request_archive_after_days` stays an integer day setting, now
-defaulting to `3` (72 elapsed hours after `completed_at`, including the exact
-boundary). Only completed goals qualify. The background retention pass runs
+defaulting to `3` (72 elapsed hours after `completed_at`, or after the
+operator's last restore if that is later, including the exact boundary). Only
+goals in phase `done` qualify. The background retention pass runs
 every 30 minutes; saving operator settings forces an immediate pass. Dashboard
 reads do not run retention. Archiving happens on the next successful pass
 after the threshold, rather than on an exact per-goal timer. The existing limit
@@ -231,30 +234,23 @@ retain their history until deletion; the existing deletion setting
 ## Never-started goal retention
 
 `settings.work_request_never_started_archive_after_days` defaults to `30` elapsed
-days, configurable from 1 to 3650. A goal qualifies when it has no recorded package
-dispatch or delivery, including historical evidence. A terminal that has worked
-on the goal (current or past owner), agent runs and legacy execution states also
-protect started goals even when their packages are dormant or no longer
-dispatched. A merely planned package does not count as execution.
+days, configurable from 1 to 3650. A goal qualifies only if it never started:
+its phase is `intake` (no packages), or `planned` with no package ever
+dispatched or ended. An operator-completed goal never qualifies.
 
 Age starts at goal creation; edits do not reset it. At the exact threshold the
 next successful retention pass archives the goal with `archive_reason:
-"never_started"`, leaving `completed_at` null and its status unchanged. It leaves
+"never_started"`, leaving `completed_at` null. It leaves
 the board and appears in `archived_work_requests`; its archive card operational state
 is `archived` / `Archived`, rather than completed. Restore clears the archive and
-starts a fresh full threshold window from restoration. Increasing the setting
-does not automatically restore an existing never-started archive.
+starts a fresh full threshold window from restoration. Changing a retention
+setting never restores an archive; only the operator's restore does.
 
 This rule neither queues worktree cleanup nor deletes ledger history. Archives
 with this reason are excluded from subsequent automatic archived-goal deletion,
 so they remain restorable indefinitely. Explicit operator deletion retains its
 existing destructive behavior. Finished-goal retention, the ten-visible-completed
 limit, and the existing deletion threshold are unchanged.
-
-The migration adds the setting without changing existing settings. On the first
-successful pass, existing unfinished goals at least 30 days old with no persisted
-execution evidence qualify; newer or previously started goals stay visible.
-No production ledger was inspected to establish an actual qualifying count.
 
 Change the setting through the local operator API (replace the base URL with
 the running dashboard's origin):
@@ -276,11 +272,11 @@ These existing POST routes require local operator authorization:
 
 | Route suffix under `/api/v1/sympp/operator/work-requests/:id` | Preconditions and consequences |
 | --- | --- |
-| `/state` with `{"state":"completed"}` | Operator override; no delivery or inactive-worker precondition. Marks the goal complete, clears its archive state and open questions, clears package attention and queues terminal package worktree cleanup. Does not stop workers or merge PRs. Confirm the override when work is still running. |
-| `/archive` | Requires completion after refreshing current evidence; otherwise returns `not_completed`. Hides the goal and queues terminal package worktree cleanup. History remains. |
+| `/complete` | Operator override; no delivery or inactive-worker precondition. Sets `operator_completed_at`, so the phase is `done`; closes open questions, clears package blockers and queues terminal package worktree cleanup. Does not stop workers or merge PRs. Confirm the override when work is still running. An archived goal returns `work_request_archived` (409) with `next_action: "restore"`. |
+| `/archive` | Requires phase `done` or `unresolved`; otherwise returns `not_completed`. Hides the goal and queues terminal package worktree cleanup. History remains. Archiving again is a no-op. |
 | `/delete` | Requires only that the goal exists; archive and completion are **not** backend prerequisites. Permanently removes the goal and dependent ledger history and ownership rows and queues linked worktree cleanup, including nonterminal packages. Confirm deletion and finish or stop active work first; it is not a safe unconditional one-click action. |
 | `/release` | Ends the goal's live ownership (`finish_reason: released_by_operator`) so another Herdr terminal's next owner-gated write takes it. Use it for an owner that crashed on a machine the factory can't see. HTTP 200 with `{ok:true, work_request_id, released:<worked_on>, refresh}`; a goal with no live owner returns `not_owned` (409). |
-| `/restore` | Requires an existing goal. Clears archive state. A never-started archive gets a new threshold window without completion; a still-completed archive resets `completed_at`. Does not restore deleted worktrees or undo queued cleanup. |
+| `/restore` | Requires an existing goal. Clears the archive and records `restored_at`, which starts a fresh retention window for both finished and never-started goals. Does not restore deleted worktrees or undo queued cleanup. |
 
 `POST /api/v1/sympp/operator/work-packages/:id/finish` ends a `dispatched` or
 `ready` WorkPackage as `finished`: its PR waits on someone else, so sympp stops

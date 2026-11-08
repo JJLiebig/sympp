@@ -142,7 +142,7 @@ function openEventStream(req: IncomingMessage, res: ServerResponse, streams: Set
 
 const MUTATIONS: Array<[RegExp, Mutation]> = [
   [/^\/settings$/, changeSettings],
-  [/^\/work-requests\/([^/]+)\/state$/, changeRequestState],
+  [/^\/work-requests\/([^/]+)\/complete$/, completeRequest],
   [/^\/work-requests\/([^/]+)\/archive$/, archiveRequest],
   [/^\/work-requests\/([^/]+)\/delete$/, deleteRequest],
   [/^\/work-requests\/([^/]+)\/restore$/, restoreRequest],
@@ -167,18 +167,16 @@ function changeSettings(snapshot: Snapshot, _id: string, body: Json) {
 }
 
 // The snapshot's clock stands at its capture time, so a goal marked done is done as of then.
-function changeRequestState(snapshot: Snapshot, id: string, body: Json) {
-  const completed = body.state === "completed";
-  const patch = completed
-    ? { status: "completed", completed_at: snapshot.hydrated.generated_at, completion_source: "operator", operational_state: { key: "completed", label: "Completed", tone: "success", raw_status: "completed", attention_items: [] } }
-    : { status: body.state, completed_at: null, operational_state: { key: body.state, label: "Ready For Slicing", tone: "neutral", raw_status: body.state, attention_items: [] } };
+function completeRequest(snapshot: Snapshot, id: string) {
+  const at = snapshot.hydrated.generated_at;
+  const patch = { phase: "done", completed_at: at, operator_completed_at: at, operational_state: { key: "completed", label: "Completed", tone: "success", phase: "done", attention_items: [] } };
   requestRecords(snapshot, id).forEach((record) => Object.assign(record, patch));
   return { work_request: { id, ...patch } };
 }
 
 function archiveRequest(snapshot: Snapshot, id: string) {
   const [card] = requestRecords(snapshot, id);
-  const archived = { ...card, id, archived_at: new Date().toISOString(), archive_reason: "operator" };
+  const archived = { ...card, id, phase: "archived", archived_at: new Date().toISOString(), archive_reason: "manual" };
   removeRequest(snapshot, id);
   const section = (snapshot.archived.archived_work_requests ??= { work_requests: [] });
   section.work_requests = [archived, ...(section.work_requests ?? [])];

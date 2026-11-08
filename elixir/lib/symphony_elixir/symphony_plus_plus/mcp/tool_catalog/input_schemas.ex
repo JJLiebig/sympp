@@ -4,7 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{SoloTools, ToolCatalog}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{WorkPackage, WorkPackageDelivery}
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{DecisionLogEntry, WorkRequest}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{DecisionLogEntry, Phase, WorkRequest}
 
   @local_operator_provenance_max_length 512
   @local_operator_text_max_length 4_000
@@ -29,7 +29,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
           "items" => %{"type" => "object", "additionalProperties" => false, "properties" => %{"repo" => string_schema(), "base_branch" => string_schema()}, "required" => ["repo"]}
         },
         "constraints" => object_schema(),
-        "status" => string_enum_schema(WorkRequest.statuses()),
         "own" => boolean_schema() |> Map.put("description", "Make the calling terminal the owner (default true). Pass false when handing the WorkRequest to an architect."),
         "creator_kind" => string_enum_schema(WorkRequest.creator_kinds()),
         "creator_name" => string_schema(),
@@ -117,7 +116,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   defp architect_schema("list_work_requests") do
     schema(
       %{
-        "status" => string_schema(),
+        "phase" => string_enum_schema(Phase.phases()),
         "limit" => integer_schema() |> Map.merge(%{"minimum" => 1, "maximum" => 200, "description" => "Page size. Defaults to 50; values above 200 are rejected."}),
         "cursor" => described_string_schema("Opaque cursor returned by the previous list_work_requests page.")
       },
@@ -243,17 +242,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         }
       },
       ["work_request_id"]
-    )
-  end
-
-  defp architect_schema("set_work_request_status") do
-    schema(
-      %{
-        "work_request_id" => string_schema(),
-        "current_status" => string_schema(),
-        "next_status" => string_schema()
-      },
-      ["work_request_id", "current_status", "next_status"]
     )
   end
 
@@ -503,7 +491,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
       "group_id" => nullable_string_schema(),
       "title" => task_title_schema(),
       "goal" => nonblank_string_schema(),
-      "kind" => Map.put(string_enum_schema(WorkPackage.executable_kinds()), "default", "standard_pr"),
+      "kind" => Map.put(string_enum_schema(WorkPackage.kinds()), "default", "standard_pr"),
       "repo" => described_string_schema("Optional delivery repo. Defaults to the WorkRequest primary repo."),
       "base_branch" => described_string_schema("Optional delivery base branch. Defaults to the WorkRequest base branch."),
       "branch_pattern" => described_string_schema("Optional exact branch or {{placeholder}} template."),

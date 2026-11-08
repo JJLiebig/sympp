@@ -7,7 +7,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
     work_request =
       create_work_request!(repo,
         id: "WR-ARCH-DESCENDANT-PLANNING",
-        status: "sliced",
         repo_scopes: [%{repo: "nextide/secondary-service", base_branch: "release"}]
       )
 
@@ -69,6 +68,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
       })
 
     assert get_in(archived, ["error", "data", "reason"]) == "work_request_archived"
-    assert get_in(archived, ["error", "data", "next_action"]) == "restore"
+    assert get_in(archived, ["error", "data", "recovery", "next_action"]) == "restore"
   end
 end

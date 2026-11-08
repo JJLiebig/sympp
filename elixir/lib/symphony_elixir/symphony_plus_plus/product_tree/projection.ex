@@ -6,7 +6,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, ExecutionGraph, Node, Revision}
 
   @terminal_completion_keys ["merged", "delivered", "completed_no_pr", "finished", "completed"]
-  @guidance_completion_keys ["human_info_needed", "ready_for_clarification", "clarifying"]
   @not_started_completion_keys ["approved", "planned", "dispatched", "prepared", "dependency_blocked"]
   @partial_completion_keys [
     "active",
@@ -417,17 +416,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
 
   defp work_package_guidance?(work_package) do
     state = map_value(work_package, "operational_state") || %{}
-    attention_items = map_value(state, "attention_items") || []
-
-    [map_value(state, "key"), map_value(work_package, "status"), map_value(work_package, "work_package_status")]
-    |> Enum.any?(&(&1 in @guidance_completion_keys)) or Enum.any?(attention_items, &attention_item_guidance?/1)
+    Enum.any?(map_value(state, "attention_items") || [], &attention_item_guidance?/1)
   end
 
   defp attention_item_guidance?(item) do
     key = item |> map_value("key") |> downcased()
     label = item |> map_value("label") |> downcased()
 
-    key in @guidance_completion_keys or String.contains?(key, "question") or String.contains?(label, "question")
+    String.contains?(key, "question") or String.contains?(label, "question")
   end
 
   defp downcased(value) when is_binary(value), do: value |> String.trim() |> String.downcase()

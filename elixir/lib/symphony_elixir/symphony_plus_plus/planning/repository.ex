@@ -13,8 +13,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion, as: WorkRequestCompletion
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase, as: WorkRequestPhase
 
   @default_append_retry_attempts 200
   @default_state_read_retry_attempts 50
@@ -108,8 +107,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
     end
   end
 
+  # Callers hold a transaction, so the archive check and the insert are atomic.
   defp append_progress_event_in_transaction(repo, attrs, changeset_fun, opts) do
-    with {:ok, attrs} <- normalize_append_attrs(attrs, Keyword.fetch!(opts, :trusted_audit_metadata)),
+    with :ok <- require_writable_progress(repo, attrs),
+         {:ok, attrs} <- normalize_append_attrs(attrs, Keyword.fetch!(opts, :trusted_audit_metadata)),
          :not_found <-
            existing_progress_event_by_idempotency_key_with_retry(repo, attrs, append_retry_attempts()) do
       repo
@@ -120,7 +121,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
         changeset_fun
       )
       |> fetch_after_idempotency_conflict(repo, attrs)
-      |> clear_work_request_completion_after_reopening_progress(repo)
     end
   end
 
@@ -164,30 +164,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   end
 
   defp pr_observation_payload?(_payload), do: false
-
-  defp clear_work_request_completion_after_reopening_progress({:ok, %ProgressEvent{} = event}, repo) do
-    if reopening_progress_event?(event) do
-      clear_work_request_completion_after_progress(event, repo)
-    else
-      {:ok, event}
-    end
-  end
-
-  defp clear_work_request_completion_after_reopening_progress(result, _repo), do: result
-
-  defp clear_work_request_completion_after_progress(%ProgressEvent{work_package_id: work_package_id} = event, repo) do
-    case WorkRequestRepository.clear_completion_for_work_package(repo, work_package_id) do
-      :ok -> {:ok, event}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp reopening_progress_event?(%ProgressEvent{work_package_id: work_package_id, payload: payload})
-       when is_binary(work_package_id) and is_map(payload) do
-    WorkRequestCompletion.blocker_event_payload?(payload) and (Map.get(payload, "active") || Map.get(payload, :active)) == true
-  end
-
-  defp reopening_progress_event?(%ProgressEvent{}), do: false
 
   defp normalize_append_attrs(attrs, trusted_audit_metadata?) do
     with :ok <- reject_conflicting_key(attrs, :work_package_id, & &1),
@@ -273,6 +249,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
     |> update(repo)
   end
 
+  # Planning records belong to a package, and an archived WorkRequest takes no new
+  # ones. Progress events are checked by `append_progress_event_in_transaction/4`.
+  defp require_writable_insert(_repo, ProgressEvent, _attrs), do: :ok
+
+  defp require_writable_insert(repo, _schema, attrs),
+    do: WorkRequestPhase.require_writable_package(repo, Map.get(attrs, "work_package_id"))
+
+  defp require_writable_progress(repo, attrs) do
+    attrs = normalize_keys(attrs)
+    WorkRequestPhase.require_writable_package(repo, Map.get(attrs, "work_package_id"))
+  end
+
+  defp update_writable_plan_node(repo, %PlanNode{} = plan_node, changeset) do
+    repo.transaction(fn ->
+      with :ok <- WorkRequestPhase.require_writable_package(repo, plan_node.work_package_id),
+           {:ok, updated} <- update(changeset, repo) do
+        updated
+      else
+        {:error, reason} -> repo.rollback(reason)
+      end
+    end)
+  end
+
   @spec update_plan_node_status(repo(), String.t(), String.t()) :: {:ok, PlanNode.t()} | {:error, error()}
   def update_plan_node_status(repo, plan_node_id, status)
       when is_atom(repo) and is_binary(plan_node_id) and is_binary(status) do
@@ -281,9 +280,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
         {:error, :not_found}
 
       %PlanNode{} = plan_node ->
-        plan_node
-        |> PlanNode.status_changeset(%{status: status})
-        |> update(repo)
+        update_writable_plan_node(repo, plan_node, PlanNode.status_changeset(plan_node, %{status: status}))
     end
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
@@ -297,9 +294,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
         {:error, :not_found}
 
       %PlanNode{} = plan_node ->
-        plan_node
-        |> PlanNode.update_changeset(attrs)
-        |> update(repo)
+        update_writable_plan_node(repo, plan_node, PlanNode.update_changeset(plan_node, attrs))
     end
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
@@ -738,12 +733,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
 
   defp insert_transaction(repo, attrs, schema, field, changeset_fun, auto_allocate?) do
     repo.transaction(fn ->
-      attrs
-      |> maybe_put_next_value(repo, schema, field, auto_allocate?)
-      |> changeset_fun.()
-      |> insert(repo)
-      |> case do
-        {:ok, row} -> row
+      with :ok <- require_writable_insert(repo, schema, attrs),
+           {:ok, row} <-
+             attrs
+             |> maybe_put_next_value(repo, schema, field, auto_allocate?)
+             |> changeset_fun.()
+             |> insert(repo) do
+        row
+      else
         {:error, reason} -> repo.rollback(reason)
       end
     end)

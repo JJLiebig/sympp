@@ -7,20 +7,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestListPaginationTest do
     def handle(_event, _measurements, metadata, test_pid), do: send(test_pid, {:list_query, to_string(metadata.query || "")})
   end
 
-  test "list_work_requests pages stable status matches with bounded queries", %{repo: repo} do
+  test "list_work_requests pages stable phase matches with bounded queries", %{repo: repo} do
     ready =
       for index <- 1..10 do
-        create_work_request!(repo,
-          id: "WR-MCP-PAGE-SCOPED-#{String.pad_leading(Integer.to_string(index), 3, "0")}",
-          status: "ready_for_slicing"
-        )
+        create_work_request!(repo, id: "WR-MCP-PAGE-SCOPED-#{String.pad_leading(Integer.to_string(index), 3, "0")}")
       end
 
-    _draft =
-      create_work_request!(repo,
-        id: "WR-MCP-PAGE-SCOPED-DRAFT",
-        status: "draft"
-      )
+    planned = create_work_request!(repo, id: "WR-MCP-PAGE-SCOPED-PLANNED")
+
+    assert {:ok, _package} =
+             CanonicalWorkPackageFixtures.add_work_package(
+               repo,
+               planned.id,
+               work_request_work_package_attrs(id: "SYMPP-MCP-PAGE-PLANNED", base_branch: planned.base_branch)
+             )
 
     visible = ready
 
@@ -28,14 +28,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestListPaginationTest do
     event = repo.config()[:telemetry_prefix] ++ [:query]
     :ok = :telemetry.attach(handler_id, event, &QueryProbe.handle/4, self())
 
-    first = mcp_tool(repo, nil, "list_work_requests", %{"status" => "ready_for_slicing", "limit" => 2})
+    first = mcp_tool(repo, nil, "list_work_requests", %{"phase" => "intake", "limit" => 2})
     :telemetry.detach(handler_id)
     first_payload = get_in(first, ["result", "structuredContent"])
     queries = drain_queries([])
 
     second =
       mcp_tool(repo, nil, "list_work_requests", %{
-        "status" => "ready_for_slicing",
+        "phase" => "intake",
         "limit" => 2,
         "cursor" => first_payload["next_cursor"]
       })
@@ -44,7 +44,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestListPaginationTest do
 
     rest =
       mcp_tool(repo, nil, "list_work_requests", %{
-        "status" => "ready_for_slicing",
+        "phase" => "intake",
         "limit" => 6,
         "cursor" => second_payload["next_cursor"]
       })

@@ -1,8 +1,6 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
   @moduledoc false
 
-  import Ecto.Query, only: [from: 2]
-
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
@@ -14,6 +12,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -55,8 +54,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
        |> Map.put("parent_work_request", %{
          "id" => work_request.id,
          "title" => Redactor.redact_text(work_request.title),
-         "goal" => Redactor.redact_text(work_request.human_description),
-         "status" => work_request.status
+         "goal" => Redactor.redact_text(work_request.human_description)
        })
        |> Map.put("direct_dependencies", direct_dependencies)
        |> Map.put("dependency_selections", Enum.filter(execution_graph.effective_edges, &(&1.dependent_work_package_id == context_anchor.id)))
@@ -125,18 +123,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     }
   end
 
-  @spec work_request_cards(repo(), [WorkRequest.t()]) :: [map()]
+  @spec work_request_cards(repo(), [WorkRequest.t()]) :: {:ok, [map()]} | {:error, term()}
   def work_request_cards(repo, work_requests) do
-    ids = Enum.map(work_requests, & &1.id)
-
-    statuses =
-      repo.all(from(package in WorkPackage, where: package.work_request_id in ^ids, select: {package.work_request_id, package.status}))
-      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
-
-    Enum.map(work_requests, fn request ->
-      request |> work_request_card() |> Map.put("execution_status", WorkRequest.execution_status(Map.get(statuses, request.id, [])))
-    end)
+    with {:ok, summaries} <- Phase.load(repo, work_requests) do
+      {:ok, Enum.map(work_requests, &(&1 |> work_request_card() |> put_phase(Map.fetch!(summaries, &1.id))))}
+    end
   end
+
+  @doc "Adds the WorkRequest's derived phase, and the operator's next action when there is one."
+  @spec put_phase(map(), Phase.summary()) :: map()
+  def put_phase(payload, %{phase: phase}) do
+    payload
+    |> Map.put("phase", phase)
+    |> optional_put("next_action", Phase.next_action(phase))
+  end
+
+  @spec put_phase(map(), repo(), WorkRequest.t()) :: {:ok, map()} | {:error, term()}
+  def put_phase(payload, repo, %WorkRequest{} = work_request) do
+    with {:ok, summary} <- Phase.load_one(repo, work_request) do
+      {:ok, put_phase(payload, summary)}
+    end
+  end
+
+  defp optional_put(map, _key, nil), do: map
+  defp optional_put(map, key, value), do: Map.put(map, key, value)
 
   @spec work_request_card(WorkRequest.t()) :: map()
   def work_request_card(%WorkRequest{} = work_request) do
@@ -150,7 +160,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
       "work_type" => work_request.work_type,
       "desired_dispatch_shape" => work_request.desired_dispatch_shape,
       "creator" => work_request_creator(work_request),
-      "status" => work_request.status,
       "inserted_at" => timestamp(work_request.inserted_at),
       "updated_at" => timestamp(work_request.updated_at)
     }
@@ -159,7 +168,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
 
   @spec work_request_filter(nil | binary()) :: map()
   def work_request_filter(nil), do: %{}
-  def work_request_filter(status), do: %{"status" => status}
+  def work_request_filter(phase), do: %{"phase" => phase}
 
   @spec work_request_detail(repo(), WorkRequest.t(), keyword()) :: {:ok, map()} | {:error, dashboard_error()}
   def work_request_detail(repo, %WorkRequest{} = work_request, _opts) do
@@ -167,15 +176,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
          {:ok, decisions} <- WorkRequestService.list_decisions(repo, work_request.id),
          {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request.id),
          {:ok, slice_visibility} <- DeliveryBoard.work_package_visibility(repo, work_request.id, work_packages),
-         {:ok, operator_reports} <- OperatorReport.load_many(repo, [work_request]) do
+         {:ok, operator_reports} <- OperatorReport.load_many(repo, [work_request]),
+         {:ok, work_request_payload} <- put_phase(work_request(work_request), repo, work_request) do
       visible_work_packages = Map.fetch!(slice_visibility, :visible_work_packages)
 
       {:ok,
        %{
-         "work_request" =>
-           work_request(work_request)
-           |> Map.put("operator_report", Map.fetch!(operator_reports, work_request.id))
-           |> Map.put("execution_status", WorkRequest.execution_status(Enum.map(work_packages, & &1.status))),
+         "work_request" => Map.put(work_request_payload, "operator_report", Map.fetch!(operator_reports, work_request.id)),
          "clarification_questions" => Enum.map(questions, &clarification_question/1),
          "decision_log_entries" => Enum.map(decisions, &decision_log_entry/1),
          "work_packages" => Enum.map(visible_work_packages, &work_package/1),
@@ -195,7 +202,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
 
       {:ok,
        %{
-         "work_request" => Map.take(payload["work_request"], ~w(id title repo base_branch status execution_status human_description constraints operator_report)),
+         "work_request" => Map.take(payload["work_request"], ~w(id title repo base_branch phase next_action human_description constraints operator_report)),
          "clarification_questions" => Enum.filter(questions, &(&1["status"] == "open")),
          "decision_log_entries" => decisions |> Enum.take(-5) |> Enum.map(&Map.take(&1, ~w(id sequence decision))) |> Enum.map(&Map.update!(&1, "decision", fn text -> one_line(text, 160) end)),
          "work_packages" => board |> delivery_board() |> Map.fetch!("work_packages") |> Enum.map(&work_package_read_summary/1),
@@ -234,7 +241,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     tree = Enum.reduce(["work_packages", "work_package_refs"], tree, &compact_plan_packages/2)
 
     payload
-    |> Map.put("work_request", Map.take(payload["work_request"], ~w(id title status execution_status)))
+    |> Map.put("work_request", Map.take(payload["work_request"], ~w(id title phase next_action)))
     |> Map.put("product_tree", tree)
     |> Map.put("omitted", %{"package_details" => length(Map.get(tree, "work_packages", Map.get(tree, "work_package_refs", [])))})
     |> Map.put("help", "Use read_plan with detail: full and the same view for complete package details.")
@@ -258,7 +265,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     if String.length(text) > limit, do: String.slice(text, 0, limit - 1) <> "…", else: text
   end
 
-  @spec work_request_product_tree(repo(), WorkRequest.t(), [WorkPackage.t()], map(), binary()) :: map()
+  @spec work_request_product_tree(repo(), WorkRequest.t(), [WorkPackage.t()], map(), binary()) ::
+          {:ok, map()} | {:error, term()}
   def work_request_product_tree(repo, %WorkRequest{} = work_request, work_packages, delivery_board, view) do
     projection_work_package_payloads =
       delivery_board
@@ -276,11 +284,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
       |> public_product_tree()
       |> product_tree_view_payload(work_package_payloads, view)
 
-    %{
-      "work_request" => Map.put(work_request(work_request), "execution_status", WorkRequest.execution_status(Enum.map(work_packages, & &1.status))),
-      "product_tree" => product_tree,
-      "view" => view
-    }
+    with {:ok, work_request_payload} <- put_phase(work_request(work_request), repo, work_request) do
+      {:ok, %{"work_request" => work_request_payload, "product_tree" => product_tree, "view" => view}}
+    end
   end
 
   @spec work_request(WorkRequest.t()) :: map()
@@ -297,7 +303,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
       "constraints" => Redactor.redact_output(work_request.constraints || %{}),
       "desired_dispatch_shape" => work_request.desired_dispatch_shape,
       "creator" => work_request_creator(work_request),
-      "status" => work_request.status,
       "inserted_at" => timestamp(work_request.inserted_at),
       "updated_at" => timestamp(work_request.updated_at)
     }
@@ -316,7 +321,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
   def work_request_mutation(%WorkRequest{} = work_request) do
     %{
       "id" => work_request.id,
-      "status" => work_request.status,
       "updated_at" => timestamp(work_request.updated_at)
     }
   end

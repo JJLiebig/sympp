@@ -111,7 +111,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.ApiCase do
       human_description: "Exercise dashboard payload projection.",
       constraints: %{"allowed_paths" => ["elixir/lib"], "requires_secret" => false},
       desired_dispatch_shape: "single_package",
-      status: "ready_for_slicing",
       created_by_kind: "agent",
       created_by_name: "dashboard-test",
       created_via: "test"

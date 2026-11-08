@@ -179,12 +179,11 @@ function buildJob(detail, now, runs) {
   const closedAt = ms(request.completed_at);
   const recordedAsks = asksOf(detail.asks);
   const attention = recordedAsks === null ? [...needs, ...questions.filter((q) => q.status === "open").map((q) => ({ ...q, label: "Needs you" }))] : recordedAsks.map((a) => ({ ...a, key: `ask:${a.id}`, label: "Needs you", since: questions.find((q) => q.id === a.id)?.since ?? (a.kind === "architect" ? ms(escalation?.raised_at) : null), jobId: request.id }));
-  const settled = request.execution_status === "closed" || (closedAt !== null && closedAt <= now) || (packages.length > 0 && done.length === packages.length && attention.length === 0);
+  const settled = ["done", "unresolved"].includes(request.phase) || (closedAt !== null && closedAt <= now) || (packages.length > 0 && done.length === packages.length && attention.length === 0);
   const job = {
     id: request.id,
     title: request.title || request.id,
-    status: request.status ?? null,
-    executionStatus: request.execution_status ?? "open",
+    phase: request.phase ?? null,
     repo,
     repoShort,
     repos: [...new Set([repo, ...packages.map((pkg) => pkg.repo)].filter(Boolean))],
@@ -390,7 +389,7 @@ function draftBrief(job, now) {
   const { live, queued, done, total } = job.counts;
   if (job.needs.length > 0) return `Waiting on you: ${job.needs[0].text}`;
   if (job.report.parked) return `Parked: ${job.report.parked.text}`;
-  if (job.executionStatus === "closed") return `${total} packages closed${job.counts.dropped ? `; ${job.counts.dropped} dropped` : ""}.`;
+  if (job.phase === "done" || job.phase === "unresolved") return `${total} packages closed${job.counts.dropped ? `; ${job.counts.dropped} dropped` : ""}.`;
   if (job.state === "settled") {
     if (job.counts.dropped) return `${total - job.counts.dropped} of ${total} packages finished; ${job.counts.dropped} dropped.`;
     return total ? `All ${total} packages have landed.` : "Closed.";

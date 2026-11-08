@@ -225,7 +225,6 @@ class InstalledSnapshotTest(unittest.TestCase):
                             ("/mcp", {"jsonrpc": "2.0", "id": 1, "method": "initialize"}),
                             ("/mcp/client-lease", {}),
                             ("/api/v1/sympp/operator/work-requests/wr_offline/work-packages/WP-OFFLINE/dispatch", {}),
-                            ("/api/v1/sympp/operator/work-packages/WP-OFFLINE/focus", {}),
                         ):
                             self.assertEqual(request(route, body)[0], 403, route)
                         self.assertNotEqual(run([*copy_args, "-ReplaceSnapshot"]).returncode, 0, "active viewer must exclude replacement")
@@ -265,7 +264,7 @@ kernel.FreeConsole()
                 self.assertEqual(sentinel.read_text(), "do not change\n")
                 self.assertFalse(command_log.exists(), "offline runtime invoked an external command")
                 self.assertFalse(any((viewer_home / "ledger").glob(".offline-snapshot-*")))
-                print("Installed runtime offline proof: old-schema WAL copy, marker, populated board, denied MCP/dispatch/focus, untouched source/commands, Ctrl+C isolation, refresh, online-start refusal.")
+                print("Installed runtime offline proof: old-schema WAL copy, marker, populated board, denied MCP/lease/dispatch, untouched source/commands, Ctrl+C isolation, refresh, online-start refusal.")
 
 
 if __name__ == "__main__":

@@ -4,7 +4,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReadyStatusMigrationTest do
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{WorkPackage, WorkPackageDelivery}
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @migration_version 20_260_822_010_000
   @previous_version 20_260_803_143_000
@@ -42,19 +41,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReadyStatusMigrationTest do
   defp seed_legacy_ready_package! do
     now = DateTime.utc_now(:microsecond)
 
-    Repo.insert!(
-      WorkRequest.create_changeset(%{
+    # The stored status column predates the derived WorkRequest phase.
+    Repo.insert_all("sympp_work_requests", [
+      %{
         id: "WR-READY-STATUS",
         title: "Ready status migration",
         repo: "nextide/symphony-plus-plus",
         base_branch: "main",
         work_type: "refactor",
         human_description: "Canonicalize persisted readiness.",
-        constraints: %{},
+        constraints: "{}",
         desired_dispatch_shape: "single_package",
-        status: "sliced"
-      })
-    )
+        status: "sliced",
+        inserted_at: now,
+        updated_at: now
+      }
+    ])
 
     Repo.insert!(
       WorkPackage.create_changeset(%{

@@ -123,7 +123,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp architect_tool_description("set_report"),
     do: "Patch the operator report on a WorkRequest you own: brief, eta and parking. null clears a field; clearing parking records that work resumed."
 
-  defp architect_tool_description("set_work_request_status"), do: "Move a scoped WorkRequest between valid statuses with optimistic current-status checking."
   defp architect_tool_description("ask_question"), do: "Add a clarification question to a scoped WorkRequest."
   defp architect_tool_description("answer_question"), do: "Answer an open clarification question that belongs to a scoped WorkRequest."
   defp architect_tool_description("answer_question_and_record_decision"), do: "Answer an open clarification question and atomically record the resulting WorkRequest decision."

@@ -11,20 +11,12 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
 
   import Ecto.Query, only: [from: 2]
 
   @local_operator_actor "local-operator"
-
-  @spec local_operator_work_request_state(map()) :: {:ok, String.t()} | {:error, atom()}
-  def local_operator_work_request_state(params) do
-    case text_param(params, "state") || text_param(params, "status") do
-      "completed" -> {:ok, "completed"}
-      "ready_for_slicing" -> {:ok, "ready_for_slicing"}
-      _state -> {:error, :invalid_status}
-    end
-  end
 
   @doc """
   Ends a dispatched or ready WorkPackage as `finished`: its PR waits on someone
@@ -214,7 +206,9 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
 
   @spec scoped_question(module(), String.t(), String.t()) :: {:ok, ClarificationQuestion.t()} | {:error, term()}
   def scoped_question(repo, work_request_id, question_id) when is_binary(work_request_id) and is_binary(question_id) do
-    with {:ok, questions} <- WorkRequestService.list_questions(repo, work_request_id) do
+    with {:ok, work_request} <- WorkRequestService.get(repo, work_request_id),
+         :ok <- Phase.require_writable(work_request),
+         {:ok, questions} <- WorkRequestService.list_questions(repo, work_request_id) do
       case Enum.find(questions, &(&1.id == question_id)) do
         %ClarificationQuestion{} = question -> {:ok, question}
         nil -> {:error, :not_found}

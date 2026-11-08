@@ -387,8 +387,9 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       work_request_target(work_request_id),
       :operator_archive_work_request,
       fn repo ->
-        with {:ok, work_request} <- WorkRequestService.archive(repo, work_request_id) do
-          json(conn, mutation_success_payload(%{work_request: LocalOperatorDashboard.work_request_mutation_payload(work_request)}, %{work_request_id: work_request.id}))
+        with {:ok, work_request} <- WorkRequestService.archive(repo, work_request_id),
+             {:ok, payload} <- LocalOperatorDashboard.work_request_mutation_payload(repo, work_request) do
+          json(conn, mutation_success_payload(%{work_request: payload}, %{work_request_id: work_request.id}))
         end
       end
     )
@@ -417,42 +418,28 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       work_request_target(work_request_id),
       :operator_restore_work_request,
       fn repo ->
-        with {:ok, work_request} <- WorkRequestService.restore(repo, work_request_id) do
-          json(conn, mutation_success_payload(%{work_request: LocalOperatorDashboard.archived_work_request_payload(work_request)}, %{work_request_id: work_request.id}))
+        with {:ok, work_request} <- WorkRequestService.restore(repo, work_request_id),
+             {:ok, payload} <- LocalOperatorDashboard.work_request_mutation_payload(repo, work_request) do
+          json(conn, mutation_success_payload(%{work_request: payload}, %{work_request_id: work_request.id}))
         end
       end
     )
   end
 
-  @spec operator_update_work_request_state(Conn.t(), map()) :: Conn.t()
-  def operator_update_work_request_state(conn, %{"work_request_id" => work_request_id} = params) do
+  @spec operator_complete_work_request(Conn.t(), map()) :: Conn.t()
+  def operator_complete_work_request(conn, %{"work_request_id" => work_request_id}) do
     send_local_operator_response(
       conn,
       :dangerous_override,
       work_request_target(work_request_id),
-      :operator_update_work_request_state,
+      :operator_complete_work_request,
       fn repo ->
-        with {:ok, state} <- LocalOperatorActions.local_operator_work_request_state(params),
-             {:ok, work_request} <- update_work_request_state(repo, work_request_id, state) do
-          json(conn, mutation_success_payload(%{work_request: LocalOperatorDashboard.work_request_mutation_payload(work_request)}, %{dashboard: false, work_request_id: work_request.id}))
+        with {:ok, work_request} <- WorkRequestService.complete(repo, work_request_id),
+             {:ok, payload} <- LocalOperatorDashboard.work_request_mutation_payload(repo, work_request) do
+          json(conn, mutation_success_payload(%{work_request: payload}, %{dashboard: false, work_request_id: work_request.id}))
         end
       end
     )
-  end
-
-  defp update_work_request_state(repo, work_request_id, "completed"), do: WorkRequestService.force_complete(repo, work_request_id)
-
-  defp update_work_request_state(repo, work_request_id, "ready_for_slicing") do
-    case WorkRequestService.get(repo, work_request_id) do
-      {:ok, %{status: status}} when status in ["ready_for_clarification", "clarifying", "human_info_needed"] ->
-        WorkRequestService.update_status(repo, work_request_id, status, "ready_for_slicing")
-
-      {:ok, _work_request} ->
-        {:error, :invalid_status}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
   end
 
   @spec operator_finish_work_package(Conn.t(), map()) :: Conn.t()
@@ -785,7 +772,14 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp error_response(conn, :invalid_answer_choice), do: error_response(conn, 422, "invalid_answer_choice", "Answer choice is invalid")
   defp error_response(conn, :invalid_archive_after_days), do: error_response(conn, 422, "invalid_archive_after_days", "Archive cutoff is invalid")
   defp error_response(conn, :missing_answer), do: error_response(conn, 422, "missing_answer", "Answer is required")
-  defp error_response(conn, :not_completed), do: error_response(conn, 422, "not_completed", "WorkRequest is not complete")
+  defp error_response(conn, :not_completed), do: error_response(conn, 422, "not_completed", "Only a done or unresolved WorkRequest can be archived")
+
+  defp error_response(conn, :work_request_archived) do
+    conn
+    |> put_status(409)
+    |> json(%{error: %{code: "work_request_archived", message: "WorkRequest is archived; restore it first", phase: "archived", next_action: "restore"}})
+  end
+
   defp error_response(conn, :not_delivered), do: error_response(conn, 422, "not_delivered", "WorkPackage is not delivered")
   defp error_response(conn, :work_request_package), do: error_response(conn, 422, "work_request_package", "WorkRequest WorkPackages cannot be archived independently")
 
@@ -812,10 +806,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   defp error_response(conn, %Ecto.Changeset{} = changeset) do
     error_response(conn, 422, "invalid_request", changeset_error_message(changeset))
-  end
-
-  defp error_response(conn, {:invalid_work_request_status, _status}) do
-    error_response(conn, 422, "invalid_work_request_status", "WorkRequest is not ready for this action")
   end
 
   defp error_response(conn, {:invalid_work_package_status, _status}) do

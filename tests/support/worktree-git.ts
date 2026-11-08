@@ -38,7 +38,7 @@ export async function repository(root: string, name: string) {
 }
 
 export async function workPackage(client: Client, origin: string, branch: string) {
-  await client.request(`Worktree ${branch}`, 'ready_for_slicing', 'beta', origin);
+  await client.request(`Worktree ${branch}`, 'beta', origin);
   const [id] = (await client.call('slice_work_request', { work_packages: [contract('Owned worktree', { branch_pattern: branch })] })).work_package_ids;
   await client.call('dispatch_work_package', { work_package_id: id });
   return id as string;

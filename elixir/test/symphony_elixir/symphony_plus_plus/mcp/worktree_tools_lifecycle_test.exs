@@ -299,8 +299,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeToolsLifecycleTest do
       create_work_request!(repo,
         id: "WR-MCP-WORKTREE-LIFECYCLE",
         repo: anchor.repo,
-        base_branch: anchor.base_branch,
-        status: "sliced"
+        base_branch: anchor.base_branch
       )
 
     assert {:ok, work_package} =

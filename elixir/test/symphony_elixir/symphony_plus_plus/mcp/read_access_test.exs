@@ -6,7 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadAccessTest do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport
 
   test "reads never take ownership or label the terminal; the first owner-gated write does", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-READS-NEVER-OWN", status: "ready_for_slicing")
+    work_request = create_work_request!(repo, id: "WR-READS-NEVER-OWN")
     package = add_package!(repo, work_request, "WP-READS-NEVER-OWN")
     client = connect!(repo, "client-reads-never-own")
 
@@ -36,8 +36,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadAccessTest do
   end
 
   test "an owner reads another WorkRequest exactly as named", %{repo: repo} do
-    owned = create_work_request!(repo, id: "WR-READS-OWNED", status: "ready_for_slicing")
-    other = create_work_request!(repo, id: "WR-READS-OTHER", repo: "nextide/other-product", base_branch: "develop", status: "sliced")
+    owned = create_work_request!(repo, id: "WR-READS-OWNED")
+    other = create_work_request!(repo, id: "WR-READS-OTHER", repo: "nextide/other-product", base_branch: "develop")
     other_packages = for index <- 1..3, do: add_package!(repo, other, "WP-READS-OTHER-#{index}")
     client = connect!(repo, "client-reads-owner")
 
@@ -66,7 +66,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadAccessTest do
   end
 
   test "a dry run rejects a non-boolean apply", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-READS-DRY-RUN", status: "ready_for_slicing")
+    work_request = create_work_request!(repo, id: "WR-READS-DRY-RUN")
     operator = connect!(repo, "client-reads-dry-run")
     refused = tool!(operator, "reconcile_work_request", %{"work_request_id" => work_request.id, "apply" => "true"})
     assert refused.response["error"]["code"] == -32_602

@@ -160,7 +160,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
     status = Keyword.get(overrides, :status, "dispatched")
     request_id = Keyword.get_lazy(overrides, :work_request_id, fn -> "WR-DELIVERY-#{System.unique_integer([:positive])}" end)
 
-    work_request = create_work_request!(repo, id: request_id, status: "ready_for_slicing")
+    work_request = create_work_request!(repo, id: request_id)
     work_package = create_work_package!(repo, work_request, id: "WRS-#{request_id}", kind: kind)
     assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
     work_package_id = Keyword.get(overrides, :work_package_id, "WP-#{request_id}")

@@ -47,7 +47,7 @@ function state(workPackages: Array<ExecutionGraphWorkPackageRef & ExecutionGraph
     pinned: false,
     selectedId: workPackages[0]?.id,
     detail: {
-      work_request: { id: "wr-a", title: "Ship the system", repo: "repo", status: "active" },
+      work_request: { id: "wr-a", title: "Ship the system", repo: "repo", phase: "active" },
       execution_graph: {
         available: true,
         work_packages: workPackages,

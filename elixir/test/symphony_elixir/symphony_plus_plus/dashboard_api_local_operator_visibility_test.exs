@@ -94,8 +94,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
     File.write!(config_path, Jason.encode!(update_in(config, ["repos", "Example-Org/Widget-Service"], &Map.delete(&1, "deploy_workflows"))))
 
     with_local_operator_endpoint(fn ->
-      request = create_work_request!(repo, repo: "https://github.com/Example-Org/Widget-Service.git", status: "sliced")
-      unmapped = create_work_request!(repo, repo: "example-org/unmapped-service", status: "sliced")
+      request = create_work_request!(repo, repo: "https://github.com/Example-Org/Widget-Service.git")
+      unmapped = create_work_request!(repo, repo: "example-org/unmapped-service")
       now = DateTime.utc_now(:microsecond)
 
       packages =
@@ -158,9 +158,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
 
   test "browser and Herdr payloads show which terminal works on each WorkRequest", %{repo: repo} do
     with_local_operator_endpoint(fn ->
-      request = create_work_request!(repo, repo: "example-org/widget-service", status: "sliced")
+      request = create_work_request!(repo, repo: "example-org/widget-service")
       package = create_dispatched_package!(repo, request, slice_id: "WRS-OWNED", package_id: "WP-OWNED", status: "dispatched")
-      unowned = create_work_request!(repo, id: "WR-UNOWNED", repo: "example-org/widget-service", status: "sliced")
+      unowned = create_work_request!(repo, id: "WR-UNOWNED", repo: "example-org/widget-service")
       _unowned_package = create_dispatched_package!(repo, unowned, slice_id: "WRS-UNOWNED", package_id: "WP-UNOWNED", status: "dispatched")
       assert {:ok, _row, :acquired} = Ownership.acquire(repo, request.id, terminal("t8"))
 
@@ -187,7 +187,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
   end
 
   test "operator Release ends ownership so another terminal can take the WorkRequest", %{repo: repo} do
-    request = create_work_request!(repo, status: "sliced")
+    request = create_work_request!(repo, [])
     assert {:ok, _row, :acquired} = Ownership.acquire(repo, request.id, terminal("t8"))
     path = "/api/v1/sympp/operator/work-requests/#{request.id}/release"
 
@@ -211,7 +211,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
       archived_request =
         create_work_request!(repo,
           id: "WR-LOCAL-ARCHIVED-LINKS",
-          status: "ready_for_slicing",
           repo: "nextide/symphony-plus-plus",
           base_branch: "main"
         )
@@ -233,7 +232,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
       active_request =
         create_work_request!(repo,
           id: "WR-LOCAL-ACTIVE-LINK",
-          status: "ready_for_slicing",
           repo: archived_request.repo,
           base_branch: archived_request.base_branch
         )
@@ -248,7 +246,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
       archived_at = DateTime.utc_now(:microsecond)
 
       archived_request
-      |> Ecto.Changeset.change(completed_at: archived_at, completion_source: "operator", archived_at: archived_at)
+      |> Ecto.Changeset.change(operator_completed_at: archived_at, archived_at: archived_at)
       |> repo.update!()
 
       payload = local_operator_dashboard_payload()
@@ -271,43 +269,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
 
   test "local operator dashboard omits unowned execution records", %{repo: repo} do
     with_local_operator_endpoint(fn ->
-      anchor =
+      unowned_package =
         create_work_package!(repo,
-          id: "SYMPP-WR-ARCH-DASHBOARD-ANCHOR",
-          kind: "delegation",
-          title: "Architect handoff: Dashboard cleanup",
-          status: "planning",
+          id: "WP-LOCAL-UNOWNED-DELIVERY",
+          kind: "mcp",
+          title: "Package without a WorkRequest",
+          status: "dispatched",
           repo: "nextide/symphony-plus-plus",
           base_branch: "main"
         )
 
-      ordinary_delegation =
-        create_work_package!(repo,
-          id: "WP-LOCAL-DELEGATION-NONANCHOR",
-          kind: "delegation",
-          title: "Delegation delivery package",
-          status: "planning",
-          repo: anchor.repo,
-          base_branch: anchor.base_branch
-        )
-
-      prefixed_delivery_package =
-        create_work_package!(repo,
-          id: "SYMPP-WR-ARCH-DASHBOARD-DELIVERY",
-          kind: "mcp",
-          title: "Prefix-like delivery package",
-          status: "dispatched",
-          repo: anchor.repo,
-          base_branch: anchor.base_branch
-        )
-
       payload = local_operator_dashboard_payload()
 
-      package_ids = dashboard_work_package_ids(payload)
-
-      refute anchor.id in package_ids
-      refute ordinary_delegation.id in package_ids
-      refute prefixed_delivery_package.id in package_ids
+      refute unowned_package.id in dashboard_work_package_ids(payload)
     end)
   end
 
@@ -410,8 +384,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
       work_type: "feature",
       human_description: "Record the human's desired outcome before slicing.",
       constraints: %{"allowed_paths" => ["elixir/lib"], "requires_secret" => false},
-      desired_dispatch_shape: "single_package",
-      status: "draft"
+      desired_dispatch_shape: "single_package"
     }
 
     Enum.into(overrides, defaults)

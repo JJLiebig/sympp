@@ -36,8 +36,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTreeTest do
         work_type: "feature",
         human_description: "Project canonical WorkPackages.",
         constraints: %{},
-        desired_dispatch_shape: "single_package",
-        status: "sliced"
+        desired_dispatch_shape: "single_package"
       }
       |> Map.merge(Map.new(overrides))
 

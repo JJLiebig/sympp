@@ -11,8 +11,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerAndLocalOperatorToolsTest d
         repo,
         id: "WR-MCP-ARCH-PACKAGE-SURFACES",
         repo: "nextide/symphony-plus-plus",
-        base_branch: "main",
-        status: "ready_for_slicing"
+        base_branch: "main"
       )
 
     assert {:ok, work_package} =

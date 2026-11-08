@@ -269,8 +269,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
       work_type: "feature",
       human_description: "Expose delivery-board truth.",
       constraints: %{"allowed_paths" => ["elixir/lib"], "forbidden_paths" => [], "requires_secret" => false},
-      desired_dispatch_shape: "architect_led_feature_branch",
-      status: "ready_for_slicing"
+      desired_dispatch_shape: "architect_led_feature_branch"
     }
 
     Enum.into(overrides, defaults)

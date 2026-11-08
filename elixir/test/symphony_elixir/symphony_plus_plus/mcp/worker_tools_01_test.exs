@@ -204,7 +204,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
   end
 
   defp package_in_request!(repo, id, overrides) do
-    work_request = create_work_request!(repo, id: "WR-" <> id, status: "sliced")
+    work_request = create_work_request!(repo, id: "WR-" <> id)
 
     assert {:ok, package} =
              WorkPackageRepository.create(repo, WorkPackageFactory.attrs(Keyword.merge([id: id, work_request_id: work_request.id, status: "dispatched"], overrides)))

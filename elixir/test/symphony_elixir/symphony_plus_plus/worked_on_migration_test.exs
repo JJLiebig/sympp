@@ -4,8 +4,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkedOnMigrationTest do
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
 
-  @migration_version 20_261_108_140_000
-  @previous_version 20_261_108_130_000
+  @migration_version 20_261_108_150_000
+  @previous_version 20_261_108_140_000
 
   # Setup runs in the test process, so the dynamic repo stays selected for the test.
   setup do
@@ -61,7 +61,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkedOnMigrationTest do
   defp seed! do
     for {id, title} <- [{"wr_reported", "Reported"}, {"wr_quiet", "Quiet"}] do
       Repo.query!(
-        "INSERT INTO sympp_work_requests (id, title, repo, base_branch, work_type, human_description, constraints, desired_dispatch_shape, status, inserted_at, updated_at) VALUES (?1, ?2, 'nextide/demo', 'main', 'feature', 'x', '{}', 'single_package', 'sliced', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')",
+        "INSERT INTO sympp_work_requests (id, title, repo, base_branch, work_type, human_description, constraints, desired_dispatch_shape, inserted_at, updated_at) VALUES (?1, ?2, 'nextide/demo', 'main', 'feature', 'x', '{}', 'single_package', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')",
         [id, title]
       )
 

@@ -10,19 +10,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.WorkPackageFactory
 
-  defmodule CompletionClearLockedAgentRunRepo do
-    alias SymphonyElixir.SymphonyPlusPlus.Repo
-
-    def all(query), do: Repo.all(query)
-    def get(schema, id), do: Repo.get(schema, id)
-    def insert(changeset), do: Repo.insert(changeset)
-    def one(query), do: Repo.one(query)
-    def rollback(reason), do: Repo.rollback(reason)
-    def transaction(fun), do: Repo.transaction(fun)
-    def update(changeset), do: Repo.update(changeset)
-    def update_all(_query, _updates), do: raise(%Exqlite.Error{message: "database is locked"})
-  end
-
   defmodule TerminalStartRaceRepo do
     import Ecto.Query, only: [from: 2]
 
@@ -108,21 +95,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
     assert repo.get!(WorkPackage, work_package.id).status == "ended"
     assert %AgentRun{status: "failed", reason: "work package became terminal before retry dispatch"} = repo.get!(AgentRun, previous.id)
     assert repo.aggregate(AgentRun, :count, :id) == 1
-  end
-
-  test "start run rolls back when completion clearing fails", %{repo: repo} do
-    assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-CLEAR-LOCKED", status: "dispatched"))
-
-    assert {:error, :database_busy} =
-             Repository.start_run(CompletionClearLockedAgentRunRepo, %{
-               work_package_id: work_package.id,
-               status: "running",
-               attempt: 1,
-               worker_task_handle: "clear-lock"
-             })
-
-    assert {:error, :not_found} = Repository.active_for_work_package(repo, work_package.id)
   end
 
   test "starting reservation blocks duplicate dispatch until promoted", %{repo: repo} do

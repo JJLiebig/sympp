@@ -263,8 +263,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
         "title" => "Concurrent dispatch",
         "request_kind" => "docs",
         "description" => "Dispatch independent packages together",
-        "workflow_mode" => "single_package",
-        "status" => "ready_for_slicing"
+        "workflow_mode" => "single_package"
       })
 
     request_id = get_in(created, ["result", "structuredContent", "work_request", "id"])
@@ -1107,8 +1106,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       work_type: "feature",
       human_description: "Prove HTTP MCP architect continuity.",
       constraints: %{"allowed_paths" => ["elixir/lib"], "requires_secret" => false},
-      desired_dispatch_shape: "single_package",
-      status: "draft"
+      desired_dispatch_shape: "single_package"
     }
 
     Enum.into(overrides, defaults)

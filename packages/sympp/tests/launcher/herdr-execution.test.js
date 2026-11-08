@@ -489,7 +489,6 @@ test("hand-started MCP bridges report native identity and require an authenticat
     assert.equal(observed.core_name, "controlled");
     assert.equal(observed.terminal_id, "t9");
     assert.equal(observed.pid, undefined, "the factory keys on core and address, never the pid");
-    assert.equal(forwarded.params._meta.sympp_session_location, undefined);
     assert.deepEqual(reporter.terminal(), { core_id: "core-one", terminal_id: "t9" });
     assert.doesNotMatch(JSON.stringify(observed), /private-core-selector|process_liveness/);
 

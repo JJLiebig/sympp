@@ -10,12 +10,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDeliveryScope
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.CompletionRecovery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.RepoScope
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
-  @completion_blocking_statuses ["human_info_needed"]
   @work_package_delivery_replay_fields [
     :work_request_id,
     :work_package_id,
@@ -63,6 +62,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
           | {:delivery_outcome_conflict, String.t()}
           | :no_work_packages
           | :open_questions
+          | :work_request_archived
           | :not_found
           | :invalid_work_package_id
           | :id_already_exists
@@ -118,14 +118,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   @spec list(repo()) :: {:ok, [WorkRequest.t()]} | {:error, error()}
   @spec list(repo(), map() | keyword()) :: {:ok, [WorkRequest.t()]} | {:error, error()}
   def list(repo, filters \\ %{}) when is_atom(repo) and (is_map(filters) or is_list(filters)) do
-    work_requests =
-      repo.all(
-        filters
-        |> normalize_keys()
-        |> list_query()
-      )
+    filters = normalize_keys(filters)
 
-    {:ok, work_requests}
+    repo.all(list_query(filters))
+    |> filter_phase(repo, Map.get(filters, "phase"))
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
@@ -134,16 +130,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
           {:ok, [WorkRequest.t()]} | {:error, error()}
   def list_page(repo, filters, limit, cursor)
       when is_atom(repo) and (is_map(filters) or is_list(filters)) and is_integer(limit) and limit > 0 do
-    work_requests =
-      filters
-      |> normalize_keys()
-      |> list_query()
-      |> page_after(cursor)
-      |> then(&repo.all(from(work_request in &1, limit: ^limit)))
-
-    {:ok, work_requests}
+    filters = normalize_keys(filters)
+    collect_page(repo, list_query(filters), Map.get(filters, "phase"), limit, cursor, [])
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
+  # The phase is derived, so a phase filter reads further batches until the
+  # page is full or the ledger is exhausted.
+  defp collect_page(repo, query, phase, limit, cursor, collected) do
+    batch = repo.all(from(work_request in page_after(query, cursor), limit: ^limit))
+
+    with {:ok, matching} <- filter_phase(batch, repo, phase) do
+      collected = collected ++ matching
+
+      cond do
+        length(collected) >= limit -> {:ok, Enum.take(collected, limit)}
+        length(batch) < limit -> {:ok, collected}
+        true -> collect_page(repo, query, phase, limit, cursor_after(List.last(batch)), collected)
+      end
+    end
+  end
+
+  defp cursor_after(%WorkRequest{inserted_at: inserted_at, id: id}), do: {inserted_at, id}
+
+  defp filter_phase(work_requests, _repo, phase) when phase in [nil, ""], do: {:ok, work_requests}
+
+  defp filter_phase(work_requests, repo, phase) do
+    with {:ok, summaries} <- Phase.load(repo, work_requests) do
+      {:ok, Enum.filter(work_requests, &(summaries[&1.id].phase == phase))}
+    end
   end
 
   @spec list_repo_scopes(repo(), String.t()) :: {:ok, [RepoScope.t()]} | {:error, error()}
@@ -179,20 +195,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  @spec clear_completion_for_work_package(repo(), String.t()) :: :ok | {:error, error()}
-  def clear_completion_for_work_package(repo, work_package_id) when is_atom(repo) and is_binary(work_package_id) do
-    now = DateTime.utc_now(:microsecond)
-
-    repo.update_all(
-      CompletionRecovery.clearable_query(work_package_id),
-      set: [completed_at: nil, completion_source: nil, archived_at: nil, archive_reason: nil, updated_at: now]
-    )
-
-    :ok
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
   @spec update(repo(), String.t(), map()) :: {:ok, WorkRequest.t()} | {:error, error()}
   def update(repo, id, attrs) when is_atom(repo) and is_binary(id) and is_map(attrs) do
     attrs = normalize_keys(attrs)
@@ -206,15 +208,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  @spec update_status(repo(), String.t(), String.t(), String.t()) :: {:ok, WorkRequest.t()} | {:error, error()}
-  def update_status(repo, id, current_status, next_status)
-      when is_atom(repo) and is_binary(id) and is_binary(current_status) and is_binary(next_status) do
-    with :ok <- validate_status(current_status),
-         :ok <- validate_status(next_status) do
-      update_valid_status(repo, id, current_status, next_status)
-    end
-  end
-
   @spec ask_question(repo(), String.t(), map()) :: {:ok, ClarificationQuestion.t()} | {:error, error()}
   def ask_question(repo, work_request_id, attrs)
       when is_atom(repo) and is_binary(work_request_id) and is_map(attrs) do
@@ -225,8 +218,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       |> Map.put("work_request_id", work_request_id)
       |> Map.put("status", "open")
 
-    changeset_fun = &ClarificationQuestion.create_changeset/1
-    insert_with_sequence(repo, attrs, &next_question_sequence/2, changeset_fun, clear_completion?: true)
+    with {:ok, %WorkRequest{}} <- get(repo, work_request_id) do
+      insert_with_sequence(repo, attrs, &next_question_sequence/2, &ClarificationQuestion.create_changeset/1)
+    end
   end
 
   @spec list_questions(repo(), String.t()) :: {:ok, [ClarificationQuestion.t()]} | {:error, error()}
@@ -273,18 +267,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     insert_with_sequence(repo, attrs, &next_decision_sequence/2, &DecisionLogEntry.create_changeset/1)
   end
 
+  # A missing WorkRequest is left to the foreign key, as before.
+  defp require_writable_if_present(repo, work_request_id) do
+    case repo.get(WorkRequest, work_request_id) do
+      %WorkRequest{} = work_request -> Phase.require_writable(work_request)
+      nil -> :ok
+    end
+  end
+
+  defp require_writable_question(repo, question_id) do
+    case repo.get(ClarificationQuestion, question_id) do
+      %ClarificationQuestion{work_request_id: work_request_id} -> require_writable_if_present(repo, work_request_id)
+      nil -> :ok
+    end
+  end
+
   @spec slice_work_request(repo(), String.t(), [map()]) ::
           {:ok, %{work_request: WorkRequest.t(), work_packages: [WorkPackage.t()]}} | {:error, error()}
   def slice_work_request(repo, work_request_id, package_attrs)
       when is_atom(repo) and is_binary(work_request_id) and is_list(package_attrs) do
     repo.transaction(fn ->
-      with :ok <- advance_to_ready_for_slicing_in_transaction(repo, work_request_id),
-           {:ok, %WorkRequest{} = work_request} <- get(repo, work_request_id),
-           :ok <- require_slicing_status(work_request.status),
+      with {:ok, %WorkRequest{} = work_request} <- get(repo, work_request_id),
+           :ok <- Phase.require_writable(work_request),
+           :ok <- ensure_no_open_questions(repo, work_request.id),
            :ok <- require_package_batch(package_attrs),
-           {:ok, work_packages} <- insert_work_package_batch(repo, work_request, package_attrs),
-           {:ok, updated_work_request} <- mark_sliced_in_transaction(repo, work_request) do
-        %{work_request: updated_work_request, work_packages: work_packages}
+           {:ok, work_packages} <- insert_work_package_batch(repo, work_request, package_attrs) do
+        %{work_request: work_request, work_packages: work_packages}
       else
         {:error, reason} -> repo.rollback(reason)
       end
@@ -382,7 +390,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       )
 
     base_query =
-      if include_archived?(filters) do
+      if include_archived?(filters) or Map.get(filters, "phase") == "archived" do
         base_query
       else
         from(work_request in base_query, where: is_nil(work_request.archived_at))
@@ -395,8 +403,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       {:include_archived, _include_archived}, query ->
         query
 
-      {"status", status}, query when is_binary(status) and status != "" ->
-        from(work_request in query, where: work_request.status == ^status)
+      {"phase", "archived"}, query ->
+        from(work_request in query, where: not is_nil(work_request.archived_at))
 
       {"repo", repo}, query when is_binary(repo) and repo != "" ->
         from(work_request in query, where: work_request.repo == ^repo)
@@ -423,106 +431,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     (Map.get(filters, "include_archived") || Map.get(filters, :include_archived)) in [true, "true", "1"]
   end
 
-  defp update_valid_status(repo, id, current_status, next_status) do
-    now = DateTime.utc_now(:microsecond)
-
-    repo.transaction(fn ->
-      id
-      |> status_update_query(current_status, next_status)
-      |> repo.update_all(set: status_update_values(next_status, now))
-      |> case do
-        {1, _rows} -> repo.get!(WorkRequest, id)
-        {0, _rows} -> repo.rollback(status_update_error(repo, id, current_status, next_status))
-      end
-    end)
-    |> case do
-      {:ok, work_request} -> {:ok, work_request}
-      {:error, error} -> error
-    end
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp advance_to_ready_for_slicing_in_transaction(repo, work_request_id) do
-    case get(repo, work_request_id) do
-      {:ok, %WorkRequest{status: status} = work_request} when status in ["ready_for_slicing", "sliced"] ->
-        ensure_no_open_questions(repo, work_request.id)
-
-      {:ok, %WorkRequest{status: status} = work_request} when status in ["ready_for_clarification", "clarifying", "human_info_needed"] ->
-        advance_ready_for_slicing_in_transaction(repo, work_request)
-
-      {:ok, %WorkRequest{}} ->
-        {:error, :invalid_status}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp advance_ready_for_slicing_in_transaction(repo, %WorkRequest{} = work_request) do
-    now = DateTime.utc_now(:microsecond)
-
-    work_request.id
-    |> ready_for_slicing_update_query(work_request.status)
-    |> repo.update_all(set: [status: "ready_for_slicing", updated_at: now])
-    |> case do
-      {1, _rows} -> :ok
-      {0, _rows} -> ready_for_slicing_result(repo, work_request)
-    end
-  end
-
-  defp ready_for_slicing_update_query(work_request_id, current_status) do
-    from(work_request in WorkRequest,
-      where: work_request.id == ^work_request_id and work_request.status == ^current_status,
-      where:
-        fragment(
-          """
-          NOT EXISTS (
-            SELECT 1
-            FROM sympp_work_request_clarification_questions AS question
-            WHERE question.work_request_id = ? AND question.status = 'open'
-          )
-          """,
-          work_request.id
-        )
-    )
-  end
-
-  defp ready_for_slicing_result(repo, work_request) do
-    cond do
-      open_questions?(repo, work_request.id) -> {:error, :open_questions}
-      work_request_ready_for_slicing?(repo, work_request.id) -> :ok
-      stale_work_request_status?(repo, work_request) -> {:error, :stale_status}
-      true -> {:error, :not_found}
-    end
-  end
-
   defp ensure_no_open_questions(repo, work_request_id) do
     if open_questions?(repo, work_request_id) do
       {:error, :open_questions}
     else
       :ok
-    end
-  end
-
-  defp status_update_values(next_status, now) when next_status in @completion_blocking_statuses do
-    [
-      status: next_status,
-      completed_at: nil,
-      completion_source: nil,
-      archived_at: nil,
-      archive_reason: nil,
-      updated_at: now
-    ]
-  end
-
-  defp status_update_values(next_status, now), do: [status: next_status, updated_at: now]
-
-  defp validate_status(status) do
-    if status in WorkRequest.statuses() do
-      :ok
-    else
-      {:error, :invalid_status}
     end
   end
 
@@ -534,14 +447,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     end
   end
 
-  defp stale_status_error(repo, id) do
-    case get(repo, id) do
-      {:ok, _work_request} -> {:error, :stale_status}
-      {:error, :not_found} = error -> error
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
   defp open_questions?(repo, work_request_id) do
     repo.exists?(
       from(question in ClarificationQuestion,
@@ -550,59 +455,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     )
   end
 
-  defp work_request_ready_for_slicing?(repo, work_request_id) do
-    case repo.get(WorkRequest, work_request_id) do
-      %WorkRequest{status: status} when status in ["ready_for_slicing", "sliced"] -> true
-      _work_request -> false
-    end
+  defp insert_with_sequence(repo, attrs, next_sequence, changeset_fun) do
+    do_insert_with_sequence(repo, attrs, next_sequence, changeset_fun, sequence_retry_attempts())
   end
 
-  defp stale_work_request_status?(repo, work_request) do
-    case repo.get(WorkRequest, work_request.id) do
-      %WorkRequest{status: status} -> status != work_request.status
-      nil -> false
-    end
-  end
-
-  defp status_update_query(id, current_status, "ready_for_slicing")
-       when current_status in ["ready_for_clarification", "clarifying", "human_info_needed"],
-       do: ready_for_slicing_update_query(id, current_status)
-
-  defp status_update_query(id, current_status, _next_status) do
-    from(work_request in WorkRequest,
-      where: work_request.id == ^id and work_request.status == ^current_status
-    )
-  end
-
-  defp status_update_error(repo, id, current_status, "ready_for_slicing")
-       when current_status in ["ready_for_clarification", "clarifying", "human_info_needed"] do
-    case ensure_no_open_questions(repo, id) do
-      :ok -> stale_status_error(repo, id)
-      {:error, _reason} = error -> error
-    end
-  end
-
-  defp status_update_error(repo, id, _current_status, _next_status), do: stale_status_error(repo, id)
-
-  defp insert_with_sequence(repo, attrs, next_sequence, changeset_fun, opts \\ []) do
-    do_insert_with_sequence(repo, attrs, next_sequence, changeset_fun, opts, sequence_retry_attempts())
-  end
-
-  defp do_insert_with_sequence(repo, attrs, next_sequence, changeset_fun, opts, attempts_left) do
+  defp do_insert_with_sequence(repo, attrs, next_sequence, changeset_fun, attempts_left) do
     repo
-    |> insert_sequence_transaction(attrs, next_sequence, changeset_fun, opts)
-    |> handle_sequence_insert_result(repo, attrs, next_sequence, changeset_fun, opts, attempts_left)
+    |> insert_sequence_transaction(attrs, next_sequence, changeset_fun)
+    |> handle_sequence_insert_result(repo, attrs, next_sequence, changeset_fun, attempts_left)
   end
 
-  defp insert_sequence_transaction(repo, attrs, next_sequence, changeset_fun, opts) do
+  defp insert_sequence_transaction(repo, attrs, next_sequence, changeset_fun) do
     repo.transaction(fn ->
+      with {:error, reason} <- require_writable_if_present(repo, Map.fetch!(attrs, "work_request_id")), do: repo.rollback(reason)
       attrs = Map.put(attrs, "sequence", next_sequence.(repo, Map.fetch!(attrs, "work_request_id")))
 
       attrs
       |> changeset_fun.()
       |> repo.insert()
       |> normalize_insert_result()
-      |> return_inserted_record_or_rollback(repo, attrs, opts)
+      |> return_inserted_record_or_rollback(repo)
     end)
     |> normalize_transaction_result()
   rescue
@@ -610,16 +482,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  defp return_inserted_record_or_rollback({:ok, record}, repo, attrs, opts) do
-    case maybe_clear_completion_state(repo, attrs, opts) do
-      :ok -> record
-      {:error, reason} -> repo.rollback(reason)
-    end
-  end
+  defp return_inserted_record_or_rollback({:ok, record}, _repo), do: record
+  defp return_inserted_record_or_rollback({:error, reason}, repo), do: repo.rollback(reason)
 
-  defp return_inserted_record_or_rollback({:error, reason}, repo, _attrs, _opts), do: repo.rollback(reason)
-
-  defp handle_sequence_insert_result({:ok, record}, _repo, _attrs, _next_sequence, _changeset_fun, _opts, _attempts_left) do
+  defp handle_sequence_insert_result({:ok, record}, _repo, _attrs, _next_sequence, _changeset_fun, _attempts_left) do
     {:ok, record}
   end
 
@@ -629,48 +495,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
          attrs,
          next_sequence,
          changeset_fun,
-         opts,
          attempts_left
        ) do
     if sequence_constraint?(constraint) do
-      retry_or_error(repo, attrs, next_sequence, changeset_fun, opts, attempts_left, :sequence_conflict)
+      retry_or_error(repo, attrs, next_sequence, changeset_fun, attempts_left, :sequence_conflict)
     else
       {:error, {:constraint_failed, constraint}}
     end
   end
 
-  defp handle_sequence_insert_result({:error, :database_busy}, repo, attrs, next_sequence, changeset_fun, opts, attempts_left) do
-    retry_or_error(repo, attrs, next_sequence, changeset_fun, opts, attempts_left, :database_busy)
+  defp handle_sequence_insert_result({:error, :database_busy}, repo, attrs, next_sequence, changeset_fun, attempts_left) do
+    retry_or_error(repo, attrs, next_sequence, changeset_fun, attempts_left, :database_busy)
   end
 
-  defp handle_sequence_insert_result({:error, reason}, _repo, _attrs, _next_sequence, _changeset_fun, _opts, _attempts_left) do
+  defp handle_sequence_insert_result({:error, reason}, _repo, _attrs, _next_sequence, _changeset_fun, _attempts_left) do
     {:error, reason}
   end
 
-  defp retry_or_error(_repo, _attrs, _next_sequence, _changeset_fun, _opts, 0, terminal_error), do: {:error, terminal_error}
+  defp retry_or_error(_repo, _attrs, _next_sequence, _changeset_fun, 0, terminal_error), do: {:error, terminal_error}
 
-  defp retry_or_error(repo, attrs, next_sequence, changeset_fun, opts, attempts_left, _terminal_error) do
+  defp retry_or_error(repo, attrs, next_sequence, changeset_fun, attempts_left, _terminal_error) do
     Process.sleep(retry_delay_ms(attempts_left, sequence_retry_attempts()))
-    do_insert_with_sequence(repo, attrs, next_sequence, changeset_fun, opts, attempts_left - 1)
+    do_insert_with_sequence(repo, attrs, next_sequence, changeset_fun, attempts_left - 1)
   end
-
-  defp maybe_clear_completion_state(repo, %{"work_request_id" => work_request_id}, clear_completion?: true) do
-    now = DateTime.utc_now(:microsecond)
-
-    repo.update_all(
-      from(work_request in WorkRequest,
-        where: work_request.id == ^work_request_id,
-        where: not is_nil(work_request.completed_at) or not is_nil(work_request.archived_at)
-      ),
-      set: [completed_at: nil, completion_source: nil, archived_at: nil, archive_reason: nil, updated_at: now]
-    )
-
-    :ok
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp maybe_clear_completion_state(_repo, _attrs, _opts), do: :ok
 
   defp retry_delay_ms(attempts_left, total_attempts) do
     used_attempts = max(total_attempts - attempts_left, 0)
@@ -718,6 +565,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     now = DateTime.utc_now(:microsecond)
 
     repo.transaction(fn ->
+      with {:error, reason} <- require_writable_question(repo, id), do: repo.rollback(reason)
+
       id
       |> answer_question_query(current_status)
       |> repo.update_all(
@@ -743,6 +592,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     now = DateTime.utc_now(:microsecond)
 
     repo.transaction(fn ->
+      with {:error, reason} <- require_writable_question(repo, id), do: repo.rollback(reason)
+
       id
       |> close_question_query(current_status)
       |> repo.update_all(set: [status: "closed", updated_at: now])
@@ -872,9 +723,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     end)
   end
 
-  defp require_slicing_status(status) when status in ["ready_for_slicing", "sliced"], do: :ok
-  defp require_slicing_status(_status), do: {:error, :invalid_status}
-
   defp require_package_batch([first | rest]) when is_map(first) do
     if Enum.all?(rest, &is_map/1), do: :ok, else: {:error, :invalid_work_package}
   end
@@ -895,14 +743,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       end
     end)
     |> case do
-      {:ok, packages} ->
-        case maybe_clear_completion_state(repo, %{"work_request_id" => work_request.id}, clear_completion?: true) do
-          :ok -> {:ok, Enum.reverse(packages)}
-          {:error, reason} -> {:error, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, packages} -> {:ok, Enum.reverse(packages)}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -944,7 +786,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   end
 
   defp validate_executable_work_package_kind(%{"kind" => kind}) do
-    if kind in WorkPackage.executable_kinds(), do: :ok, else: {:error, :invalid_work_package}
+    if kind in WorkPackage.kinds(), do: :ok, else: {:error, :invalid_work_package}
   end
 
   defp validate_product_tree_node(_repo, _work_request_id, nil), do: :ok
@@ -958,20 +800,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   end
 
   defp validate_product_tree_node(_repo, _work_request_id, _node_id), do: {:error, :not_found}
-
-  defp mark_sliced_in_transaction(repo, %WorkRequest{} = work_request) do
-    now = DateTime.utc_now(:microsecond)
-
-    from(request in WorkRequest,
-      where: request.id == ^work_request.id and request.status == ^work_request.status,
-      where: request.status in ["ready_for_slicing", "sliced"]
-    )
-    |> repo.update_all(set: [status: "sliced", updated_at: now])
-    |> case do
-      {1, _rows} -> {:ok, repo.get!(WorkRequest, work_request.id)}
-      {0, _rows} -> {:error, :stale_status}
-    end
-  end
 
   defp require_contract_revision(%WorkPackage{contract_revision: revision}, revision), do: :ok
   defp require_contract_revision(%WorkPackage{}, _expected_revision), do: {:error, :stale_status}
@@ -1016,6 +844,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     with :ok <- validate_executable_work_package_kind(effective_contract),
          :ok <- validate_product_tree_node(repo, work_package.work_request_id, Map.get(attrs, "product_tree_node_id")),
          {:ok, %WorkRequest{} = work_request} <- get(repo, work_package.work_request_id),
+         :ok <- Phase.require_writable(work_request),
          :ok <- WorkPackageDeliveryScope.validate(repo, work_request, effective_contract) do
       work_package
       |> WorkPackage.update_changeset(attrs)

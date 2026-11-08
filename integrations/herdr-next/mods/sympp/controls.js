@@ -2,7 +2,7 @@
 export function requestBody(fields) {
   const body = Object.fromEntries(["title", "repo", "base_branch", "human_description"].map((key) => [key, fields[key].trim()]));
   if (Object.values(body).some((value) => !value)) throw new Error("Fill in the title, repository, base branch and request.");
-  return { ...body, work_type: "feature", desired_dispatch_shape: "architect_led_feature_branch", constraints: {}, status: "ready_for_clarification" };
+  return { ...body, work_type: "feature", desired_dispatch_shape: "architect_led_feature_branch", constraints: {} };
 }
 
 export function answerBody(question, choice, text) {

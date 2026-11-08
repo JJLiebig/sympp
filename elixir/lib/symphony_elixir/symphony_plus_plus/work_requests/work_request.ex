@@ -12,15 +12,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest do
   @primary_key {:id, :string, autogenerate: false}
   @foreign_key_type :string
 
-  @statuses [
-    "draft",
-    "ready_for_clarification",
-    "clarifying",
-    "ready_for_slicing",
-    "human_info_needed",
-    "sliced"
-  ]
-
   @work_types [
     "feature",
     "bugfix",
@@ -52,12 +43,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest do
           creator_kind: String.t() | nil,
           creator_name: String.t() | nil,
           created_via: String.t() | nil,
-          status: String.t() | nil,
-          completed_at: DateTime.t() | nil,
-          completion_source: String.t() | nil,
+          operator_completed_at: DateTime.t() | nil,
+          report: map() | nil,
           archived_at: DateTime.t() | nil,
           archive_reason: String.t() | nil,
-          never_started_restored_at: DateTime.t() | nil,
+          restored_at: DateTime.t() | nil,
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -74,25 +64,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest do
     field(:creator_name, :string)
     field(:created_via, :string)
     field(:dispatched_by, :map)
+    field(:operator_completed_at, :utc_datetime_usec)
     field(:report, :map)
-    field(:status, :string)
-    field(:completed_at, :utc_datetime_usec)
-    field(:completion_source, :string)
     field(:archived_at, :utc_datetime_usec)
     field(:archive_reason, :string)
-    field(:never_started_restored_at, :utc_datetime_usec)
+    field(:restored_at, :utc_datetime_usec)
 
     timestamps(type: :utc_datetime_usec)
-  end
-
-  @spec statuses() :: [String.t()]
-  def statuses, do: @statuses
-
-  @spec execution_status([String.t()]) :: String.t()
-  def execution_status(statuses) do
-    if statuses != [] and Enum.all?(statuses, &(&1 == "ended")),
-      do: "closed",
-      else: "open"
   end
 
   @spec work_types() :: [String.t()]
@@ -110,9 +88,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest do
       attrs
       |> normalize_keys()
       |> put_new_value("id", stable_id())
-      |> put_new_value("status", "draft")
       |> put_new_value("constraints", %{})
-      |> Map.drop(["completed_at", "completion_source", "archived_at", "archive_reason"])
+      |> Map.drop(["operator_completed_at", "archived_at", "archive_reason", "restored_at"])
 
     %__MODULE__{}
     |> changeset(attrs)
@@ -123,9 +100,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest do
   def update_changeset(%__MODULE__{} = work_request, attrs) do
     attrs = normalize_keys(attrs)
 
-    work_request
-    |> changeset(Map.drop(attrs, ["id", "status", "dispatched_by", "report", "completed_at", "completion_source", "archived_at", "archive_reason", "inserted_at", "updated_at", "created_at"]))
-    |> reject_generic_status_update(attrs)
+    changeset(work_request, Map.drop(attrs, ["id", "dispatched_by", "report", "operator_completed_at", "archived_at", "archive_reason", "restored_at", "inserted_at", "updated_at", "created_at"]))
   end
 
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
@@ -151,9 +126,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest do
       :creator_name,
       :created_via,
       :dispatched_by,
-      :status,
-      :completed_at,
-      :completion_source,
       :archived_at,
       :archive_reason
     ])
@@ -166,22 +138,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest do
       :work_type,
       :human_description,
       :constraints,
-      :desired_dispatch_shape,
-      :status
+      :desired_dispatch_shape
     ])
-    |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:work_type, @work_types)
     |> validate_inclusion(:desired_dispatch_shape, @dispatch_shapes)
     |> validate_optional_inclusion(:creator_kind, @creator_kinds)
     |> validate_json_safe_constraints()
-  end
-
-  defp reject_generic_status_update(changeset, attrs) do
-    if Map.has_key?(attrs, "status") do
-      add_error(changeset, :status, "use update_status/4 for status transitions")
-    else
-      changeset
-    end
   end
 
   defp normalize_constraints(attrs) do

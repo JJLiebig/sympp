@@ -175,8 +175,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.CommonHelpers do
       work_type: "feature",
       human_description: "Record the human outcome before slicing.",
       constraints: %{"allowed_paths" => ["elixir/lib"], "requires_secret" => false},
-      desired_dispatch_shape: "single_package",
-      status: "draft"
+      desired_dispatch_shape: "single_package"
     }
 
     Enum.into(overrides, defaults)

@@ -8,6 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.BulkRepository, as: WorkRequestBulkRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   import Ecto.Query, only: [from: 2]
@@ -47,11 +48,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
          {:ok, decisions_by_request} <- WorkRequestBulkRepository.list_decisions_many(repo, work_request_ids),
          {:ok, work_packages_by_request} <- WorkRequestBulkRepository.list_work_packages_many(repo, work_request_ids),
          all_work_packages = Dashboard.all_work_packages(work_requests, work_packages_by_request),
+         {:ok, phases} <- Phase.load(repo, work_requests, all_work_packages),
          {:ok, work_package_contexts} <- Dashboard.work_package_work_package_contexts(repo, all_work_packages) do
       {:ok,
        %{
          work_requests: work_requests,
          operator_reports: operator_reports,
+         phases: phases,
          questions_by_request: questions_by_request,
          decisions_by_request: decisions_by_request,
          work_packages_by_request: work_packages_by_request,
@@ -81,11 +84,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
          {:ok, questions_by_request} <- WorkRequestBulkRepository.list_questions_many(repo, work_request_ids),
          {:ok, work_packages_by_request} <- board_work_packages_by_request(repo, work_request_ids, work_requests, opts),
          all_work_packages = Dashboard.all_work_packages(work_requests, work_packages_by_request),
+         {:ok, phases} <- Phase.load(repo, work_requests, all_work_packages),
          {:ok, work_package_contexts} <- board_work_package_contexts(repo, all_work_packages, opts) do
       {:ok,
        %{
          work_requests: work_requests,
          operator_reports: operator_reports,
+         phases: phases,
          questions_by_request: questions_by_request,
          work_packages_by_request: work_packages_by_request,
          work_package_contexts: work_package_contexts,
@@ -205,6 +210,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
          %WorkRequest{} = work_request,
          %{
            operator_reports: operator_reports,
+           phases: phases,
            questions_by_request: questions_by_request,
            work_packages_by_request: work_packages_by_request,
            work_package_contexts: work_package_contexts,
@@ -232,7 +238,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
         request_work_package_contexts,
         repo_identity_catalog,
         delivery_board: delivery_board,
-        operator_report: Map.get(operator_reports, work_request.id)
+        operator_report: Map.get(operator_reports, work_request.id),
+        phase: Map.fetch!(phases, work_request.id)
       )
       |> Map.drop([:human_description, :constraints, :creator])
       |> Map.update(:operational_state, %{}, &Map.delete(&1, :activity_signal))
@@ -291,6 +298,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
          %WorkRequest{} = work_request,
          %{
            operator_reports: operator_reports,
+           phases: phases,
            questions_by_request: questions_by_request,
            decisions_by_request: decisions_by_request,
            work_packages_by_request: work_packages_by_request,
@@ -324,7 +332,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
           request_work_package_contexts,
           repo_identity_catalog,
           delivery_board: delivery_board,
-          operator_report: Map.get(operator_reports, work_request.id)
+          operator_report: Map.get(operator_reports, work_request.id),
+          phase: Map.fetch!(phases, work_request.id)
         )
         |> Map.update(:operational_state, %{}, &Map.delete(&1, :activity_signal))
 

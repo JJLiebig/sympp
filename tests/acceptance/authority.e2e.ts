@@ -109,7 +109,7 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
   expect(createdNative.body.refresh).toEqual({ dashboard: true, work_request_id: nativeId });
   const nativeDetail = await native.raw(null, {}, 'GET', `/api/v1/sympp/herdr/work-requests/${nativeId}`);
   expect(nativeDetail.body.work_request.title).toBe(intake.title);
-  expect(nativeDetail.body.work_request.status).toBe('ready_for_clarification');
+  expect(nativeDetail.body.work_request.phase).toBe('intake');
   expect(nativeDetail.body.work_packages).toEqual([]);
   expect((await native.raw({}, {}, 'POST', `/api/v1/sympp/operator/work-requests/${nativeId}/delete`)).status).toBe(401);
   expect((await fresh.call('read_work_request', { detail: 'full', work_request_id: id })).work_packages.map((entry: any) => entry.id)).toEqual([nativePackage]);
@@ -150,7 +150,7 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
 test('ownership lets every terminal read any request but refuses writes to another owner and its endpoints', async ({ processes }) => {
   const factory = processes.factory();
   const architect = await factory.client();
-  const own = await architect.request('Owned request', 'ready_for_slicing', 'beta', 'example/service', [
+  const own = await architect.request('Owned request', 'beta', 'example/service', [
     { repo: 'example/service', base_branch: 'integration' },
   ]);
   const [ownWp] = await packages(architect, ['Owned package']);
@@ -168,7 +168,6 @@ test('ownership lets every terminal read any request but refuses writes to anoth
   })).clarification_question;
   expect((await architect.call('read_work_request', { detail: 'full', work_request_id: other })).work_request.id).toBe(other);
   for (const [name, args] of [
-    ['set_work_request_status', { work_request_id: other, current_status: 'sliced', next_status: 'clarifying' }],
     ['slice_work_request', { work_request_id: other, work_packages: [contract('Stolen')] }],
     ['dispatch_work_package', { work_request_id: other, work_package_id: otherWp }],
     ['dispatch_work_package', { work_package_id: otherWp }],
@@ -210,9 +209,8 @@ test('ownership lets every terminal read any request but refuses writes to anoth
   await peer.call('dispatch_work_package', { work_package_id: otherWp });
 
   const secondary = await factory.client();
-  await secondary.request('Secondary repository reader', 'ready_for_slicing', 'integration', 'example/client');
+  await secondary.request('Secondary repository reader', 'integration', 'example/client');
   expect((await secondary.call('read_work_request', { detail: 'full', work_request_id: own })).work_request.id).toBe(own);
-  await secondary.reject('set_work_request_status', { work_request_id: own, current_status: 'sliced', next_status: 'clarifying' }, 'owned_by_other_terminal');
   const [secondaryWp] = (await architect.call('slice_work_request', { work_packages: [contract('Secondary delivery', { repo: 'example/client', base_branch: 'integration' })] })).work_package_ids;
   await architect.call('dispatch_work_package', { work_package_id: secondaryWp });
   // Another terminal reads this WorkRequest in full; ownership gates writes only.
@@ -244,7 +242,7 @@ test('ownership lets every terminal read any request but refuses writes to anoth
   expect(closedRow.work_package.id).toBe(ownWp);
   expect(closedRow.operational_state.key).toBe('completed_no_pr');
   const sameRepoReader = await factory.client();
-  await sameRepoReader.request('Same repository different delivery base', 'ready_for_slicing', 'integration');
+  await sameRepoReader.request('Same repository different delivery base', 'integration');
   const [alternateBase] = (await architect.call('slice_work_request', { work_packages: [contract('Alternate delivery base', { base_branch: 'integration' })] })).work_package_ids;
   await architect.call('dispatch_work_package', { work_package_id: alternateBase });
   const baseBoard = (await sameRepoReader.call('read_delivery_board', { detail: 'full', work_request_id: own })).delivery_board;
@@ -256,7 +254,7 @@ test('ownership lets every terminal read any request but refuses writes to anoth
 
   for (const [repo, branch] of [['foreign/service', 'beta'], ['example/service', 'other-branch']]) {
     const outsider = await factory.client();
-    const foreign = await outsider.request('Confidential outside scope', 'ready_for_slicing', branch, repo);
+    const foreign = await outsider.request('Confidential outside scope', branch, repo);
     expect((await architect.call('read_work_request', { detail: 'full', work_request_id: foreign })).work_request.id).toBe(foreign);
     const listed = await architect.call('list_work_requests', {});
     expect(listed.work_requests.map((entry: any) => entry.id)).toContain(foreign);
@@ -268,7 +266,7 @@ test('plan views give a terminal that owns another request the same complete pla
   const architect = await factory.client();
   const request = await architect.request('Plan projection authority');
   const reader = await factory.client();
-  await reader.request('Secondary plan reader', 'ready_for_slicing', 'integration', 'example/client');
+  await reader.request('Secondary plan reader', 'integration', 'example/client');
   const views = ['groups_only', 'groups_with_work_package_refs', 'groups_with_work_packages'];
   const read = async (client: Client, view: string) => (await client.call('read_plan', { detail: 'full', work_request_id: request, view })).product_tree;
   const group = async (title: string, parent?: string) => (await architect.call('upsert_group', {
@@ -407,7 +405,7 @@ test('package evidence tools keep plans atomic, findings idempotent and progress
   await architect.reject('append_progress', own({
     summary: 'Cannot forge audit identity', idempotency_key: 'forged-audit',
     id: 'caller-progress-id', created_at: '2000-01-01T00:00:00Z', actor_id: 'forged-worker',
-    actor_type: 'architect', access_grant_id: 'forged-grant', agent_run_id: 'forged-run',
+    actor_type: 'architect', agent_run_id: 'forged-run',
   }), 'unexpected_argument');
   const redacted = await architect.tool('append_progress', own({
     summary: 'Recorded progress sk-synthetic-progress-token', idempotency_key: 'redacted-progress',
@@ -519,7 +517,7 @@ test('operator reports keep server times and partial edits and only the owner wr
   expect(detail.work_request.operator_report).toEqual(reparked);
   expect(detail.work_request.worked_on.address).toBe(architect.address);
   const unchanged = await architect.call('read_work_request', { detail: 'full', work_request_id: request });
-  expect(unchanged.work_request.status).toBe('sliced');
+  expect(unchanged.work_request.phase).toBe('active');
   expect(unchanged.clarification_questions.find((entry: any) => entry.id === question.id).status).toBe('open');
   expect((await row(architect, request, wp)).attention_reason_codes).not.toContain('active_blocker');
 });
@@ -527,17 +525,15 @@ test('operator reports keep server times and partial edits and only the owner wr
 test('architect question and decision mutations preserve provenance and redact compact responses', async ({ processes }) => {
   const factory = processes.factory();
   const architect = await factory.client();
-  const request = await architect.request('Redacted clarification authority', 'ready_for_clarification');
-  const status = await architect.call('set_work_request_status', { work_request_id: request, current_status: 'ready_for_clarification', next_status: 'clarifying' });
-  expect(status.work_request.status).toBe('clarifying');
-  expect(status.scope.repo).toBe('example/service');
-  expect(status.scope.base_branch).toBe('beta');
+  const request = await architect.request('Redacted clarification authority');
   const ask = await architect.call('ask_question', { work_request_id: request, category: 'scope',
     question: 'Avoid Bearer raw_secret_synthetic', why_needed: 'Keep raw_secret_synthetic out of responses.',
     asked_by_agent_run_id: 'raw_secret_synthetic', decision_prompt: { tl_dr: 'Choose scope', details: 'A bounded decision is required.',
       options: [{ id: 'continue', label: 'Continue', answer: 'Proceed without raw_secret_synthetic.' }],
     },
   });
+  expect(ask.scope.repo).toBe('example/service');
+  expect(ask.scope.base_branch).toBe('beta');
   const question = ask.clarification_question.id;
   for (const field of ['asked_by_agent_run_id', 'decision_prompt']) expect(ask.clarification_question[field]).toBeUndefined();
   expect(JSON.stringify(ask)).not.toContain('raw_secret_synthetic');
@@ -579,7 +575,7 @@ test('architect question and decision mutations preserve provenance and redact c
     ids.push(result.decision_log_entry.id);
   }
   const persisted = await architect.call('read_work_request', { detail: 'full', work_request_id: request });
-  expect(persisted.work_request.status).toBe('clarifying');
+  expect(persisted.work_request.phase).toBe('intake');
   expect(persisted.clarification_questions.map((entry: any) => entry.status)).toEqual(['answered', 'closed', 'answered']);
   expect(persisted.decision_log_entries.map((entry: any) => entry.id)).toEqual(ids);
   expect(JSON.stringify(persisted)).not.toContain('raw_secret_synthetic');

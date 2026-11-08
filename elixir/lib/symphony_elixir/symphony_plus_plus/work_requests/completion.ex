@@ -1,33 +1,38 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
-  @moduledoc false
+  @moduledoc """
+  The WorkRequest's stored operator overrides and retention.
 
-  alias SymphonyElixir.SymphonyPlusPlus.OperationalLineage
+  Operator events: `complete` sets `operator_completed_at`; `archive` and
+  `restore` set and clear `archived_at`. Restore also records `restored_at`,
+  which restarts both retention clocks. Everything else about a WorkRequest's
+  progress is derived by `Phase`.
+
+  Retention archives `done` WorkRequests after the archive window (reason
+  `age`), keeps at most ten done WorkRequests visible per repo and base branch
+  (reason `limit`), archives WorkRequests still `intake` or `planned` after the
+  never-started window (reason `never_started`, via `NeverStartedRetention`), and
+  deletes archives older than the deletion window, except never-started ones.
+  """
+
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryResolution
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.NeverStartedRetention
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   import Ecto.Query, only: [from: 2]
 
-  @completion_blocking_work_request_statuses ["human_info_needed"]
-  @operator_completion_source "operator"
-  @restorable_archive_reasons ["age"]
+  @archivable_phases ["done", "unresolved"]
   @default_archive_after_days 3
   @completed_visible_limit 10
 
-  @type context :: %{optional(:work_package) => WorkPackage.t(), optional(:card) => map()}
-  @type state :: %{completed?: boolean(), completed_at: DateTime.t() | nil, archived_at: DateTime.t() | nil}
   @type retention_summary :: %{
-          refreshed_count: non_neg_integer(),
           archived_count: non_neg_integer(),
           archived_ids: [String.t()],
           deleted_count: non_neg_integer(),
@@ -36,183 +41,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   @type delete_error :: Repository.error() | {:worktree_cleanup_failed, term()}
   @type retention_error ::
           delete_error()
-          | :active_runtime
           | :invalid_archive_after_days
           | :invalid_never_started_archive_after_days
           | :invalid_delete_after_days
-          | :not_completed
 
   @spec default_archive_after_days() :: pos_integer()
   def default_archive_after_days, do: @default_archive_after_days
 
-  @spec schedule_terminal_agent_run_worktree_cleanup(module(), String.t()) :: :ok
-  def schedule_terminal_agent_run_worktree_cleanup(_repo, _work_package_id) do
-    WorktreeCleanupQueue.wake()
-  end
-
-  @spec blocker_event_payload?(map()) :: boolean()
-  def blocker_event_payload?(payload) when is_map(payload) do
-    WorkPackageActivity.blocker_event_payload?(payload)
-  end
-
-  @spec state(WorkRequest.t(), map(), [WorkPackage.t()], %{optional(String.t()) => context()}) ::
-          state()
-  @spec state(WorkRequest.t(), map(), [WorkPackage.t()], %{optional(String.t()) => context()}, %{
-          optional(String.t()) => WorkPackageDelivery.t()
-        }) :: state()
-  def state(
-        %WorkRequest{} = work_request,
-        question_state,
-        work_packages,
-        work_package_contexts,
-        deliveries_by_slice_id \\ %{}
-      )
-      when is_map(question_state) and is_list(work_packages) and is_map(work_package_contexts) and
-             is_map(deliveries_by_slice_id) do
-    if operator_completed?(work_request) do
-      %{
-        completed?: true,
-        completed_at: work_request.completed_at,
-        archived_at: work_request.archived_at
-      }
-    else
-      derived_state(work_request, question_state, work_packages, work_package_contexts, deliveries_by_slice_id)
-    end
-  end
-
-  defp derived_state(
-         %WorkRequest{} = work_request,
-         question_state,
-         work_packages,
-         work_package_contexts,
-         deliveries_by_slice_id
-       )
-       when is_map(question_state) and is_list(work_packages) and is_map(work_package_contexts) and
-              is_map(deliveries_by_slice_id) do
-    completed? =
-      derived_completed?(
-        work_request,
-        question_state,
-        work_packages,
-        work_package_contexts,
-        deliveries_by_slice_id
-      )
-
-    completed_at =
-      derived_completed_at_if_complete(
-        completed?,
-        work_request,
-        question_state,
-        work_packages,
-        work_package_contexts,
-        deliveries_by_slice_id
-      )
-
-    %{
-      completed?: completed?,
-      completed_at: completed_at,
-      archived_at: if(completed? or work_request.archive_reason == "never_started", do: work_request.archived_at)
-    }
-  end
-
-  defp derived_completed?(
-         %WorkRequest{} = work_request,
-         question_state,
-         work_packages,
-         work_package_contexts,
-         deliveries_by_slice_id
-       ) do
-    packages_by_id = Map.new(work_packages, &{&1.id, &1})
-    successors = delivery_successors(work_package_contexts)
-
-    required_packages =
-      Enum.reject(work_packages, fn work_package ->
-        delivery_outcome(Map.get(deliveries_by_slice_id, work_package.id)) == "skipped" and
-          DeliveryResolution.successor_ids(work_package.id, deliveries_by_slice_id, successors) == []
-      end)
-
-    completion_status_allowed?(work_request) and
-      Map.get(question_state, :open_count, 0) == 0 and
-      required_packages != [] and
-      Enum.all?(required_packages, fn work_package ->
-        DeliveryResolution.resolves_work_request?(work_package.id, packages_by_id, deliveries_by_slice_id, successors) and
-          terminal_slice?(
-            work_package,
-            Map.get(work_package_contexts, work_package.id),
-            Map.get(deliveries_by_slice_id, work_package.id)
-          )
-      end)
-  end
-
-  defp derived_completed_at_if_complete(false, %WorkRequest{}, _question_state, _work_packages, _work_package_contexts, _deliveries_by_slice_id), do: nil
-
-  defp derived_completed_at_if_complete(true, %WorkRequest{} = work_request, question_state, work_packages, work_package_contexts, deliveries_by_slice_id) do
-    work_request.completed_at ||
-      derived_completed_at(
-        work_request,
-        work_packages,
-        work_package_contexts,
-        deliveries_by_slice_id,
-        Map.get(question_state, :latest_gate_at)
-      )
-  end
-
-  @spec visible_state(WorkRequest.t(), map(), [WorkPackage.t()], %{optional(String.t()) => context()}) ::
-          state()
-  @spec visible_state(WorkRequest.t(), map(), [WorkPackage.t()], %{optional(String.t()) => context()}, map()) ::
-          state()
-  def visible_state(
-        %WorkRequest{} = work_request,
-        question_state,
-        work_packages,
-        work_package_contexts,
-        deliveries_by_slice_id \\ %{}
-      )
-      when is_map(question_state) and is_list(work_packages) and is_map(work_package_contexts) and
-             is_map(deliveries_by_slice_id) do
-    state(work_request, question_state, work_packages, work_package_contexts, deliveries_by_slice_id)
-  end
-
-  @spec refresh(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, Repository.error()}
-  def refresh(repo, work_request_id) when is_atom(repo) and is_binary(work_request_id) do
-    repo.transaction(fn ->
-      case refresh_in_transaction(repo, work_request_id) do
-        {:ok, work_request} -> work_request
-        {:error, reason} -> repo.rollback(reason)
-      end
-    end)
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  @doc false
-  @spec refresh_in_transaction(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, Repository.error()}
-  def refresh_in_transaction(repo, work_request_id) do
-    with {:ok, work_request} <- Repository.get(repo, work_request_id) do
-      refresh_work_request(repo, work_request)
-    end
-  end
-
-  defp refresh_work_request(_repo, %WorkRequest{archive_reason: "never_started", archived_at: %DateTime{}} = work_request), do: {:ok, work_request}
-
-  defp refresh_work_request(repo, %WorkRequest{id: work_request_id} = work_request) do
-    with {:ok, question_state} <- question_state(repo, work_request_id),
-         {:ok, work_packages} <- Repository.list_work_packages(repo, work_request_id),
-         {:ok, deliveries_by_slice_id} <- work_package_deliveries_by_id(repo, work_packages),
-         :ok <- clear_terminal_work_package_attention(repo, work_packages, deliveries_by_slice_id),
-         {:ok, contexts} <- work_package_contexts(repo, work_packages) do
-      state = state(work_request, question_state, work_packages, contexts, deliveries_by_slice_id)
-      persist_state(repo, work_request, state, work_packages)
-    end
-  end
-
-  @spec force_complete(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, Repository.error()}
-  def force_complete(repo, work_request_id) when is_atom(repo) and is_binary(work_request_id) do
+  @doc """
+  Operator completion. Closes open clarification questions, resolves package
+  blockers and queues cleanup of ended packages' worktrees. It does not stop
+  workers or merge PRs. Refused on an archived WorkRequest.
+  """
+  @spec complete(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, Repository.error() | :work_request_archived}
+  def complete(repo, work_request_id) when is_atom(repo) and is_binary(work_request_id) do
     repo.transaction(fn ->
       with {:ok, %WorkRequest{} = work_request} <- Repository.get(repo, work_request_id),
+           :ok <- Phase.require_writable(work_request),
            {:ok, work_packages} <- Repository.list_work_packages(repo, work_request_id),
            :ok <- clear_completed_attention(repo, work_request.id, work_packages),
-           {:ok, updated} <- force_complete_work_request(repo, work_request) do
+           {:ok, updated} <- mark_operator_completed(repo, work_request) do
         updated
       else
         {:error, reason} -> repo.rollback(reason)
@@ -222,21 +70,49 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
+  @doc "Operator archive of a `done` or `unresolved` WorkRequest. Archiving again is a no-op."
   @spec archive(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, Repository.error() | :not_completed}
   def archive(repo, work_request_id) when is_atom(repo) and is_binary(work_request_id) do
-    with {:ok, %WorkRequest{} = work_request} <- refresh(repo, work_request_id) do
-      if is_nil(work_request.completed_at) do
-        {:error, :not_completed}
+    repo.transaction(fn ->
+      with {:ok, %WorkRequest{} = work_request} <- Repository.get(repo, work_request_id),
+           {:ok, summary} <- Phase.load_one(repo, work_request),
+           {:ok, archived} <- archive_in_phase(repo, work_request, summary.phase) do
+        archived
       else
-        archive_completed(repo, work_request, "manual")
+        {:error, reason} -> repo.rollback(reason)
       end
+    end)
+  rescue
+    error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
+  @doc """
+  Operator restore. Clears the archive, restarts the retention clocks and
+  resolves blockers whose target ended while the WorkRequest was archived.
+  """
+  @spec restore(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, Repository.error()}
+  def restore(repo, work_request_id) when is_atom(repo) and is_binary(work_request_id) do
+    case Repository.get(repo, work_request_id) do
+      {:ok, %WorkRequest{archived_at: nil} = work_request} ->
+        {:ok, work_request}
+
+      {:ok, %WorkRequest{} = work_request} ->
+        repo.transaction(fn -> restore_archived(repo, work_request) end)
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
-  @spec restore(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, Repository.error()}
-  def restore(repo, work_request_id) when is_atom(repo) and is_binary(work_request_id) do
-    with {:ok, %WorkRequest{} = work_request} <- refresh(repo, work_request_id) do
-      restore_completed(repo, work_request)
+  defp restore_archived(repo, %WorkRequest{} = work_request) do
+    with {:ok, restored} <-
+           work_request
+           |> Ecto.Changeset.change(archived_at: nil, archive_reason: nil, restored_at: DateTime.utc_now(:microsecond))
+           |> update_work_request(repo),
+         :ok <- Lifecycle.resolve_blockers_on_ended_targets(repo, linked_work_packages(repo, restored.id)) do
+      restored
+    else
+      {:error, reason} -> repo.rollback(reason)
     end
   end
 
@@ -258,18 +134,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
          {:ok, never_started_days} <- never_started_archive_after_days(opts),
          {:ok, delete_after_days} <- delete_after_days(opts),
          {:ok, archived_never_started} <- NeverStartedRetention.archive(repo, now, never_started_days),
-         {:ok, age_candidates} <- retention_age_candidates(repo, now, archive_after_days),
-         {:ok, refreshed} <- refresh_all(repo, age_candidates),
-         {:ok, _restored_for_age} <- restore_unexpired(repo, refreshed, now, archive_after_days),
-         {:ok, archived_for_age} <- archive_expired(repo, refreshed, now, archive_after_days),
-         {:ok, visible_completed} <- completed_unarchived(repo),
-         {:ok, archived_for_limit, overflow_refreshed_count} <- archive_overflow(repo, visible_completed),
+         cutoff = DateTime.add(now, -archive_after_days * 24 * 60 * 60, :second),
+         {:ok, candidates} <- retention_candidates(repo),
+         {:ok, archived_for_age} <- archive_expired(repo, candidates, cutoff),
+         {:ok, remaining} <- retention_candidates(repo),
+         {:ok, archived_for_limit} <- archive_overflow(repo, remaining),
          {:ok, deleted_ids} <- delete_expired_archived(repo, now, delete_after_days) do
       archived_ids = archived_for_age ++ archived_for_limit ++ archived_never_started
 
       {:ok,
        %{
-         refreshed_count: length(refreshed) + overflow_refreshed_count,
          archived_count: length(archived_ids),
          archived_ids: archived_ids,
          deleted_count: length(deleted_ids),
@@ -278,53 +152,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     end
   end
 
-  defp persist_state(repo, %WorkRequest{} = work_request, %{completed?: true} = state, work_packages) do
-    attrs = %{
-      completed_at: state.completed_at || DateTime.utc_now(:microsecond),
-      completion_source: work_request.completion_source,
-      archived_at: state.archived_at,
-      archive_reason: if(state.archived_at, do: work_request.archive_reason)
-    }
+  defp archive_in_phase(_repo, %WorkRequest{archived_at: %DateTime{}} = work_request, _phase), do: {:ok, work_request}
 
-    unchanged? =
-      work_request.completed_at == attrs.completed_at and work_request.archived_at == attrs.archived_at and
-        work_request.archive_reason == attrs.archive_reason and
-        work_request.completion_source == attrs.completion_source
+  defp archive_in_phase(repo, %WorkRequest{} = work_request, phase) when phase in @archivable_phases,
+    do: archive_work_request(repo, work_request, "manual", &archivable_phase?/2)
 
-    with :ok <- clear_completed_attention(repo, work_request.id, work_packages) do
-      if unchanged? do
-        {:ok, work_request}
-      else
-        work_request
-        |> Ecto.Changeset.change(attrs)
-        |> update_work_request(repo)
-      end
-    end
-  end
+  defp archive_in_phase(_repo, %WorkRequest{}, _phase), do: {:error, :not_completed}
 
-  defp persist_state(repo, %WorkRequest{} = work_request, %{completed?: false}, _work_packages) do
-    attrs = %{completed_at: nil, completion_source: nil, archived_at: nil, archive_reason: nil}
+  defp mark_operator_completed(_repo, %WorkRequest{operator_completed_at: %DateTime{}} = work_request), do: {:ok, work_request}
 
-    if is_nil(work_request.completed_at) and is_nil(work_request.archived_at) and
-         is_nil(work_request.completion_source) do
-      {:ok, work_request}
-    else
-      work_request
-      |> Ecto.Changeset.change(attrs)
-      |> update_work_request(repo)
-    end
-  end
-
-  defp force_complete_work_request(repo, %WorkRequest{} = work_request) do
-    attrs = %{
-      completed_at: work_request.completed_at || DateTime.utc_now(:microsecond),
-      completion_source: @operator_completion_source,
-      archived_at: nil,
-      archive_reason: nil
-    }
-
+  defp mark_operator_completed(repo, %WorkRequest{} = work_request) do
     work_request
-    |> Ecto.Changeset.change(attrs)
+    |> Ecto.Changeset.change(operator_completed_at: DateTime.utc_now(:microsecond))
     |> update_work_request(repo)
   end
 
@@ -341,24 +180,115 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     Lifecycle.apply_terminal_effects(repo, work_packages)
   end
 
-  defp clear_terminal_work_package_attention(repo, work_packages, deliveries_by_slice_id) do
-    work_packages
-    |> Enum.filter(fn work_package ->
-      Lifecycle.ended?(work_package) or
-        terminal_delivery?(Map.get(deliveries_by_slice_id, work_package.id))
-    end)
-    |> then(&Lifecycle.apply_terminal_effects(repo, &1))
+  # Every unarchived done WorkRequest, with the time its retention clock started.
+  defp retention_candidates(repo) do
+    work_requests =
+      repo.all(
+        from(work_request in WorkRequest,
+          where: is_nil(work_request.archived_at),
+          order_by: [asc: work_request.inserted_at, asc: work_request.id]
+        )
+      )
+
+    with {:ok, summaries} <- Phase.load(repo, work_requests) do
+      {:ok,
+       for %WorkRequest{} = work_request <- work_requests,
+           %{completed_at: %DateTime{} = completed_at} <- [Map.fetch!(summaries, work_request.id)] do
+         {work_request, retention_clock(completed_at, work_request.restored_at)}
+       end}
+    end
+  rescue
+    error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  defp operator_completed?(%WorkRequest{completed_at: %DateTime{}, completion_source: @operator_completion_source}), do: true
-  defp operator_completed?(%WorkRequest{}), do: false
+  defp retention_clock(completed_at, nil), do: completed_at
+  defp retention_clock(completed_at, restored_at), do: Enum.max([completed_at, restored_at], DateTime)
 
-  defp completion_status_allowed?(%WorkRequest{status: status}), do: status not in @completion_blocking_work_request_statuses
+  defp archive_expired(repo, candidates, cutoff) do
+    candidates
+    |> Enum.filter(fn {_work_request, clock} -> DateTime.compare(clock, cutoff) != :gt end)
+    |> Enum.map(&elem(&1, 0))
+    |> archive_all(repo, "age", &done_since?(&1, &2, fn clock -> DateTime.compare(clock, cutoff) != :gt end))
+  end
 
-  defp refresh_all(repo, work_requests) do
+  defp archivable_phase?(_work_request, %{phase: phase}), do: phase in @archivable_phases
+
+  defp archive_overflow(repo, candidates) do
+    candidates
+    |> Enum.group_by(fn {work_request, _clock} -> {work_request.repo, work_request.base_branch} end)
+    |> Enum.flat_map(fn {_scope, scoped} ->
+      scoped
+      |> Enum.sort_by(fn {work_request, clock} -> {DateTime.to_unix(clock, :microsecond), DateTime.to_unix(work_request.inserted_at, :microsecond), work_request.id} end)
+      |> Enum.drop(-@completed_visible_limit)
+    end)
+    |> archive_overflow_candidates(repo)
+  end
+
+  # An overflow candidate is archived only if its clock is unchanged, so a
+  # concurrent restore keeps it visible.
+  defp archive_overflow_candidates(candidates, repo) do
+    Enum.reduce_while(candidates, {:ok, []}, fn {work_request, clock}, {:ok, archived_ids} ->
+      eligible? = fn current, summary -> done_since?(current, summary, &(DateTime.compare(&1, clock) == :eq)) end
+
+      case archive_work_request(repo, work_request, "limit", eligible?) do
+        {:ok, %WorkRequest{id: id}} -> {:cont, {:ok, [id | archived_ids]}}
+        {:error, :not_completed} -> {:cont, {:ok, archived_ids}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, archived_ids} -> {:ok, Enum.reverse(archived_ids)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp done_since?(%WorkRequest{} = current, %{phase: "done", completed_at: %DateTime{} = completed_at}, clock_check),
+    do: clock_check.(retention_clock(completed_at, current.restored_at))
+
+  defp done_since?(%WorkRequest{}, _summary, _clock_check), do: false
+
+  defp archive_all(work_requests, repo, archive_reason, eligible?) do
     work_requests
-    |> Enum.map(&refresh(repo, &1.id))
-    |> collect_or_error()
+    |> Enum.reduce_while({:ok, []}, fn work_request, {:ok, archived_ids} ->
+      case archive_work_request(repo, work_request, archive_reason, eligible?) do
+        {:ok, %WorkRequest{id: id}} -> {:cont, {:ok, [id | archived_ids]}}
+        {:error, :not_completed} -> {:cont, {:ok, archived_ids}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, archived_ids} -> {:ok, Enum.reverse(archived_ids)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # Eligibility is checked again inside the archive transaction against the
+  # current WorkRequest, so a candidate that gained new work or was restored
+  # since it was selected is not archived.
+  defp archive_work_request(repo, %WorkRequest{id: id}, archive_reason, eligible?) when is_binary(id) do
+    now = DateTime.utc_now(:microsecond)
+
+    repo.transaction(fn ->
+      with {:ok, %WorkRequest{archived_at: nil} = current} <- Repository.get(repo, id),
+           {:ok, summary} <- Phase.load_one(repo, current),
+           true <- eligible?.(current, summary),
+           {1, _rows} <-
+             repo.update_all(
+               from(work_request in WorkRequest, where: work_request.id == ^id and is_nil(work_request.archived_at)),
+               set: [archived_at: now, archive_reason: archive_reason, updated_at: now]
+             ),
+           # An archived WorkRequest has no live owner.
+           :ok <- Ownership.end_subject(repo, "work_request", id),
+           :ok <- WorktreeCleanupQueue.enqueue_terminal(repo, linked_work_packages(repo, id)),
+           {:ok, archived} <- Repository.get(repo, id) do
+        archived
+      else
+        {:error, reason} -> repo.rollback(reason)
+        _not_archivable -> repo.rollback(:not_completed)
+      end
+    end)
+  rescue
+    error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
   defp archive_after_days(opts) do
@@ -383,185 +313,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     end
   end
 
-  defp archive_expired(repo, work_requests, now, archive_after_days) do
-    cutoff = DateTime.add(now, -archive_after_days * 24 * 60 * 60, :second)
-
-    work_requests
-    |> Enum.filter(&archive_expired?(&1, cutoff))
-    |> archive_all(repo)
-  end
-
-  defp archive_expired?(%WorkRequest{completed_at: %DateTime{} = completed_at, archived_at: nil}, cutoff) do
-    DateTime.compare(completed_at, cutoff) in [:lt, :eq]
-  end
-
-  defp archive_expired?(%WorkRequest{}, _cutoff), do: false
-
-  defp restore_unexpired(repo, work_requests, now, archive_after_days) do
-    cutoff = DateTime.add(now, -archive_after_days * 24 * 60 * 60, :second)
-
-    work_requests
-    |> Enum.filter(&restore_unexpired?(&1, cutoff))
-    |> restore_all(repo)
-  end
-
-  defp restore_unexpired?(
-         %WorkRequest{
-           completed_at: %DateTime{} = completed_at,
-           archived_at: %DateTime{},
-           archive_reason: archive_reason
-         },
-         cutoff
-       ) do
-    archive_reason in @restorable_archive_reasons and DateTime.compare(completed_at, cutoff) == :gt
-  end
-
-  defp restore_unexpired?(%WorkRequest{}, _cutoff), do: false
-
-  defp archive_overflow(repo, work_requests) do
-    work_requests
-    |> Enum.group_by(&{&1.repo, &1.base_branch})
-    |> Enum.reduce_while({:ok, [], 0}, fn {_scope, scoped_work_requests}, {:ok, archived_ids, refreshed_count} ->
-      case archive_overflow_scope(repo, scoped_work_requests) do
-        {:ok, scoped_archived_ids, scoped_refreshed_count} ->
-          {:cont, {:ok, archived_ids ++ scoped_archived_ids, refreshed_count + scoped_refreshed_count}}
-
-        {:error, reason} ->
-          {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, archived_ids, refreshed_count} -> {:ok, archived_ids, refreshed_count}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp archive_overflow_scope(repo, work_requests) do
-    sorted_work_requests = Enum.sort_by(work_requests, &completed_sort_key/1)
-    archive_count = max(length(sorted_work_requests) - @completed_visible_limit, 0)
-
-    archive_overflow_candidates(repo, sorted_work_requests, archive_count, [], 0)
-  end
-
-  defp archive_overflow_candidates(_repo, _work_requests, 0, archived_ids, refreshed_count),
-    do: {:ok, Enum.reverse(archived_ids), refreshed_count}
-
-  defp archive_overflow_candidates(_repo, [], _archive_count, archived_ids, refreshed_count),
-    do: {:ok, Enum.reverse(archived_ids), refreshed_count}
-
-  defp archive_overflow_candidates(repo, [work_request | rest], archive_count, archived_ids, refreshed_count) do
-    case refresh(repo, work_request.id) do
-      {:ok, %WorkRequest{archived_at: %DateTime{}}} ->
-        archive_overflow_candidates(repo, rest, archive_count - 1, archived_ids, refreshed_count + 1)
-
-      {:ok, %WorkRequest{completed_at: nil}} ->
-        archive_overflow_candidates(repo, rest, archive_count, archived_ids, refreshed_count + 1)
-
-      {:ok, %WorkRequest{} = refreshed} ->
-        case archive_completed(repo, refreshed, "limit") do
-          {:ok, %WorkRequest{id: id}} ->
-            archive_overflow_candidates(repo, rest, archive_count - 1, [id | archived_ids], refreshed_count + 1)
-
-          {:error, :not_completed} ->
-            archive_overflow_candidates(repo, rest, archive_count, archived_ids, refreshed_count + 1)
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp archive_all(work_requests, repo, archive_reason \\ "age") do
-    work_requests
-    |> Enum.reduce_while({:ok, []}, fn work_request, {:ok, archived_ids} ->
-      case archive_completed(repo, work_request, archive_reason) do
-        {:ok, %WorkRequest{id: id}} -> {:cont, {:ok, [id | archived_ids]}}
-        {:error, :not_completed} -> {:cont, {:ok, archived_ids}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, archived_ids} -> {:ok, Enum.reverse(archived_ids)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp restore_all(work_requests, repo) do
-    work_requests
-    |> Enum.map(&restore_completed(repo, &1, reset_completed_at?: false))
-    |> collect_or_error()
-    |> case do
-      {:ok, restored} -> {:ok, Enum.map(restored, & &1.id)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp retention_age_candidates(repo, now, archive_after_days) do
-    cutoff = DateTime.add(now, -archive_after_days * 24 * 60 * 60, :second)
-
-    work_requests =
-      repo.all(
-        from(work_request in WorkRequest,
-          where: not is_nil(work_request.completed_at),
-          where:
-            (is_nil(work_request.archived_at) and work_request.completed_at <= ^cutoff) or
-              (not is_nil(work_request.archived_at) and
-                 work_request.archive_reason in ^@restorable_archive_reasons and work_request.completed_at > ^cutoff),
-          order_by: [asc: work_request.inserted_at, asc: work_request.id]
-        )
-      )
-
-    {:ok, work_requests}
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp completed_unarchived(repo) do
-    work_requests =
-      repo.all(
-        from(work_request in WorkRequest,
-          where: is_nil(work_request.archived_at),
-          where: not is_nil(work_request.completed_at),
-          order_by: [asc: work_request.completed_at, asc: work_request.inserted_at, asc: work_request.id]
-        )
-      )
-
-    {:ok, work_requests}
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
   defp delete_expired_archived(_repo, _now, nil), do: {:ok, []}
 
   defp delete_expired_archived(repo, now, delete_after_days) do
     cutoff = DateTime.add(now, -delete_after_days * 24 * 60 * 60, :second)
 
-    archived =
-      repo.all(
-        from(work_request in WorkRequest,
-          where: not is_nil(work_request.archived_at),
-          where: is_nil(work_request.archive_reason) or work_request.archive_reason != "never_started",
-          where: work_request.archived_at < ^cutoff,
-          order_by: [asc: work_request.archived_at, asc: work_request.id],
-          select: work_request.id
-        )
+    repo.all(
+      from(work_request in WorkRequest,
+        where: work_request.archived_at < ^cutoff,
+        where: is_nil(work_request.archive_reason) or work_request.archive_reason != "never_started",
+        order_by: [asc: work_request.archived_at, asc: work_request.id],
+        select: work_request.id
       )
-
-    delete_archived_work_requests_with_cleanup(repo, archived, cutoff)
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp delete_archived_work_requests_with_cleanup(repo, work_request_ids, cutoff) do
-    work_request_ids
+    )
     |> Enum.reduce_while({:ok, []}, fn work_request_id, {:ok, deleted_ids} ->
-      case delete_archived_work_request_with_cleanup(repo, work_request_id, cutoff) do
+      case delete_archived_work_request(repo, work_request_id, cutoff) do
         {:ok, nil} -> {:cont, {:ok, deleted_ids}}
         {:ok, deleted_id} -> {:cont, {:ok, [deleted_id | deleted_ids]}}
-        {:error, :not_completed} -> {:cont, {:ok, deleted_ids}}
         {:error, reason} -> maybe_skip_archived_cleanup_error(reason, deleted_ids)
       end
     end)
@@ -569,55 +337,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
       {:ok, deleted_ids} -> {:ok, Enum.reverse(deleted_ids)}
       {:error, reason} -> {:error, reason}
     end
+  rescue
+    error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  defp delete_archived_work_request_with_cleanup(repo, work_request_id, cutoff) do
-    with {:ok, _current} <- claim_archived_before(repo, work_request_id, cutoff) do
-      repo.transaction(fn ->
-        delete_archived_work_request_after_dependents(repo, work_request_id, cutoff)
-      end)
-    end
-  end
-
-  defp delete_archived_work_request_after_dependents(repo, work_request_id, cutoff) do
-    case require_archived_before(repo, work_request_id, cutoff) do
-      {:ok, _current} ->
-        work_packages = linked_work_packages(repo, work_request_id)
-
-        with :ok <- enqueue_worktrees_for_deletion(repo, work_packages),
-             :ok <- delete_work_request_dependents(repo, [work_request_id], Enum.map(work_packages, & &1.id)) do
-          delete_archived_work_request(repo, work_request_id, cutoff)
-        else
-          {:error, reason} -> repo.rollback(reason)
-        end
-
-      {:error, :not_completed} ->
-        nil
-
-      {:error, reason} ->
-        repo.rollback(reason)
-    end
-  end
-
+  # Deletes the archive only if it is still archived before the cutoff when the
+  # transaction runs, so a concurrent restore wins.
   defp delete_archived_work_request(repo, work_request_id, cutoff) do
-    case delete_archived_work_request_if_still_archived(repo, work_request_id, cutoff) do
-      1 -> work_request_id
-      0 -> nil
+    repo.transaction(fn ->
+      if still_archived_before?(repo, work_request_id, cutoff) do
+        delete_still_archived_work_request(repo, work_request_id, cutoff)
+      end
+    end)
+  end
+
+  defp delete_still_archived_work_request(repo, work_request_id, cutoff) do
+    work_packages = linked_work_packages(repo, work_request_id)
+
+    with :ok <- enqueue_worktrees_for_deletion(repo, work_packages),
+         :ok <- delete_work_request_dependents(repo, [work_request_id], Enum.map(work_packages, & &1.id)) do
+      {count, _rows} =
+        repo.delete_all(from(work_request in WorkRequest, where: work_request.id == ^work_request_id and work_request.archived_at < ^cutoff))
+
+      if count == 1, do: work_request_id
+    else
+      {:error, reason} -> repo.rollback(reason)
     end
   end
 
-  defp delete_archived_work_request_if_still_archived(repo, work_request_id, cutoff) do
-    {count, _rows} =
-      repo.delete_all(
-        from(work_request in WorkRequest,
-          where: work_request.id == ^work_request_id,
-          where: not is_nil(work_request.completed_at),
-          where: not is_nil(work_request.archived_at),
-          where: work_request.archived_at < ^cutoff
-        )
-      )
-
-    count
+  defp still_archived_before?(repo, work_request_id, cutoff) do
+    repo.exists?(from(work_request in WorkRequest, where: work_request.id == ^work_request_id and work_request.archived_at < ^cutoff))
   end
 
   defp delete_work_request_with_dependents(repo, work_request_id) do
@@ -652,8 +401,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   end
 
   defp delete_work_request_dependents(repo, work_request_ids, work_package_ids) do
-    with :ok <- preserve_archived_work_package_hides(repo, work_package_ids) do
-      Ownership.delete_subjects(repo, "work_request", work_request_ids)
+    with :ok <- preserve_archived_work_package_hides(repo, work_package_ids),
+         :ok <- Ownership.delete_subjects(repo, "work_request", work_request_ids) do
       Ownership.delete_subjects(repo, "work_package", work_package_ids)
     end
   end
@@ -673,127 +422,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
       {:error, reason} ->
         {:error, reason}
     end
-  end
-
-  defp completed_sort_key(%WorkRequest{} = work_request) do
-    {timestamp_sort_value(work_request.completed_at), timestamp_sort_value(work_request.inserted_at), work_request.id || ""}
-  end
-
-  defp collect_or_error(results) do
-    Enum.reduce_while(results, {:ok, []}, fn
-      {:ok, item}, {:ok, items} -> {:cont, {:ok, [item | items]}}
-      {:error, reason}, {:ok, _items} -> {:halt, {:error, reason}}
-    end)
-    |> case do
-      {:ok, items} -> {:ok, Enum.reverse(items)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp archive_completed(repo, %WorkRequest{archived_at: %DateTime{}, id: id}, _archive_reason) do
-    repo.transaction(fn ->
-      with {:ok, current} <- claim_archived_completed(repo, id),
-           :ok <- enqueue_linked_terminal_worktrees(repo, id) do
-        current
-      else
-        {:error, reason} -> repo.rollback(reason)
-      end
-    end)
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp archive_completed(repo, %WorkRequest{id: id}, archive_reason) when is_binary(id) do
-    now = DateTime.utc_now(:microsecond)
-
-    repo.transaction(fn ->
-      with {:ok, archived, _archived_by_this_call?} <- archive_completed_update(repo, id, archive_reason, now),
-           :ok <- enqueue_linked_terminal_worktrees(repo, id) do
-        archived
-      else
-        {:error, reason} -> repo.rollback(reason)
-      end
-    end)
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp archive_completed_update(repo, id, archive_reason, now) do
-    result =
-      repo.update_all(
-        from(work_request in WorkRequest,
-          where: work_request.id == ^id,
-          where: not is_nil(work_request.completed_at),
-          where: is_nil(work_request.archived_at)
-        ),
-        set: [archived_at: now, archive_reason: archive_reason, updated_at: now]
-      )
-
-    # An archived WorkRequest has no live owner.
-    if elem(result, 0) > 0, do: Ownership.end_subject(repo, "work_request", id)
-    archive_update_result(result, repo, id)
-  end
-
-  defp claim_archived_completed(repo, work_request_id) do
-    now = DateTime.utc_now(:microsecond)
-
-    {count, _rows} =
-      repo.update_all(
-        from(work_request in WorkRequest,
-          where: work_request.id == ^work_request_id,
-          where: not is_nil(work_request.completed_at),
-          where: not is_nil(work_request.archived_at)
-        ),
-        set: [updated_at: now]
-      )
-
-    case count do
-      1 -> Repository.get(repo, work_request_id)
-      0 -> require_archived_completed(repo, work_request_id)
-    end
-  end
-
-  defp claim_archived_before(repo, work_request_id, %DateTime{} = cutoff) do
-    now = DateTime.utc_now(:microsecond)
-
-    {count, _rows} =
-      repo.update_all(
-        from(work_request in WorkRequest,
-          where: work_request.id == ^work_request_id,
-          where: not is_nil(work_request.completed_at),
-          where: not is_nil(work_request.archived_at),
-          where: work_request.archived_at < ^cutoff
-        ),
-        set: [updated_at: now]
-      )
-
-    case count do
-      1 -> Repository.get(repo, work_request_id)
-      0 -> require_archived_before(repo, work_request_id, cutoff)
-    end
-  end
-
-  defp require_archived_completed(repo, work_request_id) do
-    case Repository.get(repo, work_request_id) do
-      {:ok, %WorkRequest{completed_at: %DateTime{}, archived_at: %DateTime{}} = current} -> {:ok, current}
-      {:ok, %WorkRequest{}} -> {:error, :not_completed}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp require_archived_before(repo, work_request_id, %DateTime{} = cutoff) do
-    with {:ok, %WorkRequest{archived_at: %DateTime{} = archived_at} = current} <-
-           require_archived_completed(repo, work_request_id),
-         true <- DateTime.compare(archived_at, cutoff) == :lt do
-      {:ok, current}
-    else
-      false -> {:error, :not_completed}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp enqueue_linked_terminal_worktrees(repo, work_request_id) do
-    WorktreeCleanupQueue.enqueue_terminal(repo, linked_work_packages(repo, work_request_id))
   end
 
   defp enqueue_worktrees_for_deletion(repo, work_packages) do
@@ -817,210 +445,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   defp hard_archived_cleanup_error?(%Ecto.Changeset{}), do: true
   defp hard_archived_cleanup_error?(_reason), do: false
 
-  defp archive_update_result({1, _rows}, repo, id) do
-    with {:ok, %WorkRequest{} = current} <- Repository.get(repo, id) do
-      {:ok, current, true}
-    end
-  end
-
-  defp archive_update_result({0, _rows}, repo, id) do
-    with {:ok, %WorkRequest{} = current} <- Repository.get(repo, id) do
-      if current.archived_at do
-        {:ok, current, false}
-      else
-        {:error, :not_completed}
-      end
-    end
-  end
-
-  defp archive_update_result({_count, _rows}, _repo, _id), do: {:error, {:constraint_failed, "multiple_work_request_archives"}}
-
-  defp restore_completed(repo, %WorkRequest{} = work_request), do: restore_completed(repo, work_request, reset_completed_at?: true)
-
-  defp restore_completed(repo, %WorkRequest{archive_reason: "never_started", archived_at: %DateTime{}} = work_request, _opts) do
-    work_request
-    |> Ecto.Changeset.change(archived_at: nil, archive_reason: nil, never_started_restored_at: DateTime.utc_now(:microsecond))
-    |> update_work_request(repo)
-  end
-
-  defp restore_completed(_repo, %WorkRequest{archived_at: nil, archive_reason: nil} = work_request, _opts), do: {:ok, work_request}
-
-  defp restore_completed(repo, %WorkRequest{} = work_request, opts) do
-    reset_completed_at? = Keyword.get(opts, :reset_completed_at?, true)
-    attrs = %{archived_at: nil, archive_reason: nil}
-    attrs = if reset_completed_at?, do: Map.put(attrs, :completed_at, DateTime.utc_now(:microsecond)), else: attrs
-
-    work_request
-    |> Ecto.Changeset.change(attrs)
-    |> update_work_request(repo)
-  end
-
   defp update_work_request(changeset, repo) do
     repo.update(changeset)
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
-
-  defp question_state(repo, work_request_id) do
-    questions =
-      repo.all(
-        from(question in ClarificationQuestion,
-          where: question.work_request_id == ^work_request_id,
-          select: %{status: question.status, updated_at: question.updated_at}
-        )
-      )
-
-    {:ok,
-     %{
-       open_count: Enum.count(questions, &(&1.status == "open")),
-       latest_gate_at: latest_timestamp(Enum.map(questions, & &1.updated_at))
-     }}
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp work_package_contexts(_repo, []), do: {:ok, %{}}
-
-  defp work_package_contexts(repo, work_packages) do
-    work_package_ids =
-      work_packages
-      |> Enum.map(& &1.id)
-      |> Enum.filter(&filled_string?/1)
-      |> Enum.uniq()
-
-    activity_contexts = WorkPackageActivity.contexts(repo, work_package_ids)
-
-    with {:ok, successors} <- OperationalLineage.delivery_successors(repo, work_packages) do
-      contexts =
-        Map.new(work_packages, fn %WorkPackage{} = work_package ->
-          {work_package.id,
-           activity_contexts
-           |> Map.get(work_package.id, WorkPackageActivity.empty_context())
-           |> Map.put(:work_package, work_package)
-           |> Map.put(:delivery_successor_ids, Map.get(successors, work_package.id, []))}
-        end)
-
-      {:ok, contexts}
-    end
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp work_package_deliveries_by_id(_repo, []), do: {:ok, %{}}
-
-  defp work_package_deliveries_by_id(repo, work_packages) do
-    work_package_ids = Enum.map(work_packages, & &1.id)
-
-    deliveries =
-      repo.all(
-        from(delivery in WorkPackageDelivery,
-          where: delivery.work_package_id in ^work_package_ids
-        )
-      )
-
-    {:ok, Map.new(deliveries, &{&1.work_package_id, &1})}
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp delivery_successors(contexts) do
-    Map.new(contexts, fn {id, context} ->
-      lineage = Map.get(context, :lineage, %{})
-
-      ids =
-        cond do
-          Map.has_key?(context, :delivery_successor_ids) -> context.delivery_successor_ids
-          Map.get(lineage, :unavailable) == true -> ["lineage_unavailable"]
-          true -> Enum.map(Map.get(lineage, :successor_work, []), &map_value(&1, :work_package_id))
-        end
-
-      {id, ids}
-    end)
-  end
-
-  defp terminal_slice?(%WorkPackage{} = work_package, context, delivery) do
-    if Lifecycle.ended?(work_package) do
-      not active_blocker_context?(context) and (terminal_delivery?(delivery) or not active_runtime_context?(context))
-    else
-      terminal_delivery?(delivery)
-    end
-  end
-
-  defp terminal_delivery?(delivery), do: is_binary(delivery_outcome(delivery))
-
-  defp delivery_outcome(nil), do: nil
-  defp delivery_outcome(delivery) when is_map(delivery), do: map_value(delivery, :outcome)
-
-  defp active_blocker_context?(%{active_blocker?: true}), do: true
-  defp active_blocker_context?(%{blocker_state: %{active?: true}}), do: true
-
-  defp active_blocker_context?(%{card: %{operational_state: operational_state}}) when is_map(operational_state) do
-    map_value(operational_state, :key) == "blocked" or
-      operational_state
-      |> map_value(:attention_items)
-      |> List.wrap()
-      |> Enum.any?(&(is_map(&1) and map_value(&1, :key) == "active_blocker"))
-  end
-
-  defp active_blocker_context?(_context), do: false
-
-  defp active_runtime_context?(%{active_runtime?: true}), do: true
-  defp active_runtime_context?(%{runtime_state: %{active?: true}}), do: true
-
-  defp active_runtime_context?(%{card: %{operational_state: operational_state}}) when is_map(operational_state) do
-    map_value(operational_state, :has_active_worker) == true
-  end
-
-  defp active_runtime_context?(_context), do: false
-
-  defp map_value(map, key) when is_map(map) and is_atom(key), do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
-
-  defp derived_completed_at(%WorkRequest{} = work_request, work_packages, work_package_contexts, deliveries_by_slice_id, question_gate_at) do
-    work_package_timestamps =
-      work_package_contexts
-      |> Map.values()
-      |> Enum.map(fn
-        %{work_package: %WorkPackage{} = work_package} -> work_package.updated_at
-        _context -> nil
-      end)
-
-    gate_timestamps =
-      work_package_contexts
-      |> Map.values()
-      |> Enum.flat_map(fn context ->
-        [
-          get_in(context, [:blocker_state, :latest_gate_at]),
-          get_in(context, [:runtime_state, :latest_gate_at])
-        ]
-      end)
-
-    delivery_timestamps =
-      deliveries_by_slice_id
-      |> Map.values()
-      |> Enum.flat_map(&delivery_timestamps/1)
-
-    latest_timestamp([work_request.updated_at, question_gate_at] ++ Enum.map(work_packages, & &1.updated_at) ++ work_package_timestamps ++ gate_timestamps ++ delivery_timestamps) ||
-      DateTime.utc_now(:microsecond)
-  end
-
-  defp delivery_timestamps(%WorkPackageDelivery{} = delivery), do: [delivery.recorded_at, delivery.updated_at]
-
-  defp delivery_timestamps(delivery) when is_map(delivery) do
-    [map_value(delivery, :recorded_at), map_value(delivery, :updated_at)]
-  end
-
-  defp delivery_timestamps(_delivery), do: []
-
-  defp latest_timestamp(timestamps) do
-    timestamps
-    |> Enum.reject(&is_nil/1)
-    |> Enum.max_by(&DateTime.to_unix(&1, :microsecond), fn -> nil end)
-  end
-
-  defp timestamp_sort_value(%DateTime{} = datetime), do: DateTime.to_unix(datetime, :microsecond)
-  defp timestamp_sort_value(_timestamp), do: -1
-
-  defp filled_string?(value), do: is_binary(value) and String.trim(value) != ""
 
   defp normalize_exqlite_error(error) do
     message = Exception.message(error)

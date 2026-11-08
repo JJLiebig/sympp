@@ -67,7 +67,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
         title: "Read WorkRequests",
         repo: "nextide/symphony-plus-plus",
         base_branch: "symphony-plus-plus/beta",
-        status: "ready_for_slicing",
         human_description: "Use Bearer raw-secret-value for validation",
         constraints: %{"safe" => "visible", "token" => "raw-secret-value"}
       )
@@ -76,16 +75,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
       create_work_request!(repo,
         id: "WR-MCP-WR-OTHER-REPO",
         repo: "nextide/other",
-        base_branch: "symphony-plus-plus/beta",
-        status: "ready_for_slicing"
+        base_branch: "symphony-plus-plus/beta"
       )
 
-    _other_status =
+    _other_phase =
       create_work_request!(repo,
-        id: "WR-MCP-WR-OTHER-STATUS",
+        id: "WR-MCP-WR-OTHER-PHASE",
         repo: "nextide/symphony-plus-plus",
-        base_branch: "symphony-plus-plus/beta",
-        status: "draft"
+        base_branch: "symphony-plus-plus/beta"
       )
 
     assert {:ok, _open_question} =
@@ -126,21 +123,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
       repo.aggregate(Artifact, :count)
     }
 
-    list_response = mcp_tool(repo, nil, "list_work_requests", %{"status" => "ready_for_slicing"})
+    list_response = mcp_tool(repo, nil, "list_work_requests", %{"phase" => "planned"})
     list_payload = get_in(list_response, ["result", "structuredContent"])
 
-    assert list_payload["filters"] == %{"status" => "ready_for_slicing"}
-    assert list_payload["total_count"] == 2
-    assert list_payload["work_requests"] |> Enum.map(& &1["id"]) |> Enum.sort() == ["WR-MCP-WR-IN", "WR-MCP-WR-OTHER-REPO"]
+    assert list_payload["filters"] == %{"phase" => "planned"}
+    assert list_payload["total_count"] == 1
 
-    listed_work_request = Enum.find(list_payload["work_requests"], &(&1["id"] == "WR-MCP-WR-IN"))
-
-    assert %{
-             "title" => "Read WorkRequests",
-             "repo" => "nextide/symphony-plus-plus",
-             "base_branch" => "symphony-plus-plus/beta",
-             "status" => "ready_for_slicing"
-           } = listed_work_request
+    assert [
+             %{
+               "id" => "WR-MCP-WR-IN",
+               "title" => "Read WorkRequests",
+               "repo" => "nextide/symphony-plus-plus",
+               "base_branch" => "symphony-plus-plus/beta",
+               "phase" => "planned"
+             } = listed_work_request
+           ] = list_payload["work_requests"]
 
     refute Map.has_key?(listed_work_request, "open_question_count")
     refute Map.has_key?(listed_work_request, "decision_count")
@@ -200,7 +197,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert get_in(branch_argument_response, ["error", "data", "reason"]) == "unexpected_argument"
     assert get_in(branch_argument_response, ["error", "data", "arguments"]) == ["base_branch"]
 
-    invalid_status_response = mcp_tool(repo, nil, "list_work_requests", %{"status" => "merged"})
-    assert get_in(invalid_status_response, ["error", "data", "reason"]) == "invalid_status"
+    invalid_phase_response = mcp_tool(repo, nil, "list_work_requests", %{"phase" => "merged"})
+    assert get_in(invalid_phase_response, ["error", "data", "reason"]) == "invalid_phase"
   end
 end
