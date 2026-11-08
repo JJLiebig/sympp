@@ -80,8 +80,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
          {:ok, apply?} <- optional_boolean(arguments, "apply", false),
          :ok <- require_architect_capability(live_session, reconcile_work_request_capability(apply?)),
          {:ok, arguments} <- validate_arguments(arguments, "reconcile_work_request"),
-         {:ok, detail} <- optional_string_argument(arguments, "detail", "summary"),
-         :ok <- if(detail in ["summary", "full"], do: :ok, else: {:tool_error, "invalid_detail"}),
+         {:ok, detail} <- reconcile_detail_argument(arguments),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, live_session),
          {:ok, recorded_by} <- optional_string_argument(arguments, "recorded_by", session_claimed_by(live_session)),
          {:ok, work_request, filters, scope} <-
@@ -108,27 +107,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
              visible_work_package_ids: visible_work_package_ids,
              work_package_contexts: work_package_contexts
            ) do
-      payload = %{
-        "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
-        "reconciliation" => reconciliation_payload(reconciliation, detail),
-        "delivery_board" =>
-          reconciliation.delivery_board
-          |> WorkRequestPayloads.delivery_board(detail)
-          |> then(fn board -> if detail == "full", do: board, else: Map.delete(board, "work_packages") end),
-        "detail" => detail,
-        "scope" => scope
-      }
-
-      {:ok, ToolResult.with_text_profile(:full, fn -> ToolResult.read_tool_result(payload) end)}
+      {:ok, reconcile_work_request_result(work_request, reconciliation, detail, scope)}
     else
-      {:tool_error, reason} ->
-        {:error, -32_602, "Invalid params", %{"tool" => "reconcile_work_request", "reason" => reason}}
-
-      {:error, :not_found} ->
-        not_found_error("reconcile_work_request")
-
-      {:error, reason} ->
-        architect_error(reason, "reconcile_work_request")
+      error -> reconcile_work_request_error(error)
     end
   end
 
@@ -690,6 +671,66 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   end
 
   defp blocker_closeout_not_needed, do: %{"decision" => "none", "active_blockers" => []}
+
+  @doc """
+  Dry-runs delivery reconciliation for an explicit WorkRequest in a trusted
+  local session, independent of any session binding.
+  """
+  @spec local_trusted_reconcile_dry_run(Config.t(), map()) :: mcp_tool_result()
+  def local_trusted_reconcile_dry_run(%Config{repo: repo}, arguments) do
+    with {:ok, false} <- optional_boolean(arguments, "apply", false),
+         {:ok, arguments} <- validate_arguments(arguments, "reconcile_work_request"),
+         {:ok, detail} <- reconcile_detail_argument(arguments),
+         {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
+         {:ok, recorded_by} <- optional_string_argument(arguments, "recorded_by", "architect"),
+         {:ok, work_request, filters} <- WorkRequestScope.local_trusted_work_request_read_scope(repo, work_request_id),
+         {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request_id),
+         {visible_work_package_ids, work_package_contexts} <-
+           WorkRequestScope.visible_delivery_board_work_package_contexts(repo, work_request, work_packages, filters),
+         {:ok, reconciliation} <-
+           DeliveryReconciler.reconcile(repo, work_request_id,
+             mode: :dry_run,
+             recorded_by: recorded_by,
+             work_request: work_request,
+             work_packages: work_packages,
+             visible_work_package_ids: visible_work_package_ids,
+             work_package_contexts: work_package_contexts
+           ) do
+      scope = WorkRequestPayloads.redacted_work_request_scope(work_request)
+      {:ok, reconcile_work_request_result(work_request, reconciliation, detail, scope)}
+    else
+      error -> reconcile_work_request_error(error)
+    end
+  end
+
+  defp reconcile_detail_argument(arguments) do
+    case optional_string_argument(arguments, "detail", "summary") do
+      {:ok, detail} when detail in ["summary", "full"] -> {:ok, detail}
+      {:ok, _detail} -> {:tool_error, "invalid_detail"}
+      error -> error
+    end
+  end
+
+  defp reconcile_work_request_result(%WorkRequest{} = work_request, reconciliation, detail, scope) do
+    payload = %{
+      "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
+      "reconciliation" => reconciliation_payload(reconciliation, detail),
+      "delivery_board" =>
+        reconciliation.delivery_board
+        |> WorkRequestPayloads.delivery_board(detail)
+        |> then(fn board -> if detail == "full", do: board, else: Map.delete(board, "work_packages") end),
+      "detail" => detail,
+      "scope" => scope
+    }
+
+    ToolResult.with_text_profile(:full, fn -> ToolResult.read_tool_result(payload) end)
+  end
+
+  defp reconcile_work_request_error({:tool_error, reason}),
+    do: {:error, -32_602, "Invalid params", %{"tool" => "reconcile_work_request", "reason" => reason}}
+
+  defp reconcile_work_request_error({:error, :not_found}), do: not_found_error("reconcile_work_request")
+  defp reconcile_work_request_error({:error, reason}), do: architect_error(reason, "reconcile_work_request")
 
   defp reconcile_work_request_action(true), do: :delivery_reconcile_apply
   defp reconcile_work_request_action(false), do: :delivery_reconcile_dry_run

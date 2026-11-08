@@ -48,7 +48,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
         Server.new(local_mcp_config(repo), state_key: state_key)
       )
 
-    work_request = create_work_request!(repo, id: "WR-RECREATED-WORKER-HANDLE", status: "ready_for_clarification")
+    work_request = create_work_request!(repo, id: "WR-RECREATED-WORKER-HANDLE", status: "ready_for_slicing")
 
     architect_response =
       Server.handle(
@@ -96,11 +96,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
       "jsonrpc" => "2.0",
       "id" => "architect-after-explicit-worker-release",
       "method" => "tools/call",
-      "params" => %{"name" => "reconcile_work_request", "arguments" => %{"work_request_id" => work_request.id}}
+      "params" => %{"name" => "upsert_group", "arguments" => %{"work_request_id" => work_request.id, "title" => "Architect after worker release"}}
     }
 
     architect_result = Server.handle(architect_call, Server.new(local_mcp_config(repo), state_key: state_key))
-    assert get_in(architect_result, ["result", "structuredContent", "work_request", "id"]) == work_request.id
+    assert is_binary(get_in(architect_result, ["result", "structuredContent", "group", "id"]))
 
     architect_release = Server.handle(release_request, Server.new(local_mcp_config(repo), state_key: state_key))
     assert get_in(architect_release, ["result", "structuredContent", "binding_cleared"]) == true
@@ -350,7 +350,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
       )
 
     assert {:ok, lease} = ClaimLeaseService.current_for_work_package(repo, package.id)
-    old_seen_at = DateTime.add(DateTime.utc_now(:microsecond), -6, :minute)
+    old_seen_at = DateTime.add(DateTime.utc_now(:microsecond), -1, :minute)
     lease |> ClaimLease.update_changeset(%{last_seen_at: old_seen_at}) |> repo.update!()
 
     {responses, updated_server} =

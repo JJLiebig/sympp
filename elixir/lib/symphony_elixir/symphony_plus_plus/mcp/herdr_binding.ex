@@ -2,22 +2,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HerdrBinding do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Scope
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Server, Session}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Server, Session, ToolCatalog}
 
   @release_tool "release_current_assignment"
 
-  @spec response_binding(term(), term(), Server.t()) :: map() | :clear | nil
-  def response_binding(payload, response, %Server{} = server) do
+  # Role labels come from claims and writes. A read never assigns a role: a
+  # bound session keeps reporting its claim, and an unbound read labels nothing.
+  # For session locations (`:location`), an unbound read may still refresh a
+  # coordinator location its own client recorded through an earlier write.
+  @spec response_binding(term(), term(), Server.t(), :label | :location) :: map() | :clear | nil
+  def response_binding(payload, response, %Server{} = server, purpose \\ :label) do
     cond do
       stale_unbound?(server) -> :clear
       release_unbound?(payload, server) -> :clear
       not successful_response?(response) -> nil
       match?(%Session{}, server.session) -> bound_binding(server, payload, response)
-      true -> unbound_response_binding(payload, response)
+      true -> unbound_binding(payload, response, purpose)
     end
   rescue
     _error -> nil
   end
+
+  defp unbound_binding(payload, response, :location), do: unbound_response_binding(payload, response)
+
+  defp unbound_binding(payloads, responses, :label) when is_list(payloads),
+    do: unbound_response_binding(Enum.reject(payloads, &read_request?/1), responses)
+
+  defp unbound_binding(payload, response, :label),
+    do: if(read_request?(payload), do: nil, else: unbound_response_binding(payload, response))
 
   @spec encode(map() | :clear) :: String.t()
   def encode(:clear), do: "clear"
@@ -33,7 +45,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HerdrBinding do
 
     %{
       "role" => role,
-      "work_request_id" => work_request_scope_id(assignment.scopes) || work_request_id(payload, response),
+      "work_request_id" => work_request_scope_id(assignment.scopes) || write_work_request_id(payload, response),
       "work_package_id" => assignment.work_package_id,
       "show_inspector" => role == "architect"
     }
@@ -72,6 +84,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HerdrBinding do
       true -> nil
     end
   end
+
+  defp write_work_request_id(payload, response) do
+    if read_request?(payload), do: nil, else: work_request_id(payload, response)
+  end
+
+  defp read_request?(payloads) when is_list(payloads), do: payloads != [] and Enum.all?(payloads, &read_request?/1)
+
+  defp read_request?(%{"method" => "tools/call", "params" => %{"name" => name} = params}) when is_binary(name) do
+    arguments = Map.get(params, "arguments", %{})
+    ToolCatalog.read_call?(name, if(is_map(arguments), do: arguments, else: %{}))
+  end
+
+  defp read_request?(_payload), do: false
 
   defp work_request_id(
          %{"method" => "tools/call", "params" => %{"arguments" => arguments}},

@@ -35,9 +35,9 @@ dispatch authority. Ordinary work needs no registration. If this session registe
 several domains, attribution uses its most recent still-current registration.
 
 1. Read the assigned WorkRequest/package/phase through sympp MCP before planning.
-   An unbound trusted local architect session can implicitly claim on an
-   architect operation with `work_request_id`; `read_work_request` and
-   `read_plan` do not acquire a claim. Reconnects retain known scope. Creating
+   An unbound trusted local architect session claims on its first write that
+   names a `work_request_id`. Reads never claim and read exactly the id they
+   name, whatever the session holds. Reconnects retain known scope. Creating
    a WorkRequest does not select it or switch an existing claim. Before operating on a newly created
    or different WorkRequest, call `claim_local_architect_assignment` with its
    returned `local_architect_claim_arguments`. To return to the previous

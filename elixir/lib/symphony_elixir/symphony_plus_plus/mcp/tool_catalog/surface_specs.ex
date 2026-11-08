@@ -53,8 +53,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
         unbound_tool_specs_for_config(config) ++ local_operator_tool_specs()
     end
     |> Enum.uniq_by(& &1["name"])
+    |> Enum.map(&put_access_annotation/1)
     |> lean_tool_specs()
   end
+
+  defp put_access_annotation(%{"name" => name} = spec),
+    do: Map.put(spec, "annotations", %{"readOnlyHint" => ToolCatalog.tool_access(name) == :read})
 
   defp introspection_tool_specs,
     do: [health_tool_spec(), assignment_release_tool_spec(), worker_tool_spec("get_current_assignment")]
@@ -182,7 +186,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   end
 
   defp local_operator_tool_description("summarize_failed_mcp_calls") do
-    "Summarize process-local redacted failed MCP call envelopes without exposing raw requests or durable history. Requires an unbound trusted local HTTP MCP session."
+    "Summarize process-local redacted failed MCP call envelopes without exposing raw requests or durable history. Failures are counted only while the operator setting capture_failed_mcp_calls is on; capture_enabled reports it. Requires an unbound trusted local HTTP MCP session."
   end
 
   defp unbound_scoped_tool_specs do

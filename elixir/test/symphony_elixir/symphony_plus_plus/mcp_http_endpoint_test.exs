@@ -1006,7 +1006,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
                Repo,
                work_request_attrs(%{
                  id: "WR-HTTP-REHYDRATE-ARCHITECT",
-                 status: "ready_for_clarification"
+                 status: "ready_for_slicing"
                })
              )
 
@@ -1021,19 +1021,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
     claim =
       post_json(
-        tool_call_request("local-architect-auto-claim", "reconcile_work_request", %{"work_request_id" => work_request.id}),
+        tool_call_request("local-architect-auto-claim", "upsert_group", %{"work_request_id" => work_request.id, "title" => "Auto claim"}),
         [{"mcp-session-id", session_id}]
       )
 
     claim_payload = get_in(json_response(claim, 200), ["result", "structuredContent"])
-    assert claim_payload["work_request"]["id"] == work_request.id
+    assert is_binary(claim_payload["group"]["id"])
     assert [%ClaimLease{id: claim_lease_id, actor_display_name: owner}] = active_claim_leases(handoff.anchor_package.id)
 
     assert {:ok, _released} = ClaimLeaseService.release(Repo, claim_lease_id, reason: "connection recovery regression")
     reset_mcp_runtime_state()
 
-    recovered = post_json(tool_call_request("local-architect-recover-scope", "reconcile_work_request", %{}), [{"mcp-session-id", session_id}])
-    assert get_in(json_response(recovered, 200), ["result", "structuredContent", "work_request", "id"]) == work_request.id
+    recovered = post_json(tool_call_request("local-architect-recover-scope", "upsert_group", %{"title" => "Recovered scope"}), [{"mcp-session-id", session_id}])
+    assert is_binary(get_in(json_response(recovered, 200), ["result", "structuredContent", "group", "id"]))
     assert [%ClaimLease{id: replacement_id, actor_display_name: ^owner}] = active_claim_leases(handoff.anchor_package.id)
     refute replacement_id == claim_lease_id
   end

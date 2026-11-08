@@ -41,8 +41,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedTools do
     Enum.filter(unbound_specs, &(&1["name"] in bootstrap_names)) ++ ToolCatalog.local_operator_tool_specs()
   end
 
-  @spec failed_call_summary() :: map()
-  def failed_call_summary, do: FailedCall.summary()
+  @spec failed_call_summary(Config.t()) :: map()
+  def failed_call_summary(%Config{} = config) do
+    Map.put(FailedCall.summary(), "capture_enabled", FailedCall.capture_enabled?(config))
+  end
 
   @spec require_database(Config.t()) :: :ok | {:error, atom()}
   def require_database(%Config{repo: repo, database: database}) do

@@ -23,6 +23,7 @@ const WAITING_LABELS: Record<string, string> = {
 const ACTION_LABELS: Record<string, string> = {
   check_validation: "check validation",
   deliver_prerequisites: "wait for prerequisite delivery",
+  dispatch_work_package: "dispatch",
   finish_worker_qualification: "finish qualification",
   fix_findings: "fix review findings",
   inspect_runtime: "inspect runtime",
