@@ -120,7 +120,7 @@ test('backend restart recovers persisted bindings and work but a different ledge
   expect((await recovered.call('get_current_assignment')).assignment.work_package_id).toBe(wp);
   expect((await recovered.call('append_finding', mutation)).finding.id).toBe(finding.id);
   const owner = architect.reconnect(await restarted.endpoint);
-  expect((await owner.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages[0].status).toBe('active');
+  expect((await owner.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages[0].status).toBe('dispatched');
   const outsider = processes.factory('foreign-ledger');
   const wrongLedger = recovered.reconnect(await outsider.endpoint);
   const denied = await wrongLedger.raw(tool('append_finding', mutation));

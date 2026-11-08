@@ -180,8 +180,10 @@ test('ordinary PR handoff observes pending qualification then reconciles an exac
   expect(waiting.metadata.pr.review_state.status).toBe('review_required');
   expect((await row(architect, request, wp)).delivery_outcome).toBeNull();
   expect(await completion()).toBeNull();
-  // Readiness is the architect handoff, not a claim that native checks passed.
-  expect((await row(architect, request, wp)).merge_eligibility.next_action).toBe('merge_pr');
+  // Pending CI keeps the package dispatched until its checks pass.
+  const pending = await row(architect, request, wp);
+  expect(pending.raw_status).toBe('dispatched');
+  expect(pending.merge_eligibility.next_action).toBe('wait');
 
   provider.set(101, pr(101, head('a')));
   await architect.call('sync_pr', { work_package_id: wp, number: 101, repository: 'example/service' });
@@ -195,7 +197,9 @@ test('ordinary PR handoff observes pending qualification then reconciles an exac
   const repeated = await detail();
   expect(repeated.metadata.pr.head_changed_at).toBe(qualified.metadata.pr.head_changed_at);
   expect(repeated.metadata.pr.checks_changed_at).toBe(qualified.metadata.pr.checks_changed_at);
-  expect((await row(architect, request, wp)).merge_eligibility.eligible).toBe(true);
+  const ready = await row(architect, request, wp);
+  expect(ready.raw_status).toBe('ready');
+  expect(ready.merge_eligibility.eligible).toBe(true);
   expect(await completion()).toBeNull();
 
   const mergeTime = new Date().toISOString();
@@ -326,6 +330,7 @@ test('typed no-PR closeout resolves blockers once and terminal packages cannot r
   expect(invalid.missing_fields).toEqual(['pr_merged_at', 'merge_commit_sha']);
   expect(invalid.unexpected_fields).toEqual(['no_pr_evidence']);
   expect(invalid.allowed_fields).toEqual(['pr_url', 'pr_number', 'pr_repository', 'pr_merged_at', 'merge_commit_sha']);
+  await architect.call('dispatch_work_package', { work_package_id: remaining });
   const mergedEvidence = { pr_url: prUrl(105), pr_number: 105, pr_repository: 'example/other', pr_merged_at: new Date().toISOString(), merge_commit_sha: head('f') };
   await architect.reject('record_work_package_delivery', {
     work_package_id: remaining, outcome: 'pr_merged', idempotency_key: 'malformed-reference', evidence: { pr_merged: mergedEvidence },

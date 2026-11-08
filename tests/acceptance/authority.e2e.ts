@@ -414,7 +414,7 @@ test('force release rotates worker authority without changing delivery and allow
   expect(recycledRow.work_package.runtime_state.reason_codes).toContain('worker_recycled');
   expect(JSON.stringify(released)).not.toContain('synthetic-release-secret');
   const before = (await architect.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages.find((entry: any) => entry.id === wp);
-  expect(before.status).toBe('active');
+  expect(before.status).toBe('dispatched');
   expect((await row(architect, request, wp)).delivery_outcome).toBeNull();
   await replacement.call('claim_local_assignment', { work_package_id: wp, claimed_by: 'replacement-worker' });
   expect((await replacement.call('get_current_assignment')).assignment.claimed_by).toBe('replacement-worker');
