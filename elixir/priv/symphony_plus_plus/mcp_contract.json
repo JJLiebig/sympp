@@ -1,29 +1,17 @@
 {
-  "mcp_contract_fingerprint": "8201807b428d8f7a7a46e918e45bb78b40630bef3843ee73d635a66670b0d1a7",
+  "mcp_contract_fingerprint": "cb91ab8c06a8a9e6b28b8fcd1efe2afe7a85f3f6ac2eb8c0bcf0be17e4165c31",
   "tool_sets": {
-    "architect_tools": [
-      "list_work_requests",
-      "read_work_request",
-      "read_plan",
-      "read_task_plan",
+    "owner_gated_tools": [
       "update_task_plan",
       "append_finding",
       "append_progress",
       "resolve_blocker",
-      "read_delivery_board",
       "attach_branch",
       "sync_pr",
       "reconcile_work_request",
-      "cleanup_work_request_work_package_runtime",
       "record_work_package_delivery",
-      "revoke_work_package_worker_key",
-      "force_release_work_package_claim",
       "set_work_request_status",
-      "ask_question",
-      "answer_question",
-      "answer_question_and_record_decision",
-      "close_question",
-      "record_decision",
+      "set_report",
       "slice_work_request",
       "update_work_package",
       "upsert_group",
@@ -34,15 +22,19 @@
       "dispatch_work_package",
       "prepare_work_package_worktree"
     ],
-    "trusted_local_http_extra_tools": [
-      "create_work_request",
-      "register_chief",
-      "record_work_request_operator_decision",
+    "read_tools": [
+      "sympp.health",
+      "solo_show",
+      "solo_list",
+      "list_work_requests",
+      "read_work_request",
+      "read_plan",
+      "read_delivery_board",
+      "read_task_plan",
       "summarize_failed_mcp_calls"
     ],
-    "unbound_tools": [
+    "tools": [
       "sympp.health",
-      "release_current_assignment",
       "solo_attach",
       "solo_show",
       "solo_list",
@@ -57,22 +49,39 @@
       "solo_resume",
       "solo_complete",
       "solo_archive",
-      "claim_local_assignment",
-      "claim_local_architect_assignment"
-    ],
-    "worker_tools": [
-      "get_current_assignment",
-      "read_context",
-      "read_work_package_document",
+      "create_work_request",
+      "list_work_requests",
+      "read_work_request",
+      "read_plan",
+      "read_delivery_board",
       "read_task_plan",
       "update_task_plan",
       "append_finding",
       "append_progress",
+      "resolve_blocker",
       "attach_branch",
-      "attach_pr",
       "sync_pr",
-      "mark_ready"
+      "reconcile_work_request",
+      "record_work_package_delivery",
+      "set_work_request_status",
+      "set_report",
+      "ask_question",
+      "answer_question",
+      "answer_question_and_record_decision",
+      "close_question",
+      "record_decision",
+      "slice_work_request",
+      "update_work_package",
+      "upsert_group",
+      "delete_group",
+      "upsert_dependency",
+      "delete_dependency",
+      "skip_work_package",
+      "dispatch_work_package",
+      "prepare_work_package_worktree",
+      "record_work_request_operator_decision",
+      "summarize_failed_mcp_calls"
     ]
   },
-  "version": 7
+  "version": 8
 }

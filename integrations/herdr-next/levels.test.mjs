@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as M from './mods/sympp/model.js';
 import * as L from './mods/sympp/levels.js';
-import { NOW, boardPayload, deskFixture } from './fixture.mjs';
+import { NOW, boardPayload, chiefTerminals, deskFixture } from './fixture.mjs';
 
 const board = () => M.parseBoard(boardPayload());
 const setup = (repoTopics) => {
@@ -131,9 +131,10 @@ test('the breadcrumb runs Factory > Topic > Space > Job, Esc goes up one level a
 
 test('a topic\'s chief is the one named like it, else one whose name leads or ends it, else by its repositories; several are all shown', () => {
   const { desk } = setup();
-  const { chiefs } = board();
+  const chiefs = M.chiefsOf(chiefTerminals());
+  assert.deepEqual(chiefs.map((c) => [c.domain, c.terminal]), [['Herdr', 't7'], ['Live', 't5']], 'only live terminals labelled as chiefs with a domain');
   const topic = (name, spaces = []) => ({ id: name, name, kind: 'topic', spaces });
-  const chief = (domain, repos = []) => ({ domain, key: domain.toLowerCase(), repos, location: null, session: null });
+  const chief = (domain, repos = []) => ({ domain, key: domain.toLowerCase(), repos, location: null, terminal: null });
   const of = (t, list, d = desk) => L.chiefsFor(t, list, d).map((c) => c.domain);
   assert.deepEqual(of(byId(desk, 't-herdr'), chiefs), ['Herdr'], 'names match ignoring case');
   assert.deepEqual(of(byId(desk, 't-live'), chiefs), ['Live'], 'Live ends Nextide-Live');
@@ -154,25 +155,25 @@ test('a topic\'s chief is the one named like it, else one whose name leads or en
   assert.deepEqual(L.chiefsFor(tools, [chief('Platform', ['owner/api'])], desk, { 'owner/api': 't-herdr' }), [], 'explicit repository mappings apply');
 });
 
-test('a chief is Live only after a helper check of its own registered session, else last seen, else unknown', () => {
-  const [herdr, live] = board().chiefs;
+test('a chief is Live only after a helper check of the chief session in its own terminal, else unknown', () => {
+  const [herdr, live] = M.chiefsOf(chiefTerminals());
   const labels = {
     'sympp.session_id': 'chief-herdr', 'sympp.session_core_id': 'core-1', 'sympp.session_pid': '70', 'sympp.session_process_id': '71',
     'sympp.session_receipt': String.raw`C:\private\chief.json`, 'sympp.session_role': 'chief',
   };
   const terminal = { address: 't7', pid: 70, state: 'live', status: 'working', status_ms: NOW - 60e3, report: { msg: 'Slicing the board' }, labels };
-  const other = { ...terminal, address: 't8', labels: { ...labels, 'sympp.session_core_id': 'core-2' } };
+  const other = { ...terminal, address: 't8' };
   const bindings = M.discoverBindings({ local: { node: 'node', helper: 'h' } }, [terminal, other]);
-  assert.deepEqual(M.chiefBindings(bindings, herdr).map((b) => b.address), ['t7'], 'the same session id on another core is not the chief');
+  assert.deepEqual(M.chiefBindings(bindings, herdr).map((b) => b.address), ['t7'], 'a chief session in another terminal is not this chief');
   const seen = L.chiefAgent(herdr, bindings, [terminal], {}, NOW);
-  assert.deepEqual([seen.state, seen.where, seen.at], ['seen', 'build-desk › Terminal: Herdr chief', NOW - 15 * 60e3], 'its labels alone never make it live');
+  assert.equal(seen.state, 'unknown', 'its labels alone never make it live');
   assert.deepEqual([seen.role, seen.provider, seen.report.status, seen.report.msg], ['chief', null, 'working', 'Slicing the board']);
   const checks = { t7: { ok: true, at: NOW - 1000, launchId: 'chief-herdr', pid: 70 } };
   const checked = L.chiefAgent(herdr, bindings, [terminal], checks, NOW);
   assert.equal(checked.state, 'live');
   assert.equal(checked.binding.address, 't7', 'Open goes through the checked binding');
-  assert.equal(L.chiefAgent(herdr, bindings, [terminal], { t7: { ...checks.t7, at: NOW - 10 * 60e3 } }, NOW).state, 'seen', 'an old check has expired');
-  assert.equal(L.chiefAgent(live, bindings, [terminal], checks, NOW).state, 'unknown', 'no location and no session is unknown');
+  assert.equal(L.chiefAgent(herdr, bindings, [terminal], { t7: { ...checks.t7, at: NOW - 10 * 60e3 } }, NOW).state, 'unknown', 'an old check has expired');
+  assert.equal(L.chiefAgent(live, bindings, [terminal], checks, NOW).state, 'unknown', 'no chief session in its terminal is unknown');
 });
 
 test('a chief space that fell out of its topic goes back to its end, folded as the topic was; others stay as they are', () => {
@@ -186,28 +187,18 @@ test('a chief space that fell out of its topic goes back to its end, folded as t
 });
 
 
-test('a remote registration and Start chief share one entry without bypassing verified liveness', () => {
-  const payload = boardPayload();
-  payload.chiefs[0].session_location.machine_id = 'builder-host';
-  payload.chiefs[0].session_location.herdr.terminal_id = 't9';
-  const chief = M.parseBoard(payload).chiefs[0];
+test('a labelled chief and Start chief share one entry without bypassing verified liveness', () => {
+  const term = { address: 'build/t9', state: 'live', program: { key: 'codex' }, labels: { 'sympp.role': 'chief', 'sympp.domain': 'Herdr' } };
+  const [chief] = M.chiefsOf([term]);
   const topic = { name: chief.domain };
-  const machines = [{ id: 'core-1', name: 'build', host: 'builder-host' }];
-  const term = { address: 'build/t9', state: 'live', program: { key: 'codex' } };
   const latest = { terminal: 'build/t9', agent: 'codex' };
   const unchecked = L.chiefAgent(chief, [], [term], {}, NOW);
-  const entries = (list, last, ms = machines, c = chief, agent = unchecked) =>
-    L.chiefEntries(topic, [{ chief: c, agent }], last, ms, list, NOW);
+  const entries = (list, last, c = chief, agent = unchecked) => L.chiefEntries(topic, [{ chief: c, agent }], last, list, NOW);
   const expected = [{ domain: chief.domain, terminal: 'build/t9' }];
-  assert.deepEqual(entries([term]), [{ domain: chief.domain, terminal: null }], 'registration and a live terminal alone never prove a running chief');
-  assert.deepEqual(entries([term], latest), expected, 'dedupe by core and terminal even without session labels or a helper result');
-  assert.deepEqual(entries([term], latest, machines, chief, { state: 'live', binding: { address: term.address } }), expected);
-  assert.equal(entries([term], latest, [{ ...machines[0], id: 'replacement-core' }]).length, 2, 'a different core cannot dedupe by hostname');
-  for (const machineId of ['builder-host', 'build']) {
-    assert.deepEqual(entries([term], latest, machines, { ...chief, session: { ...chief.session, coreId: null, machineId } }), expected);
-  }
-  assert.deepEqual(entries([{ ...term, address: 't9' }], { ...latest, terminal: 't9' }, [{ id: 'core-1', name: null, host: 'builder-host' }]),
-    [{ domain: chief.domain, terminal: 't9' }], 'local core ids resolve without a machine prefix');
+  assert.deepEqual(entries([term]), [{ domain: chief.domain, terminal: null }], 'labels and a live terminal alone never prove a running chief');
+  assert.deepEqual(entries([term], latest), expected, 'dedupe by terminal even without a helper result');
+  assert.deepEqual(entries([term], latest, chief, { state: 'live', binding: { address: term.address } }), expected);
+  assert.equal(entries([term], latest, { ...chief, terminal: 'other/t9' }).length, 2, 'another terminal is another chief');
   assert.deepEqual(entries([{ ...term, program: { key: 'shell' } }], latest),
     [{ domain: chief.domain, terminal: null }], 'a shell left behind is not a running chief');
 });

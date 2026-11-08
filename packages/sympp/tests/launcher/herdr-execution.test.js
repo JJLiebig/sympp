@@ -484,18 +484,19 @@ test("hand-started MCP bridges report native identity and require an authenticat
   await once(server, "listening");
   try {
     const forwarded = JSON.parse(await reporter.attach(JSON.stringify({ method: "initialize", params: {} })));
-    const observed = forwarded.params._meta.sympp_session_location;
-    assert.equal(observed.herdr.core_id, "core-one");
-    assert.equal(observed.herdr.terminal_id, "t9");
-    assert.equal(observed.herdr.pid, 900, "terminal root PID is separate from the MCP process");
-    assert.equal(observed.herdr.process_id, process.pid);
-    assert.equal(observed.herdr.pane_id, undefined, "new core context wins over inherited legacy context");
+    const observed = forwarded.params._meta.herdr;
+    assert.equal(observed.core_id, "core-one");
+    assert.equal(observed.core_name, "controlled");
+    assert.equal(observed.terminal_id, "t9");
+    assert.equal(observed.pid, undefined, "the factory keys on core and address, never the pid");
+    assert.equal(forwarded.params._meta.sympp_session_location, undefined);
+    assert.deepEqual(reporter.terminal(), { core_id: "core-one", terminal_id: "t9" });
     assert.doesNotMatch(JSON.stringify(observed), /private-core-selector|process_liveness/);
 
     const chiefBinding = bridge.decodeHerdrBinding(Buffer.from(JSON.stringify({ role: "chief", domain: "Herdr" })).toString("base64url"));
     await reporter.report(chiefBinding, probe);
     const chiefLabels = state().terminal.labels;
-    assert.equal(chiefLabels["sympp.session_id"], observed.client_id);
+    assert.equal(chiefLabels["sympp.session_id"], reporter.clientId);
     assert.equal(chiefLabels["sympp.session_role"], "chief");
     const chief = await run(["check", "--receipt", chiefLabels["sympp.session_receipt"]]);
     assert.equal(chief.code, 0);
@@ -538,6 +539,9 @@ test("hand-started MCP bridges report native identity and require an authenticat
     assert.equal((await run(args)).body.reason, "process_changed");
     await reporter.report({ role: "architect", work_request_id: "replacement" }, { pipe, token });
     assert.equal(state().terminal.labels["sympp.session_work_request_id"], "wr-manual", "an old bridge cannot bind a recovered terminal");
+    assert.deepEqual(reporter.terminal(), { core_id: "core-one", terminal_id: "t9" }, "a pid change keeps the terminal identity");
+    const afterRestart = JSON.parse(await reporter.attach(JSON.stringify({ method: "tools/call", params: { name: "read_work_request" } })));
+    assert.equal(afterRestart.params._meta.herdr.terminal_id, "t9");
     save({ ...state(), terminal: { ...state().terminal, pid: 900 } });
     reporter.close();
     assert.equal(fs.existsSync(labels["sympp.session_receipt"]), false, "revoke before asynchronous runtime cleanup");
@@ -553,14 +557,16 @@ test("hand-started MCP bridges report native identity and require an authenticat
 }));
 
 test("standalone and unavailable-core reporters preserve MCP calls without inventing bindings", async () => {
-  const request = JSON.stringify({ method: "tools/call", params: { name: "get_current_assignment", arguments: {}, _meta: { extra: true } } });
+  const request = JSON.stringify({ method: "tools/call", params: { name: "read_work_request", arguments: {}, _meta: { extra: true } } });
   const standalone = createReporter({}, () => { throw new Error("must not contact a core"); });
-  assert.equal(JSON.parse(await standalone.attach(request)).params._meta.sympp_session_location.herdr, undefined);
+  assert.equal(JSON.parse(await standalone.attach(request)).params._meta.herdr, undefined);
+  assert.equal(standalone.terminal(), null);
   const unavailable = createReporter({ HC_TERMINAL_ID: "t2", HC_TERMINAL_SOCKET: "private" }, () => ({
     call: async () => { throw new Error("core unavailable"); }, close() {},
   }));
   const forwarded = JSON.parse(await unavailable.attach(request));
   assert.equal(forwarded.params._meta.extra, true);
   assert.deepEqual(forwarded.params.arguments, {});
-  assert.equal(forwarded.params._meta.sympp_session_location.herdr, undefined);
+  assert.equal(forwarded.params._meta.herdr, undefined);
+  assert.equal(unavailable.terminal(), null);
 });

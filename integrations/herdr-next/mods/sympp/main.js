@@ -177,7 +177,6 @@ export default class Lens extends View {
     const cadence = M.nextDelay(this.net, active);
     let busy = false;
     if (!this.reading && M.fetchDue(this.net, now, active)) { this.read(cx); busy = true; }
-    this.readChiefMachines(cx, now);
     this.shareChiefs(now);
     const watch = this.withChiefs(this.agentWatch);
     if (watch && !this.checking && (this.checkedFor !== watch.key || now - this.checkedAt >= cadence)) this.checkAgents(watch, cx);
@@ -497,22 +496,6 @@ export default class Lens extends View {
       ? binding : { ...binding, available: false, unavailable: board.offline ? "Offline copy" : "Update sympp for agent access" });
   }
 
-  // Core identity joins a factory hostname to Herdr's configured machine name.
-  readChiefMachines(cx, now) {
-    if (this.role !== "panel" || this.studio || now - (this.chiefMachinesAt ?? 0) < SWEEP) return;
-    this.chiefMachinesAt = now;
-    cx.spawn(async (cx) => {
-      try {
-        const [local, remote] = await Promise.all([hc(["server", "status", "--json"]), hc(["machine", "ls", "--json"])]);
-        const core = JSON.parse(local.stdout).core;
-        this.chiefMachines = [{ id: core.id, name: null, host: core.name },
-          ...JSON.parse(remote.stdout).machines.filter((m) => m.state === "connected")];
-      } catch { this.chiefMachines = []; }
-      this.shareChiefs(Date.now());
-      cx.notify();
-    });
-  }
-
   // The panel keeps every topic's chiefs checked, whichever level it shows, and shares them.
   // Written outside render, and only when something differs.
   shareChiefs(now) {
@@ -524,7 +507,7 @@ export default class Lens extends View {
     for (const topic of desk.filter((x) => x.kind === "topic")) {
       const chiefs = this.chiefsOf(topic, board, desk, bindings, now);
       this.chiefWatch.push(...chiefs.flatMap((c) => c.agent.bindings));
-      const entries = L.chiefEntries(topic, chiefs, sessions[topic.id], this.chiefMachines ?? [], list, now);
+      const entries = L.chiefEntries(topic, chiefs, sessions[topic.id], list, now);
       if (entries.length) out[topic.id] = entries;
       const live = out[topic.id]?.find((c) => c.terminal);
       if (live) this.readSession(topic.id, live.terminal, now);
@@ -561,7 +544,7 @@ export default class Lens extends View {
 
   // The chiefs matching a topic, each as an agent.
   chiefsOf(topic, board, desk, bindings, now) {
-    return L.chiefsFor(topic, board.chiefs, desk, this.repoTopics)
+    return L.chiefsFor(topic, M.chiefsOf(terminals()), desk, this.repoTopics)
       .map((chief) => ({ chief, agent: L.chiefAgent(chief, bindings, terminals(), this.agentChecks, now) }));
   }
 
