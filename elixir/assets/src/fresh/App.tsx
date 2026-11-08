@@ -1,21 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 
-import { ReloadContext } from "./actions";
 import { api } from "./api";
 import { setAreas, type AreaRule } from "./areas";
-import { lanesOf } from "./board";
+import { NeedsYou } from "./asks";
+import { lanesOf, Rest } from "./board";
 import { Briefing } from "./briefing";
-import { mockGoals } from "./mock";
-import { buildGoals, liveCountAt, viewAt, type Goal, type HistoryEvent, type Hydrated, type Settings } from "./model";
+import { Cards, visibleCards } from "./cards";
+import { Decisions } from "./decisions";
+import { applyDemo, demoBoard } from "./mock";
+import { buildBoard, liveCountAt, viewAt, type Board, type HistoryEvent, type Hydrated, type Settings } from "./model";
 import { focusGoal, smoothly } from "./motion";
+import { ActContext, send, type OperatorAction } from "./operator";
 import { Outline } from "./outline";
 import { Phases } from "./phases";
 import { DensityContext, type Density } from "./report";
 import { setSamples, type SampleRule } from "./samples";
 import { BoardMenu } from "./settings";
 import { changesBetween, SinceContext, SinceLine } from "./since";
-import { Asks, Status, useTabSignal } from "./status";
+import { Status, useTabSignal } from "./status";
 
 const DIRECTIONS = [
   { key: "outline", label: "Outline", hint: "Goals that open themselves", view: Outline, width: "max-w-[1280px]" },
@@ -35,15 +38,24 @@ const AWAY_MS = 3 * 3600e3;
 const SEEN_KEY = "sympp.board.seenAt";
 const REREAD_MS = 60e3;
 
+// `vite --mode demo` runs the board on invented work with no backend. `?demo=quiet` shows it with nobody waiting.
+const DEMO = import.meta.env.MODE === "demo";
+// A link can open the board on a view, a density and an area: `?view=phases&show=open&area=Herdr`.
+const LINKED = typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search);
+const START = {
+  direction: Math.max(0, DIRECTIONS.findIndex((entry) => entry.key === LINKED.get("view"))),
+  density: DENSITIES.find((entry) => entry.key === LINKED.get("show"))?.key ?? "active",
+};
+
 // `replayable` is true on a snapshot, which carries recorded history; a backend only knows the present.
-type Loaded = { goals: Goal[]; now: number; busiest: number; samples: number[]; replayable: boolean; settings: Settings };
+type Loaded = { board: Board; now: number; busiest: number; samples: number[]; replayable: boolean; settings: Settings };
 
 export function App() {
   const [data, setData] = useState<Loaded | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
-  const [direction, setDirection] = useState(0);
-  const [area, setArea] = useState<string | null>(null);
-  const [density, setDensity] = useState<Density>("active");
+  const [direction, setDirection] = useState(START.direction);
+  const [area, setArea] = useState<string | null>(LINKED.get("area"));
+  const [density, setDensity] = useState<Density>(START.density);
   const [at, setAt] = useState(0);
   const [seenAt, setSeenAt] = useState<number | null>(rememberedVisit);
   const [replay, setReplay] = useState(false);
@@ -67,9 +79,10 @@ export function App() {
     });
   }, []);
   useEffect(read, [read]);
-  useChangeSignal(read);
-  // A snapshot never changes, so it is read once. Anything else is reread, also while the first read has yet to succeed.
-  useReread(data?.replayable !== true, read);
+  useChangeSignal(!DEMO, read);
+  // A snapshot or the demo never changes on its own, so it is read once. Anything else is reread, also while the first read has yet to succeed.
+  useReread(!DEMO && data?.replayable !== true, read);
+  const act = useOperator(read, setData);
   useShortcuts(setDirection, setNote);
 
   const since = lastLookAt(seenAt, at, data?.replayable !== false);
@@ -82,16 +95,11 @@ export function App() {
     flushSync(() => setArea(null));
     focusGoal(goalId);
   };
-  const views = useMemo(() => (data ? viewAt(data.goals, at) : []), [at, data]);
-  const changes = useMemo(() => changesBetween(data ? viewAt(data.goals, since) : [], views), [data, since, views]);
-  const areas = useMemo(() => [...new Set(views.filter((view) => view.state !== "settled").map((view) => view.goal.area[0]))], [views]);
-  const shown = area ? views.filter((view) => view.goal.area[0] === area) : views;
-  // Phases has nothing to add until a goal on the board is grouped, so it is offered only then.
-  const grouped = useMemo(() => lanesOf(views, at).main.some((view) => view.goal.groups.length > 0), [at, views]);
+  const { views, changes, asks, areas, shown, shownCards, lanes, grouped } = useShaped(data, at, since, area);
   const directions = DIRECTIONS.filter((entry) => entry.key !== "phases" || grouped);
-  const current = directions[direction] ?? directions[0];
+  const current = directions.find((entry) => entry.key === DIRECTIONS[direction]?.key) ?? directions[0];
   const View = current.view;
-  useTabSignal(views.filter((view) => view.ask).length);
+  useTabSignal(asks.length);
 
   if (!data) return <Unread failure={failure} />;
 
@@ -102,7 +110,7 @@ export function App() {
           <BoardMenu settings={data.settings} onSaved={read} />
           <nav className="flex shrink-0 gap-1">
             {directions.map((entry, index) => (
-              <button key={entry.key} className={`rounded px-2.5 py-1 text-xs ${entry.key === current.key ? "bg-ink text-bg" : "text-dim hover:text-ink"}`} title={entry.hint} type="button" onClick={() => smoothly(() => setDirection(index))}>
+              <button key={entry.key} className={`rounded px-2.5 py-1 text-xs ${entry.key === current.key ? "bg-ink text-bg" : "text-dim hover:text-ink"}`} title={entry.hint} type="button" onClick={() => smoothly(() => setDirection(DIRECTIONS.indexOf(entry)))}>
                 <span className="mr-1.5 font-mono opacity-60">{index + 1}</span>
                 {entry.label}
               </button>
@@ -130,25 +138,54 @@ export function App() {
               </button>
             ) : null}
             <Lost failure={failure} />
-            <Status views={views} />
+            <Status needed={asks.length} views={views} />
           </span>
         </div>
-        <Asks at={at} views={views} onPick={goToGoal} />
       </header>
       <main className="px-8 py-6">
         <SinceLine at={at} changes={changes} since={since} width={current.width} onPick={goToGoal} onSeen={markSeen} />
-        <ReloadContext.Provider value={read}>
+        <ActContext.Provider value={act}>
+          <div className={`mx-auto ${current.width}`}>
+            <NeedsYou asks={asks} at={at} board={data.board} />
+            <Decisions at={at} board={data.board} decisions={data.board.decisions} />
+          </div>
           <SinceContext.Provider value={changes.notes}>
             <DensityContext.Provider value={density}>
               <View at={at} views={shown} />
             </DensityContext.Provider>
           </SinceContext.Provider>
-        </ReloadContext.Provider>
+          <div className={`mx-auto ${current.width}`}>
+            <Cards at={at} cards={shownCards} />
+            <Rest at={at} lanes={lanes} />
+          </div>
+        </ActContext.Provider>
       </main>
       {replay ? <Scrubber at={at} data={data} onChange={setAt} /> : null}
       {note ? <p className="fixed bottom-24 left-1/2 z-30 max-w-xl -translate-x-1/2 rounded bg-ink px-3 py-2 text-sm text-bg" role="status">{note}</p> : null}
     </div>
   );
+}
+
+// The demo applies actions to its own invented work; a backend is told, then read again.
+function useOperator(read: () => void, setData: (update: (current: Loaded | null) => Loaded | null) => void) {
+  return useCallback(async (action: OperatorAction) => {
+    if (DEMO) return smoothly(() => setData((current) => (current ? { ...current, board: applyDemo(current.board, action, current.now) } : current)));
+    await send(action);
+    read();
+  }, [read, setData]);
+}
+
+// What the board shows at `at`, with the area filter applied to goals and cards. Questions and decisions ignore the filter.
+function useShaped(data: Loaded | null, at: number, since: number, area: string | null) {
+  const views = useMemo(() => (data ? viewAt(data.board, at) : []), [at, data]);
+  const changes = useMemo(() => changesBetween(data ? viewAt(data.board, since) : [], views), [data, since, views]);
+  const cards = useMemo(() => (data ? visibleCards(data.board.cards, at) : []), [at, data]);
+  const open = views.filter((view) => view.phase !== "done" && view.phase !== "archived");
+  const areas = [...new Set([...open.map((view) => view.goal.area[0]), ...cards.map((card) => card.area[0])])];
+  const shown = area ? views.filter((view) => view.goal.area[0] === area) : views;
+  // Phases has nothing to add until a goal on the board is grouped, so it is offered only then.
+  const grouped = lanesOf(views, at).main.some((view) => view.goal.pkgs.some((pkg) => pkg.group));
+  return { views, changes, asks: data?.board.asks ?? [], areas, shown, shownCards: area ? cards.filter((card) => card.area[0] === area) : cards, lanes: lanesOf(shown, at), grouped };
 }
 
 // A board that has never loaded shows only that it is reading, or why it could not.
@@ -163,6 +200,10 @@ function Lost({ failure }: { failure: string | null }) {
 }
 
 async function load(): Promise<Loaded> {
+  if (DEMO) {
+    const now = Date.now();
+    return { board: demoBoard(now, LINKED.get("demo") === "quiet"), now, busiest: now, samples: [], replayable: false, settings: {} };
+  }
   const [hydrated, history, local] = await Promise.all([
     ledger(),
     sketchOnly<Record<string, HistoryEvent[]>>("/__snapshot/history"),
@@ -170,17 +211,15 @@ async function load(): Promise<Loaded> {
   ]);
   setAreas(local?.areas ?? []);
   setSamples(local?.samples ?? []);
-  const { goals: real, now } = buildGoals(hydrated, history ?? {});
-  // Against a backend there is no history to replay and nothing is invented: the board shows the present.
+  const { board, now } = buildBoard(hydrated, history ?? {});
+  // Against a backend there is no history to replay: the board shows the present.
   const settings = hydrated.settings ?? {};
-  if (!history) return { goals: real, now, busiest: now, samples: [], replayable: false, settings };
+  if (!history) return { board, now, busiest: now, samples: [], replayable: false, settings };
 
   const start = now - REPLAY_DAYS * 24 * 3600e3;
-  const sample = (goals: Goal[]) => Array.from({ length: (now - start) / STEP_MS + 1 }, (_unused, index) => liveCountAt(goals, start + index * STEP_MS));
-  const realSamples = sample(real);
-  const busiest = start + realSamples.indexOf(Math.max(...realSamples)) * STEP_MS;
-  const goals = [...real, ...mockGoals(busiest, now)];
-  return { goals, now, busiest, samples: sample(goals), replayable: true, settings };
+  const samples = Array.from({ length: (now - start) / STEP_MS + 1 }, (_unused, index) => liveCountAt(board.goals, start + index * STEP_MS));
+  const busiest = start + samples.indexOf(Math.max(...samples)) * STEP_MS;
+  return { board, now, busiest, samples, replayable: true, settings };
 }
 
 // A refused or failed read is an error, not an empty ledger.
@@ -235,8 +274,9 @@ function followNow(current: number, before: number, now: number) {
 
 // The backend only says that something changed; the board then reads everything again.
 // This stream is also how the backend knows a board is open, so that it does not open another one.
-function useChangeSignal(read: () => void) {
+function useChangeSignal(active: boolean, read: () => void) {
   useEffect(() => {
+    if (!active) return undefined;
     const stream = new EventSource(api("/dashboard/events"));
     let connected = false;
     // The stream also opens after a reconnect, when changes may have been missed.
@@ -247,7 +287,7 @@ function useChangeSignal(read: () => void) {
     stream.addEventListener("open", onOpen);
     stream.addEventListener("dashboard_changed", read);
     return () => stream.close();
-  }, [read]);
+  }, [active, read]);
 }
 
 function stamp(at: number) {
