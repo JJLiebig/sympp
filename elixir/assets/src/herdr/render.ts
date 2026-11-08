@@ -39,7 +39,7 @@ export function renderInspector(state: InspectorState, columns = 80, rows = 24) 
   );
   const header = [
     paint(trim(`${state.pinned ? "Pinned · " : ""}${detail.work_request.title || detail.work_request.id}`, width), ansi.bold),
-    paint(trim([detail.work_request.repo, detail.work_request.status].filter(Boolean).join(" · "), width), ansi.dim),
+    paint(trim([detail.work_request.repo, detail.work_request.phase].filter(Boolean).join(" · "), width), ansi.dim),
   ];
   if (state.error) header.push(trim(`${state.error} · Showing last observation`, width));
   const activity = renderSelectedActivity(state, projection.model.work_packages, width, Math.max(0, rows - header.length - 12));

@@ -10,13 +10,13 @@ export const ReloadContext = createContext<() => void>(() => undefined);
 type Step = [path: string, body: Record<string, string>];
 type Action = { key: string; label: string; hint: string; confirm: string; steps: Step[] };
 
-const COMPLETE: Step = ["state", { state: "completed" }];
+const COMPLETE: Step = ["complete", {}];
 const ARCHIVE: Step = ["archive", {}];
 const STALE_MS = 30 * 24 * 3600e3;
 
-// The backend archives only finished goals, so archiving an unfinished one marks it done first.
+// The backend archives only done or unresolved goals, so archiving one still in progress marks it done first.
 function archiveSteps(goal: Goal): Step[] {
-  return goal.closedAt === null ? [COMPLETE, ARCHIVE] : [ARCHIVE];
+  return goal.closedAt === null && goal.phase !== "unresolved" ? [COMPLETE, ARCHIVE] : [ARCHIVE];
 }
 
 // None of these stops a running worker or merges a PR, so a goal with work in flight says so.
