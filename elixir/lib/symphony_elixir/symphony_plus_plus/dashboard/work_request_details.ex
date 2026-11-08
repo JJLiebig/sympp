@@ -2,7 +2,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
-  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.CommentProjection
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
@@ -13,7 +12,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
 
   import Ecto.Query, only: [from: 2]
 
-  @work_request_detail_comment_target_chunk_size 500
   @delivery_signal_keys [
     :dependency_signal,
     :repo_signal,
@@ -49,8 +47,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
          {:ok, decisions_by_request} <- WorkRequestBulkRepository.list_decisions_many(repo, work_request_ids),
          {:ok, work_packages_by_request} <- WorkRequestBulkRepository.list_work_packages_many(repo, work_request_ids),
          all_work_packages = Dashboard.all_work_packages(work_requests, work_packages_by_request),
-         {:ok, work_package_contexts} <- Dashboard.work_package_work_package_contexts(repo, all_work_packages),
-         {:ok, comment_context} <- work_request_detail_comment_context(repo, work_requests, all_work_packages) do
+         {:ok, work_package_contexts} <- Dashboard.work_package_work_package_contexts(repo, all_work_packages) do
       {:ok,
        %{
          work_requests: work_requests,
@@ -59,8 +56,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
          decisions_by_request: decisions_by_request,
          work_packages_by_request: work_packages_by_request,
          work_package_contexts: work_package_contexts,
-         repo_identity_catalog: Dashboard.repo_identity_catalog_from_opts(opts, Enum.map(work_requests, & &1.repo)),
-         comment_context: comment_context
+         repo_identity_catalog: Dashboard.repo_identity_catalog_from_opts(opts, Enum.map(work_requests, & &1.repo))
        }}
     end
   end
@@ -85,9 +81,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
          {:ok, questions_by_request} <- WorkRequestBulkRepository.list_questions_many(repo, work_request_ids),
          {:ok, work_packages_by_request} <- board_work_packages_by_request(repo, work_request_ids, work_requests, opts),
          all_work_packages = Dashboard.all_work_packages(work_requests, work_packages_by_request),
-         {:ok, work_package_contexts} <- board_work_package_contexts(repo, all_work_packages, opts),
-         {:ok, comment_context} <-
-           work_request_board_detail_comment_context(repo, work_requests, all_work_packages, opts) do
+         {:ok, work_package_contexts} <- board_work_package_contexts(repo, all_work_packages, opts) do
       {:ok,
        %{
          work_requests: work_requests,
@@ -95,8 +89,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
          questions_by_request: questions_by_request,
          work_packages_by_request: work_packages_by_request,
          work_package_contexts: work_package_contexts,
-         repo_identity_catalog: Dashboard.repo_identity_catalog_from_opts(opts, Enum.map(work_requests, & &1.repo)),
-         comment_context: comment_context
+         repo_identity_catalog: Dashboard.repo_identity_catalog_from_opts(opts, Enum.map(work_requests, & &1.repo))
        }}
     end
   end
@@ -185,9 +178,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
          },
          opts
        ) do
-    guidance = DeliveryBoard.guidance_requests_by_work_package_id(repo, Map.keys(work_package_contexts))
-    opts = Keyword.put(opts, :guidance_requests_by_work_package_id, guidance)
-
     work_requests
     |> Enum.group_by(&{&1.repo, &1.base_branch})
     |> Enum.reduce_while({:ok, %{}}, fn {_scope, scoped_work_requests}, {:ok, acc} ->
@@ -218,8 +208,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
            questions_by_request: questions_by_request,
            work_packages_by_request: work_packages_by_request,
            work_package_contexts: work_package_contexts,
-           repo_identity_catalog: repo_identity_catalog,
-           comment_context: comment_context
+           repo_identity_catalog: repo_identity_catalog
          },
          opts,
          {:ok, delivery_board}
@@ -229,14 +218,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
     request_work_package_contexts = request_work_package_contexts(work_packages, work_package_contexts)
 
     questions = Dashboard.ordered_sequence_records(questions)
-    all_work_packages = Dashboard.ordered_sequence_records(work_packages)
 
     work_packages =
       work_packages
       |> Dashboard.visible_work_packages(delivery_board)
       |> Dashboard.ordered_sequence_records()
-
-    work_request_comment_context = request_comment_context(comment_context, work_request, all_work_packages)
 
     work_request_payload =
       work_request
@@ -245,10 +231,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
         work_packages,
         request_work_package_contexts,
         repo_identity_catalog,
-        work_request_comment_context,
         delivery_board: delivery_board,
-        operator_report: Map.get(operator_reports, work_request.id),
-        comment_work_packages: all_work_packages
+        operator_report: Map.get(operator_reports, work_request.id)
       )
       |> Map.drop([:human_description, :constraints, :creator])
       |> Map.update(:operational_state, %{}, &Map.delete(&1, :activity_signal))
@@ -258,7 +242,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
       |> Dashboard.work_package_payloads(
         request_work_package_contexts,
         true,
-        work_request_comment_context,
         delivery_board: delivery_board,
         compact?: true
       )
@@ -271,7 +254,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
        clarification_questions: Enum.map(questions, &Dashboard.clarification_question/1),
        work_packages: work_package_payloads,
        product_tree: product_tree_projection(repo, work_request.id, work_package_payloads, opts),
-       summary: Dashboard.work_request_board_summary(questions, work_packages, work_request_comment_context)
+       summary: Dashboard.work_request_board_summary(questions, work_packages)
      }}
   end
 
@@ -303,36 +286,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
     end)
   end
 
-  defp work_request_board_detail_comment_context(repo, work_requests, work_packages, opts) do
-    targets =
-      Enum.map(work_requests, &{"work_request", &1.id}) ++
-        Enum.map(work_packages, &{"work_package", &1.id})
-
-    case Keyword.fetch(opts, :comment_count_context) do
-      {:ok, comment_count_context} when is_map(comment_count_context) -> {:ok, comment_count_context}
-      :error -> Dashboard.comment_count_context(repo, targets)
-      {:ok, _other} -> {:error, :not_found}
-    end
-  end
-
-  defp work_request_detail_comment_context(repo, work_requests, work_packages) do
-    targets =
-      Enum.map(work_requests, &{"work_request", &1.id}) ++
-        Enum.map(work_packages, &{"work_package", &1.id})
-
-    targets
-    |> Enum.chunk_every(@work_request_detail_comment_target_chunk_size)
-    |> Enum.reduce_while({:ok, %{comments: %{}, counts: %{}}}, fn target_chunk, {:ok, acc} ->
-      case Dashboard.comment_context(repo, target_chunk) do
-        {:ok, context} ->
-          {:cont, {:ok, %{comments: Map.merge(acc.comments, context.comments), counts: Map.merge(acc.counts, context.counts)}}}
-
-        {:error, reason} ->
-          {:halt, {:error, reason}}
-      end
-    end)
-  end
-
   defp build_work_request_detail(
          repo,
          %WorkRequest{} = work_request,
@@ -342,8 +295,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
            decisions_by_request: decisions_by_request,
            work_packages_by_request: work_packages_by_request,
            work_package_contexts: work_package_contexts,
-           repo_identity_catalog: repo_identity_catalog,
-           comment_context: comment_context
+           repo_identity_catalog: repo_identity_catalog
          },
          opts
        ) do
@@ -356,7 +308,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
            delivery_board_work_package_contexts(repo, work_request, request_work_package_contexts, opts),
          delivery_board_opts = delivery_board_opts(work_request, work_packages, delivery_board_contexts, opts),
          {:ok, delivery_board} <- DeliveryBoard.project(repo, work_request.id, delivery_board_opts) do
-      all_work_packages = Dashboard.ordered_sequence_records(work_packages)
       questions = Dashboard.ordered_sequence_records(questions)
       decisions = Dashboard.ordered_sequence_records(decisions)
 
@@ -365,8 +316,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
         |> Dashboard.visible_work_packages(delivery_board)
         |> Dashboard.ordered_sequence_records()
 
-      comment_context = request_comment_context(comment_context, work_request, all_work_packages)
-
       work_request_payload =
         Dashboard.work_request_payload(
           work_request,
@@ -374,10 +323,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
           work_packages,
           request_work_package_contexts,
           repo_identity_catalog,
-          comment_context,
           delivery_board: delivery_board,
-          operator_report: Map.get(operator_reports, work_request.id),
-          comment_work_packages: all_work_packages
+          operator_report: Map.get(operator_reports, work_request.id)
         )
         |> Map.update(:operational_state, %{}, &Map.delete(&1, :activity_signal))
 
@@ -386,7 +333,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
           work_packages,
           request_work_package_contexts,
           true,
-          comment_context,
           delivery_board: delivery_board
         )
         |> put_delivery_signals(delivery_board)
@@ -399,8 +345,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
          work_packages: work_package_payloads,
          product_tree: product_tree_projection(repo, work_request.id, work_package_payloads, opts),
          delivery_board: Dashboard.redacted_json(delivery_board),
-         comments: CommentProjection.comments_for(comment_context, "work_request", work_request.id),
-         summary: Dashboard.work_request_summary(questions, decisions, work_packages, comment_context)
+         summary: Dashboard.work_request_summary(questions, decisions, work_packages)
        }}
     end
   end
@@ -413,15 +358,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
       |> MapSet.new()
 
     Map.filter(work_package_contexts, fn {work_package_id, _context} -> MapSet.member?(work_package_ids, work_package_id) end)
-  end
-
-  defp request_comment_context(comment_context, %WorkRequest{} = work_request, work_packages) do
-    targets = [{"work_request", work_request.id} | Enum.map(work_packages, &{"work_package", &1.id})]
-
-    %{
-      comments: Map.take(comment_context.comments, targets),
-      counts: Map.take(comment_context.counts, targets)
-    }
   end
 
   defp delivery_board_opts(%WorkRequest{} = work_request, work_packages, work_package_contexts, opts) do
@@ -441,7 +377,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
   end
 
   defp preloaded_delivery_board_opts(work_packages, opts) do
-    product_tree_opts = Keyword.take(opts, [:product_trees_by_request, :guidance_requests_by_work_package_id])
+    product_tree_opts = Keyword.take(opts, [:product_trees_by_request])
 
     delivery_opts =
       case Keyword.fetch(opts, :deliveries_by_slice_id) do

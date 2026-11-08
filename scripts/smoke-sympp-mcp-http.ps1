@@ -29,10 +29,9 @@ $UnboundContractTools = Get-ContractStringList $ToolSets.unbound_tools
 $ExpectedHttpUnboundTools = Get-ContractStringList $ToolSets.trusted_local_http_extra_tools
 $WorkerTools = Get-ContractStringList $ToolSets.worker_tools
 $ArchitectTools = Get-ContractStringList $ToolSets.architect_tools
-$SharedWorkerArchitectTools = Get-ContractStringList $ToolSets.shared_worker_architect_tools
 $ExpectedBoundWorkerTools = @("sympp.health", "release_current_assignment") + $WorkerTools
 $ExpectedUnboundTools = @($UnboundContractTools + $ExpectedHttpUnboundTools + $WorkerTools + $ArchitectTools | Sort-Object -Unique)
-$ArchitectOnlyTools = @($ArchitectTools | Where-Object { $SharedWorkerArchitectTools -notcontains $_ })
+$ArchitectOnlyTools = @($ArchitectTools)
 $UnboundOnlyTools = @($ExpectedUnboundTools | Where-Object { $ExpectedBoundWorkerTools -notcontains $_ })
 $ForbiddenUnboundTools = @()
 $ForbiddenBoundWorkerTools =
@@ -1383,12 +1382,12 @@ function Invoke-SelfTest {
     throw "Expected trusted local HTTP unbound discovery to include safe bootstrap tools."
   }
 
-  if ($ExpectedHttpUnboundTools -notcontains "add_work_request_comment" -or $ExpectedHttpUnboundTools -notcontains "record_work_request_operator_decision") {
-    throw "Expected trusted local HTTP unbound discovery to require safe operator note tools."
+  if ($ExpectedHttpUnboundTools -notcontains "record_work_request_operator_decision") {
+    throw "Expected trusted local HTTP unbound discovery to require the safe operator decision tool."
   }
 
-  if ($ForbiddenUnboundTools -contains "add_work_request_comment" -or $ForbiddenUnboundTools -contains "record_work_request_operator_decision") {
-    throw "Expected unbound forbidden tools to allow trusted local operator note tools."
+  if ($ForbiddenUnboundTools -contains "record_work_request_operator_decision") {
+    throw "Expected unbound forbidden tools to allow the trusted local operator decision tool."
   }
 
   if ($ExpectedUnboundTools -notcontains "append_progress" -or $ExpectedUnboundTools -notcontains "get_current_assignment") {
@@ -1427,14 +1426,6 @@ function Invoke-SelfTest {
 
   if ($ForbiddenBoundWorkerTools -notcontains "claim_local_assignment") {
     throw "Expected bound worker forbidden tools to include unbound claim tools."
-  }
-
-  if ($ArchitectTools -notcontains "read_guidance_request") {
-    throw "Expected full architect surface to include shared read_guidance_request."
-  }
-
-  if ($ForbiddenBoundWorkerTools -contains "read_guidance_request") {
-    throw "Expected shared worker guidance read tool to remain allowed for bound workers."
   }
 
   $healthPayload = @{

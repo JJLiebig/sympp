@@ -28,7 +28,7 @@ test('all dependency endpoint combinations dispatch only after canonical deliver
     .toEqual([[direct, next], [a, consumer], [b, consumer], [next, c], [next, d], [c, e], [d, e]].sort());
   await architect.reject('dispatch_work_package', { work_package_id: next }, 'unmet_work_package_dependencies');
   const cancellation = (await architect.call('upsert_dependency', { dependent: endpoint(next), prerequisite: endpoint(cancelled), reason: 'Initially required scope.' })).dependency.id;
-  await architect.call('skip_work_package', { work_package_id: cancelled, current_status: 'planned' });
+  await architect.call('skip_work_package', { work_package_id: cancelled });
   const refusal = await architect.reject('dispatch_work_package', { work_package_id: next }, 'unmet_work_package_dependencies');
   expect(refusal.prerequisite_work_package_ids.sort()).toEqual([direct, cancelled].sort());
   expect((await row(architect, request, cancelled)).raw_status).toBe('skipped');

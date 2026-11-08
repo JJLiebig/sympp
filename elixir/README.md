@@ -106,31 +106,26 @@ database when dispatch can identify one.
 Normal dispatch responses do not include a private handoff path, helper
 command, or secret-retrieval metadata.
 
-## Local Operator WorkRequest Notes
+## Local Operator WorkRequest Decisions
 
-Trusted local HTTP MCP sessions may create WorkRequests and append non-secret
-WorkRequest notes without claiming each WorkRequest as the owning architect.
-The local-operator tools are:
+Trusted local HTTP MCP sessions may create WorkRequests and record non-secret
+WorkRequest decisions without claiming each WorkRequest as the owning architect
+through `record_work_request_operator_decision`.
 
-- `add_work_request_comment`
-- `list_comments`
-- `record_work_request_operator_decision`
-
-Both tools require an explicit local MCP state key, a trusted local daemon, and
-a local filesystem ledger database. They remain visible with
+The tool requires an explicit local MCP state key, a trusted local daemon, and
+a local filesystem ledger database. It remains visible with
 `create_work_request` when the MCP wrapper is bound to a worker or architect
-assignment, but they do not widen that assignment's package or WorkRequest
-authority. They are rejected for remote/company database URLs. The tools reuse
-the WorkRequest comment and decision services, store `source_type: "operator"`,
-include caller provenance such as `created_by`, and apply the standard
-redaction pass before persisting or returning note content.
+assignment, but it does not widen that assignment's package or WorkRequest
+authority. It is rejected for remote/company database URLs. The tool reuses the
+WorkRequest decision service, stores `source_type: "operator"`, includes caller
+provenance such as `created_by`, and applies the standard redaction pass before
+persisting or returning decision content.
 
-Tool contracts are intentionally small: comments require `work_request_id`,
-`body`, and `created_by`; decisions require `work_request_id`, `decision`,
-`rationale`, `scope_impact`, and `created_by`, with optional `source_id`.
-Unexpected, non-string, or overlong fields are rejected.
+The tool requires `work_request_id`, `decision`, `rationale`, and
+`scope_impact`; `created_by` is required without a live claim, and `source_id`
+is optional. Unexpected, non-string, or overlong fields are rejected.
 
-This path is note capture only. It does not grant dispatch, child-package
+This path is decision capture only. It does not grant dispatch, child-package
 mutation, worker claim, status mutation, or lifecycle closeout authority.
 
 ## Configuration

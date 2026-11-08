@@ -20,7 +20,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession do
           base_branch: String.t() | nil,
           workspace_path: String.t() | nil,
           caller_id: String.t() | nil,
-          session_key: String.t() | nil,
           title: String.t() | nil,
           status: String.t() | nil,
           last_activity_at: DateTime.t() | nil,
@@ -34,7 +33,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession do
     field(:base_branch, :string)
     field(:workspace_path, :string)
     field(:caller_id, :string)
-    field(:session_key, :string)
     field(:title, :string)
     field(:status, :string)
     field(:last_activity_at, :utc_datetime_usec)
@@ -56,11 +54,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession do
     attrs =
       attrs
       |> normalize_keys()
-      |> Map.drop(["id", "session_key", "status", "last_activity_at", "archived_at", "inserted_at", "updated_at", "created_at"])
+      |> Map.drop(["id", "status", "last_activity_at", "archived_at", "inserted_at", "updated_at", "created_at"])
       |> trim_text_fields(["repo", "base_branch", "workspace_path", "caller_id", "title"])
       |> Map.update("title", nil, &Redactor.redact_text/1)
       |> Map.put("id", stable_id())
-      |> Map.put("session_key", stable_session_key())
       |> Map.put("status", "active")
       |> Map.put("last_activity_at", now)
 
@@ -71,7 +68,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession do
       :base_branch,
       :workspace_path,
       :caller_id,
-      :session_key,
       :title,
       :status,
       :last_activity_at,
@@ -83,7 +79,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession do
       :base_branch,
       :workspace_path,
       :caller_id,
-      :session_key,
       :status,
       :last_activity_at
     ])
@@ -119,9 +114,5 @@ defmodule SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession do
 
   defp stable_id do
     Id.random("solo")
-  end
-
-  defp stable_session_key do
-    "solo_key_" <> Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
   end
 end

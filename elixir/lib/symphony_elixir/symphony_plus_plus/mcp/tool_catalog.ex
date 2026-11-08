@@ -19,7 +19,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   @solo_tools SoloTools.tool_names()
   @assignment_release_tool "release_current_assignment"
   @bootstrap_tools ["create_work_request", "register_chief"]
-  @local_operator_tools ["add_work_request_comment", "record_work_request_operator_decision", "summarize_failed_mcp_calls"]
+  @local_operator_tools ["record_work_request_operator_decision", "summarize_failed_mcp_calls"]
   @blocker_closeout_decisions ["resolved", "still_active"]
   @local_assignment_claim_tool "claim_local_assignment"
   @local_architect_assignment_claim_tool "claim_local_architect_assignment"
@@ -29,11 +29,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "update_task_plan",
     "append_finding",
     "append_progress",
-    "abandon",
-    "add_comment",
-    "list_comments",
-    "resolve_comment",
-    "read_guidance_request",
     "attach_branch",
     "attach_pr",
     "sync_pr"
@@ -46,24 +41,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "update_task_plan",
     "append_finding",
     "append_progress",
-    "abandon",
-    "add_comment",
-    "list_comments",
-    "resolve_comment",
-    "read_guidance_request",
     "attach_branch",
     "attach_pr",
     "sync_pr",
     "mark_ready"
   ]
   @architect_planning_tools ["read_task_plan", "update_task_plan", "append_finding", "append_progress"]
-  @shared_worker_architect_tools ["add_comment", "list_comments", "resolve_comment", "read_guidance_request"]
   @architect_tools ["list_work_requests", "read_work_request", "read_plan"] ++
                      @architect_planning_tools ++
                      [
-                       "add_comment",
-                       "list_comments",
-                       "resolve_comment",
                        "resolve_blocker",
                        "read_delivery_board",
                        "attach_branch",
@@ -73,10 +59,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
                        "record_work_package_delivery",
                        "revoke_work_package_worker_key",
                        "force_release_work_package_claim",
-                       "list_guidance_requests",
-                       "read_guidance_request",
-                       "answer_guidance_request",
-                       "escalate_guidance_request",
                        "set_work_request_status",
                        "ask_question",
                        "answer_question",
@@ -91,8 +73,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
                        "delete_dependency",
                        "skip_work_package",
                        "dispatch_work_package",
-                       "prepare_work_package_worktree",
-                       "cleanup_work_package_worktree"
+                       "prepare_work_package_worktree"
                      ]
   @known_tools Enum.uniq(
                  [@health_tool, @assignment_release_tool] ++
@@ -195,7 +176,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   def contract_unbound_tools, do: [@health_tool, @assignment_release_tool] ++ @solo_tools ++ @session_claim_tools
 
   @spec contract_trusted_local_http_extra_tools() :: [tool_name()]
-  def contract_trusted_local_http_extra_tools, do: @bootstrap_tools ++ @local_operator_tools ++ ["list_comments"]
+  def contract_trusted_local_http_extra_tools, do: @bootstrap_tools ++ @local_operator_tools
 
   @spec contract_bound_worker_tools() :: [tool_name()]
   def contract_bound_worker_tools, do: [@health_tool, @assignment_release_tool] ++ @worker_tools
@@ -207,9 +188,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   def hidden_worker_argument_keys(@local_assignment_claim_tool), do: @local_assignment_claim_hidden_worker_arguments
   def hidden_worker_argument_keys(name) when name in @session_scoped_worker_tools, do: ["work_package_id"]
   def hidden_worker_argument_keys(_name), do: []
-
-  @spec shared_worker_architect_tools() :: [tool_name()]
-  def shared_worker_architect_tools, do: @shared_worker_architect_tools
 
   @spec architect_planning_tools() :: [tool_name()]
   def architect_planning_tools, do: @architect_planning_tools

@@ -36,8 +36,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.RuntimeCleanup do
     delivery_evidence = opts |> Keyword.get(:delivery_evidence, %{}) |> normalize_delivery_evidence()
     before_context = WorkPackageActivity.context(repo, work_package.id)
 
-    with :ok <- reject_paused_claim_leases(before_context),
-         :ok <- reject_fresh_active_agent_runs(before_context),
+    with :ok <- reject_fresh_active_agent_runs(before_context),
          {:ok, revoked_worker_grants} <- revoke_live_worker_grants(repo, work_package.id, now),
          {:ok, released_claim_leases} <- release_current_claim_leases(repo, work_package.id, now),
          {:ok, cleared_session_bindings} <- clear_recoverable_session_bindings(repo, work_package.id),
@@ -60,14 +59,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.RuntimeCleanup do
          runtime_cleanup: runtime_cleanup_result(payload),
          audit_event: audit_event
        }}
-    end
-  end
-
-  defp reject_paused_claim_leases(context) do
-    if get_in(context, [:runtime_state, :paused?]) == true do
-      {:error, :active_runtime}
-    else
-      :ok
     end
   end
 
@@ -119,12 +110,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.RuntimeCleanup do
   end
 
   defp release_current_claim_leases(repo, work_package_id, %DateTime{} = now) do
-    current_claim_leases = repo.all(current_claim_lease_query(work_package_id))
-
-    case Enum.filter(current_claim_leases, &(&1.status == "paused")) do
-      [] -> release_active_claim_leases(repo, current_claim_leases, now)
-      _paused_claim_leases -> {:error, :active_runtime}
-    end
+    release_active_claim_leases(repo, repo.all(current_claim_lease_query(work_package_id)), now)
   end
 
   defp current_claim_lease_query(work_package_id) do

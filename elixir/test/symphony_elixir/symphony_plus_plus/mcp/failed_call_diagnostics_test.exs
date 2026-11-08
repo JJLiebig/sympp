@@ -178,10 +178,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
     server = Server.new(config, initialized: true, state_key: "failure-test")
 
     request =
-      tool_call("list_comments", %{
-        "target_kind" => "work_request",
-        "target_id" => "private-session-value"
-      })
+      tool_call("read_work_request", %{"work_request_id" => "private-session-value"})
 
     Process.put({DiagnosticFailureRepo, :failure}, :raise)
 
@@ -292,14 +289,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
     :ok =
       FailedCall.observe_error(
         config,
-        tool_call("cleanup_work_package_worktree", %{"work_package_id" => "WP-SAFE-SUMMARY"}),
+        tool_call("prepare_work_package_worktree", %{"work_package_id" => "WP-SAFE-SUMMARY"}),
         -32_009,
         "Precondition failed",
         %{
           "reason" => "worktree_cleanup_failed",
           "recovery" => %{
             "next_action" => "retry_cleanup_worktree",
-            "tool" => "cleanup_work_package_worktree",
+            "tool" => "prepare_work_package_worktree",
             "fresh_mcp_session_required" => false,
             "message" => "Bearer summary-secret",
             "path" => "C:/private/worktree",
@@ -316,7 +313,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
     assert group["recovery"] == %{
              "fresh_mcp_session_required" => false,
              "next_action" => "retry_cleanup_worktree",
-             "tool" => "cleanup_work_package_worktree"
+             "tool" => "prepare_work_package_worktree"
            }
 
     refute inspect(group) =~ "summary-secret"

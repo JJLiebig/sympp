@@ -3,10 +3,6 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeToolsLifecycleTest do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
-  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service, as: ClaimLeaseService
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.SessionBinding
-
   @moduletag :ci_slow
 
   test "fork checkout preparation explains recovery and keeps origin scope" do
@@ -292,10 +288,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeToolsLifecycleTest do
     assert {:ok, _} = WorktreeLifecycle.cleanup(repo, package.id, target_repo_root: checkout)
   end
 
-  test "historical worktree roots and lease bindings preserve scoped cleanup and stored audit redaction", %{repo: repo} do
+  test "prepared worktrees record their target root and redact stored audit paths", %{repo: repo} do
     fixture = TestSupport.git_repo_fixture!("symphony-plus-plus/beta", prefix: "sympp-mcp-worktree")
-    other_fixture = TestSupport.git_repo_fixture!("symphony-plus-plus/beta", prefix: "sympp-mcp-other-worktree")
-    same_origin_repo_root = TestSupport.git_repo_with_origin_fixture!(fixture.origin, prefix: "sympp-mcp-same-origin-worktree")
     codex_home = Path.join(fixture.root, "codex-home")
     config = Config.default(repo: repo, repo_root: test_repo_root())
 
@@ -377,140 +371,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeToolsLifecycleTest do
       assert is_binary(prepare_payload["audit_event"]["id"])
       refute Map.has_key?(prepare_payload["audit_event"], "payload")
       assert File.dir?(prepare_payload["worktree"]["path"])
-
-      assert {:ok, _foreign_root_package} =
-               WorkPackageRepository.update(repo, package.id, %{worktree_target_repo_root: other_fixture.repo_root})
-
-      stored_scope_mismatch_response =
-        mcp_tool(
-          repo,
-          session,
-          "cleanup_work_package_worktree",
-          %{
-            "work_package_id" => package.id
-          },
-          config: config
-        )
-
-      assert get_in(stored_scope_mismatch_response, ["error", "data", "reason"]) == "target_repo_root_scope_mismatch"
-      assert File.dir?(prepare_payload["worktree"]["path"])
-      assert {:ok, _restored_root_package} = WorkPackageRepository.update(repo, package.id, %{worktree_target_repo_root: fixture.repo_root})
-
-      assert {:ok, cleanup_claim_lease} =
-               ClaimLeaseService.claim(
-                 repo,
-                 package.id,
-                 %{"actor_kind" => "agent", "actor_id" => "local:worktree-cleanup", "actor_display_name" => "worktree-cleanup"},
-                 stale_after_ms: 60_000
-               )
-
-      cleanup_binding_id = SessionBinding.binding_id("cleanup-client", "cleanup-state")
-
-      assert {:ok, cleanup_binding} =
-               %SessionBinding{}
-               |> SessionBinding.changeset(%{
-                 id: cleanup_binding_id,
-                 client_key_hash: SessionBinding.client_key_hash("cleanup-client"),
-                 initialized: true,
-                 recoverable: true,
-                 claim_lease_id: cleanup_claim_lease.id,
-                 work_package_id: package.id,
-                 grant_role: "worker",
-                 claimed_by: "worktree-cleanup",
-                 last_seen_at: DateTime.utc_now(:microsecond)
-               })
-               |> repo.insert()
-
-      cleanup_response =
-        mcp_tool(
-          repo,
-          session,
-          "cleanup_work_package_worktree",
-          %{
-            "work_package_id" => package.id
-          },
-          config: config
-        )
-
-      cleanup_payload = get_in(cleanup_response, ["result", "structuredContent"])
-      assert cleanup_payload["worktree"]["status"] == "cleaned"
-      assert cleanup_payload["audit_event"]["summary"] == "Success removing worktree. Subagent can be closed now."
-      assert cleanup_payload["work_package"]["worktree_path"] == nil
-      assert is_binary(cleanup_payload["audit_event"]["id"])
-      refute Map.has_key?(cleanup_payload["audit_event"], "payload")
-      refute File.exists?(prepare_payload["worktree"]["path"])
-      assert %ClaimLease{status: "released", release_reason: "work_request_runtime_cleanup"} = repo.get!(ClaimLease, cleanup_claim_lease.id)
-      refute repo.get(SessionBinding, cleanup_binding.id)
-
-      stale_prepare_response =
-        mcp_tool(
-          repo,
-          session,
-          "prepare_work_package_worktree",
-          %{
-            "work_package_id" => package.id,
-            "target_repo_root" => fixture.repo_root
-          },
-          config: config
-        )
-
-      stale_prepare_payload = get_in(stale_prepare_response, ["result", "structuredContent"])
-      assert stale_prepare_payload["worktree"]["status"] == "prepared"
-      assert {:ok, _legacy_package} = WorkPackageRepository.update(repo, package.id, %{worktree_target_repo_root: nil})
-      File.rm_rf!(stale_prepare_payload["worktree"]["path"])
-
-      wrong_stale_cleanup_response =
-        mcp_tool(
-          repo,
-          session,
-          "cleanup_work_package_worktree",
-          %{
-            "work_package_id" => package.id
-          },
-          config: Config.default(repo: repo, repo_root: same_origin_repo_root)
-        )
-
-      assert get_in(wrong_stale_cleanup_response, ["error", "data", "reason"]) == "target_repo_root_required"
-
-      assert {:ok, stale_cleanup_claim_lease} =
-               ClaimLeaseService.claim(
-                 repo,
-                 package.id,
-                 %{"actor_kind" => "agent", "actor_id" => "local:stale-worktree-cleanup", "actor_display_name" => "stale-worktree-cleanup"},
-                 stale_after_ms: 60_000
-               )
-
-      assert {:ok, paused_stale_cleanup_claim_lease} =
-               ClaimLeaseService.pause(
-                 repo,
-                 stale_cleanup_claim_lease.id,
-                 %{"actor_kind" => "operator", "actor_id" => "operator:pause"},
-                 reason: "operator pause"
-               )
-
-      stale_cleanup_response =
-        mcp_tool(
-          repo,
-          session,
-          "cleanup_work_package_worktree",
-          %{
-            "work_package_id" => package.id
-          },
-          config: Config.default(repo: repo, repo_root: fixture.repo_root)
-        )
-
-      stale_cleanup_payload = get_in(stale_cleanup_response, ["result", "structuredContent"])
-      assert stale_cleanup_payload["worktree"]["status"] == "stale_record_cleared"
-      assert stale_cleanup_payload["work_package"]["worktree_path"] == nil
-      assert is_binary(stale_cleanup_payload["audit_event"]["id"])
-      refute Map.has_key?(stale_cleanup_payload["audit_event"], "payload")
-      assert %ClaimLease{status: "paused"} = repo.get!(ClaimLease, paused_stale_cleanup_claim_lease.id)
     after
       restore_env("CODEX_HOME", previous_codex_home)
     end
-
-    assert {:ok, cleaned_package} = WorkPackageRepository.get(repo, package.id)
-    assert cleaned_package.worktree_path == nil
 
     events =
       repo.all(
@@ -525,20 +388,5 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeToolsLifecycleTest do
              "worktree_path" => "[REDACTED]",
              "target_repo_root" => "[REDACTED]"
            } = Enum.find(events, &(&1.payload["source_tool"] == "prepare_work_package_worktree")).payload
-
-    assert %{
-             "source_tool" => "cleanup_work_package_worktree",
-             "worktree_path" => "[REDACTED]",
-             "target_repo_root" => "[REDACTED]"
-           } = Enum.find(events, &(&1.payload["source_tool"] == "cleanup_work_package_worktree" and &1.status == "cleaned")).payload
-
-    assert %{
-             "source_tool" => "cleanup_work_package_worktree",
-             "status" => "stale_record_cleared"
-           } =
-             Enum.find(
-               events,
-               &(&1.payload["source_tool"] == "cleanup_work_package_worktree" and &1.status == "stale_record_cleared")
-             ).payload
   end
 end

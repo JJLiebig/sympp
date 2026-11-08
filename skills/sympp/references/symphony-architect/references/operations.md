@@ -6,11 +6,11 @@ delivery invariants remain in `../procedure.md`.
 ## Bootstrap recovery
 
 An unbound trusted local architect session can acquire an unclaimed WorkRequest
-or reclaim an expired, unpaused claim implicitly on an architect operation with
+or reclaim an expired claim implicitly on an architect operation with
 `work_request_id`. `read_work_request` and `read_plan` do not acquire claims.
 Known scope survives connection loss and is reused on reconnect. A bound session does not implicitly
 switch to another WorkRequest. A different live owner blocks the claim without
-changing ownership. Paused claims remain operator-controlled.
+changing ownership.
 
 When a chief owns WorkRequest A and creates WorkRequest B (including in another
 repository), creation returns B's bootstrap but leaves the session bound to A:
@@ -75,7 +75,7 @@ If a replacement worker is blocked by an old claim, call
 `force_release_work_package_claim` with `work_package_id` and `reason`, then
 deliver the ordinary assignment to the replacement worker. Only an optional
 worker MCP workflow retries `claim_local_assignment`. Any authenticated architect can release a
-worker claim across WorkRequests, including active or paused claims. The old
+worker claim across WorkRequests, including active claims. The old
 worker loses session authority; package status and delivery evidence stay intact.
 
 ## UI collaboration and candidates

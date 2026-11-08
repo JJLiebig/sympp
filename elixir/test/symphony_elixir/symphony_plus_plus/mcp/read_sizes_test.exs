@@ -3,8 +3,6 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  alias SymphonyElixir.SymphonyPlusPlus.Comments.Service, as: CommentService
-  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.Service, as: GuidanceService
   alias SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: RequestRepository
 
@@ -20,7 +18,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
         status: "sliced"
       )
 
-    {anchor, architect, _grant} = create_work_request_handoff_architect_session(repo, request, ["read:work_request", "read:guidance_request"])
+    {anchor, architect, _grant} = create_work_request_handoff_architect_session(repo, request, ["read:work_request"])
 
     packages =
       for index <- 1..28 do
@@ -64,28 +62,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "fixture-worker")
     worker = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
-    guidance_requests =
-      for index <- 1..4 do
-        assert {:ok, _comment} =
-                 CommentService.create(repo, %{
-                   "target_kind" => "work_request",
-                   "target_id" => request.id,
-                   "body" => "Review note #{index}: " <> description(),
-                   "source_type" => "operator",
-                   "author_name" => "fixture-operator"
-                 })
-
-        assert {:ok, guidance} =
-                 GuidanceService.create_for_assignment(repo, assignment, %{
-                   "summary" => "Delivery decision #{index}",
-                   "question" => "Which candidate should the worker consume?",
-                   "context" => description(),
-                   "idempotency_key" => "fixture-guidance-#{index}"
-                 })
-
-        guidance
-      end
-
     for index <- 1..12 do
       response = mcp_tool(repo, worker, "append_progress", %{"summary" => "Validation checkpoint #{index}", "body" => description(), "idempotency_key" => "fixture-progress-#{index}"})
       refute response["error"]
@@ -101,10 +77,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
         {"read_task_plan", architect, %{"work_package_id" => package.id}},
         {"get_current_assignment", worker, %{}},
         {"get_current_assignment", architect, %{}},
-        {"read_guidance_request", architect, %{"guidance_request_id" => hd(guidance_requests).id}},
-        {"read_guidance_request", worker, %{"guidance_request_id" => hd(guidance_requests).id}},
-        {"list_comments", architect, %{"target_kind" => "work_request", "target_id" => request.id}},
-        {"list_guidance_requests", architect, %{"work_request_id" => request.id}},
         {"read_delivery_board", architect, %{"work_request_id" => request.id}}
       ] ++
         Enum.map(~w(context.md task_plan.md findings.md progress.md acceptance.md review.md handoff.md), fn document ->
@@ -146,7 +118,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
     assert summary["work_request"]["human_description"] == description()
     assert summary["work_request"]["execution_status"] == "open"
     assert length(summary["work_packages"]) == 28
-    assert hd(summary["work_packages"])["next_action"] == "answer_guidance"
+    assert hd(summary["work_packages"])["next_action"] == "read_delivery_board"
     assert List.last(summary["work_packages"])["next_action"] == "dispatch_work_package"
     refute Map.has_key?(hd(summary["work_packages"]), "goal")
     assert length(summary["clarification_questions"]) == 1

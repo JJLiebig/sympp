@@ -1,27 +1,15 @@
 Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 
-defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
+defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerAndLocalOperatorToolsTest do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.Service, as: GuidanceRequestService
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
-
-  test "architect comment and blocker tools distinguish external WR notes from claimed descendants", %{repo: repo} do
+  test "architect resolve_blocker clears explicit and default-scope descendant blockers", %{repo: repo} do
     work_request =
       create_work_request!(
         repo,
         id: "WR-MCP-ARCH-PACKAGE-SURFACES",
         repo: "nextide/symphony-plus-plus",
         base_branch: "main",
-        status: "ready_for_slicing"
-      )
-
-    sibling =
-      create_work_request!(
-        repo,
-        id: "WR-MCP-ARCH-PACKAGE-SURFACES-SIBLING",
-        repo: work_request.repo,
-        base_branch: work_request.base_branch,
         status: "ready_for_slicing"
       )
 
@@ -34,72 +22,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
 
     work_package = repo.update!(Ecto.Changeset.change(work_package, status: "blocked"))
 
-    {_phase_anchor, phase_session, _phase_grant} =
-      create_phase_architect_session(
-        repo,
-        "SYMPP-MCP-ARCH-PHASE-COMMENTS",
-        [
-          "read:work_request",
-          "write:work_request"
-        ],
-        repo: work_request.repo,
-        base_branch: work_request.base_branch
-      )
-
-    work_package =
-      repo.update!(Ecto.Changeset.change(work_package, phase_id: phase_session.assignment.phase_id))
-
-    external_response =
-      mcp_tool(repo, phase_session, "add_comment", %{
-        "target_kind" => "work_request",
-        "target_id" => sibling.id,
-        "body" => "External note without claiming lifecycle authority"
-      })
-
-    assert external_comment_id = get_in(external_response, ["result", "structuredContent", "comment", "id"])
-    assert get_in(external_response, ["result", "structuredContent", "comment", "source_type"]) == "architect"
-
-    external_resolve_response =
-      mcp_tool(repo, phase_session, "resolve_comment", %{
-        "comment_id" => external_comment_id,
-        "resolution_note" => "Trying to close an external note"
-      })
-
-    assert get_in(external_resolve_response, ["error", "data", "reason"]) == "not_found"
-
-    descendant_write_denied =
-      mcp_tool(repo, phase_session, "add_comment", %{
-        "target_kind" => "work_package",
-        "target_id" => work_package.id,
-        "body" => "Phase read scope is not descendant write authority"
-      })
-
-    assert get_in(descendant_write_denied, ["error", "code"]) == -32_003
-    assert get_in(descendant_write_denied, ["error", "data", "reason"]) == "outside_session_scope"
-
     {_handoff_anchor, handoff_session, _handoff_grant} =
       create_work_request_handoff_architect_session(repo, work_request, [
         "read:work_request",
         "write:work_request"
       ])
-
-    descendant_comment_response =
-      mcp_tool(repo, handoff_session, "add_comment", %{
-        "target_kind" => "work_package",
-        "target_id" => work_package.id,
-        "body" => "Descendant package guidance"
-      })
-
-    assert get_in(descendant_comment_response, ["result", "structuredContent", "comment", "target_id"]) == work_package.id
-
-    phase_read_response =
-      mcp_tool(repo, phase_session, "list_comments", %{
-        "target_kind" => "work_package",
-        "target_id" => work_package.id
-      })
-
-    assert get_in(phase_read_response, ["result", "structuredContent", "comments"])
-           |> Enum.any?(&(&1["target_id"] == work_package.id))
 
     assert {:ok, _blocker_event} =
              PlanningRepository.append_audit_progress_event_for_work_package(repo, handoff_session.assignment, work_package.id, %{
@@ -241,128 +168,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
     refute inspect(remote_list_response) =~ "ghp_localreadsecret"
   end
 
-  test "architect guidance list filters package guidance by WorkRequest", %{repo: repo} do
-    first_work_request =
-      create_work_request!(repo,
-        id: "WR-MCP-GUIDANCE-FILTER-A",
-        repo: "nextide/symphony-plus-plus",
-        base_branch: "main",
-        status: "sliced"
-      )
-
-    second_work_request =
-      create_work_request!(repo,
-        id: "WR-MCP-GUIDANCE-FILTER-B",
-        repo: first_work_request.repo,
-        base_branch: first_work_request.base_branch,
-        status: "sliced"
-      )
-
-    phase_id = ArchitectHandoff.phase_id_for_work_request(first_work_request)
-    anchor_id = ArchitectHandoff.anchor_id_for_work_request(first_work_request)
-
-    assert {:ok, _phase} = PhaseRepository.create(repo, %{id: phase_id, title: "Architect handoff for #{first_work_request.id}"})
-
-    assert {:ok, anchor} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: anchor_id,
-                 kind: "delegation",
-                 title: "Architect handoff",
-                 repo: first_work_request.repo,
-                 base_branch: first_work_request.base_branch,
-                 phase_id: phase_id,
-                 status: "planning",
-                 allowed_file_globs: ["elixir/lib", "elixir/lib/**"],
-                 acceptance_criteria: ["Own the WorkRequest architecture."]
-               )
-             )
-
-    assert {:ok, minted} =
-             AccessGrantService.mint_architect_grant(repo, phase_id,
-               work_package_id: anchor.id,
-               work_request_id: first_work_request.id,
-               capabilities: ["read:guidance_request", "read:work_request"]
-             )
-
-    assert {:ok, assignment} =
-             AccessGrantRepository.claim(repo, minted.work_key.secret, %{claimed_by: "architect-1"}, DateTime.utc_now(:microsecond))
-
-    architect_session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    other_phase_id = "phase-guidance-wr-filter-other"
-    assert {:ok, _phase} = PhaseRepository.create(repo, %{id: other_phase_id, title: "Other WorkRequest guidance phase"})
-
-    assert {:ok, first_package} =
-             CanonicalWorkPackageFixtures.add_work_package(
-               repo,
-               first_work_request.id,
-               work_request_work_package_attrs(
-                 id: "SYMPP-MCP-GUIDANCE-WR-FILTER-A",
-                 base_branch: anchor.base_branch,
-                 phase_id: architect_session.assignment.phase_id,
-                 status: "implementing",
-                 dispatched_at: DateTime.utc_now(:microsecond)
-               )
-             )
-
-    assert {:ok, second_package} =
-             CanonicalWorkPackageFixtures.add_work_package(
-               repo,
-               second_work_request.id,
-               work_request_work_package_attrs(
-                 id: "SYMPP-MCP-GUIDANCE-WR-FILTER-B",
-                 base_branch: anchor.base_branch,
-                 phase_id: other_phase_id,
-                 status: "implementing",
-                 dispatched_at: DateTime.utc_now(:microsecond)
-               )
-             )
-
-    first_guidance_id = create_worker_guidance_request!(repo, first_package.id, "first")
-    second_guidance_id = create_worker_guidance_request!(repo, second_package.id, "second")
-
-    all_response = mcp_tool(repo, architect_session, "list_guidance_requests", %{"status" => "open"})
-    all_ids = all_response |> get_in(["result", "structuredContent", "guidance_requests"]) |> Enum.map(& &1["id"])
-
-    assert get_in(all_response, ["result", "structuredContent", "filters"]) == %{
-             "status" => "open",
-             "work_request_id" => first_work_request.id
-           }
-
-    assert first_guidance_id in all_ids
-    refute second_guidance_id in all_ids
-
-    filtered_response =
-      mcp_tool(repo, architect_session, "list_guidance_requests", %{
-        "status" => "open",
-        "work_request_id" => first_work_request.id
-      })
-
-    assert get_in(filtered_response, ["result", "structuredContent", "filters"]) == %{
-             "status" => "open",
-             "work_request_id" => first_work_request.id
-           }
-
-    assert [%{"id" => ^first_guidance_id, "work_package_id" => "SYMPP-MCP-GUIDANCE-WR-FILTER-A"}] =
-             get_in(filtered_response, ["result", "structuredContent", "guidance_requests"])
-
-    empty_response =
-      mcp_tool(repo, architect_session, "list_guidance_requests", %{
-        "status" => "open",
-        "work_request_id" => second_work_request.id,
-        "work_package_id" => first_package.id
-      })
-
-    assert get_in(empty_response, ["error", "code"]) == -32_004
-    assert get_in(empty_response, ["error", "data", "tool"]) == "list_guidance_requests"
-    assert get_in(empty_response, ["error", "data", "reason"]) == "not_found"
-  end
-
-  test "local operator WorkRequest note tools reject nonlocal and remote database modes", %{repo: repo} do
+  test "local operator decision tool rejects nonlocal and remote database modes", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-MCP-LOCAL-OPERATOR-NOTES-DENIED")
-    arguments = %{"work_request_id" => work_request.id, "body" => "safe note", "created_by" => "operator"}
+
+    arguments = %{
+      "work_request_id" => work_request.id,
+      "decision" => "Keep the safe default",
+      "rationale" => "Operator note",
+      "scope_impact" => "None",
+      "created_by" => "operator"
+    }
 
     stdio_response =
       Server.handle(
@@ -370,7 +185,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
           "jsonrpc" => "2.0",
           "id" => "stdio-local-operator-denied",
           "method" => "tools/call",
-          "params" => %{"name" => "add_work_request_comment", "arguments" => arguments}
+          "params" => %{"name" => "record_work_request_operator_decision", "arguments" => arguments}
         },
         Server.new(Config.default(repo: repo), initialized: true)
       )
@@ -392,9 +207,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
       |> tools_for_server()
       |> Map.new(&{&1["name"], &1})
 
-    assert Map.has_key?(implicit_state_tools, "add_work_request_comment")
     assert Map.has_key?(implicit_state_tools, "record_work_request_operator_decision")
-    assert Map.has_key?(remote_tools, "add_work_request_comment")
     assert Map.has_key?(remote_tools, "record_work_request_operator_decision")
 
     remote_response =
@@ -403,7 +216,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
           "jsonrpc" => "2.0",
           "id" => "remote-local-operator-denied",
           "method" => "tools/call",
-          "params" => %{"name" => "add_work_request_comment", "arguments" => arguments}
+          "params" => %{"name" => "record_work_request_operator_decision", "arguments" => arguments}
         },
         local_mcp_server(remote_config, "remote-local-operator-denied-state")
       )
@@ -424,7 +237,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
         |> tools_for_server()
         |> Map.new(&{&1["name"], &1})
 
-      assert Map.has_key?(memory_tools, "add_work_request_comment")
       assert Map.has_key?(memory_tools, "record_work_request_operator_decision")
 
       memory_response =
@@ -433,7 +245,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
             "jsonrpc" => "2.0",
             "id" => "memory-local-operator-denied-#{index}",
             "method" => "tools/call",
-            "params" => %{"name" => "add_work_request_comment", "arguments" => arguments}
+            "params" => %{"name" => "record_work_request_operator_decision", "arguments" => arguments}
           },
           local_mcp_server(memory_config, "memory-local-operator-denied-state-#{index}")
         )
@@ -441,20 +253,5 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
       assert get_in(memory_response, ["error", "code"]) == -32_001
       assert get_in(memory_response, ["error", "data", "reason"]) == "file_backed_database_required"
     end)
-  end
-
-  defp create_worker_guidance_request!(repo, work_package_id, suffix) do
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, work_package_id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-#{suffix}")
-
-    assert {:ok, request} =
-             GuidanceRequestService.create_for_assignment(repo, assignment, %{
-               "summary" => "Need #{suffix} guidance",
-               "question" => "What should #{suffix} do next?",
-               "context" => "Testing WorkRequest-scoped guidance filters.",
-               "idempotency_key" => "guidance-filter-#{suffix}"
-             })
-
-    request.id
   end
 end

@@ -48,14 +48,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ChiefRegistrationMigrationTest do
 
       assert {1, _} = Repo.insert_all("sympp_work_requests", [request])
       assert {1, _} = Repo.insert_all("sympp_work_packages", [package])
-      assert [20_261_025_160_000] = Ecto.Migrator.run(Repo, Migrations.all(), :up, all: true, log: false)
+      assert [20_261_025_160_000] = Ecto.Migrator.run(Repo, Migrations.all(), :up, to: 20_261_025_160_000, log: false)
 
       stored = Repo.get!(WorkRequest, request.id)
       assert stored.title == request.title
       assert {stored.creator_kind, stored.creator_name, stored.created_via} == {"agent", "original-agent", "mcp"}
       assert stored.dispatched_by == nil
       assert Repo.get!(WorkPackage, package.id).dispatched_by == nil
-      assert [] = Ecto.Migrator.run(Repo, Migrations.all(), :up, all: true, log: false)
+      assert [] = Ecto.Migrator.run(Repo, Migrations.all(), :up, to: 20_261_025_160_000, log: false)
     after
       Repo.put_dynamic_repo(original_repo)
       GenServer.stop(pid)

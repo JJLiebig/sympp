@@ -408,51 +408,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
     assert repo.one(from(claim_lease in ClaimLease, where: claim_lease.work_package_id == ^package.id)) == nil
   end
 
-  test "claim_local_assignment treats paused leases as pause exempt instead of stale", %{repo: repo} do
-    package = create_local_claim_package!(repo, "SYMPP-LOCAL-PAUSED-LEASE")
-    assert {:ok, _minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    arguments = local_assignment_claim_args(package)
-
-    {_claim_response, _claimed_server} =
-      Server.handle_state(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "local-paused-initial",
-          "method" => "tools/call",
-          "params" => %{"name" => "claim_local_assignment", "arguments" => arguments}
-        },
-        local_mcp_server(local_mcp_config(repo), "local-paused-initial-state")
-      )
-
-    assert {:ok, %ClaimLease{id: lease_id} = lease} = ClaimLeaseService.current_for_work_package(repo, package.id)
-    assert {:ok, paused_lease} = ClaimLeaseService.pause(repo, lease.id, %{"actor_id" => "operator"}, reason: "operator pause")
-
-    stale_seen_at = DateTime.add(DateTime.utc_now(:microsecond), -10, :second)
-
-    paused_lease
-    |> ClaimLease.update_changeset(%{last_seen_at: stale_seen_at, stale_after_ms: 1})
-    |> repo.update!()
-
-    {response, _server} =
-      Server.handle_state(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "local-paused-reclaim-denied",
-          "method" => "tools/call",
-          "params" => %{"name" => "claim_local_assignment", "arguments" => arguments}
-        },
-        local_mcp_server(local_mcp_config(repo), "local-paused-reclaim-denied-state")
-      )
-
-    assert get_in(response, ["error", "data", "reason"]) == "claim_lease_paused"
-    assert {:ok, %ClaimLease{id: ^lease_id, status: "paused"}} = ClaimLeaseService.current_for_work_package(repo, package.id)
-
-    assert repo.aggregate(
-             from(claim_lease in ClaimLease, where: claim_lease.work_package_id == ^package.id and claim_lease.status == "reclaimed"),
-             :count
-           ) == 0
-  end
-
   test "claim_local_assignment records audit evidence when reclaiming a stale lease", %{repo: repo} do
     package = create_local_claim_package!(repo, "SYMPP-LOCAL-STALE-RECLAIM")
     assert {:ok, _minted} = AccessGrantService.mint_worker_grant(repo, package.id)

@@ -365,7 +365,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
          {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
-         {:ok, current_status} <- required_argument(arguments, "current_status"),
          {:ok, work_request, work_package, _filters, scope} <-
            WorkRequestScope.authorized_work_package_scope(
              config.repo,
@@ -379,7 +378,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          :ok <- require_mutable_work_package_contract(work_package),
          {:ok, work_package} <-
            mutate_product_tree(config.repo, work_request_id, tool, session_claimed_by(session), fn ->
-             WorkRequestService.skip_work_package(config.repo, work_request_id, work_package_id, current_status)
+             WorkRequestService.skip_work_package(config.repo, work_request_id, work_package_id)
            end) do
       {:ok,
        ToolResult.tool_result(%{

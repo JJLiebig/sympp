@@ -7,9 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.ApiCase do
     quote do
       alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
       alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
-      alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
       alias SymphonyElixir.SymphonyPlusPlus.Dashboard
-      alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
       alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
       alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
       alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
@@ -63,8 +61,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.ApiCase do
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession)
-    repo.delete_all(SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest)
-    repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Comments.Comment)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage)

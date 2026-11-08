@@ -105,7 +105,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     active = read.("read_delivery_board", %{"work_request_id" => work_request.id})["delivery_board"]["work_packages"] |> List.last()
     assert active["merge_eligibility"]["next_action"] == "finish_worker_qualification"
 
-    read.("skip_work_package", %{"work_request_id" => work_request.id, "work_package_id" => List.last(packages).id, "current_status" => "planned"})
+    read.("skip_work_package", %{"work_request_id" => work_request.id, "work_package_id" => List.last(packages).id})
 
     for detail <- ["summary", "full"] do
       board = read.("read_delivery_board", %{"work_request_id" => work_request.id, "detail" => detail})

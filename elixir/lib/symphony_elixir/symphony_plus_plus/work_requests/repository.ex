@@ -336,10 +336,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  @spec skip_work_package(repo(), String.t(), String.t(), String.t()) :: {:ok, WorkPackage.t()} | {:error, error()}
-  def skip_work_package(repo, work_request_id, id, current_status)
-      when is_atom(repo) and is_binary(work_request_id) and is_binary(id) and is_binary(current_status) do
-    update_work_package_status(repo, work_request_id, id, current_status, "skipped", ["planned"])
+  @spec skip_work_package(repo(), String.t(), String.t()) :: {:ok, WorkPackage.t()} | {:error, error()}
+  def skip_work_package(repo, work_request_id, id) when is_atom(repo) and is_binary(work_request_id) and is_binary(id) do
+    update_work_package_status(repo, work_request_id, id, "planned", "skipped", ["planned"])
   end
 
   @spec record_work_package_delivery(repo(), String.t(), String.t(), map()) ::

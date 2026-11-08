@@ -6,8 +6,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
 
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
-  alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
-  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
   alias SymphonyElixir.SymphonyPlusPlus.OperatorConfig
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
@@ -63,8 +61,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
     repo.delete_all(PlanNode)
     repo.delete_all(SoloSessionEntry)
     repo.delete_all(SoloSession)
-    repo.delete_all(GuidanceRequest)
-    repo.delete_all(Comment)
     repo.delete_all(AccessGrant)
     repo.delete_all(WorkPackageDelivery)
     repo.delete_all(WorkPackage)
@@ -216,8 +212,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
 
       assert Enum.map(payload["work_request_details"], & &1["work_request"]["id"]) ==
                Enum.map(browser_payload["work_request_details"], & &1["work_request"]["id"])
-
-      assert payload["guidance_requests"] == browser_payload["guidance_requests"]
 
       assert payload["work_packages"] ==
                Enum.map(browser_payload["work_packages"], &Map.take(&1, ["id", "active_agent_run"]))

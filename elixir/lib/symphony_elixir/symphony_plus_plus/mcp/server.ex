@@ -7,7 +7,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       assignment_release_tool_arguments: 1,
       bootstrap_tool_arguments: 2,
       local_operator_tool_arguments: 2,
-      optional_argument: 3,
       optional_list_argument: 2,
       optional_object_argument: 2,
       optional_string_argument: 2,
@@ -17,27 +16,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       worker_tool_arguments: 2
     ]
 
-  import SymphonyElixir.SymphonyPlusPlus.MCP.Payloads,
-    only: [
-      comment_payload: 1,
-      json_safe_payload: 1
-    ]
+  import SymphonyElixir.SymphonyPlusPlus.MCP.Payloads, only: [json_safe_payload: 1]
 
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
   alias SymphonyElixir.SymphonyPlusPlus.Chiefs
-  alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
-  alias SymphonyElixir.SymphonyPlusPlus.Comments.Service, as: CommentService
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     ArchitectDeliveryTools,
     ArchitectProductTreeTools,
     ArchitectWorkRequestTools,
     Auth,
+    BlockerTools,
     Config,
     ErrorDetails,
     FailedCall,
-    GuidanceTools,
     HandleStateStore,
     HandoffDatabase,
     Health,
@@ -592,50 +585,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp dispatch(
          "tools/call",
-         %{"name" => "read_guidance_request"} = params,
-         %__MODULE__{session: %Session{assignment: %{grant_role: "architect"}}} = server
-       ) do
-    case prepare_architect_tool_call(server, params, "read_guidance_request") do
-      {:ok, arguments} -> GuidanceTools.call("read_guidance_request", server.config, server.session, arguments)
-      {:error, code, message, data} -> {:error, code, message, data}
-    end
-  end
-
-  defp dispatch("tools/call", %{"name" => "read_guidance_request"} = params, %__MODULE__{session: nil} = server) do
-    case prepare_architect_tool_call(server, params, "read_guidance_request") do
-      {:ok, arguments} -> GuidanceTools.call("read_guidance_request", server.config, server.session, arguments)
-      {:error, code, message, data} -> {:error, code, message, data}
-    end
-  end
-
-  defp dispatch("tools/call", %{"name" => "read_guidance_request"} = params, %__MODULE__{} = server) do
-    case prepare_worker_tool_call(server, params, "read_guidance_request") do
-      {:ok, arguments} -> GuidanceTools.call("read_guidance_request", server.config, server.session, arguments)
-      {:error, code, message, data} -> {:error, code, message, data}
-    end
-  end
-
-  defp dispatch("tools/call", %{"name" => "list_comments"} = params, %__MODULE__{session: %Session{}} = server) do
-    dispatch_scoped_list_comments(params, server)
-  end
-
-  defp dispatch("tools/call", %{"name" => "list_comments"} = params, %__MODULE__{} = server) do
-    if Surface.local_trusted_tools_enabled?(server) do
-      case prepare_local_trusted_list_comments_tool_call(server, params) do
-        {:ok, arguments} -> local_trusted_list_comments_tool(arguments, server)
-        {:error, code, message, data} -> {:error, code, message, data}
-      end
-    else
-      dispatch_scoped_list_comments(params, server)
-    end
-  end
-
-  defp dispatch(
-         "tools/call",
          %{"name" => name} = params,
          %__MODULE__{session: %Session{assignment: %{grant_role: "architect"}}} = server
        )
-       when name in ["add_comment", "resolve_comment", "resolve_blocker", "attach_branch", "sync_pr"] or
+       when name in ["resolve_blocker", "attach_branch", "sync_pr"] or
               name in @architect_planning_tools do
     case prepare_architect_tool_call(server, params, name) do
       {:ok, arguments} -> architect_tool(name, arguments, server)
@@ -723,27 +676,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp dispatch(_method, _params, _server) do
     {:error, -32_601, "Method not found", %{}}
-  end
-
-  defp dispatch_scoped_list_comments(params, %__MODULE__{session: %Session{assignment: %{grant_role: "architect"}}} = server) do
-    case prepare_architect_tool_call(server, params, "list_comments") do
-      {:ok, arguments} -> architect_tool("list_comments", arguments, server)
-      {:error, code, message, data} -> {:error, code, message, data}
-    end
-  end
-
-  defp dispatch_scoped_list_comments(params, %__MODULE__{session: nil} = server) do
-    case prepare_architect_tool_call(server, params, "list_comments") do
-      {:ok, arguments} -> architect_tool("list_comments", arguments, server)
-      {:error, code, message, data} -> {:error, code, message, data}
-    end
-  end
-
-  defp dispatch_scoped_list_comments(params, %__MODULE__{} = server) do
-    case prepare_worker_tool_call(server, params, "list_comments") do
-      {:ok, arguments} -> worker_tool("list_comments", arguments, server)
-      {:error, code, message, data} -> {:error, code, message, data}
-    end
   end
 
   defp handle_assignment_release_tool(params, id, %__MODULE__{} = server) do
@@ -843,9 +775,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp require_worker_assignment(%{grant_role: "worker"}), do: :ok
-  defp require_worker_assignment(_assignment), do: {:error, :worker_grant_required}
-
   defp require_assignment_introspection(%{grant_role: role}) when role in ["worker", "architect"], do: :ok
   defp require_assignment_introspection(_assignment), do: {:error, :unsupported_grant_role}
 
@@ -861,7 +790,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     with :ok <- require_tool_arguments_object(params, name),
          :ok <- require_architect_tool_binding(server, name),
          :ok <- prepare_mcp_repository_for_tool(server.config.repo, name) do
-      if name in @delivery_policy_tools or name == "read_guidance_request" do
+      if name in @delivery_policy_tools do
         {:ok, Map.get(params, "arguments", %{})}
       else
         architect_tool_arguments_for_binding(server, params, name)
@@ -936,14 +865,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          :ok <- authorize_local_operator_tool_call(server, name),
          :ok <- prepare_mcp_repository_for_tool(server.config.repo, name) do
       local_operator_tool_arguments(params, name)
-    end
-  end
-
-  defp prepare_local_trusted_list_comments_tool_call(%__MODULE__{} = server, params) do
-    with :ok <- require_tool_arguments_object(params, "list_comments"),
-         :ok <- authorize_trusted_local_tool_call(server, "list_comments"),
-         :ok <- prepare_mcp_repository_for_tool(server.config.repo, "list_comments") do
-      architect_tool_arguments(params, "list_comments")
     end
   end
 
@@ -1091,32 +1012,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp local_operator_tool("add_work_request_comment", arguments, %__MODULE__{config: config} = server) do
-    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, body} <- required_argument(arguments, "body"),
-         {:ok, created_by} <- local_operator_created_by(arguments, server),
-         {:ok, work_request} <- WorkRequestService.get(config.repo, work_request_id),
-         {:ok, comment} <-
-           CommentService.create(config.repo, %{
-             "target_kind" => "work_request",
-             "target_id" => work_request.id,
-             "body" => Redactor.redact_text(body),
-             "source_type" => "operator",
-             "author_name" => Redactor.redact_text(created_by)
-           }) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "comment" => comment_payload(comment),
-         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
-         "provenance" => local_operator_note_provenance(created_by)
-       })}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "add_work_request_comment", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("add_work_request_comment")
-      {:error, reason} -> local_operator_error(reason, "add_work_request_comment")
-    end
-  end
-
   defp local_operator_tool("summarize_failed_mcp_calls", _arguments, %__MODULE__{}) do
     {:ok, ToolResult.tool_result(LocalTrustedTools.failed_call_summary())}
   end
@@ -1165,7 +1060,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     |> optional_put("source_id", Redactor.redact_text(source_id))
   end
 
-  defp local_operator_note_provenance(created_by, source_id \\ nil) do
+  defp local_operator_note_provenance(created_by, source_id) do
     %{"source_type" => "operator", "created_by" => Redactor.redact_text(created_by)}
     |> optional_put("source_id", Redactor.redact_text(source_id))
   end
@@ -1179,33 +1074,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp local_trusted_list_comments_tool(arguments, %__MODULE__{config: config}) do
-    case LocalTrustedTools.list_comments(config.repo, arguments, &comment_payload/1) do
-      {:ok, payload} -> {:ok, ToolResult.tool_result(payload)}
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "list_comments", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("list_comments")
-      {:error, reason} -> architect_error(reason, "list_comments")
-    end
-  end
-
   defp architect_tool(name, arguments, %__MODULE__{config: config, session: session} = server) when name in @architect_work_request_tools do
     ArchitectWorkRequestTools.call(name, config, session, arguments, server: server)
   end
 
-  defp architect_tool(name, arguments, %__MODULE__{config: config, session: %Session{} = session})
-       when name in ["add_comment", "list_comments", "resolve_comment"] do
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, result} <- comment_tool_result(name, config.repo, session, arguments, :architect, session_claimed_by(session)) do
-      {:ok, result}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => reason}}
-      {:error, :not_found} -> not_found_error(name)
-      {:error, reason} -> architect_error(reason, name)
-    end
-  end
-
   defp architect_tool("resolve_blocker", arguments, %__MODULE__{config: config, session: session}),
-    do: GuidanceTools.call("resolve_blocker", config, session, arguments)
+    do: BlockerTools.call("resolve_blocker", config, session, arguments)
 
   defp architect_tool(name, arguments, %__MODULE__{config: config, session: session})
        when name in @architect_planning_tools,
@@ -1222,10 +1096,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
               "force_release_work_package_claim"
             ],
        do: ArchitectDeliveryTools.call(name, config, session, arguments)
-
-  defp architect_tool(name, arguments, %__MODULE__{config: config, session: session})
-       when name in ["list_guidance_requests", "answer_guidance_request", "escalate_guidance_request"],
-       do: GuidanceTools.call(name, config, session, arguments)
 
   defp architect_tool(name, arguments, %__MODULE__{config: config, session: session}) when name in @architect_product_tree_tools do
     ArchitectProductTreeTools.call(name, config, session, arguments)
@@ -1260,18 +1130,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp worker_tool(name, arguments, %__MODULE__{config: config, session: session}) when name in @worker_tool_module_tools,
     do: WorkerTools.call(name, config, session, arguments)
-
-  defp worker_tool(name, arguments, %__MODULE__{config: config, session: session})
-       when name in ["add_comment", "list_comments", "resolve_comment"] do
-    with {:ok, session} <- scoped_session(config.repo, session, arguments),
-         {:ok, result} <- comment_tool_result(name, config.repo, session, arguments, :worker, worker_comment_actor(session)) do
-      {:ok, result}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => reason}}
-      {:error, :not_found} -> not_found_error(name)
-      {:error, reason} -> worker_error(reason, name)
-    end
-  end
 
   defp drop_nil_values(map), do: Map.reject(map, fn {_key, value} -> is_nil(value) end)
 
@@ -1311,20 +1169,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp local_operator_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp local_operator_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
-  defp architect_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
-  defp architect_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)
-
   defp architect_error(:architect_grant_required, resource) do
     {:error, code, message, data} = auth_error({:unauthorized, :architect_grant_required}, resource)
     {:error, code, message, Map.put(data, "recovery", %{"next_action" => "return_to_architect", "next_owner" => "architect"})}
   end
-
-  defp architect_error({:authorization_policy_denied, %Decision{} = decision}, resource), do: MCPError.from_decision(decision, resource)
-  defp architect_error({:service_unavailable, _reason} = reason, resource), do: auth_error(reason, resource)
-  defp architect_error(:database_busy, tool), do: service_error(:database_busy, tool)
-  defp architect_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
-
-  defp architect_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
   defp invalid_params_error(tool, reason) when reason in [:missing_repo_root, "missing_repo_root"] do
     {:error, -32_602, "Invalid params",
@@ -1368,105 +1216,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp changeset_invalid_params_error(tool, reason, %Ecto.Changeset{} = changeset) do
     ErrorDetails.changeset_invalid_params_error(tool, reason, changeset)
-  end
-
-  defp scoped_session(repo, session, arguments) when is_map(arguments) do
-    case Auth.require_session(session, repo) do
-      {:ok, session} ->
-        with :ok <- require_worker_assignment(session.assignment) do
-          require_argument_scope(session, Map.get(arguments, "work_package_id"))
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp require_argument_scope(session, nil), do: {:ok, session}
-  defp require_argument_scope(session, work_package_id) when work_package_id == session.assignment.work_package_id, do: {:ok, session}
-  defp require_argument_scope(_session, _work_package_id), do: {:error, :forbidden}
-
-  defp require_comment_target_kind(target_kind) do
-    if target_kind in Comment.target_kinds(), do: :ok, else: {:tool_error, "invalid_target_kind"}
-  end
-
-  defp comment_tool_result("add_comment", repo, %Session{} = session, arguments, source_type, author_name) do
-    with {:ok, target_kind, target_id} <- comment_target_arguments(arguments, session, source_type),
-         {:ok, body} <- required_argument(arguments, "body"),
-         {:ok, comment} <-
-           CommentService.create_for_assignment(
-             repo,
-             session.assignment,
-             %{
-               "target_kind" => target_kind,
-               "target_id" => target_id,
-               "body" => body,
-               "source_type" => Atom.to_string(source_type),
-               "author_name" => author_name
-             },
-             comment_create_opts(source_type, target_kind)
-           ) do
-      {:ok, ToolResult.tool_result(%{"comment" => comment_payload(comment)})}
-    end
-  end
-
-  defp comment_tool_result("list_comments", repo, %Session{} = session, arguments, source_type, _author_name) do
-    with {:ok, target_kind, target_id} <- comment_target_arguments(arguments, session, source_type),
-         {:ok, comments} <- CommentService.list_for_assignment(repo, session.assignment, target_kind, target_id) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "comments" => Enum.map(comments, &comment_payload/1),
-         "target" => %{"kind" => target_kind, "id" => target_id}
-       })}
-    end
-  end
-
-  defp comment_tool_result("resolve_comment", repo, %Session{} = session, arguments, source_type, author_name) do
-    with {:ok, comment_id} <- required_argument(arguments, "comment_id"),
-         {:ok, resolved} <-
-           CommentService.resolve_for_assignment(repo, session.assignment, comment_id, %{
-             "resolved_by" => author_name,
-             "resolved_source_type" => Atom.to_string(source_type),
-             "resolution_note" => optional_argument(arguments, "resolution_note", nil)
-           }) do
-      {:ok, ToolResult.tool_result(%{"comment" => comment_payload(resolved)})}
-    end
-  end
-
-  defp comment_target_arguments(arguments, %Session{} = session, :worker) do
-    with {:ok, target_kind} <- optional_string_argument(arguments, "target_kind", "work_package"),
-         :ok <- require_comment_target_kind(target_kind),
-         {:ok, target_id} <- comment_target_id_argument(arguments, session, target_kind) do
-      {:ok, target_kind, target_id}
-    end
-  end
-
-  defp comment_target_arguments(arguments, %Session{}, _source_type) do
-    with {:ok, target_kind} <- required_argument(arguments, "target_kind"),
-         :ok <- require_comment_target_kind(target_kind),
-         {:ok, target_id} <- required_argument(arguments, "target_id") do
-      {:ok, target_kind, target_id}
-    end
-  end
-
-  defp comment_target_id_argument(arguments, %Session{} = session, "work_package") do
-    case optional_string_argument(arguments, "target_id", Session.work_package_id(session)) do
-      {:ok, nil} -> {:tool_error, "missing_target_id"}
-      result -> result
-    end
-  end
-
-  defp comment_target_id_argument(arguments, %Session{}, _target_kind), do: required_argument(arguments, "target_id")
-
-  defp comment_create_opts(:architect, target_kind), do: [action: architect_comment_add_action(target_kind)]
-  defp comment_create_opts(_source_type, _target_kind), do: []
-
-  defp architect_comment_add_action("work_request"), do: :external_comment_add
-  defp architect_comment_add_action(_target_kind), do: :comment_add
-
-  defp worker_comment_actor(%Session{} = session) do
-    assignment = Session.public_assignment(session)
-    assignment["claimed_by"] || assignment["grant_id"] || "worker"
   end
 
   defp authorize_solo_tool_call(%__MODULE__{session_refresh_required: true}, tool) do
@@ -1597,7 +1346,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp auto_claim_architect(%__MODULE__{} = server, _method, _params), do: {:ok, server}
 
   defp architect_claim_call?(profile, role, name) do
-    name not in ["list_comments" | @local_trusted_work_request_read_tools] and
+    name not in @local_trusted_work_request_read_tools and
       (name not in @worker_tools or profile == :architect or role == "architect")
   end
 

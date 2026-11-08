@@ -54,7 +54,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler
@@ -364,14 +363,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
       {:error, reason} ->
         architect_error(reason, "revoke_work_package_worker_key")
     end
-  end
-
-  @spec cleanup_worktree_runtime(module(), Session.t(), WorkPackage.t()) ::
-          {:ok, map() | nil} | {:error, term()}
-  def cleanup_worktree_runtime(repo, %Session{} = session, %WorkPackage{} = work_package) do
-    run_architect_transaction(repo, fn ->
-      cleanup_worktree_runtime_in_transaction(repo, session, work_package.id)
-    end)
   end
 
   @spec prepare_scoped_blocker_closeout(module(), Session.t(), [String.t()], map(), String.t()) ::
@@ -860,68 +851,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
         end
     end
   end
-
-  defp cleanup_worktree_runtime_in_transaction(repo, %Session{} = session, work_package_id) do
-    with :ok <- lock_access_grant(repo, session.assignment.grant_id),
-         {:ok, _architect_grant} <- WorkRequestScope.require_live_architect_grant(repo, session),
-         :ok <- lock_work_package(repo, Session.work_package_id(session)),
-         :ok <- lock_work_package(repo, work_package_id),
-         {:ok, _work_package} <- WorkPackageRepository.get(repo, work_package_id),
-         {:ok, work_request, work_package} <- cleanup_worktree_runtime_scope(repo, work_package_id),
-         true <- cleanup_worktree_claim_only_runtime?(repo, work_package_id) do
-      WorkRequestRuntimeCleanup.cleanup(
-        repo,
-        work_request,
-        work_package,
-        session.assignment,
-        reason: "cleanup_work_package_worktree",
-        delivery_evidence: %{"outcome" => "worktree_cleanup"}
-      )
-    else
-      false -> {:ok, nil}
-      {:error, :not_found} -> {:ok, nil}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp cleanup_worktree_runtime_scope(repo, work_package_id) do
-    query =
-      from(work_package in WorkPackage,
-        join: work_request in WorkRequest,
-        on: work_request.id == work_package.work_request_id,
-        where: work_package.id == ^work_package_id,
-        select: {work_request, work_package},
-        limit: 1
-      )
-
-    case repo.one(query) do
-      {%WorkRequest{} = work_request, %WorkPackage{} = work_package} -> {:ok, work_request, work_package}
-      nil -> {:error, :not_found}
-    end
-  end
-
-  defp cleanup_worktree_claim_only_runtime?(repo, work_package_id) do
-    now = DateTime.utc_now(:microsecond)
-    context = WorkPackageActivity.context(repo, work_package_id)
-    reason_codes = List.wrap(get_in(context, [:runtime_state, :reason_codes]))
-
-    with {:ok, grants} <- AccessGrantRepository.list_for_work_package(repo, work_package_id) do
-      not Enum.any?(grants, &live_worker_grant?(&1, now)) and
-        get_in(context, [:runtime_state, :paused?]) != true and
-        reason_codes -- ["claim_lease_active", "claim_lease_stale", "worker_recycled", "package_terminal"] == []
-    end
-  end
-
-  defp live_worker_grant?(%AccessGrant{grant_role: "worker", revoked_at: nil, expires_at: nil}, _now), do: true
-
-  defp live_worker_grant?(
-         %AccessGrant{grant_role: "worker", revoked_at: nil, expires_at: %DateTime{} = expires_at},
-         now
-       ) do
-    DateTime.compare(expires_at, now) == :gt
-  end
-
-  defp live_worker_grant?(%AccessGrant{}, _now), do: false
 
   defp cleanup_work_request_work_package_runtime_in_transaction(
          repo,

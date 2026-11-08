@@ -119,50 +119,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
       ArchitectHandoff.phase_id_for_work_request(work_request) == anchor.phase_id
   end
 
-  @spec scoped_guidance_request_filters(repo(), term()) :: term()
-  def scoped_guidance_request_filters(repo, %Session{} = session) do
-    with {:ok, filters, scope} <- scoped_work_request_filters(repo, session),
-         {:ok, phase_id} <- architect_phase_scope(repo, session) do
-      scope = Map.put(scope, "phase_id", phase_id)
-
-      filters =
-        filters
-        |> Map.put("phase_id", phase_id)
-        |> maybe_put_work_request_guidance_package_ids(repo)
-
-      {:ok, filters, scope}
-    end
-  end
-
-  defp maybe_put_work_request_guidance_package_ids(%{"repo" => repo_name, "base_branch" => base_branch, "phase_id" => phase_id} = filters, repo) do
-    equivalent_base_branches = BaseBranch.equivalent_refs(base_branch)
-
-    work_package_ids =
-      repo.all(
-        from(work_package in WorkPackage,
-          join: work_request in WorkRequest,
-          on: work_request.id == work_package.work_request_id,
-          where: work_request.base_branch in ^equivalent_base_branches,
-          where: not is_nil(work_package.id),
-          select: {work_request, work_package.id}
-        )
-      )
-      |> Enum.filter(fn {work_request, _work_package_id} ->
-        ArchitectHandoff.phase_id_for_work_request(work_request) == phase_id and
-          repo_scope_name_matches?(repo_name, work_request.repo, []) and
-          BaseBranch.equivalent?(base_branch, work_request.base_branch)
-      end)
-      |> Enum.map(fn {_work_request, work_package_id} -> work_package_id end)
-      |> Enum.uniq()
-
-    case work_package_ids do
-      [] -> filters
-      ids -> Map.put(filters, "work_package_ids", ids)
-    end
-  end
-
-  defp maybe_put_work_request_guidance_package_ids(filters, _repo), do: filters
-
   defp require_work_request_anchor_scope(repo, %Session{} = session, %AccessGrant{} = grant) do
     if architect_explicit_phase_grant?(grant) do
       require_architect_phase_anchor_with_grant(repo, session, grant)
@@ -261,24 +217,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
 
       {:error, reason} ->
         {:halt, {:error, reason}}
-    end
-  end
-
-  @spec maybe_put_work_request_guidance_filter(repo(), filters(), String.t() | nil) :: term()
-  def maybe_put_work_request_guidance_filter(_repo, filters, nil), do: {:ok, filters}
-
-  def maybe_put_work_request_guidance_filter(repo, filters, work_request_id) when is_binary(work_request_id) do
-    with {:ok, _work_request} <- scoped_work_request(repo, work_request_id, filters, repo_scopes?: true),
-         {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request_id) do
-      work_package_ids =
-        work_packages
-        |> Enum.map(& &1.id)
-        |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
-        |> Enum.uniq()
-
-      {:ok, Map.put(filters, "filter_work_package_ids", work_package_ids)}
-    else
-      {:error, reason} -> {:error, reason}
     end
   end
 

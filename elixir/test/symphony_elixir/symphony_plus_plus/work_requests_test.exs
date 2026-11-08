@@ -9,8 +9,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service, as: ClaimLeaseService
-  alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
-  alias SymphonyElixir.SymphonyPlusPlus.Comments.Service, as: CommentService
   alias SymphonyElixir.SymphonyPlusPlus.OperationalLineage
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
@@ -104,7 +102,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     repo.delete_all(ProgressEvent)
     repo.delete_all(ClaimLease)
     repo.delete_all(AccessGrant)
-    repo.delete_all(Comment)
     repo.delete_all(WorkPackageDelivery)
     repo.delete_all(WorkPackage)
     repo.delete_all(ClarificationQuestion)
@@ -392,7 +389,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     end
   end
 
-  test "retention deletes expired archived work requests after removing their comments", %{repo: repo} do
+  test "retention deletes expired archived work requests and their grant scopes", %{repo: repo} do
     now = utc_usec(~U[2026-05-23 12:00:00Z])
     stale_at = utc_usec(~U[2026-05-20 12:00:00Z])
     recent_at = utc_usec(~U[2026-05-22 12:00:00Z])
@@ -402,37 +399,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     set_archived_at!(repo, expired_archived, stale_at)
     expired_slice_id = "WRS-#{expired.id}"
 
-    assert {:ok, request_comment} =
-             CommentService.create(repo, %{
-               id: "comment-retention-delete-wr",
-               target_kind: "work_request",
-               target_id: expired.id,
-               body: "Remove with WorkRequest",
-               source_type: "operator",
-               author_name: "retention-test"
-             })
-
-    assert {:ok, slice_comment} =
-             CommentService.create(repo, %{
-               id: "comment-retention-delete-slice",
-               target_kind: "work_package",
-               target_id: expired_slice_id,
-               body: "Remove with WorkPackage",
-               source_type: "operator",
-               author_name: "retention-test"
-             })
-
     active = completed_delivered_request!(repo, "WR-RETENTION-DELETE-ACTIVE", recent_at)
-
-    assert {:ok, active_comment} =
-             CommentService.create(repo, %{
-               id: "comment-retention-keep-active",
-               target_kind: "work_request",
-               target_id: active.id,
-               body: "Keep active",
-               source_type: "operator",
-               author_name: "retention-test"
-             })
 
     scope_owner = create_activity_work_package!(repo, "WP-RETENTION-SCOPE-OWNER", status: "merged")
     grant = insert_claimed_activity_grant!(repo, scope_owner, "worker", "retention-worker")
@@ -456,13 +423,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert summary.deleted_ids == [expired.id]
     assert summary.deleted_count == 1
     assert {:error, :not_found} = Service.get(repo, expired.id)
-    assert {:error, :not_found} = CommentService.get(repo, request_comment.id)
-    assert {:error, :not_found} = CommentService.get(repo, slice_comment.id)
     assert grant_scope_count(repo, "work_request", expired.id) == 0
     assert grant_scope_count(repo, "work_package", expired_slice_id) == 0
 
     assert {:ok, ^active} = Service.get(repo, active.id)
-    assert {:ok, ^active_comment} = CommentService.get(repo, active_comment.id)
     assert grant_scope_count(repo, "work_package", expired_slice_id) == 0
     assert {:ok, ^completed} = Service.get(repo, completed.id)
     assert {:ok, ^open} = Service.get(repo, open.id)
@@ -603,42 +567,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:ok, _revoked_grant} = AccessGrantRepository.revoke(repo, minted.grant.id, DateTime.utc_now(:microsecond))
     assert {:ok, without_grant} = Service.refresh_completion(repo, request.id)
     assert without_grant.completed_at == with_grant.completed_at
-  end
-
-  test "completion and archive wait for a paused current claim lease", %{repo: repo} do
-    assert {:ok, request} = Repository.create(repo, attrs(id: "WR-COMPLETE-PAUSED-LEASE", status: "ready_for_slicing"))
-    assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-COMPLETE-PAUSED-LEASE"))
-    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, request.id, work_package.id, "planned")
-
-    assert {:ok, claim_lease} =
-             ClaimLeaseService.claim(repo, approved_slice.id, activity_actor("paused-completion-worker"), stale_after_ms: 60_000)
-
-    linked_package = set_work_package_status!(repo, approved_slice, "merged")
-
-    assert {:ok, paused_lease} = ClaimLeaseService.pause(repo, claim_lease.id, activity_actor("operator"), reason: "operator pause")
-
-    paused_context = WorkPackageActivity.context(repo, linked_package.id)
-    assert get_in(paused_context, [:runtime_state, :active?]) == true
-    assert get_in(paused_context, [:runtime_state, :paused?]) == true
-    assert get_in(paused_context, [:runtime_state, :lifecycle_state]) == "paused"
-    assert "claim_lease_paused" in get_in(paused_context, [:runtime_state, :reason_codes])
-
-    assert {:ok, with_paused_lease} = Service.refresh_completion(repo, request.id)
-    assert with_paused_lease.completed_at == nil
-    assert {:error, :not_completed} = Service.archive(repo, request.id)
-
-    assert {:ok, _released_lease} = ClaimLeaseService.release(repo, paused_lease.id, reason: "operator resolved pause")
-
-    released_context = WorkPackageActivity.context(repo, linked_package.id)
-    assert get_in(released_context, [:runtime_state, :active?]) == false
-    assert get_in(released_context, [:runtime_state, :paused?]) == false
-    assert get_in(released_context, [:runtime_state, :lifecycle_state]) == "terminal"
-
-    insert_delivery!(repo, linked_package)
-    assert {:ok, completed} = Service.refresh_completion(repo, request.id)
-    assert %DateTime{} = completed.completed_at
-    assert {:ok, archived} = Service.archive(repo, request.id)
-    assert %DateTime{} = archived.archived_at
   end
 
   test "historical blocker timestamps and active AgentRuns preserve completion fencing", %{repo: repo} do
@@ -842,14 +770,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert DeliveryResolution.resolved?(package.id, %{package.id => package}, %{package.id => %{outcome: "abandoned"}}) == false
   end
 
-  test "activity context derives active stale paused recycled and terminal runtime state", %{repo: repo} do
+  test "activity context derives active stale recycled and terminal runtime state", %{repo: repo} do
     now = DateTime.utc_now(:microsecond)
     stale_seen_at = DateTime.add(now, -10, :second)
 
     active_package = create_activity_work_package!(repo, "WP-ACTIVITY-ACTIVE", status: "implementing")
     stale_package = create_activity_work_package!(repo, "WP-ACTIVITY-STALE", status: "implementing")
     mixed_package = create_activity_work_package!(repo, "WP-ACTIVITY-MIXED", status: "implementing")
-    paused_package = create_activity_work_package!(repo, "WP-ACTIVITY-PAUSED", status: "implementing")
     recycled_package = create_activity_work_package!(repo, "WP-ACTIVITY-RECYCLED", status: "ready_for_worker")
     ready_package = create_activity_work_package!(repo, "WP-ACTIVITY-READY", status: "ready_for_merge")
     terminal_package = create_activity_work_package!(repo, "WP-ACTIVITY-TERMINAL", status: "implementing")
@@ -867,17 +794,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
              ClaimLeaseService.claim(repo, mixed_package.id, activity_actor("mixed-worker"), now: stale_seen_at, stale_after_ms: 1)
 
     insert_claimed_activity_grant!(repo, mixed_package, "architect", "mixed-architect")
-
-    assert {:ok, paused_lease} =
-             ClaimLeaseService.claim(repo, paused_package.id, activity_actor("paused-worker"), stale_after_ms: 60_000)
-
-    assert {:ok, paused_lease} = ClaimLeaseService.pause(repo, paused_lease.id, activity_actor("operator"), reason: "operator pause")
-
-    paused_lease
-    |> ClaimLease.update_changeset(%{last_seen_at: stale_seen_at, stale_after_ms: 1})
-    |> repo.update!()
-
-    insert_claimed_activity_grant!(repo, paused_package, "architect", "paused-architect")
 
     assert {:ok, _reclaimed_lease} =
              ClaimLeaseService.claim(repo, recycled_package.id, activity_actor("old-worker"), now: stale_seen_at, stale_after_ms: 1)
@@ -930,7 +846,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
         active_package.id,
         stale_package.id,
         mixed_package.id,
-        paused_package.id,
         recycled_package.id,
         ready_package.id,
         terminal_package.id,
@@ -952,13 +867,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert mixed_runtime.lifecycle_state == "stale"
     assert "claim_lease_stale" in mixed_runtime.reason_codes
     assert "architect_grant_active" in mixed_runtime.reason_codes
-
-    paused_runtime = get_in(contexts, [paused_package.id, :runtime_state])
-    assert paused_runtime.active? == true
-    assert paused_runtime.paused? == true
-    assert paused_runtime.stale? == false
-    assert paused_runtime.lifecycle_state == "paused"
-    assert paused_runtime.reason_codes == ["claim_lease_paused", "architect_grant_active"]
 
     recycled_runtime = get_in(contexts, [recycled_package.id, :runtime_state])
     assert recycled_runtime.active? == true

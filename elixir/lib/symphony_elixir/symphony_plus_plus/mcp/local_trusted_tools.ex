@@ -1,14 +1,8 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedTools do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
-  alias SymphonyElixir.SymphonyPlusPlus.Comments.Service, as: CommentService
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, FailedCall, ToolCatalog}
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @spec enabled?(map()) :: boolean()
   def enabled?(server), do: authorize(server, "tools/list") == :ok
@@ -44,25 +38,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedTools do
     unbound_specs = ToolCatalog.unbound_tool_specs_for_config(config)
     bootstrap_names = ToolCatalog.bootstrap_tools()
 
-    Enum.filter(unbound_specs, &(&1["name"] in bootstrap_names)) ++
-      ToolCatalog.local_operator_tool_specs() ++
-      Enum.filter(unbound_specs, &(&1["name"] == "list_comments"))
-  end
-
-  @spec list_comments(module(), map(), (Comment.t() -> map())) ::
-          {:ok, map()} | {:tool_error, term()} | {:error, term()}
-  def list_comments(repo, arguments, comment_payload) when is_atom(repo) and is_map(arguments) and is_function(comment_payload, 1) do
-    with {:ok, target_kind} <- required_argument(arguments, "target_kind"),
-         :ok <- require_comment_target_kind(target_kind),
-         {:ok, target_id} <- required_argument(arguments, "target_id"),
-         :ok <- require_comment_target(repo, target_kind, target_id),
-         {:ok, comments} <- CommentService.list_for_target(repo, target_kind, target_id) do
-      {:ok,
-       %{
-         "comments" => Enum.map(comments, comment_payload),
-         "target" => %{"kind" => target_kind, "id" => target_id}
-       }}
-    end
+    Enum.filter(unbound_specs, &(&1["name"] in bootstrap_names)) ++ ToolCatalog.local_operator_tool_specs()
   end
 
   @spec failed_call_summary() :: map()
@@ -176,32 +152,4 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedTools do
   end
 
   defp reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)
-
-  defp require_comment_target_kind(target_kind) do
-    if target_kind in Comment.target_kinds(), do: :ok, else: {:tool_error, "invalid_target_kind"}
-  end
-
-  defp require_comment_target(repo, "work_request", target_id) do
-    case WorkRequestService.get(repo, target_id) do
-      {:ok, %WorkRequest{}} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp require_comment_target(repo, "work_package", target_id) do
-    case repo.get(WorkPackage, target_id) do
-      %WorkPackage{} -> :ok
-      nil -> {:error, :not_found}
-    end
-  end
-
-  defp require_comment_target(_repo, _target_kind, _target_id), do: {:tool_error, "invalid_target_kind"}
-
-  defp required_argument(arguments, key) do
-    case Map.fetch(arguments, key) do
-      {:ok, value} when is_binary(value) and value != "" -> {:ok, value}
-      {:ok, _value} -> {:tool_error, {:invalid_argument, key}}
-      :error -> {:tool_error, {:missing_argument, key}}
-    end
-  end
 end

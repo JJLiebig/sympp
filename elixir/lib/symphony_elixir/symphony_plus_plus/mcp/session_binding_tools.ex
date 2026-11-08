@@ -437,9 +437,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
       {:ok, {:ok, %ClaimLease{status: "active"} = lease}} ->
         refresh_current_session_claim_lease(repo, server, lease, preserve_service_unavailable?)
 
-      {:ok, {:ok, %ClaimLease{status: "paused"}}} ->
-        lost_current_session_claim(server, :claim_lease_paused)
-
       {:ok, {:ok, %ClaimLease{}}} ->
         lost_current_session_claim(server, :claim_lease_not_active)
 

@@ -132,8 +132,8 @@ catalog.
 
 Replaying the same claim heartbeats the current claim lease. If the prior lease
 is stale, the server may reclaim it and records audit evidence without
-rewriting the current package lifecycle. If the lease is
-paused or another active owner still has authority, stop and ask the
+rewriting the current package lifecycle. If another active owner still has
+authority, stop and ask the
 architect/operator to repair that state. A configured `state_key` only
 preserves initialized handshake continuity for stateless transports; it does
 not restore worker authorization by itself.

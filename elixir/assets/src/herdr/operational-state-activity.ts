@@ -3,9 +3,9 @@ import { operationalStatusIsRunning } from "./operational-state";
 import { formatStatus, statusLabel } from "./status-labels";
 import type { WorkPackageActivitySignal, WorkPackageMergeEligibility, WorkPackageReviewSignal } from "./work-request";
 
-export type WorkActivityField = { key: "owner" | "actor" | "stage" | "waiting" | "next"; label: string; value: string; human?: boolean; unknown?: boolean };
+export type WorkActivityField = { key: "owner" | "actor" | "stage" | "waiting" | "next"; label: string; value: string; unknown?: boolean };
 
-const ACTOR_LABELS: Record<string, string> = { architect: "Architect", human: "Human", prerequisite_owner: "Prerequisite owner", worker: "Worker" };
+const ACTOR_LABELS: Record<string, string> = { architect: "Architect", prerequisite_owner: "Prerequisite owner", worker: "Worker" };
 const WAITING_LABELS: Record<string, string> = {
   active_blocker: "Active blocker",
   awaiting_integration: "Architect integration",
@@ -19,10 +19,8 @@ const WAITING_LABELS: Record<string, string> = {
   runtime_stale: "Fresh runtime observation",
   unmet_dependencies: "Prerequisite work",
   validation_pending: "Checks",
-  worker_paused: "Paused worker",
 };
 const ACTION_LABELS: Record<string, string> = {
-  answer_guidance: "answer the decision",
   check_validation: "check validation",
   deliver_prerequisites: "wait for prerequisite delivery",
   finish_worker_qualification: "finish qualification",
@@ -32,7 +30,6 @@ const ACTION_LABELS: Record<string, string> = {
   resolve_blocker: "resolve blocker",
   resolve_delivery_order_violation: "resolve delivery order",
   resolve_dependencies: "resolve dependencies",
-  resume: "resume work",
   select_current_candidate_and_requalify_affected_work: "select current input and requalify",
   verify_native_checks_and_review_then_merge: "verify checks and review, then integrate",
   wait: "wait for review",
@@ -79,7 +76,7 @@ function reviewProgressParts(review?: WorkPackageReviewSignal | null) {
 }
 
 export function activityObservationLabel(state?: string | null) {
-  return state === "stale" ? "Runtime stale" : state === "paused" ? "Runtime paused" : state === "current" ? "Runtime current" : "Runtime observation unknown";
+  return state === "stale" ? "Runtime stale" : state === "current" ? "Runtime current" : "Runtime observation unknown";
 }
 
 export function activityNextLabel(activity?: WorkPackageActivitySignal | null) {
@@ -92,26 +89,24 @@ export function activityNextLabel(activity?: WorkPackageActivitySignal | null) {
 export function activityWaitingLabel(activity?: WorkPackageActivitySignal | null) {
   const reason = activity?.waiting_reason;
   if (!reason) return "Nothing recorded";
-  const label = WAITING_LABELS[reason] ?? (/^[a-z0-9_]+$/.test(reason) ? formatStatus(reason) : reason);
-  return activity?.next_actor === "human" ? `Human decision: ${label}` : label;
+  return WAITING_LABELS[reason] ?? (/^[a-z0-9_]+$/.test(reason) ? formatStatus(reason) : reason);
 }
 
 export function workActivityFields(activity?: WorkPackageActivitySignal | null, review?: WorkPackageReviewSignal | null, eligibility?: WorkPackageMergeEligibility | null): WorkActivityField[] {
   const owner = activity?.accountable_owner?.id;
   const actor = activityActorLabel(activity?.current_actor);
   const next = activityNextLabel(activity);
-  const human = activity?.next_actor === "human";
   return [
     { key: "owner", label: "Owner", value: owner || "Unknown", unknown: !owner },
     { key: "actor", label: "Working now", value: actorWithObservation(actor, activity?.observation_state), unknown: actor === "Unknown" },
     { key: "stage", label: "Stage", value: activity?.stage ? activityStageLabel(activity, review, eligibility) : "Unknown", unknown: !activity?.stage },
-    { key: "waiting", label: "Waiting on", value: activityWaitingLabel(activity), human: human && Boolean(activity?.waiting_reason) },
-    { key: "next", label: "Next", value: next, human, unknown: next === "Unknown" },
+    { key: "waiting", label: "Waiting on", value: activityWaitingLabel(activity) },
+    { key: "next", label: "Next", value: next, unknown: next === "Unknown" },
   ];
 }
 
 function actorWithObservation(actor: string, observation?: string | null) {
-  return observation === "stale" || observation === "paused" ? `${actor} · ${activityObservationLabel(observation).toLowerCase()}` : actor;
+  return observation === "stale" ? `${actor} · ${activityObservationLabel(observation).toLowerCase()}` : actor;
 }
 
 export function workActivityFacts(activity?: WorkPackageActivitySignal | null, review?: WorkPackageReviewSignal | null, eligibility?: WorkPackageMergeEligibility | null) {

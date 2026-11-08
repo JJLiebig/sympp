@@ -56,7 +56,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
           "jsonrpc" => "2.0",
           "id" => "recreated-worker-architect-call",
           "method" => "tools/call",
-          "params" => %{"name" => "list_guidance_requests", "arguments" => %{"work_request_id" => work_request.id}}
+          "params" => %{"name" => "reconcile_work_request", "arguments" => %{"work_request_id" => work_request.id}}
         },
         Server.new(local_mcp_config(repo), state_key: state_key)
       )
@@ -96,25 +96,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
       "jsonrpc" => "2.0",
       "id" => "architect-after-explicit-worker-release",
       "method" => "tools/call",
-      "params" => %{"name" => "list_guidance_requests", "arguments" => %{"work_request_id" => work_request.id}}
+      "params" => %{"name" => "reconcile_work_request", "arguments" => %{"work_request_id" => work_request.id}}
     }
 
     architect_result = Server.handle(architect_call, Server.new(local_mcp_config(repo), state_key: state_key))
-    assert get_in(architect_result, ["result", "structuredContent", "guidance_requests"]) == []
-
-    {comments, comments_server} =
-      Server.handle_response_state(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "recreated-architect-comment-browsing",
-          "method" => "tools/call",
-          "params" => %{"name" => "list_comments", "arguments" => %{"target_kind" => "work_request", "target_id" => work_request.id}}
-        },
-        Server.new(local_mcp_config(repo), state_key: state_key)
-      )
-
-    assert get_in(comments, ["result", "structuredContent", "comments"]) == []
-    assert comments_server.session == nil
+    assert get_in(architect_result, ["result", "structuredContent", "work_request", "id"]) == work_request.id
 
     architect_release = Server.handle(release_request, Server.new(local_mcp_config(repo), state_key: state_key))
     assert get_in(architect_release, ["result", "structuredContent", "binding_cleared"]) == true
@@ -172,15 +158,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
     package = create_local_claim_package!(repo, "SYMPP-STATE-STALE-LIVE")
     assert {:ok, _minted} = AccessGrantService.mint_worker_grant(repo, package.id)
 
-    assert {:ok, comment} =
-             CommentService.create(repo, %{
-               "target_kind" => "work_package",
-               "target_id" => package.id,
-               "body" => "stale session local comment",
-               "source_type" => "operator",
-               "author_name" => "operator"
-             })
-
     arguments = local_assignment_claim_args(package)
     state_key = make_ref()
 
@@ -221,7 +198,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
           "jsonrpc" => "2.0",
           "id" => "architect-after-stale-worker-handle",
           "method" => "tools/call",
-          "params" => %{"name" => "list_guidance_requests", "arguments" => %{"work_request_id" => "WR-NOT-A-WORKER-PROMOTION"}}
+          "params" => %{"name" => "reconcile_work_request", "arguments" => %{"work_request_id" => "WR-NOT-A-WORKER-PROMOTION"}}
         },
         tools_server
       )
@@ -231,17 +208,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
     {stale_solo_response, _stale_solo_server} =
       Server.handle_response_state(
         %{"jsonrpc" => "2.0", "id" => "solo-after-stale-init", "method" => "tools/call", "params" => %{"name" => "solo_attach", "arguments" => %{}}},
-        tools_server
-      )
-
-    {stale_list_comments_response, _stale_comments_server} =
-      Server.handle_response_state(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "list-comments-after-stale-init",
-          "method" => "tools/call",
-          "params" => %{"name" => "list_comments", "arguments" => %{"target_kind" => "work_package", "target_id" => package.id}}
-        },
         tools_server
       )
 
@@ -265,8 +231,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
 
     assert get_in(stale_solo_response, ["error", "data", "reason"]) == "claim_required"
     assert get_in(stale_solo_response, ["error", "data", "action"]) == "claim_local_assignment"
-    assert [%{"id" => stale_comment_id}] = get_in(stale_list_comments_response, ["result", "structuredContent", "comments"])
-    assert stale_comment_id == comment.id
     assert get_in(fresh_init_response, ["result", "serverInfo", "name"]) == "sympp"
     assert Map.has_key?(tools_by_name, "get_current_assignment")
     assert Map.has_key?(fresh_tools_by_name, "read_work_request")
@@ -576,29 +540,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
     assert {:ok, []} = PlanningRepository.list_progress_events(repo, package.id)
   end
 
-  test "bound worker tools stop before mutation when the current claim lease is paused", %{repo: repo} do
-    package = create_local_claim_package!(repo, "SYMPP-STATE-PAUSED-PREFLIGHT")
+  test "bound worker tools stop before mutation when the current claim lease is released", %{repo: repo} do
+    package = create_local_claim_package!(repo, "SYMPP-STATE-RELEASED-PREFLIGHT")
     assert {:ok, _minted} = AccessGrantService.mint_worker_grant(repo, package.id)
 
     {_claim_response, claimed_server} =
       Server.handle_state(
         %{
           "jsonrpc" => "2.0",
-          "id" => "claim-paused-preflight",
+          "id" => "claim-released-preflight",
           "method" => "tools/call",
           "params" => %{"name" => "claim_local_assignment", "arguments" => local_assignment_claim_args(package)}
         },
-        local_mcp_server(local_mcp_config(repo), "claim-paused-preflight-state")
+        local_mcp_server(local_mcp_config(repo), "claim-released-preflight-state")
       )
 
     assert {:ok, lease} = ClaimLeaseService.current_for_work_package(repo, package.id)
-    assert {:ok, _paused_lease} = ClaimLeaseService.pause(repo, lease.id, %{"actor_id" => "operator"}, reason: "operator pause")
+    assert {:ok, _released_lease} = ClaimLeaseService.release(repo, lease.id, reason: "operator release")
 
     {blocked_response, updated_server} =
       Server.handle_state(
         %{
           "jsonrpc" => "2.0",
-          "id" => "append-after-pause",
+          "id" => "append-after-release",
           "method" => "tools/call",
           "params" => %{"name" => "append_progress", "arguments" => %{"summary" => "This should not be recorded", "status" => "in_progress"}}
         },
@@ -606,14 +570,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
       )
 
     assert get_in(blocked_response, ["error", "data", "reason"]) == "claim_lease_lost"
-    assert get_in(blocked_response, ["error", "data", "claim_lease_reason"]) == "claim_lease_paused"
     assert updated_server.session == nil
     assert updated_server.session_refresh_required == true
     assert updated_server.stale_assignment_role == "worker"
 
     {stale_tools, _relisted_server} =
       Server.handle_state(
-        %{"jsonrpc" => "2.0", "id" => "tools-after-pause", "method" => "tools/list", "params" => %{}},
+        %{"jsonrpc" => "2.0", "id" => "tools-after-release", "method" => "tools/list", "params" => %{}},
         updated_server
       )
 

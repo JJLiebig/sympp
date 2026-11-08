@@ -13,19 +13,19 @@ dashboard improve workflow but cannot grant authority.
 - `claimed_by` is an optional audit label, not a secret.
 - Repository, branch, worktree, phase, and anchor values are derived from the
   ledger and treated as validation context when supplied.
-- Fresh claims block competing workers and architects; stale unpaused residue can be
-  reclaimed; paused claims remain operator-controlled.
+- Fresh claims block competing workers and architects; stale residue can be
+  reclaimed.
 
 ## Capabilities And Scope
 
 Authenticated workers may optionally update their own plan, progress, findings,
-comments, branch, pull request, and readiness evidence. Only architects declare
+branch, pull request, and readiness evidence. Only architects declare
 and resolve work blockers; questions and ordinary waits do not change them. They cannot mint grants,
 dispatch siblings, expand scope silently, merge pull requests, or record
 WorkRequest delivery.
 
 Architects may clarify and plan their WorkRequest, organize Groups, author and
-dispatch WorkPackages, answer descendant guidance, approve allowed scope
+dispatch WorkPackages, approve allowed scope
 expansion, and reconcile delivery. They do not gain global ledger authority.
 
 ## Secret Hygiene

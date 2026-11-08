@@ -1021,19 +1021,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
     claim =
       post_json(
-        tool_call_request("local-architect-auto-claim", "list_guidance_requests", %{"work_request_id" => work_request.id}),
+        tool_call_request("local-architect-auto-claim", "reconcile_work_request", %{"work_request_id" => work_request.id}),
         [{"mcp-session-id", session_id}]
       )
 
     claim_payload = get_in(json_response(claim, 200), ["result", "structuredContent"])
-    assert claim_payload["guidance_requests"] == []
+    assert claim_payload["work_request"]["id"] == work_request.id
     assert [%ClaimLease{id: claim_lease_id, actor_display_name: owner}] = active_claim_leases(handoff.anchor_package.id)
 
     assert {:ok, _released} = ClaimLeaseService.release(Repo, claim_lease_id, reason: "connection recovery regression")
     reset_mcp_runtime_state()
 
-    recovered = post_json(tool_call_request("local-architect-recover-scope", "list_guidance_requests", %{}), [{"mcp-session-id", session_id}])
-    assert get_in(json_response(recovered, 200), ["result", "structuredContent", "guidance_requests"]) == []
+    recovered = post_json(tool_call_request("local-architect-recover-scope", "reconcile_work_request", %{}), [{"mcp-session-id", session_id}])
+    assert get_in(json_response(recovered, 200), ["result", "structuredContent", "work_request", "id"]) == work_request.id
     assert [%ClaimLease{id: replacement_id, actor_display_name: ^owner}] = active_claim_leases(handoff.anchor_package.id)
     refute replacement_id == claim_lease_id
   end
@@ -1370,7 +1370,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
     payload = [
       tool_call_request("private-batch-id", "sympp.health", %{"bearer" => "request-secret"}),
-      tool_call_notification("list_comments", %{"bearer" => "notification-secret"}),
+      tool_call_notification("read_work_request", %{"bearer" => "notification-secret"}),
       tools_list_request("ignored-protocol-item")
     ]
 
@@ -1382,7 +1382,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     assert Enum.all?(events, &(&1["failure_layer"] == "endpoint"))
     assert Enum.all?(events, &(&1["failure_reason"] == "batch_not_supported"))
     assert events |> Enum.map(& &1["diagnostic_id"]) |> Enum.uniq() |> length() == 2
-    assert events |> Enum.map(& &1["tool_name"]) |> Enum.sort() == ["list_comments", "sympp.health"]
+    assert events |> Enum.map(& &1["tool_name"]) |> Enum.sort() == ["read_work_request", "sympp.health"]
     refute log =~ "private-batch-id"
     refute log =~ "request-secret"
     refute log =~ "notification-secret"

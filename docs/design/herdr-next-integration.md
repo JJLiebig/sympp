@@ -80,8 +80,7 @@ state only, in the web dashboard's visual language:
   Answer in place when it has an answer route, else the topic's chief (a peek
   while it runs, otherwise Start chief). An unrecorded wait says its question
   isn't recorded, and only when no real question exists. A board without
-  `asks` falls back to its escalations, guidance and open clarification
-  questions.
+  `asks` falls back to its escalations and open clarification questions.
 - **Packages at work:** a row per package at work or waiting on the person, in
   planned order, with the dashboard's Build ─ PR ─ Checks ─ Review ─ Merge
   pipeline (work, then done without a PR); the PR step opens the pull request.
@@ -168,7 +167,7 @@ consumer authorization. It does not migrate a ledger, register a dashboard
 opener, change claims or weaken operator mutation authorization.
 
 Do not spoof browser headers to call browser-authorized operator routes.
-Native intake and question/guidance answers have a separate deliberate local
+Native intake and question answers have a separate deliberate local
 authority boundary: direct loopback and a local Host, no forwarding or browser
 metadata, JSON only, and no native CORS/preflight grant. This authorizes a trusted
 local process; it does not authenticate an application brand. Existing browser
@@ -237,7 +236,7 @@ recovery restores shells rather than restarting the original agent.
 | Track view | Topic, Space and task views in the web dashboard's language: box strips, asks with their own answer route or the topic's chief, words only for problems, stable order, folded landed and queued work, the per-package pipeline; replaces the rails, agents, decisions and chief-desk views. | [#816](https://github.com/JJLiebig/sympp/pull/816), on #819's asks and freshness. Node tests cover asks, freshness, strip grouping, order and folds; `herdr-app check --print-spec` checks the drawn structure wide and narrow. |
 | Chief desk | A topic's registered chief, its dispatched work, recaps and waiting decisions, and chief presence on Factory rows, from #773's chiefs and attribution. | Replaced by the Track view ([#816](https://github.com/JJLiebig/sympp/pull/816)); Factory chief presence remains. Node tests cover topic matching (exact, leading or ending words, repositories, ambiguity), attribution, ordering, recaps, needs and chief liveness; `herdr-app check --print-spec` checks the desk, the no-chief line and Factory marks. An isolated Windows home and scratch core showed the desk, a no-chief topic, the Factory rows and the panel width with fixture data, dark and light. Not qualified: real registrations, a Live chief with a real session receipt, Open, and input. |
 | UI studio | A UI package's tab with its verified worker beside a preview: a published web preview as a link card, or the worktree's own Herdr view live on sample data; a tab glyph through desk-tabs chrome 2. | Node tests cover UI detection, preview addresses, tab placement and hand-over, worker placement, preview choice, sweeping and the builder (sample-only entry, changed-only writes, base gating); `herdr-app check --print-spec` checks the Open UI studio button and each studio state. An isolated Windows home and scratch core, with stand-in workers carrying real launch labels and receipts the helper verified, showed a scripted studio placing a paneless worker on the left, the native preview following a save, the link card, duplicate hand-over, landing cleanup and the chrome 1 to 2 upgrade, dark, light and narrow. Not qualified: a real provider worker, a remote worker, pointer and keyboard input, and Open in a browser. |
-| Native human actions | Intake and persisted question/guidance answers, with browser exclusion and canonical scope/status checks. | Landed in [#758](https://github.com/JJLiebig/sympp/pull/758); API/offline acceptance and all required hosted gates passed. |
+| Native human actions | Intake and persisted question answers, with browser exclusion and canonical scope/status checks. | Landed in [#758](https://github.com/JJLiebig/sympp/pull/758); API/offline acceptance and all required hosted gates passed. |
 | Native bindings/tooling | Explicit core/terminal/process bindings; optional direct work remains simple; correct focus and stale-state handling. | Landed in [#759](https://github.com/JJLiebig/sympp/pull/759); six controlled-core checks and all required hosted gates passed. Native receipt checks also reject mismatched canonical request/package IDs. |
 | Hand-started sessions | Architects, coordinators and workers started in a native terminal report their location; Open verifies the actual MCP bridge as well as the terminal. | [#761](https://github.com/JJLiebig/sympp/pull/761) adds Node bridge discovery and private session receipts without changing worker launch receipts or core/app APIs. Existing bridge processes need a supported reconnect to load it; the PowerShell fallback remains legacy-only. |
 | Cross-provider execution | Scoped launches and handoffs through herdr-core, provider qualification and recovery evidence. | Six controlled-core checks; real Windows Codex, Claude Opus and OpenCode launches and both fresh Codex/Opus handoffs passed in an isolated core. In-place sends to done/unknown agents remain unsupported by core 0.1.10. |

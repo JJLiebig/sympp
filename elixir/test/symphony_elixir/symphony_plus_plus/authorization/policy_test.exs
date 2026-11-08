@@ -10,9 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.PolicyTest do
   @architect_capabilities [
     "read:work_request",
     "write:work_request",
-    "dispatch:work_request",
-    "read:guidance_request",
-    "write:guidance_request"
+    "dispatch:work_request"
   ]
 
   test "worker package scope does not allow dispatch or dangerous actions" do
@@ -81,15 +79,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.PolicyTest do
              Policy.decide(actor, :work_request_read, other_base_target)
   end
 
-  test "architect reads and external comments deny without a matching scope" do
+  test "architect reads deny without a matching scope" do
     actor = architect([Scope.work_request("wr-1")])
     sibling_target = Target.work_request("wr-2")
 
     assert %Decision{allowed?: false, reason_code: "scope_mismatch", legacy_reason: "outside_session_scope"} =
              Policy.decide(actor, :work_request_read, sibling_target)
-
-    assert %Decision{allowed?: false, reason_code: "scope_mismatch", legacy_reason: "outside_session_scope"} =
-             Policy.decide(actor, :external_comment_add, sibling_target)
   end
 
   test "repo scope base branch must match when scope is branch pinned" do

@@ -4,7 +4,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
   alias Ecto.Changeset
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
-  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -186,16 +185,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
   def clear_terminal_attention(_repo, []), do: :ok
 
   def clear_terminal_attention(repo, work_packages) when is_atom(repo) and is_list(work_packages) do
-    work_package_ids = Enum.map(work_packages, & &1.id)
-
-    repo.delete_all(
-      from(request in GuidanceRequest,
-        where: request.work_package_id in ^work_package_ids,
-        where: request.status in ["open", "human_info_needed"]
-      )
-    )
-
-    with :ok <- resolve_active_blockers(repo, work_package_ids) do
+    with :ok <- resolve_active_blockers(repo, Enum.map(work_packages, & &1.id)) do
       WorktreeCleanupQueue.enqueue_terminal(repo, work_packages)
     end
   end

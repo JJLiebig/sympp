@@ -24,7 +24,7 @@ matching `evidence.pr_merged` object.
 - `abandoned`: rationale explaining why the package will not be delivered.
 
 Record the terminal outcome directly. Successful closeout revokes live worker
-grants and releases current claim leases, including paused leases. Use
+grants and releases current claim leases. Use
 `cleanup_work_request_work_package_runtime` only to recycle runtime without
 terminal closeout or to clear recoverable worker MCP bindings explicitly.
 

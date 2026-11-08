@@ -415,7 +415,7 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
                stop_conditions: []
              })
 
-    assert {:ok, _skipped} = WorkRequestRepository.skip_work_package(Repo, request.id, slice.id, "planned")
+    assert {:ok, _skipped} = WorkRequestRepository.skip_work_package(Repo, request.id, slice.id)
 
     assert {:ok, _delivery} =
              WorkRequestRepository.record_work_package_delivery(Repo, request.id, slice.id, %{

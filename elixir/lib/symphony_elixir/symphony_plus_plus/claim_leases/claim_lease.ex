@@ -10,7 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease do
   @primary_key {:id, :string, autogenerate: false}
   @foreign_key_type :string
 
-  @active_statuses ["active", "paused"]
+  @active_statuses ["active"]
   @statuses @active_statuses ++ ["released", "reclaimed"]
   @actor_kinds ["agent", "human", "operator", "system"]
   @immutable_fields ~w(id work_package_id access_grant_id claim_group_id previous_claim_id actor_kind actor_id actor_display_name lease_started_at)a
@@ -34,9 +34,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease do
     field(:stale_checked_at, :utc_datetime_usec)
     field(:stale_at, :utc_datetime_usec)
     field(:stale_reason, :string)
-    field(:paused_at, :utc_datetime_usec)
-    field(:paused_by_actor_id, :string)
-    field(:pause_reason, :string)
     field(:reclaimed_at, :utc_datetime_usec)
     field(:reclaimed_by_actor_id, :string)
     field(:reclaim_reason, :string)
@@ -128,7 +125,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease do
     |> cast(normalize_keys(attrs), fields() -- @immutable_fields)
     |> validate_inclusion(:status, @statuses)
     |> validate_number(:stale_after_ms, greater_than: 0)
-    |> validate_nonblank_optional(:paused_by_actor_id)
     |> validate_nonblank_optional(:reclaimed_by_actor_id)
   end
 
@@ -150,9 +146,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease do
       :stale_checked_at,
       :stale_at,
       :stale_reason,
-      :paused_at,
-      :paused_by_actor_id,
-      :pause_reason,
       :reclaimed_at,
       :reclaimed_by_actor_id,
       :reclaim_reason,

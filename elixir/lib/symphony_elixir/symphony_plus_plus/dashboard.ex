@@ -8,11 +8,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
   alias SymphonyElixir.SymphonyPlusPlus.Chiefs
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
-  alias SymphonyElixir.SymphonyPlusPlus.Comments.Repository, as: CommentRepository
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
     BlockerProjection,
-    CommentProjection,
     DeliveryWorkPackageProjection,
     MetadataProjection,
     OperationalProjection,
@@ -22,8 +20,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     WorkRequestDetails
   }
 
-  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
-  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.Repository, as: GuidanceRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperationalLineage
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
@@ -117,24 +113,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
       linked_work_packages = all_work_packages(work_requests, work_packages_by_request)
 
-      comment_targets =
-        Enum.map(work_requests, &{"work_request", &1.id}) ++
-          Enum.map(linked_work_packages, &{"work_package", &1.id})
-
       with {:ok, work_package_contexts} <- work_package_work_package_contexts(repo, linked_work_packages),
            {:ok, product_trees_by_request} <-
              product_tree_contexts_for_work_requests(repo, MapSet.to_list(work_request_ids)),
            {:ok, deliveries_by_slice_id} <-
-             DeliveryBoard.work_package_deliveries_by_id(repo, linked_work_packages),
-           {:ok, comment_count_context} <- comment_count_context(repo, comment_targets) do
+             DeliveryBoard.work_package_deliveries_by_id(repo, linked_work_packages) do
         {:ok,
          %{
            work_packages: work_packages,
            work_packages_by_request: work_packages_by_request,
            work_package_contexts: work_package_contexts,
            product_trees_by_request: product_trees_by_request,
-           deliveries_by_slice_id: deliveries_by_slice_id,
-           comment_count_context: comment_count_context
+           deliveries_by_slice_id: deliveries_by_slice_id
          }}
       end
     end)
@@ -330,24 +320,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     end)
   end
 
-  @spec human_guidance_requests(repo()) :: {:ok, map()} | {:error, dashboard_error()}
-  def human_guidance_requests(repo) when is_atom(repo) do
-    human_guidance_requests(repo, [])
-  end
-
-  @spec human_guidance_requests(repo(), keyword()) :: {:ok, map()} | {:error, dashboard_error()}
-  def human_guidance_requests(repo, opts) when is_atom(repo) and is_list(opts) do
-    safe_read(fn ->
-      with {:ok, cards} <- human_guidance_request_cards(repo, opts) do
-        {:ok,
-         %{
-           guidance_requests: cards,
-           total_count: length(cards)
-         }}
-      end
-    end)
-  end
-
   @spec solo_sessions(repo()) :: {:ok, map()} | {:error, dashboard_error()}
   @spec solo_sessions(repo(), map()) :: {:ok, map()} | {:error, dashboard_error()}
   def solo_sessions(repo, filters \\ %{}) when is_atom(repo) and is_map(filters) do
@@ -506,28 +478,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     safe_read(fn ->
       with {:ok, state} <- planning_state(repo, work_package_id),
            {:ok, grants} <- AccessGrantRepository.list_for_work_package(repo, work_package_id),
-           {:ok, agent_runs} <- AgentRunRepository.list_for_work_package(repo, work_package_id),
-           {:ok, guidance_requests} <- GuidanceRequestRepository.list_for_work_package(repo, work_package_id),
-           {:ok, comment_context} <- comment_context(repo, [{"work_package", work_package_id}]) do
+           {:ok, agent_runs} <- AgentRunRepository.list_for_work_package(repo, work_package_id) do
         repo_identity_catalog = repo_identity_catalog_from_opts(opts, [state.work_package.repo])
         blockers = OperationalProjection.blockers(state.progress_events)
-        summary = summary(state, grants, agent_runs, blockers, guidance_requests, comment_context)
+        summary = summary(state, grants, agent_runs, blockers)
 
         {:ok,
          %{
-           work_package:
-             state.work_package
-             |> work_package_detail(repo_identity_catalog)
-             |> CommentProjection.put_counts(CommentProjection.counts_for(comment_context, "work_package", work_package_id)),
+           work_package: work_package_detail(state.work_package, repo_identity_catalog),
            lineage: OperationalProjection.package_lineage(repo, work_package_id),
            summary: summary,
-           comments: CommentProjection.comments_for(comment_context, "work_package", work_package_id),
            plan: Enum.map(state.plan_nodes, &plan_node/1),
            findings: Enum.map(state.findings, &finding/1),
            progress: Enum.map(state.progress_events, &progress_event/1),
            artifacts: Enum.map(state.artifacts, &artifact/1),
            blockers: blockers,
-           guidance_requests: Enum.map(guidance_requests, &guidance_request/1),
            grants: Enum.map(grants, &grant/1),
            agent_runs: Enum.map(agent_runs, &agent_run/1),
            metadata: MetadataProjection.metadata(state.progress_events),
@@ -557,8 +522,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
          {:ok, progress_events} <- PlanningRepository.list_progress_events(repo, work_package.id),
          {:ok, readiness_collections} <- readiness_collections(repo, work_package),
          {:ok, agent_runs} <- AgentRunRepository.list_for_work_package(repo, work_package.id),
-         {:ok, grants} <- AccessGrantRepository.list_for_work_package(repo, work_package.id),
-         {:ok, comment_context} <- comment_count_context(repo, [{"work_package", work_package.id}]) do
+         {:ok, grants} <- AccessGrantRepository.list_for_work_package(repo, work_package.id) do
       %{artifacts: artifacts, findings: findings} = readiness_collections
       claim_leases = grouped_claim_leases(repo, [work_package.id]) |> Map.get(work_package.id, [])
 
@@ -566,7 +530,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
         WorkPackageActivity.project_context(grants, agent_runs, claim_leases, progress_events, work_package)
 
       {:ok,
-       build_card_context(repo, work_package, repo_identity_catalog, comment_context, %{
+       build_card_context(repo, work_package, repo_identity_catalog, %{
          plan_nodes: status_summary.plan_nodes,
          progress_events: progress_events,
          artifacts: artifacts,
@@ -581,7 +545,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     end
   end
 
-  defp build_card_context(repo, work_package, repo_identity_catalog, comment_context, context) do
+  defp build_card_context(repo, work_package, repo_identity_catalog, context) do
     plan_nodes = context.plan_nodes
     progress_events = context.progress_events
     artifacts = context.artifacts
@@ -640,7 +604,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
           inserted_at: timestamp(work_package.inserted_at),
           updated_at: timestamp(work_package.updated_at)
         }
-        |> CommentProjection.put_counts(CommentProjection.counts_for(comment_context, "work_package", work_package.id))
         |> put_repo_identity_fields(repo_identity_catalog, work_package.repo)
     }
   end
@@ -978,15 +941,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
   defp card_contexts_for_packages(repo, work_packages, repo_identity_catalog, opts) do
     with {:ok, work_package_contexts} <- work_package_contexts_for_packages(repo, work_packages, opts) do
-      targets = Enum.map(work_packages, &{"work_package", &1.id})
-
-      with {:ok, comment_context} <- comment_count_context_for_packages(repo, targets, opts) do
-        {:ok,
-         Enum.map(work_packages, fn work_package ->
-           context = work_package_contexts |> Map.fetch!(work_package.id) |> card_context_projection(work_package)
-           build_card_context(repo, work_package, repo_identity_catalog, comment_context, context)
-         end)}
-      end
+      {:ok,
+       Enum.map(work_packages, fn work_package ->
+         context = work_package_contexts |> Map.fetch!(work_package.id) |> card_context_projection(work_package)
+         build_card_context(repo, work_package, repo_identity_catalog, context)
+       end)}
     end
   end
 
@@ -1006,14 +965,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
       {:ok, _other} ->
         {:error, :not_found}
-    end
-  end
-
-  defp comment_count_context_for_packages(repo, targets, opts) do
-    case Keyword.fetch(opts, :comment_count_context) do
-      {:ok, comment_count_context} when is_map(comment_count_context) -> {:ok, comment_count_context}
-      :error -> comment_count_context(repo, targets)
-      {:ok, _other} -> {:error, :not_found}
     end
   end
 
@@ -1264,18 +1215,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
   defp group_statuses(groups) when is_map(groups), do: Enum.uniq(WorkPackage.statuses() ++ Map.keys(groups))
 
-  defp summary(%State{} = state, grants, agent_runs, blockers, guidance_requests, comment_context) do
+  defp summary(%State{} = state, grants, agent_runs, blockers) do
     runtime = OperationalProjection.runtime_summary(agent_runs)
-    comment_counts = CommentProjection.counts_for(comment_context, "work_package", state.work_package.id)
 
     %{
       artifact_count: length(state.artifacts),
       finding_count: length(state.findings),
       progress_event_count: length(state.progress_events),
-      comment_count: comment_counts.comment_count,
-      open_comment_count: comment_counts.open_comment_count,
       active_blocker_count: Enum.count(blockers, & &1.active),
-      guidance_request_count: length(guidance_requests),
       grant_count: length(grants),
       active_grant_count: Enum.count(grants, &active_grant?/1),
       agent_run_count: length(agent_runs),
@@ -1291,67 +1238,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   end
 
   @doc false
-  @spec comment_count_context(repo(), [{String.t(), String.t()}]) :: {:ok, map()} | {:error, dashboard_error()}
-  def comment_count_context(repo, targets) do
-    with {:ok, counts} <- CommentRepository.counts_for_targets(repo, targets) do
-      {:ok, %{comments: %{}, counts: counts}}
-    end
-  end
-
-  @doc false
-  @spec comment_context(repo(), [{String.t(), String.t()}]) :: {:ok, map()} | {:error, dashboard_error()}
-  def comment_context(repo, targets) do
-    with {:ok, comments} <- CommentRepository.list_for_targets(repo, targets),
-         {:ok, counts} <- CommentRepository.counts_for_targets(repo, targets) do
-      {:ok, %{comments: comments, counts: counts}}
-    end
-  end
-
-  @doc false
   @spec visible_work_packages([WorkPackage.t()], map() | nil) :: [WorkPackage.t()]
   def visible_work_packages(work_packages, delivery_board), do: WorkRequestCards.visible_work_packages(work_packages, delivery_board)
-
-  defp human_guidance_request_cards(repo, opts) do
-    rows =
-      repo.all(
-        from(guidance_request in GuidanceRequest,
-          join: work_package in WorkPackage,
-          on: work_package.id == guidance_request.work_package_id,
-          where: guidance_request.status == "human_info_needed",
-          order_by: [asc: guidance_request.inserted_at, asc: guidance_request.id],
-          select: {guidance_request, work_package}
-        )
-      )
-
-    with {:ok, repo_identity_catalog} <-
-           repo_identity_catalog_from_repo(repo, opts, Enum.map(rows, fn {_guidance_request, work_package} -> work_package.repo end)) do
-      {:ok,
-       Enum.map(rows, fn {guidance_request, work_package} ->
-         guidance_request_card(guidance_request, work_package, repo_identity_catalog)
-       end)}
-    end
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp guidance_request_card(%GuidanceRequest{} = guidance_request, %WorkPackage{} = work_package, repo_identity_catalog) do
-    guidance_request(guidance_request)
-    |> Map.merge(%{
-      work_package_title: redacted_text(work_package.title),
-      package_kind: work_package.kind,
-      repo: work_package.repo,
-      base_branch: work_package.base_branch,
-      phase_id: work_package.phase_id
-    })
-    |> put_repo_identity_fields(repo_identity_catalog, work_package.repo)
-  end
 
   @doc false
   @spec work_request_payload(
           WorkRequest.t(),
           [ClarificationQuestion.t()],
           [WorkPackage.t()],
-          map(),
           map(),
           map(),
           keyword()
@@ -1362,7 +1256,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
         work_packages,
         work_package_contexts,
         repo_identity_catalog,
-        comment_context,
         opts
       ) do
     WorkRequestCards.work_request_payload(
@@ -1371,30 +1264,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       work_packages,
       work_package_contexts,
       repo_identity_catalog,
-      comment_context,
       opts
     )
-  end
-
-  defp guidance_request(%GuidanceRequest{} = guidance_request) do
-    %{
-      id: guidance_request.id,
-      work_package_id: guidance_request.work_package_id,
-      summary: redacted_text(guidance_request.summary),
-      question: redacted_text(guidance_request.question),
-      context: redacted_text(guidance_request.context),
-      status: guidance_request.status,
-      requested_by: redacted_text(guidance_request.requested_by),
-      answer: redacted_text(guidance_request.answer),
-      answered_by: redacted_text(guidance_request.answered_by),
-      answered_at: timestamp(guidance_request.answered_at),
-      human_info_reason: redacted_text(guidance_request.human_info_reason),
-      recommended_language: redacted_text(guidance_request.recommended_language),
-      decision_prompt: redacted_json(guidance_request.decision_prompt),
-      blocker_id: guidance_request.blocker_id,
-      inserted_at: timestamp(guidance_request.inserted_at),
-      updated_at: timestamp(guidance_request.updated_at)
-    }
   end
 
   @doc false
@@ -1438,14 +1309,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   end
 
   @doc false
-  @spec work_package_payloads([WorkPackage.t()], map(), boolean(), map(), keyword()) :: [map()]
-  def work_package_payloads(work_packages, work_package_contexts, include_dispatch_details?, comment_context, opts) do
+  @spec work_package_payloads([WorkPackage.t()], map(), boolean(), keyword()) :: [map()]
+  def work_package_payloads(work_packages, work_package_contexts, include_dispatch_details?, opts) do
     delivery_work_packages_by_id = opts |> Keyword.get(:delivery_board) |> DeliveryWorkPackageProjection.work_packages_by_id()
 
     Enum.map(work_packages, fn slice ->
       work_package(slice, work_package_contexts,
         include_dispatch_details?: include_dispatch_details?,
-        comment_context: comment_context,
         delivery_work_package: Map.get(delivery_work_packages_by_id, slice.id),
         compact?: Keyword.get(opts, :compact?, false)
       )
@@ -1471,7 +1341,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     }
     |> put_package_detail_fields(work_package, opts)
     |> Chiefs.put_attribution(:dispatched_by, work_package.dispatched_by)
-    |> CommentProjection.put_counts(CommentProjection.counts_for(Keyword.get(opts, :comment_context), "work_package", work_package.id))
     |> maybe_put_dispatch_details(work_package, work_package_statuses, opts)
   end
 
@@ -1482,7 +1351,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       Enum.reduce([:allowed_file_globs, :forbidden_file_globs, :acceptance_criteria, :validation_steps, :stop_conditions], payload, fn key, acc ->
         Map.put(acc, key, Enum.map(Map.get(work_package, key) || [], &redacted_text/1))
       end)
-      |> Map.put(:comments, CommentProjection.comments_for(Keyword.get(opts, :comment_context), "work_package", work_package.id))
     end
   end
 
@@ -1492,7 +1360,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     payload
     |> drop_keys([
       :acceptance_criteria,
-      :comments,
       :forbidden_file_globs,
       :allowed_file_globs,
       :stop_conditions,
@@ -1733,17 +1600,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   defp records_by_work_package_id(records), do: Enum.group_by(records, & &1.work_package_id)
 
   @doc false
-  @spec work_request_summary([ClarificationQuestion.t()], [DecisionLogEntry.t()], [WorkPackage.t()], map()) :: map()
-  def work_request_summary(questions, decisions, work_packages, comment_context) do
-    comment_counts = CommentProjection.total_counts(comment_context)
-
+  @spec work_request_summary([ClarificationQuestion.t()], [DecisionLogEntry.t()], [WorkPackage.t()]) :: map()
+  def work_request_summary(questions, decisions, work_packages) do
     %{
       open_question_count: Enum.count(questions, &(&1.status == "open")),
       answered_question_count: Enum.count(questions, &(&1.status == "answered")),
       closed_question_count: Enum.count(questions, &(&1.status == "closed")),
       decision_count: length(decisions),
-      comment_count: comment_counts.comment_count,
-      open_comment_count: comment_counts.open_comment_count,
       work_package_count: length(work_packages),
       planned_work_package_count: Enum.count(work_packages, &(&1.status == "planned")),
       dispatched_work_package_count: Enum.count(work_packages, &(not is_nil(&1.dispatched_at))),
@@ -1752,16 +1615,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   end
 
   @doc false
-  @spec work_request_board_summary([ClarificationQuestion.t()], [WorkPackage.t()], map()) :: map()
-  def work_request_board_summary(questions, work_packages, comment_context) do
-    comment_counts = CommentProjection.total_counts(comment_context)
-
+  @spec work_request_board_summary([ClarificationQuestion.t()], [WorkPackage.t()]) :: map()
+  def work_request_board_summary(questions, work_packages) do
     %{
       open_question_count: Enum.count(questions, &(&1.status == "open")),
       answered_question_count: Enum.count(questions, &(&1.status == "answered")),
       closed_question_count: Enum.count(questions, &(&1.status == "closed")),
-      comment_count: comment_counts.comment_count,
-      open_comment_count: comment_counts.open_comment_count,
       work_package_count: length(work_packages),
       planned_work_package_count: Enum.count(work_packages, &(&1.status == "planned")),
       dispatched_work_package_count: Enum.count(work_packages, &(not is_nil(&1.dispatched_at))),
