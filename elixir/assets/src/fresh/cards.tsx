@@ -16,7 +16,7 @@ const STATE: Record<CardState, { label: string; tone: string; pip: string }> = {
   merged: { label: "Merged", tone: "text-merge/80", pip: "bg-merge/40" },
   done: { label: "Done", tone: "text-dim", pip: "bg-faint" },
 };
-const ROW = "grid grid-cols-[10px_minmax(0,1fr)_minmax(0,220px)_190px_100px_70px_160px_24px] items-center gap-3 rounded px-2 py-1 odd:bg-white/[0.035]";
+const ROW = "grid grid-cols-[10px_minmax(0,1fr)_minmax(0,200px)_220px_70px_70px_190px_24px] items-center gap-3 rounded px-2 py-1 odd:bg-white/[0.035]";
 
 // Ended cards drop off a day after they merged or their terminal finished; dismissed ones right away.
 export function visibleCards(cards: Card[], at: number) {

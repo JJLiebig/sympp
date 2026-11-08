@@ -12,7 +12,7 @@ export function Status({ needed, views }: { needed: number; views: GoalView[] })
   const words = needed > 0 ? `You are needed in ${needed}` : "You are not needed";
   return (
     <span className="flex shrink-0 items-center gap-3 text-sm">
-      <span className="hidden text-xs text-faint min-[1440px]:inline">{overview(views)}</span>
+      <span className="hidden text-xs text-faint min-[1720px]:inline">{overview(views)}</span>
       {needed > 0 ? (
         <button className="rounded px-1.5 py-0.5 font-semibold text-you hover:bg-you/10" type="button" onClick={() => spotlight("#needs-you")}>
           {words}
