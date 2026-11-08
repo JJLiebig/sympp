@@ -20,6 +20,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase, as: WorkRequestPhase
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @planned "planned"
   @dispatched "dispatched"
@@ -105,9 +106,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
   end
 
   @doc """
-  Resolves the active blockers these packages raised against packages that have
-  since ended. Restoring an archived WorkRequest uses it for blockers whose target
-  ended while their history was frozen.
+  Resolves the active blockers these packages raised against a package that has
+  since ended, whose WorkRequest the operator completed, or that no longer
+  exists. Restoring an archived WorkRequest uses it for blockers whose target
+  settled while their history was frozen.
   """
   @spec resolve_blockers_on_ended_targets(module(), [WorkPackage.t()]) :: :ok | {:error, term()}
   def resolve_blockers_on_ended_targets(_repo, []), do: :ok
@@ -124,12 +126,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
 
   defp ended_target?(repo, %{blocked_item: %{kind: "work_package", id: target_id}}) do
     case repo.get(WorkPackage, target_id) do
-      %WorkPackage{} = target -> ended?(target)
-      nil -> false
+      %WorkPackage{} = target -> ended?(target) or operator_completed_request?(repo, target.work_request_id)
+      nil -> true
     end
   end
 
   defp ended_target?(_repo, _blocker), do: false
+
+  defp operator_completed_request?(_repo, nil), do: false
+
+  defp operator_completed_request?(repo, work_request_id) do
+    match?(%WorkRequest{operator_completed_at: %DateTime{}}, repo.get(WorkRequest, work_request_id))
+  end
 
   @doc """
   Terminal effects for packages that just ended: resolve the blockers on them

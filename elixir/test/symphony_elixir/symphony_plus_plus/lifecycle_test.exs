@@ -135,6 +135,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
 
     assert {:ok, _restored} = WorkRequestService.restore(repo, other.id)
     assert WorkPackageActivity.context(repo, source.id).blocker_state.active_ids == []
+
+    # A target that was deleted while the source was archived counts as settled too.
+    blocker!(repo, source.id, "deleted-target-blocker", %{kind: "work_package", id: "WP-DELETED"})
+    assert {:ok, _archived} = WorkRequestService.archive(repo, other.id)
+    assert {:ok, _restored} = WorkRequestService.restore(repo, other.id)
+    assert WorkPackageActivity.context(repo, source.id).blocker_state.active_ids == []
   end
 
   test "qualification fails on each predicate that does not hold" do
