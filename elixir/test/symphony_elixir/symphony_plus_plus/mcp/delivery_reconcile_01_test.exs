@@ -246,6 +246,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       assert repo.get!(WorkPackage, approved_slice.id).status == "dispatched"
 
       url_only = Map.delete(handoff, "head_sha")
+
+      blocker = %{type: "blocker", source_tool: "report_blocker", blocker_id: "sync-hold", active: true}
+
+      assert {:ok, _blocked} =
+               PlanningRepository.append_progress_event(repo, %{
+                 work_package_id: approved_slice.id,
+                 summary: "Hold",
+                 status: "blocked",
+                 idempotency_key: "sync-hold",
+                 payload: blocker
+               })
+
+      held = mcp_tool(repo, session, "sync_pr", url_only)
+      assert get_in(held, ["result", "structuredContent", "work_package", "status"]) == "dispatched"
+      assert "no_active_blockers" in get_in(held, ["result", "structuredContent", "pr_sync", "readiness_reasons"])
+
+      assert {:ok, _resolved} =
+               PlanningRepository.append_progress_event(repo, %{
+                 work_package_id: approved_slice.id,
+                 summary: "Hold cleared",
+                 status: "resolved",
+                 idempotency_key: "sync-hold-cleared",
+                 payload: %{blocker | active: false}
+               })
+
       accepted = mcp_tool(repo, session, "sync_pr", url_only)
       assert get_in(accepted, ["result", "structuredContent", "work_package", "status"]) == "ready"
       assert repo.get!(ClaimLease, other_owner.id).status == "released"

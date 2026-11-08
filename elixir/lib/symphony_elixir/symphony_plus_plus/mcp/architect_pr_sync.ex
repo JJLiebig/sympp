@@ -5,6 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
   import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments, only: [optional_string_argument: 2]
 
   alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
 
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{
@@ -83,11 +84,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
            :ok <- require_handoff(repo, current, payload),
            {:ok, candidate_head} <- candidate_head(repo, current),
            :ok <- append_snapshot(repo, session, current, payload),
+           {:ok, state} <- PlanningRepository.get_state(repo, current.id),
            {:ok, graph} <- ExecutionGraph.evaluate(repo, current.work_request_id),
            facts = qualification_facts(current, graph, pr_facts, candidate_head, payload),
            qualification = Lifecycle.qualification(facts),
-           {:ok, updated} <- reconcile_qualification(repo, session, current, qualification, payload) do
-        %{status: updated.status, head_sha: payload["head_sha"], readiness_reasons: qualification_reasons(qualification)}
+           gates = readiness_gates(state),
+           {:ok, updated} <- reconcile_qualification(repo, session, current, qualification, gates, payload) do
+        %{status: updated.status, head_sha: payload["head_sha"], readiness_reasons: qualification_reasons(qualification) ++ gates}
       else
         {:error, reason} -> repo.rollback(reason)
       end
@@ -138,10 +141,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
   defp qualification_reasons(:qualified), do: []
   defp qualification_reasons({:unqualified, reasons}), do: reasons
 
-  defp reconcile_qualification(repo, session, %WorkPackage{} = package, qualification, payload) do
+  # Active blockers, missing evidence and missing investigation findings keep a
+  # dispatched package from qualifying; on a ready package they block merge
+  # eligibility on the board instead of unqualifying it.
+  defp readiness_gates(state), do: state |> OperationalProjection.readiness_failure_reasons() |> Enum.map(& &1["gate"])
+
+  defp reconcile_qualification(repo, session, %WorkPackage{} = package, qualification, gates, payload) do
+    qualifies? = qualification == :qualified and gates == []
+
     cond do
       PullRequestProgress.merged?(payload) -> {:ok, package}
-      Lifecycle.dispatched?(package) and qualification == :qualified -> Lifecycle.transition(repo, package, :qualify)
+      Lifecycle.dispatched?(package) and qualifies? -> Lifecycle.transition(repo, package, :qualify)
       Lifecycle.ready?(package) and qualification != :qualified -> unqualify(repo, session, package, qualification, payload)
       true -> {:ok, package}
     end
