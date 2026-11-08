@@ -38,7 +38,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
   end
 
   def get_current_assignment(%Server{session: %Session{claim_lease_id: claim_lease_id}} = server) when is_binary(claim_lease_id) do
-    case require_current_session_claim(server, true) do
+    case require_current_session_claim(server, true, false) do
       {:ok, %Server{session: %Session{} = session} = updated_server} ->
         {:ok, bound_assignment_payload(updated_server, session), updated_server}
 
@@ -201,6 +201,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
   def require_current_session_claim_for_bound_call(%Server{} = server, method, params) do
     if bound_session_call?(server, method, params) do
       require_current_session_claim(server)
+    else
+      {:ok, server}
+    end
+  end
+
+  @doc """
+  Checks a bound session's claim for a read without reclaiming it. A live
+  claim with a live grant is renewed, and a stale one is left for the next
+  write to reclaim, as is the binding when the ledger cannot be checked. A
+  revoked grant or a paused or lost claim unbinds the session as a write
+  would, but the read still proceeds.
+  """
+  @spec refresh_current_session_claim_for_read(Server.t(), String.t(), map()) :: {:ok, Server.t()}
+  def refresh_current_session_claim_for_read(%Server{} = server, method, params) do
+    if bound_session_call?(server, method, params) do
+      case require_current_session_claim(server, true, false) do
+        {:ok, %Server{} = refreshed} -> {:ok, refreshed}
+        {:error, _code, _message, _data, %Server{} = unbound} -> {:ok, unbound}
+        {:service_error, _reason} -> {:ok, server}
+      end
     else
       {:ok, server}
     end
@@ -431,11 +451,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
 
   defp require_current_session_claim(
          %Server{config: %Config{repo: repo}, session: %Session{} = session} = server,
-         preserve_service_unavailable? \\ false
+         preserve_service_unavailable? \\ false,
+         reclaim_stale? \\ true
        ) do
     case {Auth.require_live_session_grant(session, repo), current_matching_claim_lease(repo, session)} do
       {:ok, {:ok, %ClaimLease{status: "active"} = lease}} ->
-        refresh_current_session_claim_lease(repo, server, lease, preserve_service_unavailable?)
+        refresh_current_session_claim_lease(repo, server, lease, preserve_service_unavailable?, reclaim_stale?)
 
       {:ok, {:ok, %ClaimLease{status: "paused"}}} ->
         lost_current_session_claim(server, :claim_lease_paused)
@@ -460,15 +481,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
          repo,
          %Server{session: %Session{} = session} = server,
          %ClaimLease{} = lease,
-         preserve_service_unavailable?
+         preserve_service_unavailable?,
+         reclaim_stale?
        ) do
     if claim_lease_heartbeat_due?(lease) do
       case ClaimLeaseService.heartbeat(repo, lease.id, stale_after_ms: @local_assignment_claim_stale_after_ms) do
         {:ok, %ClaimLease{} = renewed} ->
           {:ok, %{server | session: Session.with_claim_lease(session, renewed)}}
 
-        {:error, :claim_stale} ->
+        {:error, :claim_stale} when reclaim_stale? ->
           reclaim_current_session_claim_lease(repo, server, session, lease, preserve_service_unavailable?)
+
+        # Without reclaim, a stale claim stays bound so the next write can reclaim it.
+        {:error, :claim_stale} ->
+          {:ok, %{server | session: Session.with_claim_lease(session, lease)}}
 
         {:error, reason} ->
           preserve_service_error_or_lose_claim(server, reason, preserve_service_unavailable?)

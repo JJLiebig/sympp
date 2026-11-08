@@ -6,9 +6,9 @@ delivery invariants remain in `../procedure.md`.
 ## Bootstrap recovery
 
 An unbound trusted local architect session can acquire an unclaimed WorkRequest
-or reclaim an expired, unpaused claim implicitly on an architect operation with
-`work_request_id`. `read_work_request` and `read_plan` do not acquire claims.
-Known scope survives connection loss and is reused on reconnect. A bound session does not implicitly
+or reclaim an expired, unpaused claim implicitly on a write that names its
+`work_request_id`. Reads never claim; with an explicit id they read that object
+whatever the session holds. Known scope survives connection loss and is reused on reconnect. A bound session does not implicitly
 switch to another WorkRequest. A different live owner blocks the claim without
 changing ownership. Paused claims remain operator-controlled.
 
@@ -16,7 +16,7 @@ When a chief owns WorkRequest A and creates WorkRequest B (including in another
 repository), creation returns B's bootstrap but leaves the session bound to A:
 
 1. Call `claim_local_architect_assignment` with B's returned
-   `local_architect_claim_arguments` before reading or planning B.
+   `local_architect_claim_arguments` before planning B.
 2. Read `read_work_request` and `read_plan` for B, then perform B's scoped work.
 3. To resume A, call `claim_local_architect_assignment` with A's
    `work_request_id` and the same `claimed_by` used for A's original claim,
@@ -24,10 +24,7 @@ repository), creation returns B's bootstrap but leaves the session bound to A:
 
 Switching releases the previous session assignment after acquiring the new one;
 it does not override another architect's ownership. Keep the original bootstrap
-arguments for each request when switching back. If a trusted local scoped read returns
-redacted `not_found` immediately after creation, check the returned bootstrap
-and explicitly claim that request. This is a recovery step for a known request,
-not evidence that an arbitrary id exists. If claiming fails, report the blocker.
+arguments for each request when switching back. If claiming fails, report the blocker.
 
 A local architect claim can recover stale handoff scope when the ledger proves
 one matching WorkRequest, repo, base branch, anchor, and grant. For

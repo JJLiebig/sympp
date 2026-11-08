@@ -222,23 +222,22 @@ test('architect scope separates same-repository discovery from foreign writes an
   await architect.call('dispatch_work_package', { work_package_id: secondaryWp });
   const secondaryWorker = await worker(factory, secondaryWp, 'secondary-worker');
   expect((await secondaryWorker.call('read_context')).work_package.base_branch).toBe('integration');
-  const scopedBoard = (await secondary.call('read_delivery_board', { detail: 'full', work_request_id: own })).delivery_board;
-  const hiddenRow = scopedBoard.work_packages.find((entry: any) => entry.id === ownWp);
-  expect(hiddenRow.work_package).toBeNull();
-  expect(hiddenRow['work_package_hidden?']).toBe(true);
-  expect(hiddenRow.attention_reason_codes).toEqual([]);
-  expect(scopedBoard.work_packages.find((entry: any) => entry.id === secondaryWp).work_package.id).toBe(secondaryWp);
+  // A bound architect reads another WorkRequest in full; ownership gates writes only.
+  const readerBoard = (await secondary.call('read_delivery_board', { detail: 'full', work_request_id: own })).delivery_board;
+  expect(readerBoard.work_packages.find((entry: any) => entry.id === ownWp).work_package.id).toBe(ownWp);
+  expect(readerBoard.work_packages.find((entry: any) => entry.id === secondaryWp).work_package.id).toBe(secondaryWp);
   const parentGroup = (await architect.call('upsert_group', { title: 'Visible ancestor' })).group.id;
-  const visibleGroup = (await architect.call('upsert_group', { title: 'Visible secondary group', parent_group_id: parentGroup })).group.id;
-  const hiddenGroup = (await architect.call('upsert_group', { title: 'Confidential primary group' })).group.id;
-  for (const [wp, group] of [[ownWp, hiddenGroup], [secondaryWp, visibleGroup]]) {
+  const secondaryGroup = (await architect.call('upsert_group', { title: 'Secondary group', parent_group_id: parentGroup })).group.id;
+  const primaryGroup = (await architect.call('upsert_group', { title: 'Primary group' })).group.id;
+  for (const [wp, group] of [[ownWp, primaryGroup], [secondaryWp, secondaryGroup]]) {
     await architect.call('update_work_package', { work_package_id: wp, expected_contract_revision: 1, patch: { group_id: group } });
   }
-  const scopedPlan = await secondary.call('read_plan', { detail: 'full', work_request_id: own, view: 'groups_with_work_packages' });
-  expect(scopedPlan.product_tree.groups.map((entry: any) => entry.id).sort()).toEqual([parentGroup, visibleGroup].sort());
-  expect(JSON.stringify(scopedPlan)).not.toContain('Confidential primary group');
-  await peer.reject('update_work_package', { work_package_id: otherWp, expected_contract_revision: 1, patch: { group_id: visibleGroup } }, 'not_found');
-  const dependencyArgs = { dependent: { kind: 'group', id: hiddenGroup }, prerequisite: { kind: 'work_package', id: secondaryWp }, reason: 'Scoped dependency' };
+  const planArgs = { detail: 'full', work_request_id: own, view: 'groups_with_work_packages' };
+  const readerPlan = await secondary.call('read_plan', planArgs);
+  expect(readerPlan.product_tree.groups.map((entry: any) => entry.id).sort()).toEqual([parentGroup, secondaryGroup, primaryGroup].sort());
+  expect(readerPlan).toEqual(await architect.call('read_plan', planArgs));
+  await peer.reject('update_work_package', { work_package_id: otherWp, expected_contract_revision: 1, patch: { group_id: secondaryGroup } }, 'not_found');
+  const dependencyArgs = { dependent: { kind: 'group', id: primaryGroup }, prerequisite: { kind: 'work_package', id: secondaryWp }, reason: 'Scoped dependency' };
   const dependency = (await architect.call('upsert_dependency', dependencyArgs)).dependency.id;
   const beforeEdges = (await architect.call('read_plan', { detail: 'full', work_request_id: own, view: 'groups_with_work_packages' })).product_tree.dependency_intents;
   const foreignUpdate = await architect.rpc('tools/call', { name: 'upsert_dependency', arguments: {
@@ -248,11 +247,9 @@ test('architect scope separates same-repository discovery from foreign writes an
   expect(foreignUpdate.error.data.reason).toContain('product_tree_dependency_target_scope');
   expect((await architect.call('read_plan', { detail: 'full', work_request_id: own, view: 'groups_with_work_packages' })).product_tree.dependency_intents).toEqual(beforeEdges);
   await close(architect, ownWp);
-  const hiddenTerminal = await row(secondary, own, ownWp);
-  expect(hiddenTerminal.work_package).toBeNull();
-  expect(hiddenTerminal['work_package_hidden?']).toBe(true);
-  expect(hiddenTerminal.operational_state.key).toBe('completed_no_pr');
-  expect(hiddenTerminal.attention_reason_codes).toEqual([]);
+  const closedRow = await row(secondary, own, ownWp);
+  expect(closedRow.work_package.id).toBe(ownWp);
+  expect(closedRow.operational_state.key).toBe('completed_no_pr');
   const sameRepoReader = await factory.client();
   await sameRepoReader.request('Same repository different delivery base', 'ready_for_slicing', 'integration');
   const [alternateBase] = (await architect.call('slice_work_request', { work_packages: [contract('Alternate delivery base', { base_branch: 'integration' })] })).work_package_ids;
@@ -261,7 +258,7 @@ test('architect scope separates same-repository discovery from foreign writes an
   expect((await alternateWorker.call('read_context')).work_package.base_branch).toBe('integration');
   const baseBoard = (await sameRepoReader.call('read_delivery_board', { detail: 'full', work_request_id: own })).delivery_board;
   expect(baseBoard.work_packages.find((entry: any) => entry.id === alternateBase).work_package.id).toBe(alternateBase);
-  expect(baseBoard.work_packages.find((entry: any) => entry.id === ownWp).work_package).toBeNull();
+  expect(baseBoard.work_packages.find((entry: any) => entry.id === ownWp).work_package.id).toBe(ownWp);
   await sameRepoReader.reject('record_work_package_delivery', { work_request_id: own, work_package_id: ownWp, outcome: 'completed_no_pr',
     idempotency_key: 'wrong-delivery-base', evidence: { completed_no_pr: { no_pr_evidence: 'Refuse hidden-base closeout' } },
   }, 'not_found');
@@ -269,13 +266,13 @@ test('architect scope separates same-repository discovery from foreign writes an
   for (const [repo, branch] of [['foreign/service', 'beta'], ['example/service', 'other-branch']]) {
     const outsider = await factory.client();
     const foreign = await outsider.request('Confidential outside scope', 'ready_for_slicing', branch, repo);
-    await architect.reject('read_work_request', { detail: 'full', work_request_id: foreign }, 'not_found');
+    expect((await architect.call('read_work_request', { detail: 'full', work_request_id: foreign })).work_request.id).toBe(foreign);
     const listed = await architect.call('list_work_requests', {});
     expect(JSON.stringify(listed)).not.toContain(foreign);
   }
 });
 
-test('plan views preserve complete authoring and confine partial readers to visible groups and dependencies', async ({ processes }) => {
+test('plan views give a reader bound to another request the same complete plan as the owner', async ({ processes }) => {
   const factory = processes.factory();
   const architect = await factory.client();
   const request = await architect.request('Plan projection authority');
@@ -287,100 +284,69 @@ test('plan views preserve complete authoring and confine partial readers to visi
     title, ...(parent ? { parent_group_id: parent } : {}),
   })).group.id as string;
   const empty = await group('Empty authoring group');
-  const hiddenRoot = await group('Hidden root');
-  const hiddenGroup = await group('Hidden package group', hiddenRoot);
-  const emptyDescendant = await group('Empty hidden descendant', hiddenGroup);
-  const ancestor = await group('Necessary visible ancestor');
-  const visibleGroup = await group('Visible package group', ancestor);
+  const primaryRoot = await group('Primary root');
+  const primaryGroup = await group('Primary package group', primaryRoot);
+  const emptyDescendant = await group('Empty primary descendant', primaryGroup);
+  const ancestor = await group('Secondary ancestor');
+  const secondaryGroup = await group('Secondary package group', ancestor);
   const mixed = await group('Mixed membership');
-  const allGroups = [empty, hiddenRoot, hiddenGroup, emptyDescendant, ancestor, visibleGroup, mixed].sort();
-  // Empty equals empty: both callers can see a complete pre-package authoring plan.
+  const allGroups = [empty, primaryRoot, primaryGroup, emptyDescendant, ancestor, secondaryGroup, mixed].sort();
   for (const client of [architect, reader]) for (const view of views) {
     const plan = await read(client, view);
     expect(plan.groups.map((entry: any) => entry.id).sort()).toEqual(allGroups);
     expect(plan.summary.work_package_count).toBe(0);
   }
-  const hidden = (await architect.call('slice_work_request', { work_packages: [
-    contract('Hidden contract', { group_id: hiddenGroup }),
-    contract('Hidden ancestor membership', { group_id: ancestor }),
-    contract('Hidden mixed membership', { group_id: mixed }),
-    contract('Hidden terminal contract', { group_id: hiddenGroup, kind: 'docs' }),
+  const primary = (await architect.call('slice_work_request', { work_packages: [
+    contract('Primary contract', { group_id: primaryGroup }),
+    contract('Primary ancestor membership', { group_id: ancestor }),
+    contract('Primary mixed membership', { group_id: mixed }),
+    contract('Primary terminal contract', { group_id: primaryGroup, kind: 'docs' }),
   ] })).work_package_ids as string[];
-  for (const view of views) {
-    const plan = await read(reader, view);
-    expect(plan.groups).toEqual([]);
-    expect(plan.root_group_ids).toEqual([]);
-    expect(plan.root_work_package_ids).toEqual([]);
-    expect(plan.summary.work_package_count).toBe(0);
-    expect(plan.summary.group_count).toBe(0);
-    for (const id of [...hidden, ...allGroups]) expect(JSON.stringify(plan)).not.toContain(id);
-  }
   const secondary = { repo: 'example/client', base_branch: 'integration' };
   const [planned, mixedMember, terminal, rootMember] = (await architect.call('slice_work_request', { work_packages: [
-    contract('Visible planned contract', { ...secondary, group_id: visibleGroup }),
-    contract('Visible mixed contract', { ...secondary, group_id: mixed }),
-    contract('Visible terminal contract', { ...secondary, group_id: visibleGroup, kind: 'docs' }),
-    contract('Visible root contract', secondary),
+    contract('Secondary planned contract', { ...secondary, group_id: secondaryGroup }),
+    contract('Secondary mixed contract', { ...secondary, group_id: mixed }),
+    contract('Secondary terminal contract', { ...secondary, group_id: secondaryGroup, kind: 'docs' }),
+    contract('Secondary root contract', secondary),
   ] })).work_package_ids;
-  const visible = [planned, mixedMember, terminal, rootMember].sort();
+  const all = [...primary, planned, mixedMember, terminal, rootMember].sort();
   const dependency = async (dependent: string, prerequisite: string, kind = 'work_package') =>
     (await architect.call('upsert_dependency', {
       dependent: { kind, id: dependent }, prerequisite: { kind, id: prerequisite }, reason: 'Required bounded scope',
     })).dependency.id as string;
-  const visibleEdge = await dependency(planned, terminal);
-  const groupEdge = await dependency(mixed, visibleGroup, 'group');
-  const hiddenEdge = await dependency(planned, hidden[0]);
-  const hiddenGroupEdge = await dependency(mixed, hiddenGroup, 'group');
-  const assertPartial = async (terminalStatus: string) => {
+  const edges = [
+    await dependency(planned, terminal),
+    await dependency(mixed, secondaryGroup, 'group'),
+    await dependency(planned, primary[0]),
+    await dependency(mixed, primaryGroup, 'group'),
+  ];
+  const assertComplete = async (terminalStatus: string) => {
     for (const view of views) {
       const plan = await read(reader, view);
-      expect(plan.groups.map((entry: any) => entry.id).sort()).toEqual([ancestor, visibleGroup, mixed].sort());
-      expect(plan.root_group_ids.sort()).toEqual([ancestor, mixed].sort());
-      expect(plan.summary.work_package_count).toBe(4);
-      expect(plan.summary.group_count).toBe(3);
-      const mixedRow = plan.groups.find((entry: any) => entry.id === mixed);
-      expect(mixedRow.work_package_count).toBe(1);
-      for (const id of [...hidden, empty, hiddenRoot, hiddenGroup, emptyDescendant, hiddenEdge, hiddenGroupEdge]) expect(JSON.stringify(plan)).not.toContain(id);
-      expect(JSON.stringify(plan)).not.toContain('Hidden contract');
-      expect(JSON.stringify(plan)).not.toContain('Hidden terminal contract');
+      expect(plan).toEqual(await read(architect, view));
+      expect(plan.groups.map((entry: any) => entry.id).sort()).toEqual(allGroups);
+      expect(plan.summary.work_package_count).toBe(8);
+      expect(plan.summary.group_count).toBe(7);
       if (view === 'groups_only') {
-        expect(plan.root_work_package_ids).toEqual([]);
-        expect(mixedRow.work_package_ids).toBeUndefined();
         expect(plan.work_packages).toBeUndefined();
-        expect(plan.work_package_refs).toBeUndefined();
-        expect(plan.omitted_work_package_count).toBe(4);
-        expect(plan.execution_graph.omitted_work_package_count).toBe(4);
-        expect(plan.dependency_intents.map((entry: any) => entry.id)).toEqual([groupEdge]);
+        expect(plan.omitted_work_package_count).toBe(8);
       } else {
-        expect(plan.root_work_package_ids).toEqual([rootMember]);
-        expect(mixedRow.work_package_ids).toEqual([mixedMember]);
-        expect(plan.groups.find((entry: any) => entry.id === ancestor).work_package_ids).toEqual([]);
         const members = view === 'groups_with_work_packages' ? plan.work_packages : plan.work_package_refs;
-        expect(members.map((entry: any) => entry.id).sort()).toEqual(visible);
-        expect(members.find((entry: any) => entry.id === planned).status).toBe('planned');
+        expect(members.map((entry: any) => entry.id).sort()).toEqual(all);
         expect(members.find((entry: any) => entry.id === terminal).status).toBe(terminalStatus);
-        expect(plan.execution_graph.work_package_ids.sort()).toEqual(visible);
-        expect(plan.dependency_intents.map((entry: any) => entry.id).sort()).toEqual([visibleEdge, groupEdge].sort());
-        expect(plan.execution_graph.effective_edges.map((entry: any) => [entry.prerequisite_work_package_id, entry.dependent_work_package_id]).sort())
-          .toEqual([[terminal, planned], [planned, mixedMember], [terminal, mixedMember]].sort());
+        expect(members.find((entry: any) => entry.id === primary[3]).status).toBe(terminalStatus);
+        expect(plan.root_work_package_ids).toEqual([rootMember]);
+        expect(plan.dependency_intents.map((entry: any) => entry.id).sort()).toEqual([...edges].sort());
       }
     }
   };
-  await assertPartial('planned');
-  for (const wp of [hidden[3], terminal]) {
+  await assertComplete('planned');
+  for (const wp of [primary[3], terminal]) {
     await architect.call('dispatch_work_package', { work_package_id: wp });
     await (await worker(factory, wp)).call('mark_ready');
     await close(architect, wp);
   }
-  await assertPartial('closed');
-  for (const view of views) {
-    const plan = await read(architect, view);
-    expect(plan.groups.map((entry: any) => entry.id).sort()).toEqual(allGroups);
-    expect(plan.summary.work_package_count).toBe(8);
-    if (view === 'groups_with_work_packages') {
-      expect(plan.work_packages.find((entry: any) => entry.id === hidden[3]).status).toBe('closed');
-    }
-  }
+  await assertComplete('closed');
 });
 
 test('worker mutations and resources remain confined to its package while explicit local notes preserve provenance', async ({ processes }) => {
@@ -1297,7 +1263,8 @@ test('architect descendant planning stays scoped through terminal closeout and r
   const foreign = await factory.client();
   await foreign.request('Other planning owner');
   const [otherWp] = await packages(foreign, ['Private foreign plan']);
-  await architect.reject('read_task_plan', { work_package_id: otherWp }, 'not_found');
+  // Reads by explicit id are free for trusted callers; package resources stay session-scoped.
+  expect((await architect.call('read_task_plan', { work_package_id: otherWp })).uri).toContain(otherWp);
   expect(JSON.stringify(await architect.rpc('resources/list'))).not.toContain(otherWp);
   await close(architect, wp);
   for (const [name, args] of [
@@ -1309,8 +1276,11 @@ test('architect descendant planning stays scoped through terminal closeout and r
   const staleReader = await factory.client();
   await staleReader.call('claim_local_architect_assignment', { work_request_id: request, claimed_by: 'acceptance-architect' });
   expect((await architect.operator(`/api/v1/sympp/operator/work-requests/${request}/archive`, {})).status).toBe(200);
-  await architect.reject('read_task_plan', { work_package_id: wp }, 'claim_lease_lost');
-  await staleReader.reject('list_work_requests', {}, 'claim_lease_lost');
+  // The archived request's plan stays readable by id; the lost claim only blocks writes and scoped calls.
+  expect((await architect.call('read_task_plan', { work_package_id: wp })).text).toContain('Inspect descendant');
+  // Losing the claim unbinds the session; its reads continue against the local ledger.
+  expect((await staleReader.call('list_work_requests', {})).work_requests).toBeDefined();
+  expect((await staleReader.call('get_current_assignment')).binding.state).toBe('stale');
 });
 
 deliveryTest('worker dependency qualifications survive successor replacement only after explicit input requalification', async ({ delivery: { factory, provider } }) => {
