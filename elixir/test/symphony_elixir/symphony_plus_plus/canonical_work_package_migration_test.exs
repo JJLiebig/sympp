@@ -1,7 +1,6 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
   use ExUnit.Case, async: false
 
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -273,18 +272,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
       ["PTSL-CANONICAL", "WR-CANONICAL-MIGRATION", "PTN-CANONICAL", "WRS-LINKED", "implementation_slice", 0, now, now, now]
     )
 
-    grant =
-      Repo.insert!(
-        AccessGrant.create_changeset(%{
-          id: "GRANT-LEGACY-SLICE",
-          work_package_id: "WP-LINKED",
-          display_key: "ABCD",
-          secret_hash: String.duplicate("a", 64),
-          grant_role: "worker",
-          capabilities: ["read:assignment"],
-          expires_at: DateTime.add(now, 3_600, :second)
-        })
-      )
+    # The access grant tables existed at this schema version.
+    query!(
+      """
+      INSERT INTO sympp_access_grants
+        (id, work_package_id, display_key, secret_hash, grant_role, capabilities, expires_at, inserted_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      """,
+      ["GRANT-LEGACY-SLICE", "WP-LINKED", "ABCD", String.duplicate("a", 64), "worker", ~s(["read:assignment"]), DateTime.add(now, 3_600, :second), now, now]
+    )
 
     query!(
       """
@@ -292,7 +288,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
         (id, access_grant_id, scope_type, scope_key, scope_id, inserted_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
       """,
-      ["AGS-LEGACY-SLICE", grant.id, "planned_slice", "planned_slice:WRS-LINKED", "WRS-LINKED", now, now]
+      ["AGS-LEGACY-SLICE", "GRANT-LEGACY-SLICE", "planned_slice", "planned_slice:WRS-LINKED", "WRS-LINKED", now, now]
     )
 
     query!(

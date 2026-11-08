@@ -21,7 +21,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
     end
   end
 
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.CreateWork
   alias SymphonyElixir.SymphonyPlusPlus.Planning.{Artifact, Finding, PlanNode, ProgressEvent}
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Node
@@ -47,7 +46,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
     repo.delete_all(ProgressEvent)
     repo.delete_all(Finding)
     repo.delete_all(PlanNode)
-    repo.delete_all(AccessGrant)
     repo.delete_all(WorkPackageDelivery)
     repo.delete_all(ClarificationQuestion)
     repo.delete_all(WorkPackage)
@@ -99,7 +97,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
     assert {:ok, persisted} = WorkPackageRepository.get(repo, package.id)
     assert persisted.status == "planned"
     assert persisted.title == "Newer contract"
-    assert Repo.aggregate(AccessGrant, :count) == 0
   end
 
   defp slice_one!(repo, work_request_id, attrs \\ package_attrs()) do

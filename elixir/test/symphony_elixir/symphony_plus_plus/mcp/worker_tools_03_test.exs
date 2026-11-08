@@ -3,7 +3,9 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  test "sync_pr records only a verified merge, which ends the package and retires the worker", %{repo: repo} do
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
+
+  test "sync_pr ends a ready package only on a verified merge", %{repo: repo} do
     original_client = Application.get_env(:symphony_elixir, :sympp_github_client)
     Application.put_env(:symphony_elixir, :sympp_github_client, SymphonyElixir.FakeGitHubClient)
     SymphonyElixir.FakeGitHubClient.clear()
@@ -48,9 +50,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
                payload: %{type: "pr", source_tool: "attach_pr", url: "https://github.com/nextide/repo/pull/27", repository: "nextide/repo", number: 27, head_sha: "head-a"}
              })
 
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
     assert {:ok, initial_events} = PlanningRepository.list_progress_events(repo, package.id)
 
     SymphonyElixir.FakeGitHubClient.put_response(
@@ -67,16 +66,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
           "method" => "tools/call",
           "params" => %{
             "name" => "sync_pr",
-            "arguments" => %{"url" => "https://github.com/nextide/repo/pull/27"}
+            "arguments" => %{"work_package_id" => package.id, "url" => "https://github.com/nextide/repo/pull/27"}
           }
         },
         repo: repo,
-        session: session
+        terminal: "t1"
       )
 
-    assert get_in(open_response, ["error", "data", "reason"]) == "pr_not_merged"
-    assert {:ok, unchanged_events} = PlanningRepository.list_progress_events(repo, package.id)
-    assert length(unchanged_events) == length(initial_events)
+    # An open PR refreshes the snapshot but never ends the package.
+    assert get_in(open_response, ["result", "structuredContent", "work_package", "status"]) == "ready"
+    assert {:ok, synced_events} = PlanningRepository.list_progress_events(repo, package.id)
+    assert length(synced_events) > length(initial_events)
     assert repo.get!(WorkPackage, package.id).status == "ready"
 
     SymphonyElixir.FakeGitHubClient.put_response(
@@ -93,34 +93,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
           "method" => "tools/call",
           "params" => %{
             "name" => "sync_pr",
-            "arguments" => %{"url" => "https://github.com/nextide/repo/pull/27"}
+            "arguments" => %{"work_package_id" => package.id, "url" => "https://github.com/nextide/repo/pull/27"}
           }
         },
         repo: repo,
-        session: session
+        terminal: "t1"
       )
 
     assert get_in(merged_response, ["result", "structuredContent", "work_package", "status"]) == "ended"
     assert get_in(merged_response, ["result", "structuredContent", "pr_sync", "status"]) == "merged"
-    assert get_in(merged_response, ["result", "structuredContent", "next_owner"]) == "architect"
-    assert get_in(merged_response, ["result", "structuredContent", "next_action"]) == "return_to_architect"
-
-    replay_response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "sync-replay",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "sync_pr",
-            "arguments" => %{"url" => "https://github.com/nextide/repo/pull/27"}
-          }
-        },
-        repo: repo,
-        session: session
-      )
-
-    # Ending the package retired the worker's grant.
-    assert get_in(replay_response, ["error", "data", "reason"]) == "revoked"
+    assert [%{outcome: "pr_merged"}] = repo.all(from(delivery in WorkPackageDelivery, where: delivery.work_package_id == ^package.id))
   end
 end

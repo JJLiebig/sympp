@@ -595,8 +595,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   end
 
   defp scoped_work_package(repo, work_request_id, work_package_id) do
-    with {:ok, work_request, work_package} <- WorkRequestScope.work_package_scope(repo, work_request_id, work_package_id) do
-      {:ok, work_request, work_package, %{}, WorkRequestPayloads.redacted_work_request_scope(work_request)}
+    case WorkRequestScope.work_package_scope(repo, work_request_id, work_package_id) do
+      {:ok, work_request, work_package} ->
+        scope = WorkRequestPayloads.redacted_work_request_scope(work_request)
+        {:ok, work_request, work_package, %{}, scope}
+
+      error ->
+        error
     end
   end
 

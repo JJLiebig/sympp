@@ -8,17 +8,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   alias SymphonyElixir.FakeGitHubClient
   alias SymphonyElixir.GitHubPullRequestFixtures
   alias SymphonyElixir.MCPHarness
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
-  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
-  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service, as: ClaimLeaseService
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Config
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.Session
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
-  alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Revision
@@ -27,7 +21,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
@@ -72,8 +65,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
           WorkPackage,
           DecisionLogEntry,
           AgentRun,
-          ClaimLease,
-          AccessGrant,
           WorkPackage,
           WorkRequest,
           Phase
@@ -119,24 +110,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert closeout_event.payload["ignored_stale_agent_run_ids"] == [agent_run.id]
   end
 
-  test "apply records merged PR closeout for stale package and retires worker authority", %{repo: repo} do
+  test "apply records merged PR closeout for a stale dispatched package", %{repo: repo} do
     {work_request, work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-RECONCILE-STALE-PR-MERGED",
         work_package_id: "WP-RECONCILE-STALE-PR-MERGED",
         status: "dispatched"
       )
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
-    assert {:ok, _assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "stale-worker")
-
-    assert {:ok, claim_lease} =
-             ClaimLeaseService.claim(
-               repo,
-               linked_package.id,
-               %{"actor_kind" => "agent", "actor_id" => "local:reconcile-claim", "actor_display_name" => "worker-claim"},
-               stale_after_ms: 60_000
-             )
 
     append_merged_pr_evidence!(repo, linked_package, 913, "old-head-913", synced_head_sha: "head-913")
 
@@ -151,8 +131,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert [delivery] = repo.all(WorkPackageDelivery)
     assert delivery.outcome == "pr_merged"
     assert repo.get!(WorkPackage, linked_package.id).status == "ended"
-    assert %AccessGrant{revoked_at: %DateTime{}} = repo.get!(AccessGrant, minted.grant.id)
-    assert %ClaimLease{status: "released", release_reason: "pr_merged_delivery_closeout"} = repo.get!(ClaimLease, claim_lease.id)
   end
 
   test "periodic PR observation closes dispatched work without recorded head or readiness", %{repo: repo} do
@@ -209,7 +187,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     refute Enum.any?(events, &(&1.status == "github_pr_merged"))
   end
 
-  test "MCP reconcile_work_request dry-run reports proposed closeout without write capability", %{repo: repo} do
+  test "MCP reconcile_work_request dry-run is a read that reports proposed closeout", %{repo: repo} do
     {work_request, work_package, linked_package} =
       linked_slice!(
         repo,
@@ -219,9 +197,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
       )
 
     append_merged_pr_evidence!(repo, linked_package, 903, "head-903")
-    session = create_work_request_architect_session(repo, work_request, ["read:work_request"])
-
-    response = mcp_tool(repo, session, "reconcile_work_request", %{"work_request_id" => work_request.id})
+    response = mcp_tool(repo, nil, "reconcile_work_request", %{"work_request_id" => work_request.id})
     payload = get_in(response, ["result", "structuredContent", "reconciliation"])
 
     assert payload["mode"] == "dry_run"
@@ -251,9 +227,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
       )
 
     append_merged_pr_evidence!(repo, linked_package, 917, "head-917")
-    session = create_work_request_architect_session(repo, work_request, ["read:work_request", "write:work_request"])
-
-    response = mcp_tool(repo, session, "reconcile_work_request", %{"work_request_id" => work_request.id, "apply" => true})
+    response = mcp_tool(repo, "t1", "reconcile_work_request", %{"work_request_id" => work_request.id, "apply" => true})
     payload = get_in(response, ["result", "structuredContent", "reconciliation"])
 
     assert payload["applied_count"] == 1
@@ -263,7 +237,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     repo.delete_all(from(revision in Revision, where: revision.work_request_id == ^work_request.id))
     assert revision_count(repo, work_request.id) == 0
 
-    backfill_response = mcp_tool(repo, session, "reconcile_work_request", %{"work_request_id" => work_request.id, "apply" => true})
+    backfill_response = mcp_tool(repo, "t1", "reconcile_work_request", %{"work_request_id" => work_request.id, "apply" => true})
 
     assert get_in(backfill_response, ["result", "structuredContent", "reconciliation", "applied_count"]) == 0
     assert revision_count(repo, work_request.id) == 1
@@ -500,38 +474,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
 
     assert {:ok, work_package} = WorkPackageRepository.create(repo, attrs)
     work_package
-  end
-
-  defp create_work_request_architect_session(repo, %WorkRequest{} = work_request, capabilities) do
-    phase_id = ArchitectHandoff.phase_id_for_work_request(work_request)
-
-    assert {:ok, _phase} = PhaseRepository.create(repo, %{id: phase_id, title: "Architect handoff for #{work_request.id}"})
-
-    anchor_attrs =
-      [
-        id: ArchitectHandoff.anchor_id_for_work_request(work_request),
-        kind: "delegation",
-        title: "Architect handoff",
-        repo: work_request.repo,
-        base_branch: work_request.base_branch,
-        phase_id: phase_id,
-        status: "planning",
-        allowed_file_globs: ["elixir/lib", "elixir/lib/**"],
-        acceptance_criteria: ["Own the WorkRequest architecture."]
-      ]
-      |> WorkPackageFactory.attrs()
-
-    assert {:ok, anchor} = WorkPackageRepository.create(repo, anchor_attrs)
-
-    assert {:ok, minted} =
-             AccessGrantService.mint_architect_grant(repo, phase_id,
-               work_package_id: anchor.id,
-               capabilities: capabilities
-             )
-
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "architect-1")
-
-    MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
   end
 
   defp append_merged_pr_evidence!(repo, work_package, number, attached_head_sha, opts \\ []) do
@@ -810,7 +752,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     Enum.into(overrides, defaults)
   end
 
-  defp mcp_tool(repo, %Session{} = session, name, arguments) do
+  defp mcp_tool(repo, terminal, name, arguments) do
     MCPHarness.request(
       %{
         "jsonrpc" => "2.0",
@@ -819,7 +761,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
         "params" => %{"name" => name, "arguments" => arguments}
       },
       config: Config.default(repo: repo, repo_root: test_repo_root()),
-      session: session
+      terminal: terminal
     )
   end
 

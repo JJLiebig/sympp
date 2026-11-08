@@ -6,15 +6,15 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
-  alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit.Target
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
-  alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
+  alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit.Target
   alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixirWeb.Endpoint

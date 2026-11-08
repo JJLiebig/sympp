@@ -86,9 +86,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal do
   defp text(value) when is_binary(value) do
     trimmed = String.trim(value)
 
-    if trimmed != "" and byte_size(trimmed) <= @max_length and String.printable?(trimmed) and not String.contains?(trimmed, ["\n", "\r"]),
-      do: {:ok, trimmed},
-      else: :error
+    valid? = trimmed != "" and byte_size(trimmed) <= @max_length and String.printable?(trimmed)
+    if valid? and not String.contains?(trimmed, ["\n", "\r"]), do: {:ok, trimmed}, else: :error
   end
 
   defp text(_value), do: :error

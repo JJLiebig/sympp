@@ -12,13 +12,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
     contract = @contract_path |> File.read!() |> Jason.decode!()
     tool_sets = Map.fetch!(contract, "tool_sets")
 
+    tools = :full |> ToolCatalog.startup_tool_specs(Config.default(mode: :http)) |> Enum.map(& &1["name"])
+
     assert Map.keys(contract) |> Enum.sort() == ["mcp_contract_fingerprint", "tool_sets", "version"]
-    assert Map.fetch!(contract, "version") == 7
+    assert Map.fetch!(contract, "version") == 8
     assert Map.fetch!(contract, "mcp_contract_fingerprint") == Server.mcp_contract_identity()["fingerprint"]
-    assert Map.fetch!(tool_sets, "unbound_tools") == ToolCatalog.contract_unbound_tools()
-    assert Map.fetch!(tool_sets, "trusted_local_http_extra_tools") == ToolCatalog.contract_trusted_local_http_extra_tools()
-    assert Map.fetch!(tool_sets, "worker_tools") == ToolCatalog.worker_tools()
-    assert Map.fetch!(tool_sets, "architect_tools") == ToolCatalog.architect_tools()
+
+    assert tool_sets == %{
+             "tools" => tools,
+             "read_tools" => Enum.filter(tools, &(ToolCatalog.tool_access(&1) == :read)),
+             "owner_gated_tools" => Enum.filter(tools, &ToolCatalog.owner_gated_call?(&1, %{"apply" => true}))
+           }
   end
 
   test "mix task reuses an already-started repo for the exact SQLite URI" do
@@ -61,27 +65,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
   end
 
   test "tools list returns Codex-compatible top-level input schemas for every surface", %{repo: repo} do
-    assert {:ok, worker_package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-CODEX-SCHEMA-WORKER", kind: "mcp"))
-    assert {:ok, worker_minted} = AccessGrantService.mint_worker_grant(repo, worker_package.id)
-    assert {:ok, worker_assignment} = AccessGrantService.claim(repo, worker_minted.work_key.secret, claimed_by: "worker-1")
-    worker_session = MCPHarness.session(worker_assignment, proof_hash: worker_minted.grant.secret_hash)
-
-    {_anchor, architect_session, _grant} = create_phase_architect_session(repo, "SYMPP-CODEX-SCHEMA-ARCHITECT", ["read:phase"])
-
-    surfaces = [
-      {"unbound", Server.new(Config.default(repo: repo), initialized: true)},
-      {"worker", Server.new(Config.default(repo: repo), initialized: true, session: worker_session)},
-      {"architect", Server.new(test_mcp_config(repo), initialized: true, session: architect_session)}
-    ]
-
-    for {surface, server} <- surfaces,
-        tool <- tools_for_server(server) do
+    for profile <- [:full, :worker, :architect, :coordinator, :solo],
+        tool <- ToolCatalog.startup_tool_specs(profile, test_mcp_config(repo)) do
       schema = Map.fetch!(tool, "inputSchema")
 
-      assert schema["type"] == "object", "#{surface} #{tool["name"]} inputSchema must be a top-level object"
+      assert schema["type"] == "object", "#{profile} #{tool["name"]} inputSchema must be a top-level object"
 
       forbidden = Map.take(schema, @codex_forbidden_top_level_schema_keys)
-      assert forbidden == %{}, "#{surface} #{tool["name"]} has Codex-rejected top-level schema keys: #{inspect(Map.keys(forbidden))}"
+      assert forbidden == %{}, "#{profile} #{tool["name"]} has Codex-rejected top-level schema keys: #{inspect(Map.keys(forbidden))}"
     end
   end
 end

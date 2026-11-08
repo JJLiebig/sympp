@@ -37,7 +37,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
   this call had just taken ownership, the new row is removed again, so a failed
   write leaves ownership as it was.
   """
-  @spec gated(repo(), String.t(), Terminal.t(), (-> result)) :: result | {:error, {:owned_by_other_terminal, owner()}} | {:error, term()}
+  @spec gated(repo(), String.t(), Terminal.t(), (-> result)) ::
+          result | {:error, {:owned_by_other_terminal, owner()}} | {:error, term()}
         when result: term()
   def gated(repo, work_request_id, %Terminal{} = terminal, fun) when is_function(fun, 0) do
     case acquire(repo, work_request_id, terminal) do
@@ -150,7 +151,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
   @doc "Ends every live row on a subject that has ended or been archived."
   @spec end_subject(repo(), String.t(), String.t()) :: :ok
   def end_subject(repo, subject_kind, subject_id) do
-    finish_all(repo, from(worked_on in WorkedOn, where: worked_on.subject_kind == ^subject_kind and worked_on.subject_id == ^subject_id), "subject_ended")
+    query = from(row in WorkedOn, where: row.subject_kind == ^subject_kind and row.subject_id == ^subject_id)
+    finish_all(repo, query, "subject_ended")
   end
 
   @doc "Removes the rows of deleted subjects."
@@ -230,17 +232,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
 
   def liveness(%WorkedOn{terminal_key: key}) do
     case Terminal.split_key(key) do
-      {core_id, address} ->
-        case HerdrCore.view(core_id, address) do
-          {:live, _record} -> "live"
-          :finished -> "finished"
-          _unseen_or_unknown -> if ClientLeases.terminal_live?(key), do: "live", else: "unknown"
-        end
-
-      :error ->
-        "unknown"
+      {core_id, address} -> core_liveness(HerdrCore.view(core_id, address), key)
+      :error -> "unknown"
     end
   end
+
+  defp core_liveness({:live, _record}, _key), do: "live"
+  defp core_liveness(:finished, _key), do: "finished"
+  defp core_liveness(_unseen_or_unknown, key), do: if(ClientLeases.terminal_live?(key), do: "live", else: "unknown")
 
   defp refusal(%WorkedOn{} = row) do
     status =

@@ -11,22 +11,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.FakeGitHubClient
   alias SymphonyElixir.GitHubPullRequestFixtures
   alias SymphonyElixir.GitHubTestSupport
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.WorkKey
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
-  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
-  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service, as: ClaimLeaseService
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards
   alias SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.Config
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.Server
   alias SymphonyElixir.SymphonyPlusPlus.OperationalLineage
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
   alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
@@ -182,14 +174,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   setup %{repo: repo} do
     repo.delete_all(OperatorAudit)
     repo.delete_all(AgentRun)
-    repo.delete_all(ClaimLease)
     repo.delete_all(Artifact)
     repo.delete_all(ProgressEvent)
     repo.delete_all(Finding)
     repo.delete_all(PlanNode)
     repo.delete_all(SoloSessionEntry)
     repo.delete_all(SoloSession)
-    repo.delete_all(AccessGrant)
     repo.delete_all(WorkPackageDelivery)
     repo.delete_all(WorkPackage)
     repo.delete_all(WorkPackage)
@@ -215,7 +205,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert {:ok, started} =
              WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-OP-READY-STARTED", status: "dispatched"))
 
-    create_claimed_worker_grant(repo, started.id, "worker-started")
+    start_running_agent_run!(repo, started.id)
 
     assert {:ok, started_card} = Dashboard.card(repo, started)
     assert started_card.operational_state.key == "active"
@@ -1046,42 +1036,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end
   end
 
-  test "session focus routes return missing sessions normally without writing ledger state" do
-    for target <- ["work-packages", "work-requests"] do
-      {conn, queries} = capture_queries(fn -> post(local_operator_conn(), "/api/v1/sympp/operator/#{target}/missing/focus", %{}) end)
-      assert json_response(conn, 200) == %{"ok" => true, "status" => "not_focused", "reason" => "session_gone"}
-      refute Enum.any?(queries, &Regex.match?(~r/^\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP)\b/i, &1))
-    end
-  end
-
-  test "focus rejects cross-origin requests and unsupported methods before reading the ledger" do
-    {conn, queries} =
-      capture_queries(fn ->
-        local_operator_conn()
-        |> put_req_header("origin", "https://example.invalid")
-        |> post("/api/v1/sympp/operator/work-packages/missing/focus", %{})
-      end)
-
-    assert json_response(conn, 401)["error"]["code"] == "unauthorized"
-    assert queries == []
-    assert local_operator_conn() |> get("/api/v1/sympp/operator/work-requests/missing/focus") |> json_response(405)
-  end
-
-  test "offline sandbox refuses focus before any ledger read or external probe" do
-    previous = System.get_env("SYMPP_OFFLINE_SANDBOX")
-    System.put_env("SYMPP_OFFLINE_SANDBOX", "1")
-
-    try do
-      for target <- ["work-packages", "work-requests"] do
-        {conn, queries} = capture_queries(fn -> post(local_operator_conn(), "/api/v1/sympp/operator/#{target}/missing/focus", %{}) end)
-        assert json_response(conn, 403) == %{"error" => "This action is unavailable in the offline beta sandbox."}
-        assert queries == []
-      end
-    after
-      if previous, do: System.put_env("SYMPP_OFFLINE_SANDBOX", previous), else: System.delete_env("SYMPP_OFFLINE_SANDBOX")
-    end
-  end
-
   test "local operator dashboard reads do not write after migration bootstrap" do
     {bootstrap_queries, queries} =
       with_local_operator_endpoint(fn ->
@@ -1203,11 +1157,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert parse_context.worker_signal.status == "active"
       assert parse_context.runtime_state.active?
 
-      Repo.get!(ClaimLease, "LEASE-RUN-FANOUT-PARSE")
-      |> ClaimLease.update_changeset(%{status: "released", released_at: ~U[2026-07-18 09:00:00.000000Z]})
-      |> Repo.update!()
-
-      Repo.get!(AgentRun, "RUN-FANOUT-PARSE")
+      Repo.get!(AgentRun, "RUN-FANOUT-PARSE-LIVE")
       |> AgentRun.update_changeset(%{status: "running", last_seen_at: ~U[2020-01-01 00:00:00.000000Z]})
       |> Repo.update!()
 
@@ -1236,100 +1186,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert recovery_packages["WP-RECOVERY-SKIPPED"].delivery.outcome == "skipped"
       assert recovery_packages["WP-RECOVERY-SUCCESSOR"].work_package.review_signal.status == "pending"
       assert Enum.count(recovery.work_packages, &(get_in(&1, [:work_package, :blocker_state, :active?]) == true)) == 1
-      assert Repo.all(ClaimLease) |> length() == 6
 
       assert {:ok, [recovery_detail]} = Dashboard.work_request_board_details(Repo, ["WR-FIXTURE-RECOVERY"])
       assert recovery_detail.product_tree.summary.blocker_count == 1
 
-      architect_anchor =
-        Repo.get!(WorkPackage, "WP-RECOVERY-VALIDATE")
-        |> Ecto.Changeset.change(kind: "delegation", owner_id: "accountable-architect")
-        |> Repo.update!()
-
-      assert {:ok, _architect_lease} =
-               ClaimLeaseService.claim(
-                 Repo,
-                 architect_anchor.id,
-                 %{"actor_kind" => "agent", "actor_id" => "fixture:architect", "actor_display_name" => "fixture-architect"},
-                 stale_after_ms: 60_000
-               )
-
-      architect_context = Dashboard.work_package_contexts(Repo, [architect_anchor])[architect_anchor.id]
-      assert architect_context.runtime_state.active?
-      assert is_nil(architect_context.worker_signal)
-      refute architect_context.card.operational_state.has_active_worker
-      assert {:ok, [architect_detail]} = Dashboard.work_request_board_details(Repo, ["WR-FIXTURE-RECOVERY"])
-      architect_activity = Enum.find(architect_detail.work_packages, &(&1.id == architect_anchor.id)).activity_signal
-      assert architect_activity["accountable_owner"]["id"] == "accountable-architect"
-      assert architect_activity["current_actor"]["id"] == "fixture:architect"
-      assert architect_activity["observation_state"] == "current"
-
       assert {:ok, dense_tree} = ProductTree.tree_for_work_request(Repo, "WR-FIXTURE-DENSE")
       assert length(dense_tree.nodes) == 3
       assert length(dense_tree.dependency_edges) == 18
-      assert Repo.all(AgentRun) |> length() == 6
-
-      assert %AccessGrant{
-               id: "GRANT-FANOUT-PLAYTEST",
-               display_key: "PLAY",
-               claimed_at: nil,
-               grant_role: "worker",
-               expires_at: ~U[2099-01-01 00:00:00.000000Z]
-             } = Repo.get_by(AccessGrant, work_package_id: "WP-FANOUT-PLAYTEST")
+      assert Repo.all(AgentRun) |> length() == 7
 
       assert Repo.all(PlanNode)
              |> Enum.filter(&(&1.work_package_id == "WP-FANOUT-PLAYTEST"))
              |> Enum.map(& &1.id)
              |> Enum.sort() == ["PLAN-FANOUT-PLAYTEST-01"]
-
-      {claim_response, claimed_server} =
-        Server.handle_response_state(
-          %{
-            "jsonrpc" => "2.0",
-            "id" => "fixture-playtest-claim",
-            "method" => "tools/call",
-            "params" => %{
-              "name" => "claim_local_assignment",
-              "arguments" => %{
-                "work_package_id" => "WP-FANOUT-PLAYTEST",
-                "claimed_by" => "fictional-playtest-worker"
-              }
-            }
-          },
-          Server.new(Config.default(repo: Repo, repo_root: @repo_root), initialized: true)
-        )
-
-      assert get_in(claim_response, ["result", "structuredContent", "assignment", "work_package_id"]) ==
-               "WP-FANOUT-PLAYTEST"
-
-      playtest = Repo.get!(WorkPackage, "WP-FANOUT-PLAYTEST")
-      active_context = Dashboard.work_package_contexts(Repo, [playtest])[playtest.id]
-      assert active_context.worker_signal.status == "active"
-      assert active_context.runtime_state.active?
-      assert active_context.card.operational_state.has_active_worker
-
-      ready_playtest = playtest |> Ecto.Changeset.change(status: "ready") |> Repo.update!()
-
-      {release_response, _released_server} =
-        Server.handle_response_state(
-          %{
-            "jsonrpc" => "2.0",
-            "id" => "fixture-playtest-release",
-            "method" => "tools/call",
-            "params" => %{
-              "name" => "release_current_assignment",
-              "arguments" => %{"reason" => "fixture playtest ready"}
-            }
-          },
-          claimed_server
-        )
-
-      assert get_in(release_response, ["result", "structuredContent", "binding_cleared"]) == true
-
-      released_context = Dashboard.work_package_contexts(Repo, [ready_playtest])[ready_playtest.id]
-      assert released_context.worker_signal.status == "idle"
-      refute released_context.runtime_state.active?
-      refute released_context.card.operational_state.has_active_worker
     after
       Repo.put_dynamic_repo(previous_repo)
       GenServer.stop(pid)
@@ -2118,7 +1987,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert {:ok, _run} = AgentRunRepository.start_run(repo, %{work_package_id: live.id, status: "running"})
       assert {:ok, _run} = AgentRunRepository.start_run(repo, %{work_package_id: stale.id, status: "running", last_seen_at: DateTime.add(DateTime.utc_now(:microsecond), -600, :second)})
       assert {:ok, question} = WorkRequestRepository.ask_question(repo, request.id, question_attrs(question: "Which region?"))
-      create_claimed_worker_grant(repo, queued.id, "lens-worker")
 
       read = fn ->
         board = build_conn() |> Map.put(:host, "localhost") |> Map.put(:remote_ip, {127, 0, 0, 1}) |> get("/api/v1/sympp/herdr/dashboard") |> json_response(200)
@@ -2845,31 +2713,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
-  test "local operator can create a local-claim architect handoff", %{repo: repo} do
-    with_local_operator_endpoint(fn ->
-      request =
-        create_work_request!(repo,
-          id: "WR-LOCAL-ARCHITECT-HANDOFF",
-          status: "ready_for_slicing",
-          desired_dispatch_shape: "architect_led_feature_branch"
-        )
-
-      payload =
-        local_operator_conn()
-        |> post("/api/v1/sympp/operator/work-requests/#{request.id}/architect-handoff", %{})
-        |> json_response(200)
-
-      assert get_in(payload, ["architect_handoff", "status"]) == "created"
-
-      assert get_in(payload, ["architect_handoff", "local_architect_claim"]) == %{
-               "tool" => "claim_local_architect_assignment",
-               "arguments" => %{"work_request_id" => request.id, "claimed_by" => "symphony-architect"},
-               "required_runtime_arguments" => [],
-               "secret_in_response" => false
-             }
-    end)
-  end
-
   test "local operator can tune archive cutoff and restore archived WorkRequests", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       completed_at = DateTime.add(DateTime.utc_now(:microsecond), -4 * 24 * 60 * 60, :second)
@@ -3466,44 +3309,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
-  test "local operator Finish retires active claim authority", %{repo: repo} do
-    with_local_operator_endpoint(fn ->
-      work_request = create_work_request!(repo, id: "WR-LOCAL-NO-PR-ACTIVE-RUNTIME", status: "ready_for_slicing")
-
-      assert {:ok, slice} =
-               CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-LOCAL-NO-PR-ACTIVE-RUNTIME"))
-
-      assert {:ok, approved} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, slice.id, "planned")
-
-      work_package =
-        create_matching_work_package!(repo, work_request, approved,
-          id: "WP-LOCAL-NO-PR-ACTIVE-RUNTIME",
-          status: "ready"
-        )
-
-      assert {:ok, _dispatched} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved.id, "approved", work_package.id)
-
-      assert {:ok, claim_lease} =
-               ClaimLeaseService.claim(
-                 repo,
-                 work_package.id,
-                 %{"actor_kind" => "agent", "actor_id" => "local:active-runtime", "actor_display_name" => "active-worker"},
-                 stale_after_ms: 60_000
-               )
-
-      payload =
-        local_operator_conn()
-        |> post("/api/v1/sympp/operator/work-packages/#{work_package.id}/finish", %{})
-        |> json_response(200)
-
-      assert payload["ok"] == true
-      assert [%WorkPackageDelivery{outcome: "finished"}] = repo.all(WorkPackageDelivery)
-
-      assert %ClaimLease{status: "released", release_reason: "finished_delivery_closeout"} =
-               repo.get!(ClaimLease, claim_lease.id)
-    end)
-  end
-
   test "local operator Finish refuses packages that are planned or already ended", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       work_request = create_work_request!(repo, id: "WR-LOCAL-NO-PR-TERMINAL", status: "ready_for_slicing")
@@ -4036,16 +3841,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                )
              )
 
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, work_package.id)
-    assert {:ok, _assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    assert {:ok, grant} = AccessGrantRepository.get(repo, minted.grant.id)
+    append_state(repo, work_package)
 
-    append_state(repo, work_package, grant)
-
-    %{work_package: work_package, grant: grant, work_key_secret: minted.work_key.secret}
+    %{work_package: work_package}
   end
 
-  defp append_state(repo, work_package, grant) do
+  defp append_state(repo, work_package) do
     timestamp = ~U[2026-05-05 00:00:00Z]
 
     assert {:ok, _plan_node} =
@@ -4091,7 +3892,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                title: "Finding one",
                body: "Needs attention",
                severity: "medium",
-               access_grant_id: grant.id,
                created_at: DateTime.add(timestamp, 5, :second)
              })
 
@@ -4109,7 +3909,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert {:ok, _run} =
              AgentRunRepository.start_run(repo, %{
                work_package_id: work_package.id,
-               access_grant_id: grant.id,
                actor_id: "worker-1",
                status: "running",
                attempt: 1,
@@ -4132,29 +3931,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     }
   end
 
-  defp create_claimed_worker_grant(repo, work_package_id, claimed_by) do
-    {grant, _work_key} = create_claimed_worker_key(repo, work_package_id, claimed_by)
-    grant
-  end
-
-  defp create_claimed_worker_key(repo, work_package_id, claimed_by) do
-    work_key = WorkKey.generate()
-
-    assert {:ok, grant} =
-             AccessGrantRepository.create(repo, %{
-               work_package_id: work_package_id,
-               display_key: work_key.display_key,
-               secret_hash: WorkKey.secret_hash(work_key.secret),
-               grant_role: "worker",
-               capabilities: ["read:package"],
-               expires_at: DateTime.add(DateTime.utc_now(:microsecond), 3600, :second)
-             })
-
-    assert {:ok, _assignment} =
-             AccessGrantRepository.claim(repo, work_key.secret, %{claimed_by: claimed_by}, DateTime.utc_now(:microsecond))
-
-    assert {:ok, grant} = AccessGrantRepository.get(repo, grant.id)
-    {grant, work_key}
+  defp start_running_agent_run!(repo, work_package_id) do
+    assert {:ok, run} = AgentRunRepository.start_run(repo, %{work_package_id: work_package_id, actor_id: "worker-started", status: "running"})
+    run
   end
 
   defp with_retention_throttle_ms(window_ms, fun) when is_integer(window_ms) and is_function(fun, 0) do

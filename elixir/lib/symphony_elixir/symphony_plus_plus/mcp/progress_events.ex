@@ -3,8 +3,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
 
   import Ecto.Query, only: [from: 2]
 
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.Writer
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.Writer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository

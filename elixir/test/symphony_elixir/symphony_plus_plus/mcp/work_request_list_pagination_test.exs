@@ -7,16 +7,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestListPaginationTest do
     def handle(_event, _measurements, metadata, test_pid), do: send(test_pid, {:list_query, to_string(metadata.query || "")})
   end
 
-  test "list_work_requests pages stable authorized status matches with one batched scope query", %{repo: repo} do
-    {anchor, session, _grant} =
-      create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-PAGE-SCOPED", ["read:work_request"])
-
+  test "list_work_requests pages stable status matches with bounded queries", %{repo: repo} do
     ready =
       for index <- 1..10 do
         create_work_request!(repo,
           id: "WR-MCP-PAGE-SCOPED-#{String.pad_leading(Integer.to_string(index), 3, "0")}",
-          repo: anchor.repo,
-          base_branch: anchor.base_branch,
           status: "ready_for_slicing"
         )
       end
@@ -24,26 +19,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestListPaginationTest do
     _draft =
       create_work_request!(repo,
         id: "WR-MCP-PAGE-SCOPED-DRAFT",
-        repo: anchor.repo,
-        base_branch: anchor.base_branch,
         status: "draft"
       )
 
-    visible = Enum.take_every(ready, 2)
-    Enum.each(visible, &grant_work_request_scope!(repo, session, &1.id))
-    remove_grant_scope_type!(repo, session, "repo")
+    visible = ready
 
     handler_id = {__MODULE__, self(), make_ref()}
     event = repo.config()[:telemetry_prefix] ++ [:query]
     :ok = :telemetry.attach(handler_id, event, &QueryProbe.handle/4, self())
 
-    first = mcp_tool(repo, session, "list_work_requests", %{"status" => "ready_for_slicing", "limit" => 2})
+    first = mcp_tool(repo, nil, "list_work_requests", %{"status" => "ready_for_slicing", "limit" => 2})
     :telemetry.detach(handler_id)
     first_payload = get_in(first, ["result", "structuredContent"])
     queries = drain_queries([])
 
     second =
-      mcp_tool(repo, session, "list_work_requests", %{
+      mcp_tool(repo, nil, "list_work_requests", %{
         "status" => "ready_for_slicing",
         "limit" => 2,
         "cursor" => first_payload["next_cursor"]
@@ -51,14 +42,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestListPaginationTest do
 
     second_payload = get_in(second, ["result", "structuredContent"])
 
-    third =
-      mcp_tool(repo, session, "list_work_requests", %{
+    rest =
+      mcp_tool(repo, nil, "list_work_requests", %{
         "status" => "ready_for_slicing",
-        "limit" => 2,
+        "limit" => 6,
         "cursor" => second_payload["next_cursor"]
       })
 
-    third_payload = get_in(third, ["result", "structuredContent"])
+    third_payload = get_in(rest, ["result", "structuredContent"])
 
     listed =
       [first_payload, second_payload, third_payload]
@@ -69,33 +60,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestListPaginationTest do
     assert length(listed) == length(Enum.uniq(listed))
     refute Map.has_key?(third_payload, "next_cursor")
 
-    assert Enum.count(queries, &String.contains?(&1, "FROM \"sympp_work_request_repo_scopes\"")) == 1
     assert length(queries) < 25
-  end
-
-  test "sparse authorization scans through to the visible rows", %{repo: repo} do
-    {anchor, session, _grant} =
-      create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-PAGE-SPARSE", ["read:work_request"])
-
-    work_requests =
-      for index <- 1..1_100 do
-        create_work_request!(repo,
-          id: "WR-MCP-PAGE-SPARSE-#{String.pad_leading(Integer.to_string(index), 4, "0")}",
-          repo: anchor.repo,
-          base_branch: anchor.base_branch,
-          status: "ready_for_slicing"
-        )
-      end
-
-    visible = List.last(work_requests)
-    grant_work_request_scope!(repo, session, visible.id)
-    remove_grant_scope_type!(repo, session, "repo")
-
-    result = mcp_tool(repo, session, "list_work_requests", %{"status" => "ready_for_slicing", "limit" => 1})
-    payload = get_in(result, ["result", "structuredContent"])
-
-    assert Enum.map(payload["work_requests"], & &1["id"]) == [visible.id]
-    refute Map.has_key?(payload, "next_cursor")
   end
 
   defp drain_queries(queries) do

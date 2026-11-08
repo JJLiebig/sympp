@@ -3,9 +3,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.NeverStartedRetention do
 
   import Ecto.Query, only: [from: 2, exclude: 2]
 
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{Repository, WorkRequest}
 
   # Legacy dispatches may predate dispatched_at; these states already imply execution.

@@ -27,19 +27,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HandleStateStore do
   @doc "Restores whether an explicit state key was initialized."
   @spec restore(term(), Server.t()) :: Server.t()
   def restore(payload, %{__struct__: @server} = server) do
-    cond do
-      initialize_request?(payload) and not server.initialized ->
-        if not server.state_key_explicit, do: delete(server)
+    if initialize_request?(payload) and not server.initialized do
+      if not server.state_key_explicit, do: delete(server)
+      server
+    else
+      restore_stored(server)
+    end
+  end
+
+  defp restore_stored(server) do
+    case lookup(server) do
+      {%{__struct__: @server} = stored, _timestamp_ms, _explicit?} ->
+        %{server | initialized: server.initialized or stored.initialized, state_key_version: stored.state_key_version}
+
+      _missing ->
         server
-
-      true ->
-        case lookup(server) do
-          {%{__struct__: @server} = stored, _timestamp_ms, _explicit?} ->
-            %{server | initialized: server.initialized or stored.initialized, state_key_version: stored.state_key_version}
-
-          _missing ->
-            server
-        end
     end
   end
 
@@ -50,7 +52,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HandleStateStore do
       initialize_request?(payload) and match?(%{"result" => _result}, response) ->
         %{updated_server | state_key_version: put(updated_server)}
 
-      initialize_request?(payload) and server.state_key_explicit and not match?(%{"error" => %{"data" => %{"reason" => "already_initialized"}}}, response) ->
+      initialize_request?(payload) and server.state_key_explicit and not already_initialized?(response) ->
         delete(server)
         %{updated_server | state_key_version: nil}
 
@@ -135,6 +137,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HandleStateStore do
 
   defp dynamic_repo_identity(repo) when is_atom(repo), do: if(function_exported?(repo, :get_dynamic_repo, 0), do: repo.get_dynamic_repo())
   defp monotonic_ms, do: System.monotonic_time(:millisecond)
+  defp already_initialized?(%{"error" => %{"data" => %{"reason" => "already_initialized"}}}), do: true
+  defp already_initialized?(_response), do: false
+
   defp initialize_request?(%{"jsonrpc" => "2.0", "method" => "initialize"}), do: true
   defp initialize_request?(_payload), do: false
 end

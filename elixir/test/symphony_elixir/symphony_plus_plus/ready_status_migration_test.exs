@@ -1,7 +1,6 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.ReadyStatusMigrationTest do
   use ExUnit.Case, async: false
 
-  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{WorkPackage, WorkPackageDelivery}
@@ -74,17 +73,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReadyStatusMigrationTest do
       })
     )
 
-    Repo.insert!(
-      ClaimLease.create_changeset(
-        %{
-          id: "CLAIM-READY-STATUS",
-          work_package_id: "WP-READY-STATUS",
-          actor_id: "ready-status-worker",
-          actor_display_name: "Ready status worker",
-          stale_after_ms: 300_000
-        },
-        now: now
-      )
+    # The claim lease table existed at this schema version.
+    Repo.query!(
+      """
+      INSERT INTO sympp_claim_leases
+        (id, work_package_id, claim_group_id, actor_kind, actor_id, actor_display_name, status,
+         lease_started_at, last_seen_at, stale_after_ms, inserted_at, updated_at)
+      VALUES ('CLAIM-READY-STATUS', 'WP-READY-STATUS', 'CLAIM-READY-STATUS', 'agent', 'ready-status-worker',
+        'Ready status worker', 'active', ?1, ?1, 300000, ?1, ?1)
+      """,
+      [now]
     )
 
     Repo.insert!(

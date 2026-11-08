@@ -19,21 +19,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport do
   @spec set(repo(), String.t(), map()) :: {:ok, WorkRequest.t()} | {:error, term()} | {:tool_error, String.t()}
   def set(repo, work_request_id, arguments) when is_map(arguments) do
     with {:ok, patch} <- normalize_patch(arguments) do
-      repo.transaction(
-        fn ->
-          case repo.get(WorkRequest, work_request_id) do
-            nil ->
-              repo.rollback(:not_found)
-
-            %WorkRequest{} = work_request ->
-              now = DateTime.utc_now(:microsecond) |> DateTime.to_iso8601()
-              report = apply_patch(work_request.report || %{}, patch, now)
-              repo.update!(Ecto.Changeset.change(work_request, report: report))
-          end
-        end,
-        mode: :immediate
-      )
+      repo.transaction(fn -> store_patch(repo, work_request_id, patch) end, mode: :immediate)
       |> DashboardPubSub.broadcast_changed_on_success()
+    end
+  end
+
+  defp store_patch(repo, work_request_id, patch) do
+    case repo.get(WorkRequest, work_request_id) do
+      nil ->
+        repo.rollback(:not_found)
+
+      %WorkRequest{} = work_request ->
+        now = DateTime.utc_now(:microsecond) |> DateTime.to_iso8601()
+        repo.update!(Ecto.Changeset.change(work_request, report: apply_patch(work_request.report || %{}, patch, now)))
     end
   end
 
@@ -88,15 +86,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport do
   defp normalize_patch(arguments) do
     patch = Map.take(arguments, @fields)
 
-    if map_size(patch) == 0 do
-      {:tool_error, "empty_operator_report"}
-    else
-      Enum.reduce_while(patch, {:ok, %{}}, fn {field, value}, {:ok, acc} ->
-        case normalize_field(field, value) do
-          {:ok, normalized} -> {:cont, {:ok, Map.put(acc, field, normalized)}}
-          :error -> {:halt, {:tool_error, "invalid_operator_report_#{field}"}}
-        end
-      end)
+    if map_size(patch) == 0,
+      do: {:tool_error, "empty_operator_report"},
+      else: Enum.reduce_while(patch, {:ok, %{}}, &normalize_entry/2)
+  end
+
+  defp normalize_entry({field, value}, {:ok, acc}) do
+    case normalize_field(field, value) do
+      {:ok, normalized} -> {:cont, {:ok, Map.put(acc, field, normalized)}}
+      :error -> {:halt, {:tool_error, "invalid_operator_report_#{field}"}}
     end
   end
 

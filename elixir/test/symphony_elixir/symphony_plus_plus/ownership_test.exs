@@ -126,7 +126,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
   test "a caller outside Herdr can read but not write", %{repo: repo, work_request: work_request} do
     assert %{"result" => _} = mcp_tool(repo, nil, "read_work_request", %{"work_request_id" => work_request.id})
     assert error_reason(set_report(repo, nil, work_request.id, "Hello")) == "read_only_outside_herdr"
-    assert error_reason(mcp_tool(repo, nil, "record_decision", %{"work_request_id" => work_request.id, "decision" => "x", "rationale" => "y", "scope_impact" => "z", "source_type" => "architect"})) == "read_only_outside_herdr"
+
+    assert error_reason(mcp_tool(repo, nil, "record_decision", %{"work_request_id" => work_request.id, "decision" => "x", "rationale" => "y", "scope_impact" => "z", "source_type" => "architect"})) ==
+             "read_only_outside_herdr"
+
     assert [] = live_owner_rows(repo, work_request.id)
   end
 

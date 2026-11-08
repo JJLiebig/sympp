@@ -18,7 +18,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
         status: "sliced"
       )
 
-    {anchor, architect, _grant} = create_work_request_handoff_architect_session(repo, request, ["read:work_request"])
+    architect = "t1"
 
     packages =
       for index <- 1..28 do
@@ -30,7 +30,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
                      id: "wp_00000000000000#{String.pad_leading(to_string(index), 2, "0")}",
                      title: "Native delivery surface #{index}",
                      goal: description(),
-                     phase_id: anchor.phase_id,
                      acceptance_criteria: acceptance(),
                      validation_steps: ["Run the owning MCP tests with a disposable ledger.", "Verify the candidate head and complete fast review."],
                      stop_conditions: ["Ask the parent before changing the delivery contract or runtime defaults."],
@@ -58,52 +57,44 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
     assert {:ok, _question} = RequestRepository.ask_question(repo, request.id, work_request_question_attrs([]))
 
     package = repo.update!(Ecto.Changeset.change(hd(packages), status: "dispatched"))
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "fixture-worker")
-    worker = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
     for index <- 1..12 do
-      response = mcp_tool(repo, worker, "append_progress", %{"summary" => "Validation checkpoint #{index}", "body" => description(), "idempotency_key" => "fixture-progress-#{index}"})
+      response =
+        mcp_tool(repo, architect, "append_progress", %{
+          "work_package_id" => package.id,
+          "summary" => "Validation checkpoint #{index}",
+          "body" => description(),
+          "idempotency_key" => "fixture-progress-#{index}"
+        })
+
       refute response["error"]
     end
 
-    reads =
-      [
-        {"read_work_request", architect, %{"work_request_id" => request.id}},
-        {"list_work_requests", architect, %{}},
-        {"read_plan", architect, %{"work_request_id" => request.id}},
-        {"read_context", worker, %{}},
-        {"read_task_plan", worker, %{}},
-        {"read_task_plan", architect, %{"work_package_id" => package.id}},
-        {"get_current_assignment", worker, %{}},
-        {"get_current_assignment", architect, %{}},
-        {"read_delivery_board", architect, %{"work_request_id" => request.id}}
-      ] ++
-        Enum.map(~w(context.md task_plan.md findings.md progress.md acceptance.md review.md handoff.md), fn document ->
-          {"read_work_package_document", worker, %{"document" => document}}
-        end)
+    reads = [
+      {"read_work_request", %{"work_request_id" => request.id}},
+      {"list_work_requests", %{}},
+      {"read_plan", %{"work_request_id" => request.id}},
+      {"read_task_plan", %{"work_package_id" => package.id}},
+      {"read_delivery_board", %{"work_request_id" => request.id}}
+    ]
 
     sizes =
-      for {name, session, arguments} <- reads do
-        response = mcp_tool(repo, session, name, arguments)
+      for {name, arguments} <- reads do
+        response = mcp_tool(repo, nil, name, arguments)
         refute response["error"], inspect(response["error"])
         result = response["result"]
 
         full =
-          if name in ~w(read_work_request read_plan read_work_package_document) do
-            full_response = mcp_tool(repo, session, name, Map.put(arguments, "detail", "full"))
+          if name in ~w(read_work_request read_plan) do
+            full_response = mcp_tool(repo, nil, name, Map.put(arguments, "detail", "full"))
             refute full_response["error"]
             full_response["result"]
           else
             result
           end
 
-        if name == "read_work_package_document" and arguments["document"] != "progress.md", do: assert(full == result)
-
         %{
           tool: name,
-          role: session.assignment.grant_role,
-          document: arguments["document"],
           after: measure(result),
           before: measure(full)
         }
@@ -143,21 +134,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
     assert full_plan["product_tree"]["work_package_refs"] |> hd() |> Map.has_key?("operational_state")
     refute plan["product_tree"]["work_package_refs"] |> hd() |> Map.has_key?("operational_state")
 
-    progress = mcp_tool(repo, worker, "read_work_package_document", %{"document" => "progress.md"})["result"]["structuredContent"]
-    full_progress = mcp_tool(repo, worker, "read_work_package_document", %{"document" => "progress.md", "detail" => "full"})["result"]["structuredContent"]
-    assert length(progress["progress_events"]) == 5
-    assert length(full_progress["progress_events"]) == 12
-    assert progress["summary_omitted"] == %{"progress_events" => 7, "event_details" => 12}
-    assert List.last(full_progress["progress_events"])["body"] == description()
-    assert progress["omitted"] == full_progress["omitted"]
-
-    for {tool, session, arguments} <- reads, tool in ~w(read_work_request read_plan read_work_package_document) do
-      invalid = mcp_tool(repo, session, tool, Map.put(arguments, "detail", "invalid"))
+    for {tool, arguments} <- reads, tool in ~w(read_work_request read_plan) do
+      invalid = mcp_tool(repo, nil, tool, Map.put(arguments, "detail", "invalid"))
       assert get_in(invalid, ["error", "data", "reason"]) == "invalid_detail"
     end
 
     # Existing delivery evidence must still drive the architect's next action.
-    attach_tool(repo, worker, "attach_pr", %{"url" => "https://github.com/nextide/symphony-plus-plus/pull/123", "head_sha" => "abc123"})
+    assert {:ok, _pr} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: package.id,
+               summary: "PR synced",
+               status: "pr_synced",
+               payload: %{type: "pr", source_tool: "sync_pr", url: "https://github.com/nextide/symphony-plus-plus/pull/123", head_sha: "abc123"}
+             })
+
     repo.update!(Ecto.Changeset.change(Enum.at(packages, 1), status: "ended"))
     changed = mcp_tool(repo, architect, "read_work_request", %{"work_request_id" => request.id})["result"]["structuredContent"]
     assert hd(changed["work_packages"])["pr_url"] == "https://github.com/nextide/symphony-plus-plus/pull/123"

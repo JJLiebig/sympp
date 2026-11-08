@@ -12,10 +12,10 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   alias SymphonyElixir.SymphonyPlusPlus.DeploymentObservation
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.OperatorConfig
-  alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Retention
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.ReviewObservation
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage

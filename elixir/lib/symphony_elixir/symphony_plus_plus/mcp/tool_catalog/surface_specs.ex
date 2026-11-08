@@ -12,11 +12,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   """
   @spec startup_tool_specs(:full | :worker | :architect | :coordinator | :solo, Config.t()) :: [ToolCatalog.tool_spec()]
   def startup_tool_specs(profile, %Config{}) do
+    full = fn -> [health_tool_spec() | solo_tool_specs()] ++ [bootstrap_tool_spec("create_work_request") | architect_tool_specs()] end
+
     case profile do
       :worker -> [health_tool_spec()]
       :architect -> [health_tool_spec(), bootstrap_tool_spec("create_work_request")] ++ architect_tool_specs()
       profile when profile in [:coordinator, :solo] -> [health_tool_spec() | solo_tool_specs()]
-      :full -> [health_tool_spec()] ++ solo_tool_specs() ++ [bootstrap_tool_spec("create_work_request")] ++ architect_tool_specs() ++ local_operator_tool_specs()
+      :full -> full.() ++ local_operator_tool_specs()
     end
     |> Enum.uniq_by(& &1["name"])
     |> Enum.map(&put_access_annotation/1)

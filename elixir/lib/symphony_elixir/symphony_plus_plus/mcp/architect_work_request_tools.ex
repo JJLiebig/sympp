@@ -346,8 +346,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   defp read_plan_transaction(repo, work_request, scope, view, detail) do
     with {:ok, work_request} <- WorkRequestService.get(repo, work_request.id),
          {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request.id),
-         {:ok, delivery_board} <-
-           WorkRequestScope.scoped_delivery_board(repo, work_request, work_packages, slice_projection: :operational_state) do
+         {:ok, delivery_board} <- operational_delivery_board(repo, work_request, work_packages) do
       payload = WorkRequestPayloads.work_request_product_tree(repo, work_request, work_packages, delivery_board, view)
       payload = Map.put(payload, "scope", scope)
 
@@ -360,6 +359,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
       error -> repo.rollback(error)
     end
   end
+
+  defp operational_delivery_board(repo, work_request, work_packages),
+    do: WorkRequestScope.scoped_delivery_board(repo, work_request, work_packages, slice_projection: :operational_state)
 
   defp require_planned_dispatch_work_package(%WorkPackage{status: "planned"}), do: :ok
 
@@ -408,7 +410,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   defp dispatch_work_package_error(reason), do: architect_error(reason, "dispatch_work_package")
 
   defp append_worktree_lifecycle_audit(repo, %Terminal{} = terminal, work_package_id, source_tool, result) do
-    PlanningRepository.append_audit_progress_event_for_work_package(repo, Actor.from_terminal(terminal), work_package_id, %{
+    actor = Actor.from_terminal(terminal)
+
+    PlanningRepository.append_audit_progress_event_for_work_package(repo, actor, work_package_id, %{
       "summary" => worktree_lifecycle_summary(source_tool, result.status),
       "status" => result.status,
       "idempotency_key" => worktree_lifecycle_idempotency_key(work_package_id, source_tool, result),

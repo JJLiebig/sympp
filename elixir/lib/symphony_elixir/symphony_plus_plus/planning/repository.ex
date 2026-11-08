@@ -4,8 +4,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   import Ecto.Query, only: [from: 2]
 
   alias Ecto.Changeset
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
@@ -95,16 +95,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
            :ok <- validate_replayed_event_scope(actor, event) do
         event
       else
-        {:ok, %ProgressEvent{} = event} ->
-          case validate_replayed_event_scope(actor, event) do
-            :ok -> event
-            {:error, reason} -> repo.rollback(reason)
-          end
-
-        {:error, reason} ->
-          repo.rollback(reason)
+        {:ok, %ProgressEvent{} = event} -> replayed_event(repo, actor, event)
+        {:error, reason} -> repo.rollback(reason)
       end
     end)
+  end
+
+  defp replayed_event(repo, actor, event) do
+    case validate_replayed_event_scope(actor, event) do
+      :ok -> event
+      {:error, reason} -> repo.rollback(reason)
+    end
   end
 
   defp append_progress_event_in_transaction(repo, attrs, changeset_fun, opts) do
@@ -403,7 +404,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   end
 
   def get_progress_event_by_idempotency_key(repo, work_package_id, idempotency_key, idempotency_scope)
-      when is_atom(repo) and is_binary(work_package_id) and is_binary(idempotency_key) and is_binary(idempotency_scope) do
+      when is_atom(repo) and is_binary(work_package_id) and is_binary(idempotency_key) and
+             is_binary(idempotency_scope) do
     safe_one(repo, fn ->
       from(progress_event in ProgressEvent,
         where: progress_event.work_package_id == ^work_package_id,

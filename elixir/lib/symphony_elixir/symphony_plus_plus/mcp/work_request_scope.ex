@@ -28,11 +28,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
   end
 
   @doc "A WorkRequest and one of its packages."
-  @spec work_package_scope(repo(), String.t(), String.t()) :: {:ok, WorkRequest.t(), WorkPackage.t()} | {:error, term()}
-  def work_package_scope(repo, work_request_id, work_package_id) do
+  @spec work_package_scope(repo(), String.t(), String.t()) ::
+          {:ok, WorkRequest.t(), WorkPackage.t()} | {:error, term()}
+  def work_package_scope(repo, work_request_id, id) do
     with {:ok, %WorkRequest{} = work_request} <- WorkRequestService.get(repo, work_request_id),
-         {:ok, %WorkPackage{} = work_package} <- WorkRequestService.get_work_package(repo, work_request_id, work_package_id) do
-      {:ok, work_request, work_package}
+         {:ok, %WorkPackage{} = package} <- WorkRequestService.get_work_package(repo, work_request_id, id) do
+      {:ok, work_request, package}
     end
   end
 
@@ -46,7 +47,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
   @spec work_request_repository_filters(filters()) :: map()
   def work_request_repository_filters(filters), do: Map.take(filters, ["repo", "base_branch", "status"])
 
-  @spec scoped_work_request_question(repo(), String.t(), String.t()) :: {:ok, ClarificationQuestion.t()} | {:error, term()}
+  @spec scoped_work_request_question(repo(), String.t(), String.t()) ::
+          {:ok, ClarificationQuestion.t()} | {:error, term()}
   def scoped_work_request_question(repo, work_request_id, question_id) do
     with {:ok, questions} <- WorkRequestService.list_questions(repo, work_request_id) do
       case Enum.find(questions, &(&1.id == question_id)) do
@@ -58,7 +60,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
 
   @spec scoped_delivery_board(repo(), WorkRequest.t(), [WorkPackage.t()], keyword()) :: term()
   def scoped_delivery_board(repo, %WorkRequest{} = work_request, work_packages, opts \\ []) when is_list(work_packages) do
-    {visible_work_package_ids, work_package_contexts} = visible_delivery_board_work_package_contexts(repo, work_request, work_packages)
+    {visible_work_package_ids, work_package_contexts} =
+      visible_delivery_board_work_package_contexts(repo, work_request, work_packages)
 
     project_opts =
       [
@@ -74,7 +77,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
   end
 
   @doc "The WorkRequest's packages plus any same-WorkRequest successors their endings name."
-  @spec visible_delivery_board_work_package_contexts(repo(), WorkRequest.t(), [WorkPackage.t()]) :: {[String.t()], map()}
+  @spec visible_delivery_board_work_package_contexts(repo(), WorkRequest.t(), [WorkPackage.t()]) ::
+          {[String.t()], map()}
   def visible_delivery_board_work_package_contexts(repo, %WorkRequest{} = work_request, work_packages) do
     work_package_ids = Enum.map(work_packages, & &1.id)
 

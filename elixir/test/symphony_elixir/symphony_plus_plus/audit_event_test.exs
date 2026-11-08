@@ -1,15 +1,13 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.AuditEventTest do
   use ExUnit.Case, async: false
 
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Assignment
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.WorkKey
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Timeline
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -32,18 +30,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AuditEventTest do
 
   setup %{repo: repo} do
     repo.delete_all(ProgressEvent)
-    repo.delete_all(AccessGrant)
     repo.delete_all(WorkPackage)
     :ok
   end
 
-  test "actor grant and trusted agent run are recorded and exposed in the timeline", %{repo: repo} do
-    assert {:ok, assignment} = claimed_assignment(repo, claimed_by: "agent-worker-1")
+  test "terminal actor and trusted agent run are recorded and exposed in the timeline", %{repo: repo} do
+    assert {:ok, work_package} = create_work_package(repo)
 
     assert {:ok, event} =
-             PlanningService.append_authenticated_progress_event(
+             PlanningRepository.append_audit_progress_event_for_work_package(
                repo,
-               assignment,
+               actor("box/t1"),
+               work_package.id,
                %{
                  idempotency_key: "progress:actor",
                  summary: "Actor update",
@@ -53,47 +51,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AuditEventTest do
                agent_run_id: "trusted-run-123"
              )
 
-    assert event.actor_id == "agent-worker-1"
-    assert event.actor_type == "worker"
-    assert event.access_grant_id == assignment.grant_id
+    assert event.actor_id == "box/t1"
+    assert event.actor_type == "architect"
+    assert event.idempotency_scope == "terminal:core/t1"
     assert event.agent_run_id == "trusted-run-123"
 
-    assert {:ok, [timeline_item]} = PlanningService.fetch_timeline(repo, assignment)
-    assert timeline_item.actor == %{id: "agent-worker-1", type: "worker", access_grant_id: assignment.grant_id}
+    assert {:ok, [timeline_item]} = Timeline.fetch(repo, work_package.id)
+    assert timeline_item.actor == %{id: "box/t1", type: "architect"}
     assert timeline_item.agent_run_id == "trusted-run-123"
     assert timeline_item.payload == %{"phase" => "implementation"}
   end
 
-  test "timeline fetch requires a valid assignment", %{repo: repo} do
-    assert {:ok, assignment} = claimed_assignment(repo)
-
-    assert {:error, :unauthenticated} = PlanningService.fetch_timeline(repo, assignment.work_package_id)
-
-    assert {:error, :assignment_mismatch} =
-             PlanningService.fetch_timeline(repo, %{assignment | display_key: "forged-display-key"})
-
-    assert {:ok, _revoked} = AccessGrantService.revoke(repo, assignment.grant_id)
-    assert {:error, :assignment_revoked} = PlanningService.fetch_timeline(repo, assignment)
-  end
-
-  test "claim grant append with idempotency renders one redacted progress event", %{repo: repo} do
+  test "terminal append with idempotency renders one redacted progress event", %{repo: repo} do
     assert {:ok, work_package} = create_work_package(repo)
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, work_package.id)
-    assert {:ok, %Assignment{} = assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
+    secret = work_key_shaped_secret()
 
     attrs = %{
-      idempotency_key: "progress:claim-grant",
-      summary: "Claimed worker wrote progress",
+      idempotency_key: "progress:terminal-append",
+      summary: "Architect wrote progress",
       body: "Append completed.",
       payload: %{
         safe: "visible",
-        claim_secret: minted.work_key.secret,
+        claim_secret: secret,
         nested: %{authorization: "Bearer raw"}
       }
     }
 
-    assert {:ok, first} = PlanningService.append_authenticated_progress_event(repo, assignment, attrs)
-    assert {:ok, second} = PlanningService.append_authenticated_progress_event(repo, assignment, attrs)
+    assert {:ok, first} = PlanningRepository.append_audit_progress_event_for_work_package(repo, actor("box/t1"), work_package.id, attrs)
+    assert {:ok, second} = PlanningRepository.append_audit_progress_event_for_work_package(repo, actor("box/t1"), work_package.id, attrs)
     assert first.id == second.id
     assert repo.aggregate(ProgressEvent, :count) == 1
 
@@ -104,16 +89,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AuditEventTest do
            }
 
     assert {:ok, progress_markdown} = Renderer.render(repo, work_package.id, "progress.md")
-    assert progress_markdown =~ "Claimed worker wrote progress"
-    assert progress_markdown =~ "worker-1"
+    assert progress_markdown =~ "Architect wrote progress"
+    assert progress_markdown =~ "box/t1"
     refute progress_markdown =~ "[REDACTED]"
-    refute progress_markdown =~ minted.work_key.secret
-    refute inspect(first.payload) =~ minted.work_key.secret
+    refute progress_markdown =~ secret
+    refute inspect(first.payload) =~ secret
   end
 
   test "progress rendering redacts secret-shaped source text", %{repo: repo} do
     assert {:ok, work_package} = create_work_package(repo)
-    secret = WorkKey.generate().secret
+    secret = work_key_shaped_secret()
     fine_grained_pat = "github_pat_" <> Base.encode16(:crypto.strong_rand_bytes(18), case: :lower)
     query_password = "pw-" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
 
@@ -235,7 +220,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AuditEventTest do
           sequence: 1,
           actor_id: "worker-render",
           actor_type: "`worker`\n# actor",
-          access_grant_id: "`grant`\n# grant",
           agent_run_id: "`run`\n# injected",
           payload: %{},
           created_at: ~U[2026-05-01 10:00:00Z]
@@ -249,176 +233,73 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AuditEventTest do
     assert progress_markdown =~ "Actor: source:"
     assert progress_markdown =~ "`` `worker` # actor ``"
     refute progress_markdown =~ "Agent run:"
-    refute progress_markdown =~ "Grant:"
-    refute progress_markdown =~ "`` `grant` # grant ``"
     refute progress_markdown =~ "`` `run` # injected ``"
     refute progress_markdown =~ "\n# injected"
     refute progress_markdown =~ "\n# actor"
-    refute progress_markdown =~ "\n# grant"
   end
 
-  test "authenticated append validates assignment against stored grant state", %{repo: repo} do
-    assert {:ok, %Assignment{} = assignment} = claimed_assignment(repo)
-
-    forged = %Assignment{
-      assignment
-      | grant_id: "ag_forged",
-        work_package_id: assignment.work_package_id,
-        claimed_by: "worker-forged"
-    }
-
-    assert {:error, :assignment_mismatch} =
-             PlanningService.append_authenticated_progress_event(repo, forged, %{
-               idempotency_key: "progress:forged-assignment",
-               summary: "Forged"
-             })
-
-    mismatched = %{assignment | claimed_by: "worker-forged"}
-
-    assert {:error, :assignment_mismatch} =
-             PlanningService.append_authenticated_progress_event(repo, mismatched, %{
-               idempotency_key: "progress:mismatched-assignment",
-               summary: "Mismatched"
-             })
-
-    unclaimed = %{assignment | claimed_at: nil, claimed_by: nil}
-
-    assert {:error, :assignment_mismatch} =
-             PlanningService.append_authenticated_progress_event(repo, unclaimed, %{
-               idempotency_key: "progress:unclaimed-assignment",
-               summary: "Unclaimed"
-             })
-
-    assert {:ok, _revoked} = AccessGrantService.revoke(repo, assignment.grant_id)
-
-    assert {:error, :assignment_revoked} =
-             PlanningService.append_authenticated_progress_event(repo, assignment, %{
-               idempotency_key: "progress:revoked-assignment",
-               summary: "Revoked"
-             })
-  end
-
-  test "mixed atom and string package targets cannot bypass authenticated scope", %{repo: repo} do
-    assert {:ok, assignment} = claimed_assignment(repo, claimed_by: "worker-source")
-
-    assert {:error, :work_package_scope_mismatch} =
-             PlanningService.append_authenticated_progress_event(repo, assignment, %{
-               :work_package_id => assignment.work_package_id,
-               "work_package_id" => "forged-package",
-               :idempotency_key => "progress:scope-forgery",
-               :summary => "Blocked"
-             })
-
-    assert repo.aggregate(ProgressEvent, :count) == 0
-  end
-
-  test "authenticated idempotency keys are scoped to each claimed grant", %{repo: repo} do
+  test "idempotency keys are scoped to each terminal", %{repo: repo} do
     assert {:ok, work_package} = create_work_package(repo)
-    assert {:ok, first_minted} = AccessGrantService.mint_worker_grant(repo, work_package.id)
-    assert {:ok, second_minted} = AccessGrantService.mint_worker_grant(repo, work_package.id)
-    assert {:ok, first_assignment} = AccessGrantService.claim(repo, first_minted.work_key.secret, claimed_by: "worker-1")
-    assert {:ok, second_assignment} = AccessGrantService.claim(repo, second_minted.work_key.secret, claimed_by: "worker-2")
 
     assert {:ok, first_event} =
-             PlanningService.append_authenticated_progress_event(repo, first_assignment, %{
-               idempotency_key: "progress:grant-scoped",
-               summary: "Grant scoped",
-               payload: %{worker: "one"}
+             PlanningRepository.append_audit_progress_event_for_work_package(repo, actor("box/t1"), work_package.id, %{
+               idempotency_key: "progress:terminal-scoped",
+               summary: "Terminal scoped",
+               payload: %{terminal: "one"}
              })
 
     assert {:ok, second_event} =
-             PlanningService.append_authenticated_progress_event(repo, second_assignment, %{
-               idempotency_key: "progress:grant-scoped",
-               summary: "Other grant",
+             PlanningRepository.append_audit_progress_event_for_work_package(repo, actor("box/t2"), work_package.id, %{
+               idempotency_key: "progress:terminal-scoped",
+               summary: "Other terminal",
                status: "blocked",
-               payload: %{worker: "two"}
+               payload: %{terminal: "two"}
              })
 
+    assert first_event.id != second_event.id
     assert repo.aggregate(ProgressEvent, :count) == 2
-    assert first_event.access_grant_id == first_assignment.grant_id
-    assert second_event.access_grant_id == second_assignment.grant_id
-
-    assert {:ok, first_timeline} = PlanningService.fetch_timeline(repo, first_assignment)
-    assert Enum.map(first_timeline, & &1.id) == [first_event.id, second_event.id]
-    assert Enum.find(first_timeline, &(&1.id == first_event.id)).payload == %{"worker" => "one"}
-    foreign_first_view = Enum.find(first_timeline, &(&1.id == second_event.id))
-    assert foreign_first_view.payload == %{}
-    assert foreign_first_view.idempotency_key == nil
-    assert foreign_first_view.actor == %{id: nil, type: nil, access_grant_id: nil}
-    assert foreign_first_view.status == "[redacted]"
-    assert foreign_first_view.summary == "[redacted]"
-    assert foreign_first_view.body == nil
-
-    assert {:ok, second_timeline} = PlanningService.fetch_timeline(repo, second_assignment)
-    assert Enum.map(second_timeline, & &1.id) == [first_event.id, second_event.id]
-    foreign_second_view = Enum.find(second_timeline, &(&1.id == first_event.id))
-    assert foreign_second_view.payload == %{}
-    assert foreign_second_view.idempotency_key == nil
-    assert foreign_second_view.actor == %{id: nil, type: nil, access_grant_id: nil}
-    assert foreign_second_view.status == "[redacted]"
-    assert foreign_second_view.summary == "[redacted]"
-    assert foreign_second_view.body == nil
-    assert Enum.find(second_timeline, &(&1.id == second_event.id)).payload == %{"worker" => "two"}
+    assert first_event.idempotency_scope == "terminal:core/t1"
+    assert second_event.idempotency_scope == "terminal:core/t2"
   end
 
-  test "direct and authenticated idempotency keys have separate scopes", %{repo: repo} do
-    assert {:ok, assignment} = claimed_assignment(repo)
+  test "direct and terminal idempotency keys have separate scopes", %{repo: repo} do
+    assert {:ok, work_package} = create_work_package(repo)
 
     assert {:ok, audit_event} =
-             PlanningService.append_authenticated_progress_event(repo, assignment, %{
+             PlanningRepository.append_audit_progress_event_for_work_package(repo, actor("box/t1"), work_package.id, %{
                idempotency_key: "progress:shared-key",
-               summary: "Authenticated"
+               summary: "Terminal"
              })
 
     assert {:ok, direct_event} =
              PlanningService.append_progress_event(repo, %{
-               work_package_id: assignment.work_package_id,
+               work_package_id: work_package.id,
                idempotency_key: "progress:shared-key",
                summary: "Direct",
                payload: %{system: "visible"}
              })
 
     assert audit_event.id != direct_event.id
-    assert audit_event.access_grant_id == assignment.grant_id
-    assert direct_event.access_grant_id == nil
+    assert direct_event.idempotency_scope == "direct"
 
     assert {:ok, replayed_audit_event} =
-             PlanningService.append_authenticated_progress_event(repo, assignment, %{
+             PlanningRepository.append_audit_progress_event_for_work_package(repo, actor("box/t1"), work_package.id, %{
                idempotency_key: "progress:shared-key",
-               summary: "Authenticated replay"
+               summary: "Terminal replay"
              })
 
     assert replayed_audit_event.id == audit_event.id
     assert repo.aggregate(ProgressEvent, :count) == 2
-
-    assert {:ok, timeline} = PlanningService.fetch_timeline(repo, assignment)
-    assert Enum.find(timeline, &(&1.id == direct_event.id)).payload == %{"system" => "visible"}
   end
 
-  test "authenticated idempotency replay validates stored grant state", %{repo: repo} do
-    assert {:ok, assignment} = claimed_assignment(repo)
+  test "a replay from the same terminal under another role conflicts", %{repo: repo} do
+    assert {:ok, work_package} = create_work_package(repo)
+    attrs = %{idempotency_key: "progress:role-replay", summary: "As architect"}
 
-    assert {:ok, _first_event} =
-             PlanningService.append_authenticated_progress_event(repo, assignment, %{
-               idempotency_key: "progress:revoked-replay",
-               summary: "Before revoke"
-             })
+    assert {:ok, _event} = PlanningRepository.append_audit_progress_event_for_work_package(repo, actor("box/t1"), work_package.id, attrs)
 
-    forged_assignment = %{assignment | display_key: "forged-display-key"}
-
-    assert {:error, :assignment_mismatch} =
-             PlanningService.append_authenticated_progress_event(repo, forged_assignment, %{
-               idempotency_key: "progress:revoked-replay",
-               summary: "Forged replay"
-             })
-
-    assert {:ok, _revoked} = AccessGrantService.revoke(repo, assignment.grant_id)
-
-    assert {:error, :assignment_revoked} =
-             PlanningService.append_authenticated_progress_event(repo, assignment, %{
-               idempotency_key: "progress:revoked-replay",
-               summary: "After revoke"
-             })
+    assert {:error, :idempotency_scope_conflict} =
+             PlanningRepository.append_audit_progress_event_for_work_package(repo, actor("box/t1", "chief"), work_package.id, attrs)
 
     assert repo.aggregate(ProgressEvent, :count) == 1
   end
@@ -433,13 +314,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AuditEventTest do
                summary: "Direct provenance",
                actor_id: "forged-worker",
                actor_type: "architect",
-               access_grant_id: "forged-grant",
+               idempotency_scope: "terminal:forged",
                agent_run_id: "forged-run"
              })
 
     assert event.actor_id == nil
     assert event.actor_type == nil
-    assert event.access_grant_id == nil
+    assert event.idempotency_scope == "direct"
     assert event.agent_run_id == nil
 
     assert {:ok, replayed_event} =
@@ -447,21 +328,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AuditEventTest do
                work_package_id: work_package.id,
                idempotency_key: "progress:direct-provenance",
                summary: "Direct provenance replay",
-               access_grant_id: "forged-grant"
+               idempotency_scope: "terminal:forged"
              })
 
     assert replayed_event.id == event.id
     assert repo.aggregate(ProgressEvent, :count) == 1
   end
 
-  defp claimed_assignment(repo, opts \\ []) do
-    claimed_by = Keyword.get(opts, :claimed_by, "worker-1")
-
-    with {:ok, work_package} <- create_work_package(repo, id: Keyword.get(opts, :work_package_id, "SYMPP-P1-005")),
-         {:ok, minted} <- AccessGrantService.mint_worker_grant(repo, work_package.id) do
-      AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: claimed_by)
-    end
+  defp actor(address, type \\ "architect") do
+    [_core_name, terminal] = String.split(address, "/")
+    %Actor{id: address, type: type, idempotency_scope: "terminal:core/" <> terminal}
   end
+
+  defp work_key_shaped_secret, do: "wk_" <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
   defp create_work_package(repo, overrides \\ []) do
     attrs =

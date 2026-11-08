@@ -293,15 +293,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeToolsLifecycleTest do
     codex_home = Path.join(fixture.root, "codex-home")
     config = Config.default(repo: repo, repo_root: test_repo_root())
 
-    {anchor, session, _grant} =
-      create_phase_architect_session(
-        repo,
-        "SYMPP-ARCHITECT-WORKTREE-LIFECYCLE",
-        [
-          "dispatch:work_request"
-        ],
-        repo: fixture.origin
-      )
+    anchor = %{repo: fixture.origin, base_branch: "symphony-plus-plus/beta"}
 
     work_request =
       create_work_request!(repo,
@@ -353,7 +345,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeToolsLifecycleTest do
       prepare_response =
         mcp_tool(
           repo,
-          session,
+          "t1",
           "prepare_work_package_worktree",
           %{
             "work_package_id" => package.id,
@@ -383,10 +375,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeToolsLifecycleTest do
         )
       )
 
+    audit_event = Enum.find(events, &(&1.payload["source_tool"] == "prepare_work_package_worktree"))
+
     assert %{
              "source_tool" => "prepare_work_package_worktree",
              "worktree_path" => "[REDACTED]",
              "target_repo_root" => "[REDACTED]"
-           } = Enum.find(events, &(&1.payload["source_tool"] == "prepare_work_package_worktree")).payload
+           } = audit_event.payload
+
+    assert {audit_event.actor_id, audit_event.actor_type} == {"testbox/t1", "architect"}
   end
 end
