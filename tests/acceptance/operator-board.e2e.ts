@@ -5,6 +5,7 @@ import { close, head, pr, prUrl, row, sync } from '../support/delivery.js';
 import { installReviewProvider } from '../support/browser-review-provider.js';
 import { repository } from '../support/worktree-git.js';
 import { readFile } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
 
 test('operator sees dependency ordering, pending qualification and actual delivered completion', async ({ candidate, app, screen, browser, agent }) => {
   const { client, provider } = candidate;
@@ -116,9 +117,15 @@ test('operator attention differs from explicit blockers and settings/archive act
   const prematureArchive = await client.operator(`/api/v1/sympp/operator/work-requests/${request}/archive`, {});
   expect(prematureArchive.status).toBe(422);
   expect(prematureArchive.body.error.code).toBe('not_completed');
-  const question = (await client.call('ask_question', {
-    work_request_id: request, category: 'scope', question: 'Approve the bounded scope?', why_needed: 'An operator scope choice is needed.',
-  })).clarification_question.id;
+  // Until asks exist, the only operator escalation is one carried over from the
+  // old architect report as `report.pending_ask`; no tool raises a new one.
+  const pendingAsk = (ask: object | null) => {
+    const db = new DatabaseSync(candidate.factory!.database, { timeout: 5000 });
+    try {
+      db.prepare('UPDATE sympp_work_requests SET report = ? WHERE id = ?').run(ask ? JSON.stringify({ pending_ask: ask }) : null, request);
+    } finally { db.close(); }
+  };
+  pendingAsk({ question: 'Approve the bounded scope?', raised_at: new Date().toISOString() });
   await candidate.capture('operator-needed');
   await app.open('/sympp/board');
   const goal = browser.locator(`[data-goal="${request}"]`);
@@ -129,7 +136,7 @@ test('operator attention differs from explicit blockers and settings/archive act
     work_package_id: wp, summary: 'Required schema missing.', idempotency_key: 'browser-blocker',
     payload: { type: 'blocker', active: true, blocker_id: 'schema' },
   });
-  await client.call('close_question', { work_request_id: request, question_id: question, expected_question_status: 'open' });
+  pendingAsk(null);
   await candidate.capture('blocker-without-escalation');
   await browser.reload();
   await expect(goal).not.toContainText('Approve the bounded scope?');
