@@ -82,17 +82,17 @@ async function main() {
       }
       if (message.method === "tools/list") {
         if (failSchemaLookup) { failSchemaLookup = false; return request.socket.destroy(); }
-        const names = currentContract === contract ? ["test.removed", "test.arguments", "test.unchanged"] : ["test.arguments", "test.unchanged", "test.added"];
+        const names = currentContract === contract ? ["test.removed", "test.arguments", "test.conflict", "test.unchanged"] : ["test.arguments", "test.conflict", "test.unchanged", "test.added"];
         response.writeHead(200, { "Content-Type": "application/json" });
         return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { tools: names.map(name => ({ name,
-          inputSchema: { type: "object", properties: name === "test.arguments" && currentContract !== contract ? { required_new: { type: "string" } } : {} },
+          inputSchema: { type: "object", properties: ["test.arguments", "test.conflict"].includes(name) && currentContract !== contract ? { required_new: { type: "string" } } : {} },
         })) } }));
       }
-      if (message.params?.name === "test.unchanged" || message.params?.name === "test.removed" || message.params?.name === "test.arguments" || message.params?.name === "test.denied") {
+      if (message.params?.name === "test.conflict" || message.params?.name === "test.unchanged" || message.params?.name === "test.removed" || message.params?.name === "test.arguments" || message.params?.name === "test.denied") {
         response.writeHead(200, { "Content-Type": "application/json" });
         return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: {
-          code: message.params.name === "test.removed" ? -32601 : message.params.name === "test.arguments" ? -32602 : -32000,
-          message: "original error", data: { tool: message.params.name },
+          code: message.params.name === "test.removed" ? -32601 : ["test.arguments", "test.conflict"].includes(message.params.name) ? -32602 : -32000,
+          message: "original error", data: { tool: message.params.name, reason: message.params.name === "test.conflict" ? "idempotency_conflict" : "invalid_tool_arguments" },
         } }));
       }
       const key = message.params && message.params.name === "record_work_package_delivery" && message.params.arguments.idempotency_key;
@@ -233,11 +233,11 @@ async function main() {
   responsePromise = readResponse(20);
   bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 20, method: "tools/call", params: { name: "test.added", arguments: {} } })}\n`);
   assert.equal((await responsePromise).result.content[0].text, "forwarded");
-  for (const [id, name] of [[13, "test.removed"], [14, "test.arguments"], [15, "test.denied"], [17, "test.unchanged"]]) {
+  for (const [id, name] of [[13, "test.removed"], [14, "test.arguments"], [15, "test.denied"], [17, "test.unchanged"], [21, "test.conflict"]]) {
     responsePromise = readResponse(id);
     bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: {} } })}\n`);
     const error = (await responsePromise).error;
-    if (name === "test.denied" || name === "test.unchanged") assert.equal(error.message, "original error");
+    if (name === "test.denied" || name === "test.unchanged" || name === "test.conflict") assert.equal(error.message, "original error");
     else assert.match(error.message, /was updated.*restart the session/);
     assert.equal(error.data.tool, name);
   }

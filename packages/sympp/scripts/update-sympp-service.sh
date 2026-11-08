@@ -37,16 +37,19 @@ if subprocess.check_output(['git', '-C', str(source), 'status', '--porcelain'], 
     raise SystemExit('Factory checkout has local changes. Commit or remove them before updating.')
 subprocess.run(['git', '-C', str(source), 'fetch', '--quiet', 'origin', ref], check=True, env={**env, 'GIT_TERMINAL_PROMPT': '0'})
 target = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'FETCH_HEAD'], text=True).strip()
+pid = subprocess.check_output(['systemctl', '--user', 'show', unit, '-p', 'MainPID', '--value'], text=True).strip()
+port = values.get('SYMPP_BACKEND_PORT', '19998')
+sockets = subprocess.check_output(['ss', '-H', '-ltnp', 'sport = :' + port], text=True)
+local_addresses = {'127.0.0.1:' + port, '0.0.0.0:' + port, '*:' + port, '[::]:' + port}
+listeners = [line for line in sockets.splitlines() if line.split()[3] in local_addresses]
+owns_listener = bool(listeners) and pid != '0' and all('pid=' + pid + ',' in line for line in listeners)
+if listeners and not owns_listener:
+    raise SystemExit('Saved factory endpoint belongs to another process. Rerun setup with its service name.')
 try:
-    with urllib.request.urlopen('http://127.0.0.1:' + values.get('SYMPP_BACKEND_PORT', '19998') + '/mcp/readiness', timeout=3) as response:
+    with urllib.request.urlopen('http://127.0.0.1:' + port + '/mcp/readiness', timeout=3) as response:
         health = json.load(response)
-    pid = subprocess.check_output(['systemctl', '--user', 'show', unit, '-p', 'MainPID', '--value'], text=True).strip()
-    sockets = subprocess.check_output(['ss', '-H', '-ltnp', 'sport = :' + values.get('SYMPP_BACKEND_PORT', '19998')], text=True)
-    owns_listener = pid != '0' and any('pid=' + pid + ',' in line and line.split()[3] == '127.0.0.1:' + values.get('SYMPP_BACKEND_PORT', '19998') for line in sockets.splitlines())
-    if not owns_listener and any(line.split()[3] == '127.0.0.1:' + values.get('SYMPP_BACKEND_PORT', '19998') for line in sockets.splitlines()):
-        raise SystemExit('Saved factory endpoint belongs to another process. Rerun setup with its service name.')
     running = health.get('source', {}).get('revision') if owns_listener and health.get('status') == 'ok' and health.get('ledger', {}).get('reachable') is True else None
-except (OSError, ValueError, subprocess.CalledProcessError):
+except (OSError, ValueError):
     running = None
 subprocess.run(['git', '-C', str(source), 'checkout', '--quiet', '--detach', target], check=True)
 def non_runtime(path):

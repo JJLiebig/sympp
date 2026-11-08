@@ -1371,7 +1371,12 @@ async function bridge(identity, state, runtimeFile) {
               const listed = await mcpPost(current.mcpUrl, JSON.stringify({ jsonrpc: "2.0", id: "bridge-current-tools", method: "tools/list", params: {} }), sessionId, protocol, timeoutMs);
               const tools = listed.lines.map(line => JSON.parse(line)).find(result => Array.isArray(result.result?.tools))?.result.tools;
               const name = parsed.params.name;
-              if (tools && schemas(tools).get(name) !== sessionTools.get(name)) {
+              const currentSchema = tools?.find(tool => tool.name === name)?.inputSchema;
+              const fields = new Set([...Object.keys(JSON.parse(sessionTools.get(name)).properties || {}), ...Object.keys(currentSchema?.properties || {})]);
+              const reason = payload.error.data?.reason;
+              const invalidArguments = reason === "invalid_tool_arguments" || [...fields].some(field => reason === `missing_${field}` || reason === `invalid_${field}`) ||
+                payload.error.data?.validation_errors?.some(error => fields.has(error.field));
+              if (tools && schemas(tools).get(name) !== sessionTools.get(name) && (payload.error.code === -32601 || invalidArguments)) {
                 payload.error.message = `${name.startsWith("sympp.") ? name : `sympp.${name}`} was updated and ${schemas(tools).has(name) ? "its schema changed" : "it was removed"}; restart the session to reload the sympp MCP bridge.`;
                 forwarded = JSON.stringify(payload);
               }

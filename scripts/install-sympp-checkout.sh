@@ -58,9 +58,8 @@ previous_release="$(readlink -f "$SYMPP_HOME/service/current" || true)"
 previous_unit="$release/previous.service"
 unit_file="$SYMPP_SERVICE_CONFIG/$SYMPP_SERVICE_NAME.service"
 [[ ! -f "$unit_file" ]] || cp "$unit_file" "$previous_unit"
-ln -s "$release" "$SYMPP_HOME/service/current.new"
-mv -Tf "$SYMPP_HOME/service/current.new" "$SYMPP_HOME/service/current"
 
+write_unit() {
 python3 - <<'PY'
 import os
 from pathlib import Path
@@ -103,10 +102,8 @@ file = Path(os.environ['SYMPP_SERVICE_CONFIG']) / (os.environ['SYMPP_SERVICE_NAM
 file.write_text(unit)
 print('unit: ' + str(file))
 PY
+}
 # Link also supports a scratch XDG_CONFIG_HOME without changing the default unit.
-systemctl --user link "$SYMPP_SERVICE_CONFIG/$SYMPP_SERVICE_NAME.service"
-systemctl --user daemon-reload
-systemctl --user enable "$SYMPP_SERVICE_NAME.service"
 wait_ready() {
 python3 - <<'READY'
 import json
@@ -140,7 +137,13 @@ else:
 READY
 }
 started=$SECONDS
-if systemctl --user restart "$SYMPP_SERVICE_NAME.service" && wait_ready; then
+if write_unit &&
+   ln -s "$release" "$SYMPP_HOME/service/current.new" &&
+   mv -Tf "$SYMPP_HOME/service/current.new" "$SYMPP_HOME/service/current" &&
+   systemctl --user link "$SYMPP_SERVICE_CONFIG/$SYMPP_SERVICE_NAME.service" &&
+   systemctl --user daemon-reload &&
+   systemctl --user enable "$SYMPP_SERVICE_NAME.service" &&
+   systemctl --user restart "$SYMPP_SERVICE_NAME.service" && wait_ready; then
   printf 'factory: updated %s (restart to ready: %ss)\n' "${service_revision:0:12}" "$((SECONDS-started))"
 else
   echo "Factory revision ${service_revision:0:12} failed readiness; restoring previous release." >&2
