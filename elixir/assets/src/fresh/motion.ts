@@ -52,7 +52,11 @@ export function useFlash<T extends HTMLElement>(value: string, frames: Keyframe[
 
 // Bring one goal under the header and light it up. A goal on a closed shelf opens its shelf first.
 export function focusGoal(id: string) {
-  const node = document.querySelector<HTMLElement>(`[data-goal="${CSS.escape(id)}"]`);
+  spotlight(`[data-goal="${CSS.escape(id)}"]`);
+}
+
+export function spotlight(selector: string) {
+  const node = document.querySelector<HTMLElement>(selector);
   if (!node) return;
   const shelf = node.closest("details");
   if (shelf) shelf.open = true;

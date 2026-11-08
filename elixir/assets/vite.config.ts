@@ -37,8 +37,10 @@ function manualChunks(id: string) {
 }
 
 // `vite --mode snapshot` serves the operator API from a captured snapshot instead of a backend.
+// `vite --mode demo` needs no API at all, so it proxies nothing and can be opened by any host name.
 export default defineConfig(({ mode }) => {
   const snapshot = mode === "snapshot";
+  const demo = mode === "demo";
   const dashboardPort = parseDashboardPort(process.env.SYMPP_DASHBOARD_PORT, snapshot ? snapshotDashboardPort : 19999);
 
   return {
@@ -47,8 +49,8 @@ export default defineConfig(({ mode }) => {
       host: "127.0.0.1",
       port: dashboardPort,
       strictPort: true,
-      allowedHosts: ["spp.localhost"],
-      proxy: snapshot ? undefined : operatorProxy,
+      allowedHosts: demo ? true : ["spp.localhost"],
+      proxy: snapshot || demo ? undefined : operatorProxy,
     },
     preview: {
       host: "127.0.0.1",
