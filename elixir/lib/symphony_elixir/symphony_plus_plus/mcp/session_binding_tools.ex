@@ -206,6 +206,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
     end
   end
 
+  @doc """
+  Keeps a bound session's live claim fresh during a read. A read never
+  reclaims a stale claim and never fails or unbinds because of claim state.
+  """
+  @spec refresh_current_session_claim_for_read(Server.t(), String.t(), map()) :: {:ok, Server.t()}
+  def refresh_current_session_claim_for_read(%Server{} = server, method, params) do
+    if bound_session_call?(server, method, params), do: {:ok, refresh_live_claim(server)}, else: {:ok, server}
+  end
+
+  defp refresh_live_claim(%Server{config: %Config{repo: repo}, session: %Session{} = session} = server) do
+    with {:ok, %ClaimLease{status: "active"} = lease} <- current_matching_claim_lease(repo, session),
+         true <- claim_lease_heartbeat_due?(lease),
+         {:ok, %ClaimLease{} = renewed} <-
+           ClaimLeaseService.heartbeat(repo, lease.id, stale_after_ms: @local_assignment_claim_stale_after_ms) do
+      %{server | session: Session.with_claim_lease(session, renewed)}
+    else
+      _not_renewed -> server
+    end
+  rescue
+    _error -> server
+  end
+
   defp release_current_assignment_lease(repo, %Session{} = session, reason, context) do
     case current_matching_claim_lease(repo, session) do
       {:ok, %ClaimLease{} = lease} ->

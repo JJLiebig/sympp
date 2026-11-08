@@ -1278,7 +1278,7 @@ test('architect descendant planning stays scoped through terminal closeout and r
   expect((await architect.operator(`/api/v1/sympp/operator/work-requests/${request}/archive`, {})).status).toBe(200);
   // The archived request's plan stays readable by id; the lost claim only blocks writes and scoped calls.
   expect((await architect.call('read_task_plan', { work_package_id: wp })).text).toContain('Inspect descendant');
-  await staleReader.reject('list_work_requests', {}, 'claim_lease_lost');
+  await staleReader.reject('list_work_requests', {}, 'work_request_terminal');
 });
 
 deliveryTest('worker dependency qualifications survive successor replacement only after explicit input requalification', async ({ delivery: { factory, provider } }) => {

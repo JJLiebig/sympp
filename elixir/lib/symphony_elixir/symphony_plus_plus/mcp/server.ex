@@ -1506,9 +1506,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     {:error, -32_004, "Not found", %{"tool" => tool, "reason" => "not_found"}}
   end
 
-  defp require_current_session_claim_for_bound_call(%__MODULE__{} = server, "tools/call" = method, params) do
-    if local_trusted_read?(server, params),
-      do: {:ok, server},
+  # Reads only keep a live claim fresh; claim state never blocks or reclaims them.
+  defp require_current_session_claim_for_bound_call(%__MODULE__{} = server, "tools/call" = method, %{"name" => name} = params)
+       when is_binary(name) do
+    arguments = Map.get(params, "arguments", %{})
+
+    if is_map(arguments) and ToolCatalog.read_call?(name, arguments),
+      do: SessionBindingTools.refresh_current_session_claim_for_read(server, method, params),
       else: SessionBindingTools.require_current_session_claim_for_bound_call(server, method, params)
   end
 
