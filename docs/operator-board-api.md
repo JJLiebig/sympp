@@ -244,9 +244,9 @@ retain their history until deletion; the existing deletion setting
 ## Never-started goal retention
 
 `settings.work_request_never_started_archive_after_days` defaults to `30` elapsed
-days, configurable from 1 to 3650. A goal qualifies while its phase is `intake`
-or `planned`: it has no packages, or at least one package is still planned and
-none is dispatched or ready. An operator-completed goal never qualifies.
+days, configurable from 1 to 3650. A goal qualifies only if it never started:
+its phase is `intake` (no packages), or `planned` with no package ever
+dispatched or ended. An operator-completed goal never qualifies.
 
 Age starts at goal creation; edits do not reset it. At the exact threshold the
 next successful retention pass archives the goal with `archive_reason:

@@ -305,7 +305,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:ok, %{archived_ids: [^id]}} = Service.retention_pass(repo, now: next_boundary)
   end
 
-  test "never-started retention archives intake and planned work and keeps everything else", %{repo: repo} do
+  test "never-started retention archives only work that never started", %{repo: repo} do
     now = DateTime.utc_now(:microsecond)
 
     requests =
@@ -324,11 +324,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
         end
       )
 
-    assert {:ok, summary} = Service.retention_pass(repo, now: now, archive_after_days: 3650, delete_after_days: 1)
-    expected = Enum.map([:intake, :planned, :planned_after_endings], &requests[&1].id)
-    assert MapSet.new(summary.archived_ids) == MapSet.new(expected)
+    dispatched_before = request_with_packages!(repo, "WR-NEVER-planned_after_dispatch", [:planned])
+    [package] = repo.all(from(package in WorkPackage, where: package.work_request_id == ^dispatched_before.id))
+    repo.update!(Ecto.Changeset.change(package, dispatched_at: DateTime.add(now, -80, :day)))
+    requests = Map.put(requests, :planned_after_dispatch, repo.update!(Ecto.Changeset.change(dispatched_before, inserted_at: DateTime.add(now, -90, :day))))
 
-    for {name, request} <- Map.take(requests, [:active, :done, :unresolved]) do
+    assert {:ok, summary} = Service.retention_pass(repo, now: now, archive_after_days: 3650, delete_after_days: 1)
+    assert MapSet.new(summary.archived_ids) == MapSet.new([requests.intake.id, requests.planned.id])
+
+    # A planned package beside an ended one, or one dispatched before, means the work started.
+    for {name, request} <- Map.drop(requests, [:intake, :planned]) do
       assert repo.get!(WorkRequest, request.id).archived_at == nil, "#{name} must remain visible"
     end
   end
