@@ -1,4 +1,5 @@
-import { useId, useState } from "react";
+import { X } from "lucide-react";
+import { useId, useState, type MouseEvent } from "react";
 
 import { ActButton } from "./actions";
 import { readOnly } from "./api";
@@ -7,15 +8,18 @@ import { focusGoal } from "./motion";
 import { useAct } from "./operator";
 import { Owner } from "./owner";
 
+const ROW = "grid grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-2 py-3 pr-2";
+
 // Product calls chiefs and architects flagged for review, and feedback that could not reach its terminal.
+// They follow the questions' layout, in neutral tones: these calls are made already and only want a reaction.
 export function Decisions({ at, board, decisions }: { at: number; board: Board; decisions: Decision[] }) {
-  const shown = decisions.filter((entry) => entry.state === "recorded" || (entry.state === "feedback" && entry.delivered === false));
+  const shown = decisions.filter((entry) => entry.state === "recorded" || (entry.state === "feedback" && entry.delivered === false && !entry.dismissed));
   if (shown.length === 0) return null;
   const waiting = shown.filter((entry) => entry.state === "recorded").length;
 
   return (
     <section className="mb-8">
-      <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">Decisions to review{waiting > 0 ? ` · ${waiting}` : ""}</h2>
+      <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-dim">Decisions to review{waiting > 0 ? ` · ${waiting}` : ""}</h2>
       <ul className="divide-y divide-line border-y border-line">
         {[...shown].sort((left, right) => right.at - left.at).map((entry) => (
           <DecisionItem key={entry.id} at={at} board={board} decision={entry} />
@@ -25,46 +29,85 @@ export function Decisions({ at, board, decisions }: { at: number; board: Board; 
   );
 }
 
+// A click on the row itself, not on a control inside it or at the end of a text selection.
+function rowClick(event: MouseEvent) {
+  const target = event.target as HTMLElement;
+  return !target.closest("button, a, input, textarea, label, form") && !window.getSelection()?.toString();
+}
+
 function DecisionItem({ at, board, decision }: { at: number; board: Board; decision: Decision }) {
+  const act = useAct();
   const goal = board.goals.find((entry) => entry.id === decision.goalId);
   const [writing, setWriting] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const undelivered = decision.state === "feedback";
+  const dismiss = () => act({ kind: "dismiss_feedback", decisionId: decision.id }).catch((caught: unknown) => setFailure(caught instanceof Error ? caught.message : "The backend refused this."));
+  // The whole row answers a click: a decision opens its feedback form, undelivered feedback is dismissed.
+  const onRow = (event: MouseEvent) => {
+    if (readOnly || !rowClick(event)) return;
+    if (undelivered) void dismiss();
+    else setWriting(true);
+  };
+  const clickable = !readOnly && (undelivered || !writing);
 
   return (
-    <li className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-1 py-2.5 pr-2">
-      <div className="min-w-0">
-        <p className="flex min-w-0 items-baseline gap-3 text-xs">
-          <span className="shrink-0 uppercase tracking-[0.12em] text-faint">{decision.by.topic ?? goal?.area[0]}</span>
-          {goal ? (
-            <button className="min-w-0 truncate text-dim hover:text-ink" type="button" onClick={() => focusGoal(goal.id)}>
-              {goal.title}
-            </button>
-          ) : null}
-        </p>
-        <p className="mt-1 max-w-[75ch] text-sm font-medium text-ink">{decision.text}</p>
-        {decision.rationale ? <p className="max-w-[75ch] text-sm text-dim">{decision.rationale}</p> : null}
-        {decision.state === "feedback" ? (
-          <p className="mt-1.5 flex max-w-[75ch] items-baseline gap-2 text-sm">
-            <span className="shrink-0 rounded-full border border-checks/50 px-1.5 text-[11px] font-semibold text-checks">Undelivered</span>
-            <span className="text-dim">“{decision.feedback}”</span>
-          </p>
-        ) : null}
+    <li className={`${ROW} ${clickable ? "cursor-pointer hover:bg-white/[0.025]" : ""}`} onClick={onRow}>
+      <Subject goal={goal} topic={decision.by.topic} />
+      <p className="flex items-center justify-end gap-3">
+        <Owner owner={decision.by} />
+        <span className="font-mono text-[11px] text-faint">{span(at - decision.at)} ago</span>
+      </p>
+      <div className="col-span-2 max-w-[75ch]">
+        <p className={`text-[15px] leading-snug ${undelivered ? "text-dim" : "text-ink"}`}>{decision.text}</p>
+        {decision.rationale ? <p className="mt-0.5 text-sm text-dim">{decision.rationale}</p> : null}
       </div>
-      <div className="flex flex-col items-end gap-1.5">
-        <p className="flex items-center gap-3">
-          <Owner owner={decision.by} />
-          <span className="font-mono text-[11px] text-faint">{span(at - decision.at)} ago</span>
-        </p>
-        {decision.state === "recorded" && !writing && !readOnly ? (
-          <p className="flex items-center gap-1">
-            <ActButton action={{ kind: "ack", decisionId: decision.id }} label="Ack" tone="text-ink" />
-            <button className="rounded px-1.5 py-0.5 text-xs font-medium text-dim hover:bg-line hover:text-ink" type="button" onClick={() => setWriting(true)}>
-              Feedback
-            </button>
-          </p>
-        ) : null}
-      </div>
+      {undelivered ? <Undelivered decision={decision} failure={failure} onDismiss={() => void dismiss()} /> : null}
+      {!undelivered && !writing ? <Reactions decision={decision} onFeedback={() => setWriting(true)} /> : null}
       {writing ? <FeedbackForm decision={decision} onCancel={() => setWriting(false)} /> : null}
     </li>
+  );
+}
+
+// The chief's topic, or the goal's area, and the goal the decision belongs to.
+function Subject({ goal, topic }: { goal: Board["goals"][number] | undefined; topic: string | null | undefined }) {
+  return (
+    <p className="flex min-w-0 items-baseline gap-3 text-xs">
+      <span className="shrink-0 uppercase tracking-[0.12em] text-faint">{topic ?? goal?.area[0]}</span>
+      {goal ? (
+        <button className="min-w-0 truncate text-dim hover:text-ink" type="button" onClick={() => focusGoal(goal.id)}>
+          {goal.title}
+        </button>
+      ) : null}
+    </p>
+  );
+}
+
+// Where a question has its answer form, a decision has its two reactions.
+function Reactions({ decision, onFeedback }: { decision: Decision; onFeedback: () => void }) {
+  if (readOnly) return null;
+  return (
+    <p className="col-span-2 flex items-center gap-2">
+      <ActButton action={{ kind: "ack", decisionId: decision.id }} label="Ack" look="h-8 rounded border border-line px-3 text-sm font-medium" tone="text-ink" />
+      <button className="h-8 rounded px-3 text-sm font-medium text-dim hover:bg-line hover:text-ink" type="button" onClick={onFeedback}>
+        Feedback
+      </button>
+    </p>
+  );
+}
+
+// Feedback that reached nobody, because the terminal that recorded the decision had finished.
+function Undelivered({ decision, failure, onDismiss }: { decision: Decision; failure: string | null; onDismiss: () => void }) {
+  return (
+    <div className="col-span-2 flex max-w-[880px] items-center gap-3 rounded border border-line bg-panel px-3 py-2 text-sm">
+      <span className="shrink-0 rounded-full border border-checks/50 px-1.5 text-[11px] font-semibold text-checks">Undelivered</span>
+      <span className="min-w-0 flex-1 text-ink">“{decision.feedback}”</span>
+      {failure ? <span className="shrink-0 text-xs text-fail">{failure}</span> : null}
+      {readOnly ? null : (
+        <button aria-label="Dismiss undelivered feedback" className="flex size-6 shrink-0 items-center justify-center rounded text-faint hover:bg-line hover:text-ink" title="Dismiss" type="button" onClick={onDismiss}>
+          <X className="size-3.5" />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -88,7 +131,7 @@ function FeedbackForm({ decision, onCancel }: { decision: Decision; onCancel: ()
   };
 
   return (
-    <form className="col-span-2 mt-1.5 max-w-[880px] space-y-1.5" onSubmit={(event) => { event.preventDefault(); if (text.trim()) void submit(); }}>
+    <form className="col-span-2 max-w-[880px] space-y-2" onSubmit={(event) => { event.preventDefault(); if (text.trim()) void submit(); }}>
       <div className="flex items-start gap-2">
         <label className="sr-only" htmlFor={id}>Feedback for {decision.by.address}</label>
         <textarea
@@ -98,7 +141,7 @@ function FeedbackForm({ decision, onCancel }: { decision: Decision; onCancel: ()
           disabled={busy}
           id={id}
           placeholder={`Feedback for ${decision.by.address}`}
-          rows={2}
+          rows={1}
           value={text}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
