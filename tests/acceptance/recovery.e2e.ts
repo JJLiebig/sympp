@@ -73,7 +73,7 @@ test('a supported disposable offline snapshot denies MCP and dispatch without ch
   expect((await client.operator(`/api/v1/sympp/operator/work-requests/${request}/work-packages/${wp}/dispatch`, {})).status).toBe(403);
   const restarted = processes.factory();
   const original = architect.reconnect(await restarted.endpoint);
-  expect((await original.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages[0].status).toBe('ready_for_worker');
+  expect((await original.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages[0].status).toBe('dispatched');
   expect((await original.call('read_work_request', { detail: 'full', work_request_id: request })).decision_log_entries).toEqual([]);
 });
 
@@ -120,7 +120,7 @@ test('backend restart recovers persisted bindings and work but a different ledge
   expect((await recovered.call('get_current_assignment')).assignment.work_package_id).toBe(wp);
   expect((await recovered.call('append_finding', mutation)).finding.id).toBe(finding.id);
   const owner = architect.reconnect(await restarted.endpoint);
-  expect((await owner.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages[0].status).toBe('active');
+  expect((await owner.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages[0].status).toBe('dispatched');
   const outsider = processes.factory('foreign-ledger');
   const wrongLedger = recovered.reconnect(await outsider.endpoint);
   const denied = await wrongLedger.raw(tool('append_finding', mutation));

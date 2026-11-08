@@ -180,8 +180,10 @@ test('ordinary PR handoff observes pending qualification then reconciles an exac
   expect(waiting.metadata.pr.review_state.status).toBe('review_required');
   expect((await row(architect, request, wp)).delivery_outcome).toBeNull();
   expect(await completion()).toBeNull();
-  // Readiness is the architect handoff, not a claim that native checks passed.
-  expect((await row(architect, request, wp)).merge_eligibility.next_action).toBe('verify_native_checks_and_review_then_merge');
+  // Pending CI keeps the package dispatched until its checks pass.
+  const pending = await row(architect, request, wp);
+  expect(pending.raw_status).toBe('dispatched');
+  expect(pending.merge_eligibility.next_action).toBe('wait');
 
   provider.set(101, pr(101, head('a')));
   await architect.call('sync_pr', { work_package_id: wp, number: 101, repository: 'example/service' });
@@ -195,14 +197,16 @@ test('ordinary PR handoff observes pending qualification then reconciles an exac
   const repeated = await detail();
   expect(repeated.metadata.pr.head_changed_at).toBe(qualified.metadata.pr.head_changed_at);
   expect(repeated.metadata.pr.checks_changed_at).toBe(qualified.metadata.pr.checks_changed_at);
-  expect((await row(architect, request, wp)).merge_eligibility.eligible).toBe(true);
+  const ready = await row(architect, request, wp);
+  expect(ready.raw_status).toBe('ready');
+  expect(ready.merge_eligibility.eligible).toBe(true);
   expect(await completion()).toBeNull();
 
   const mergeTime = new Date().toISOString();
   provider.set(101, pr(101, head('a'), { state: 'MERGED', mergedAt: mergeTime, mergeCommit: { oid: head('f') } }));
   await architect.call('sync_pr', { work_package_id: wp, url: prUrl(101) });
   const delivered = await row(architect, request, wp);
-  expect(delivered.raw_status).toBe('merged');
+  expect(delivered.raw_status).toBe('ended');
   expect(delivered.delivery_outcome).toBe('pr_merged');
   expect(delivered.delivery.pr_number).toBe(101);
   expect(delivered.delivery.merge_commit_sha).toBe(head('f'));
@@ -250,7 +254,7 @@ test('provider errors and incomplete or wrong-head evidence cannot complete a di
     provider.set(102, pr(102, head('a'), patch));
     const rejected = await architect.rpc('tools/call', { name: 'sync_pr', arguments: handoff });
     expect(rejected.error).toBeTruthy();
-    expect((await row(architect, request, wp)).raw_status).toBe('ready_for_worker');
+    expect((await row(architect, request, wp)).raw_status).toBe('dispatched');
     expect((await row(architect, request, wp)).delivery_outcome).toBeNull();
   }
   provider.set(102, pr(102, head('a'), { changedFiles: undefined, files: [{ path: 'src/new.ts', changeType: 'RENAMED', previous_filename: 'src/old.ts' }], additional_field: true }));
@@ -282,7 +286,7 @@ test('provider errors and incomplete or wrong-head evidence cannot complete a di
   const observed = await architect.operator('/api/v1/sympp/operator/github/sync-prs', { mode: 'auto' });
   expect(observed.status).toBe(200);
   expect(observed.body.sync.merged_count).toBe(1);
-  expect((await row(architect, request, wp)).raw_status).toBe('merged');
+  expect((await row(architect, request, wp)).raw_status).toBe('ended');
   expect((await row(architect, request, wp)).delivery_outcome).toBe('pr_merged');
   const replay = await architect.call('reconcile_work_request', { apply: true });
   expect(replay.reconciliation.applied_count).toBe(0);
@@ -326,6 +330,7 @@ test('typed no-PR closeout resolves blockers once and terminal packages cannot r
   expect(invalid.missing_fields).toEqual(['pr_merged_at', 'merge_commit_sha']);
   expect(invalid.unexpected_fields).toEqual(['no_pr_evidence']);
   expect(invalid.allowed_fields).toEqual(['pr_url', 'pr_number', 'pr_repository', 'pr_merged_at', 'merge_commit_sha']);
+  await architect.call('dispatch_work_package', { work_package_id: remaining });
   const mergedEvidence = { pr_url: prUrl(105), pr_number: 105, pr_repository: 'example/other', pr_merged_at: new Date().toISOString(), merge_commit_sha: head('f') };
   await architect.reject('record_work_package_delivery', {
     work_package_id: remaining, outcome: 'pr_merged', idempotency_key: 'malformed-reference', evidence: { pr_merged: mergedEvidence },
@@ -351,7 +356,7 @@ test('typed no-PR closeout resolves blockers once and terminal packages cannot r
   expect(conflict.error?.data?.reason).toBe('delivery_outcome_conflict');
   expect((await row(architect, request, wp)).delivery).toEqual(scoped.delivery);
   await close(architect, abandoned, 'abandoned', { abandoned_rationale: 'No implementation was started.' });
-  for (const [id, status] of [[wp, 'closed'], [abandoned, 'abandoned']]) {
+  for (const [id, status] of [[wp, 'ended'], [abandoned, 'ended']]) {
     const before = await row(architect, request, id);
     expect(before.raw_status).toBe(status);
     expect(before.work_package.blocker_state['active?']).toBe(false);
@@ -397,7 +402,7 @@ test('blocked handoff accepts new PR and head observations without reviving an o
   await architect.call('sync_pr', { work_package_id: wp });
   expect((await row(architect, request, wp)).delivery.pr_number).toBe(104);
   await architect.call('resolve_blocker', { work_package_id: wp, blocker_id: 'scope', resolution: 'Already closed.', summary: 'Late resolution.', idempotency_key: 'late-resolution' });
-  expect((await row(architect, request, wp)).raw_status).toBe('merged');
+  expect((await row(architect, request, wp)).raw_status).toBe('ended');
   expect((await architect.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.completed_at).toBeTruthy();
   await factory.stop();
   let disconnected: unknown;
@@ -421,7 +426,7 @@ test('architect integration holds gate a ready PR without reopening work or chan
     await sync(architect, id, number, head('a'));
   }
   const before = await row(architect, request, wp);
-  expect(before.raw_status).toBe('ready_for_merge');
+  expect(before.raw_status).toBe('ready');
   expect(before.merge_eligibility.eligible).toBe(true);
   const metadata = (await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).metadata;
   const hold = {
@@ -441,7 +446,7 @@ test('architect integration holds gate a ready PR without reopening work or chan
   const declared = await architect.call('append_progress', hold);
   expect((await architect.call('append_progress', hold)).progress_event.id).toBe(declared.progress_event.id);
   const held = await row(architect, request, wp);
-  expect(held.raw_status).toBe('ready_for_merge');
+  expect(held.raw_status).toBe('ready');
   expect(held.merge_eligibility.eligible).toBe(false);
   expect(held.merge_eligibility.reason_codes).toContain('active_blocker');
   expect(held.merge_eligibility.next_action).toBe('resolve_blocker');
@@ -454,11 +459,11 @@ test('architect integration holds gate a ready PR without reopening work or chan
   const resolved = await architect.call('resolve_blocker', resolution);
   expect((await architect.call('resolve_blocker', resolution)).progress_event.id).toBe(resolved.progress_event.id);
   expect((await row(architect, request, wp)).merge_eligibility.eligible).toBe(true);
-  expect((await row(architect, request, wp)).raw_status).toBe('ready_for_merge');
+  expect((await row(architect, request, wp)).raw_status).toBe('ready');
   expect((await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).metadata).toEqual(metadata);
   provider.set(801, pr(801, head('a'), { state: 'MERGED', mergedAt: new Date().toISOString(), mergeCommit: { oid: head('f') } }));
   await architect.call('sync_pr', { work_package_id: wp });
-  expect((await row(architect, request, wp)).raw_status).toBe('merged');
+  expect((await row(architect, request, wp)).raw_status).toBe('ended');
   const late = await architect.rpc('tools/call', { name: 'append_progress', arguments: { ...hold, idempotency_key: 'after-merge' } });
   expect(late.error).toBeTruthy();
   expect((await row(architect, request, wp)).work_package.blocker_state['active?']).toBe(false);

@@ -7,7 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     assert {:ok, package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(id: "SYMPP-SOLO-RELEASE-LEGACY", kind: "mcp", status: "ready_for_worker")
+               WorkPackageFactory.attrs(id: "SYMPP-SOLO-RELEASE-LEGACY", kind: "mcp", status: "dispatched")
              )
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
@@ -162,7 +162,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
           Map.merge(contract, %{
             work_request_id: work_request.id,
             sequence: 1,
-            status: "ready_for_worker",
+            status: "dispatched",
             dispatched_at: DateTime.utc_now(:microsecond)
           })
         )

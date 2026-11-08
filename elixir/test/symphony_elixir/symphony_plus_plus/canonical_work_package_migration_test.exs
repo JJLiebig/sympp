@@ -27,7 +27,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
 
       assert @cutover_version in Ecto.Migrator.run(Repo, Migrations.all(), :up, to: @cutover_version, log: false)
 
-      assert [["WP-LINKED", "WR-CANONICAL-MIGRATION", "PTN-CANONICAL", 1, "Linked legacy goal", "ready_for_worker"]] =
+      assert [["WP-LINKED", "WR-CANONICAL-MIGRATION", "PTN-CANONICAL", 1, "Linked legacy goal", "dispatched"]] =
                rows!("""
                SELECT id, work_request_id, product_tree_node_id, sequence, goal, status
                FROM sympp_work_packages
@@ -189,9 +189,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
       })
     )
 
-    insert_legacy_work_package!("WP-LINKED", "mcp", nil, "ready_for_worker", now)
+    insert_legacy_work_package!("WP-LINKED", "mcp", nil, "dispatched", now)
     insert_legacy_work_package!("WP-CLOSEOUT", "mcp", nil, "closed", now)
-    insert_legacy_work_package!("WP-DISPATCHED", "mcp", nil, "ready_for_worker", now)
+    insert_legacy_work_package!("WP-DISPATCHED", "mcp", nil, "dispatched", now)
 
     query!(
       """
@@ -377,7 +377,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
         "PROGRESS-LEGACY-PAYLOAD",
         "WP-LINKED",
         "Legacy payload",
-        "implementing",
+        "dispatched",
         1,
         now,
         now,

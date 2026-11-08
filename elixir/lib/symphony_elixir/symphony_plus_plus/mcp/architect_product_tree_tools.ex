@@ -32,13 +32,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @work_request_authoring_states ["ready_for_slicing", "sliced"]
-  @work_package_terminal_states ["skipped", "merged", "closed", "abandoned"]
-  @work_package_authoring_states WorkPackage.statuses() -- @work_package_terminal_states
+  @work_package_authoring_states ["planned", "dispatched"]
 
   @tools [
     "ask_question",
@@ -477,16 +477,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   defp require_work_package_authoring_status(%WorkRequest{status: status}, revision),
     do: {:error, {:work_request_not_authorable, status, revision}}
 
-  defp require_mutable_work_package_contract(%WorkPackage{status: status} = work_package)
-       when status in @work_package_terminal_states do
-    {:error, {:work_package_terminal, status, work_package.contract_revision}}
+  defp require_mutable_work_package_contract(%WorkPackage{status: status} = work_package) do
+    cond do
+      Lifecycle.ended?(work_package) -> {:error, {:work_package_terminal, status, work_package.contract_revision}}
+      Lifecycle.ready?(work_package) -> {:error, {:contract_frozen, status, work_package.contract_revision}}
+      true -> :ok
+    end
   end
-
-  defp require_mutable_work_package_contract(%WorkPackage{}), do: :ok
 
   defp update_work_package(repo, work_request_id, work_package_id, expected_revision, patch) do
     case WorkRequestService.update_work_package(repo, work_request_id, work_package_id, expected_revision, patch) do
-      {:error, reason} when reason in [:stale_status, :invalid_status] ->
+      {:error, reason} when reason in [:stale_status, :invalid_status, :contract_frozen] ->
         with {:ok, work_package} <- WorkRequestService.get_work_package(repo, work_request_id, work_package_id),
              :ok <- require_contract_revision(work_package, expected_revision),
              :ok <- require_mutable_work_package_contract(work_package) do
@@ -702,6 +703,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
       |> optional_put("current_contract_revision", revision)
 
     ErrorDetails.lifecycle_error(tool, reason, details)
+  end
+
+  defp architect_error({:contract_frozen, status, revision}, tool) do
+    ErrorDetails.lifecycle_error(tool, :contract_frozen, %{
+      "actual_status" => reason_text(status),
+      "allowed_authoring_states" => @work_package_authoring_states,
+      "current_contract_revision" => revision
+    })
   end
 
   defp architect_error({reason, status, revision}, tool)

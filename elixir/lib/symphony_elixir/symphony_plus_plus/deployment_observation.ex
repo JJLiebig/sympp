@@ -49,7 +49,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
 
   defp enrich_detail(detail, config, state) do
     request = detail.work_request
-    packages = Enum.reject(detail.work_packages, &(outcome(&1) in ["superseded", "abandoned"] or value(&1, :status) == "skipped"))
+    packages = Enum.reject(detail.work_packages, &(outcome(&1) in ["superseded", "abandoned", "skipped"]))
     by_repo = Enum.group_by(packages, &package_repo/1)
     repos = [repository(request) | Map.keys(by_repo)] |> Enum.reject(&is_nil/1) |> Enum.uniq() |> Enum.sort()
 

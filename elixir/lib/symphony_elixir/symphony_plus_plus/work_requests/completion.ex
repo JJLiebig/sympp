@@ -5,7 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings
   alias SymphonyElixir.SymphonyPlusPlus.SessionLocations
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
@@ -18,8 +18,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
 
   import Ecto.Query, only: [from: 2]
 
-  @terminal_work_package_statuses ["skipped", "merged", "closed", "abandoned"]
-  @terminal_delivery_outcomes ["pr_merged", "completed_no_pr", "superseded", "abandoned"]
   @completion_blocking_work_request_statuses ["human_info_needed"]
   @operator_completion_source "operator"
   @restorable_archive_reasons ["age"]
@@ -130,7 +128,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
 
     required_packages =
       Enum.reject(work_packages, fn work_package ->
-        work_package.status == "skipped" and not Map.has_key?(deliveries_by_slice_id, work_package.id) and
+        delivery_outcome(Map.get(deliveries_by_slice_id, work_package.id)) == "skipped" and
           DeliveryResolution.successor_ids(work_package.id, deliveries_by_slice_id, successors) == []
       end)
 
@@ -138,7 +136,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
       Map.get(question_state, :open_count, 0) == 0 and
       required_packages != [] and
       Enum.all?(required_packages, fn work_package ->
-        DeliveryResolution.resolved?(work_package.id, packages_by_id, deliveries_by_slice_id, successors) and
+        DeliveryResolution.resolves_work_request?(work_package.id, packages_by_id, deliveries_by_slice_id, successors) and
           terminal_slice?(
             work_package,
             Map.get(work_package_contexts, work_package.id),
@@ -341,16 +339,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
       set: [status: "closed", updated_at: now]
     )
 
-    WorkPackageRepository.clear_terminal_attention(repo, work_packages)
+    Lifecycle.apply_terminal_effects(repo, work_packages)
   end
 
   defp clear_terminal_work_package_attention(repo, work_packages, deliveries_by_slice_id) do
     work_packages
     |> Enum.filter(fn work_package ->
-      work_package.status in @terminal_work_package_statuses or
+      Lifecycle.ended?(work_package) or
         terminal_delivery?(Map.get(deliveries_by_slice_id, work_package.id))
     end)
-    |> then(&WorkPackageRepository.clear_terminal_attention(repo, &1))
+    |> then(&Lifecycle.apply_terminal_effects(repo, &1))
   end
 
   defp operator_completed?(%WorkRequest{completed_at: %DateTime{}, completion_source: @operator_completion_source}), do: true
@@ -970,29 +968,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     end)
   end
 
-  defp terminal_slice?(work_package, context, delivery)
-
-  defp terminal_slice?(%WorkPackage{status: status}, context, delivery) when status in @terminal_work_package_statuses do
-    not active_blocker_context?(context) and
-      (terminal_delivery?(delivery) or not active_runtime_context?(context))
+  defp terminal_slice?(%WorkPackage{} = work_package, context, delivery) do
+    if Lifecycle.ended?(work_package) do
+      not active_blocker_context?(context) and (terminal_delivery?(delivery) or not active_runtime_context?(context))
+    else
+      terminal_delivery?(delivery)
+    end
   end
 
-  defp terminal_slice?(%WorkPackage{}, _context, %WorkPackageDelivery{outcome: outcome})
-       when outcome in @terminal_delivery_outcomes,
-       do: true
+  defp terminal_delivery?(delivery), do: is_binary(delivery_outcome(delivery))
 
-  defp terminal_slice?(%WorkPackage{}, _context, delivery) when is_map(delivery),
-    do: terminal_delivery?(delivery)
-
-  defp terminal_slice?(%WorkPackage{}, _context, _delivery), do: false
-
-  defp terminal_delivery?(%WorkPackageDelivery{outcome: outcome}), do: outcome in @terminal_delivery_outcomes
-
-  defp terminal_delivery?(delivery) when is_map(delivery) do
-    map_value(delivery, :outcome) in @terminal_delivery_outcomes
-  end
-
-  defp terminal_delivery?(_delivery), do: false
+  defp delivery_outcome(nil), do: nil
+  defp delivery_outcome(delivery) when is_map(delivery), do: map_value(delivery, :outcome)
 
   defp active_blocker_context?(%{active_blocker?: true}), do: true
   defp active_blocker_context?(%{blocker_state: %{active?: true}}), do: true

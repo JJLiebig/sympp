@@ -70,7 +70,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReadyStatusMigrationTest do
         branch_pattern: "cleanup/ready-status",
         engineering_scope: "Update the persisted status only.",
         acceptance_criteria: ["Status is canonical."],
-        status: "ready_for_merge"
+        status: "ready"
       })
     )
 

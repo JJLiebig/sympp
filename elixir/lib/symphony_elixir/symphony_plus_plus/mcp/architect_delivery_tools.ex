@@ -52,9 +52,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.RuntimeCleanup, as: WorkRequestRuntimeCleanup
@@ -184,15 +186,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
          {:ok, recorded_by} <- optional_string_argument(arguments, "recorded_by", session_claimed_by(live_session)),
          {:ok, attrs} <- work_package_delivery_attrs(arguments, outcome, idempotency_key, recorded_by),
          {:ok, work_request, work_package, filters, scope} <-
-           WorkRequestScope.authorized_work_package_scope(
-             config.repo,
-             live_session,
-             work_request_id,
-             work_package_id,
-             :delivery_closeout_record,
-             "record_work_package_delivery"
-           ),
-         :ok <- require_work_package_delivery_scope(config.repo, work_request, work_package, attrs, filters),
+           delivery_closeout_target(config.repo, live_session, work_request_id, work_package_id, outcome),
+         :ok <- require_delivery_closeout_target_scope(config.repo, work_request, work_package, attrs, filters),
          {:ok, {delivery, cleanup_work_package, closeout_context}} <-
            mutate_product_tree(
              config.repo,
@@ -218,8 +213,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
            ),
          _cleanup_broadcast_result <- DashboardPubSub.broadcast_changed(),
          {:ok, work_packages} <- WorkRequestService.list_work_packages(config.repo, work_request_id),
-         {:ok, delivery_board} <-
-           WorkRequestScope.scoped_delivery_board(config.repo, work_request, work_packages, filters) do
+         {:ok, delivery_board} <- delivery_closeout_board(config.repo, work_request, work_packages, filters) do
       {:ok,
        ToolResult.tool_result(%{
          "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
@@ -425,8 +419,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   end
 
   defp work_package_delivery_attrs(arguments, outcome, idempotency_key, recorded_by) do
-    with {:ok, evidence} <- required_object(arguments, "evidence"),
-         {:ok, evidence_attrs} <- work_package_delivery_evidence_attrs(evidence, outcome) do
+    with {:ok, evidence} <- optional_object_argument(arguments, "evidence"),
+         {:ok, evidence_attrs} <- work_package_delivery_evidence_attrs(evidence || %{}, outcome) do
       {:ok,
        Map.merge(
          %{
@@ -777,7 +771,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   end
 
   defp architect_sync_pr_result(repo, work_package_id, %{status: status} = pr_sync, scope)
-       when status in ["merged", "already_merged", "ready_for_worker", "active", "reviewing", "ci_waiting", "ready_for_merge"] do
+       when status in ["merged", "already_merged", "dispatched", "ready"] do
     with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
       {:ok,
        ToolResult.tool_result(%{
@@ -848,6 +842,37 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
        do: true
 
   defp reconcile_result_has_delivery_closeout?(_result), do: false
+
+  # Any chief or architect may end a package as finished (it waits on someone
+  # else); every other ending needs the architect that owns the WorkRequest.
+  defp delivery_closeout_target(repo, %Session{}, work_request_id, work_package_id, "finished") do
+    with {:ok, work_request} <- WorkRequestService.get(repo, work_request_id),
+         {:ok, work_package} <- WorkRequestService.get_work_package(repo, work_request_id, work_package_id) do
+      {:ok, work_request, work_package, :any_architect, %{"work_request_id" => work_request.id}}
+    end
+  end
+
+  defp delivery_closeout_target(repo, %Session{} = session, work_request_id, work_package_id, _outcome) do
+    WorkRequestScope.authorized_work_package_scope(
+      repo,
+      session,
+      work_request_id,
+      work_package_id,
+      :delivery_closeout_record,
+      "record_work_package_delivery"
+    )
+  end
+
+  defp require_delivery_closeout_target_scope(_repo, _work_request, _work_package, _attrs, :any_architect), do: :ok
+
+  defp require_delivery_closeout_target_scope(repo, work_request, work_package, attrs, filters),
+    do: require_work_package_delivery_scope(repo, work_request, work_package, attrs, filters)
+
+  defp delivery_closeout_board(repo, %WorkRequest{} = work_request, work_packages, :any_architect),
+    do: DeliveryBoard.project(repo, work_request.id, work_request: work_request, work_packages: work_packages)
+
+  defp delivery_closeout_board(repo, %WorkRequest{} = work_request, work_packages, filters),
+    do: WorkRequestScope.scoped_delivery_board(repo, work_request, work_packages, filters)
 
   defp require_work_package_delivery_scope(
          repo,
@@ -930,14 +955,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
     end
   end
 
-  defp require_runtime_cleanup_delivery_state(%WorkPackage{}, %{"outcome" => "superseded"}), do: :ok
-
-  defp require_runtime_cleanup_delivery_state(%WorkPackage{status: status}, %{"outcome" => "abandoned"})
-       when status in ["planning", "ready_for_worker"],
-       do: :ok
-
-  defp require_runtime_cleanup_delivery_state(%WorkPackage{}, %{"outcome" => "abandoned"}),
-    do: {:tool_error, "work_package_not_abandonable"}
+  defp require_runtime_cleanup_delivery_state(%WorkPackage{status: status}, %{"outcome" => outcome}) do
+    if status in Lifecycle.ending_sources(outcome), do: :ok, else: {:tool_error, "work_package_not_abandonable"}
+  end
 
   defp force_release_work_package_claim(repo, session, work_package_id, reason) do
     with :ok <- lock_access_grant(repo, session.assignment.grant_id),
@@ -977,7 +997,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
            ),
          :ok <- WorkPackageWorkerRevoke.require_revoke_status(work_package),
          {:ok, grant} <- scoped_work_package_worker_grant_for_revoke(repo, grant_id, work_package_id, now),
-         {:ok, recycled_work_package} <- WorkPackageWorkerRevoke.update_status(repo, work_package, now),
          {:ok, revoked_grant} <- revoke_live_work_package_worker_grant(repo, grant, now),
          {:ok, event} <-
            append_work_package_worker_revoke_event(
@@ -985,21 +1004,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
              session,
              work_request,
              work_package,
-             work_package.status,
-             recycled_work_package,
              revoked_grant,
              reason
            ) do
-      {:ok,
-       work_package_worker_revoke_result(
-         work_request,
-         work_package,
-         work_package.status,
-         recycled_work_package,
-         revoked_grant,
-         event,
-         reason
-       )}
+      {:ok, work_package_worker_revoke_result(work_package, revoked_grant, event)}
     end
   end
 
@@ -1059,55 +1067,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
     end
   end
 
-  defp append_work_package_worker_revoke_event(
-         repo,
-         %Session{} = session,
-         %WorkRequest{} = work_request,
-         %WorkPackage{},
-         previous_work_package_status,
-         %WorkPackage{} = recycled_work_package,
-         %AccessGrant{} = grant,
-         reason
-       ) do
-    payload =
-      WorkPackageWorkerRevoke.payload(
-        work_request,
-        recycled_work_package,
-        previous_work_package_status,
-        grant,
-        reason
-      )
+  defp append_work_package_worker_revoke_event(repo, %Session{} = session, %WorkRequest{} = work_request, %WorkPackage{} = work_package, %AccessGrant{} = grant, reason) do
+    payload = WorkPackageWorkerRevoke.payload(work_request, work_package, grant, reason)
 
-    PlanningRepository.append_audit_progress_event_for_work_package(repo, session.assignment, recycled_work_package.id, %{
+    PlanningRepository.append_audit_progress_event_for_work_package(repo, session.assignment, work_package.id, %{
       "summary" => "WorkRequest work-package worker grant revoked for cleanup",
       "body" =>
         "Cleanup reason: #{redacted_child_worker_revoke_reason(reason)}; " <>
-          "WorkRequest: #{work_request.id}; WorkPackage: #{recycled_work_package.id}",
+          "WorkRequest: #{work_request.id}; WorkPackage: #{work_package.id}",
       "status" => "work_package_worker_key_revoked",
       "idempotency_key" => ProgressEvents.metadata_idempotency_key(payload),
       "payload" => payload
     })
   end
 
-  defp work_package_worker_revoke_result(
-         %WorkRequest{},
-         %WorkPackage{},
-         previous_work_package_status,
-         %WorkPackage{} = recycled_work_package,
-         %AccessGrant{} = grant,
-         %ProgressEvent{} = event,
-         _reason
-       ) do
-    reason_codes = WorkPackageWorkerRevoke.reason_codes(previous_work_package_status, recycled_work_package.status)
-
+  defp work_package_worker_revoke_result(%WorkPackage{} = work_package, %AccessGrant{} = grant, %ProgressEvent{} = event) do
     %{
-      "work_package" => work_package_payload(recycled_work_package),
+      "work_package" => work_package_payload(work_package),
       "revoked_worker_grant" => %{"id" => grant.id, "work_package_id" => grant.work_package_id},
       "closeout_affordance" => %{
         "status" => "revoked",
-        "previous_work_package_status" => previous_work_package_status,
-        "work_package_status" => recycled_work_package.status,
-        "reason_codes" => reason_codes
+        "work_package_status" => work_package.status,
+        "reason_codes" => WorkPackageWorkerRevoke.reason_codes()
       },
       "audit_event" => ProgressEvents.payload(event),
       "next_action" => "retry_record_work_package_delivery"
@@ -1196,14 +1177,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   defp record_work_package_delivery_error(%Ecto.Changeset{} = changeset),
     do: changeset_invalid_params_error("record_work_package_delivery", "invalid_work_package_delivery", changeset)
 
+  defp record_work_package_delivery_error({:delivery_outcome_conflict, outcome}) do
+    {:error, -32_602, "Invalid params", %{"tool" => "record_work_package_delivery", "reason" => "delivery_outcome_conflict", "state" => "ended", "outcome" => outcome}}
+  end
+
+  defp record_work_package_delivery_error({:ending_not_allowed, status, outcome}) do
+    {:error, -32_009, "Precondition Failed",
+     %{
+       "tool" => "record_work_package_delivery",
+       "reason" => "ending_not_allowed",
+       "reason_code" => "ending_not_allowed",
+       "state" => status,
+       "outcome" => outcome,
+       "allowed_outcomes" => Enum.filter(WorkPackageDelivery.outcomes(), &(status in Lifecycle.ending_sources(&1)))
+     }}
+  end
+
   defp record_work_package_delivery_error(reason)
-       when reason in [:delivery_outcome_conflict, :missing_strong_pr_evidence, :idempotency_key_conflict] do
+       when reason in [:missing_strong_pr_evidence, :idempotency_key_conflict] do
     data = %{"tool" => "record_work_package_delivery", "reason" => Atom.to_string(reason)}
     {:error, -32_602, "Invalid params", data}
   end
 
   defp record_work_package_delivery_error(reason)
-       when reason in [:active_runtime, :claim_not_current, :work_package_not_abandonable],
+       when reason in [:active_runtime, :claim_not_current],
        do: delivery_closeout_precondition_error("record_work_package_delivery", reason)
 
   defp record_work_package_delivery_error(reason), do: architect_error(reason, "record_work_package_delivery")

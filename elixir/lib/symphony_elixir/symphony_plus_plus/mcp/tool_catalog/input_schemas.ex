@@ -326,13 +326,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
           |> string_enum_schema()
           |> Map.put(
             "description",
-            "Delivery outcome. Must match the single typed key inside evidence."
+            "How the WorkPackage ended. finished ends a dispatched or ready package whose PR waits on someone else; it completes the WorkRequest but never satisfies dependents. skipped ends a planned package."
           ),
         "idempotency_key" => described_string_schema("Stable caller-provided key for replay. Reusing the same key and evidence returns the existing delivery; conflicting evidence is rejected."),
         "recorded_by" => described_string_schema("Optional closeout actor. Defaults to the claimed architect identity."),
         "evidence" => work_package_delivery_evidence_schema()
       },
-      ["work_package_id", "outcome", "idempotency_key", "evidence"]
+      ["work_package_id", "outcome", "idempotency_key"]
     )
   end
 

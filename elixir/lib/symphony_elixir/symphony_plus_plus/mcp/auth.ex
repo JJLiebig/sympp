@@ -7,6 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Auth do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Session
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
 
   @type denial :: :unauthorized | :forbidden | {:service_unavailable, term()} | {:unauthorized, term()}
 
@@ -73,9 +74,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Auth do
 
   defp require_merged_package(repo, %AccessGrant{work_package_id: work_package_id}) do
     case WorkPackageRepository.get(repo, work_package_id) do
-      {:ok, %{status: "merged"}} -> :ok
+      {:ok, %{status: "ended"}} -> require_merged_ending(repo, work_package_id)
       {:ok, _work_package} -> {:error, :work_package_terminal}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp require_merged_ending(repo, work_package_id) do
+    case repo.get_by(WorkPackageDelivery, work_package_id: work_package_id) do
+      %WorkPackageDelivery{outcome: "pr_merged"} -> :ok
+      _other -> {:error, :work_package_terminal}
     end
   end
 

@@ -54,3 +54,18 @@ test("open in tab targets the job's local space and carries this copy's props", 
   assert.equal(J.jobSpace({ ...job, repos: ['C:/code/owner/web'] }, spaces).id, 'web');
   assert.equal(J.jobTabArgs({}, { ...job, title: 'x'.repeat(40) }, []).name.length, 32);
 });
+
+test('migrated endings read their recorded legacy status', () => {
+  const board = boardPayload();
+  const detail = board.work_request_details[0];
+  const ended = (id, legacy_status) => ({
+    id, work_package_id: id, title: id, sequence: 9, repo: 'owner/web', status: 'ended', inserted_at: detail.work_request.inserted_at,
+    dispatched_at: detail.work_request.inserted_at, board_state: { stage: null, delivered: false, track: 'pr' },
+    delivery: { outcome: 'legacy', legacy_status },
+  });
+  detail.work_packages.push(ended('wp-legacy-abandoned', 'abandoned'), ended('wp-legacy-merged', 'merged'));
+  const job = M.parseBoard(board).jobs.find((entry) => entry.id === detail.work_request.id);
+  const outcomeOf = (id) => job.packages.find((p) => p.id === id).outcome;
+  assert.equal(outcomeOf('wp-legacy-abandoned'), 'dropped');
+  assert.equal(outcomeOf('wp-legacy-merged'), 'merged');
+});

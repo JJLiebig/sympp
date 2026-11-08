@@ -13,7 +13,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
     def update(changeset) do
       if Process.delete(@race_key) do
         changeset.data
-        |> Ecto.Changeset.change(status: "ready_for_worker")
+        |> Ecto.Changeset.change(status: "dispatched")
         |> Repo.update!()
       end
 
@@ -31,6 +31,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   setup_all do
@@ -70,7 +71,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
              )
 
     assert {:ok, persisted} = WorkPackageRepository.get(repo, package.id)
-    assert persisted.status == "ready_for_worker"
+    assert persisted.status == "dispatched"
     assert persisted.title == package.title
     assert persisted.contract_revision == package.contract_revision
   end
@@ -79,8 +80,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
     work_request = create_work_request!(repo)
     package = slice_one!(repo, work_request.id)
 
-    assert {:ok, skipped} = WorkPackageRepository.update_status(repo, package.id, "planned", "skipped")
-    assert skipped.status == "skipped"
+    assert {:ok, _skipped} = WorkRequestService.skip_work_package(repo, work_request.id, package.id)
     assert {:error, :stale_status} = CreateWork.activate(repo, package)
   end
 

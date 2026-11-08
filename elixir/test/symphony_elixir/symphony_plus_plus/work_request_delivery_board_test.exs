@@ -76,7 +76,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
 
   test "returns lineage read failures from graph construction" do
     request = %WorkRequest{id: "WR-LOCKED-LINEAGE"}
-    package = %WorkPackage{id: "WP-RETIRED", work_request_id: request.id, status: "skipped"}
+    package = %WorkPackage{id: "WP-RETIRED", work_request_id: request.id, status: "ended"}
     trees = %{request.id => {:ok, %{nodes: [], dependency_edges: []}}}
 
     assert {:error, {:storage_failed, "database is locked"}} =
@@ -90,7 +90,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
       linked_slice!(repo, work_request,
         id: "WRS-BOARD-STALE",
         work_package_id: "WP-BOARD-STALE",
-        status: "blocked"
+        status: "dispatched"
       )
 
     assert {:ok, _blocker} =
@@ -120,7 +120,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
              })
 
     assert {:ok, _delivery} =
-             Repository.record_work_package_delivery(
+             CanonicalWorkPackageFixtures.end_work_package(
                repo,
                work_request.id,
                work_package.id,
@@ -137,8 +137,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
 
     assert {:ok, %{work_packages: [slice]}} = DeliveryBoard.project(repo, work_request.id)
     assert slice.operational_state.key == "delivered"
-    assert slice.operational_state.raw_status == "blocked"
-    assert slice.work_package.raw_status == "blocked"
+    assert slice.operational_state.raw_status == "ended"
+    assert slice.work_package.raw_status == "ended"
 
     assert %{
              status: "merged",
@@ -161,7 +161,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
       linked_slice!(repo, work_request,
         id: "WRS-BOARD-LIVE-RUNTIME",
         work_package_id: "WP-BOARD-LIVE-RUNTIME",
-        status: "ready_for_merge"
+        status: "ready"
       )
 
     assert {:ok, _run} =
@@ -175,7 +175,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
              })
 
     assert {:ok, _delivery} =
-             Repository.record_work_package_delivery(
+             CanonicalWorkPackageFixtures.end_work_package(
                repo,
                work_request.id,
                work_package.id,
@@ -198,7 +198,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
       linked_slice!(repo, work_request,
         id: "WRS-BOARD-PROGRESS-SUMMARIES",
         work_package_id: "WP-BOARD-PROGRESS-SUMMARIES",
-        status: "reviewing",
+        status: "dispatched",
         review_requirement: %{"type" => "human"}
       )
 
@@ -247,33 +247,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     refute Map.has_key?(slice.work_package.pr.merge_state, :raw_payload)
   end
 
-  test "preloaded blocked raw state does not imply active blocker evidence", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-BOARD-RESOLVED-BLOCKER")
-
-    {_work_package, linked_package} =
-      linked_slice!(repo, work_request,
-        id: "WRS-BOARD-RESOLVED-BLOCKER",
-        work_package_id: "WP-BOARD-RESOLVED-BLOCKER",
-        status: "blocked"
-      )
-
-    work_package_contexts = %{
-      linked_package.id => %{
-        work_package: linked_package,
-        card: %{operational_state: %{key: "blocked", attention_items: []}}
-      }
-    }
-
-    assert {:ok, %{work_packages: [slice]}} =
-             DeliveryBoard.project(repo, work_request.id, work_package_contexts: work_package_contexts)
-
-    assert slice.operational_state.key == "blocked"
-    assert slice.attention_reason_codes == []
-  end
-
   defp linked_slice!(repo, work_request, overrides) do
     work_package_id = Keyword.fetch!(overrides, :work_package_id)
-    status = Keyword.get(overrides, :status, "ready_for_worker")
+    status = Keyword.get(overrides, :status, "dispatched")
 
     work_package =
       create_work_package!(

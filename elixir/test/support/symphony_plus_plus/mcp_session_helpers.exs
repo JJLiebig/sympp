@@ -76,7 +76,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.SessionHelpers do
         repo: "nextide/symphony-plus-plus",
         allowed_file_globs: ["elixir/lib/**"],
         phase_id: phase_id,
-        status: "planning"
+        status: "dispatched"
       ]
       |> Keyword.merge(overrides)
       |> WorkPackageFactory.attrs()
@@ -145,7 +145,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.SessionHelpers do
         base_branch: "symphony-plus-plus/beta",
         repo: "nextide/symphony-plus-plus",
         allowed_file_globs: ["elixir/lib/**"],
-        status: "planning"
+        status: "dispatched"
       ]
       |> Keyword.merge(overrides)
       |> WorkPackageFactory.attrs()
@@ -177,7 +177,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.SessionHelpers do
         base_branch: "symphony-plus-plus/beta",
         repo: "nextide/symphony-plus-plus",
         allowed_file_globs: ["elixir/lib/**"],
-        status: "planning",
+        status: "dispatched",
         phase_id: phase_id
       ]
       |> WorkPackageFactory.attrs()
@@ -347,7 +347,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.SessionHelpers do
         base_branch: "feature/sympp-v21-ledger-claims",
         branch_pattern: "agent/#{id}/worker",
         worktree_path: local_claim_worktree_path(id),
-        status: "ready_for_worker"
+        status: "dispatched"
       ]
       |> Keyword.merge(overrides)
       |> WorkPackageFactory.attrs()

@@ -1,7 +1,7 @@
 import { formatStatus } from "./status-labels";
 import type { WorkPackageMergeEligibility } from "./work-request";
 
-const QUALIFIED_STATES = new Set(["merge_ready", "ready_for_merge"]);
+const QUALIFIED_STATES = new Set(["merge_ready", "ready"]);
 const REASON_COPY: Record<string, string> = {
   candidate_pin_stale: "candidate input changed",
   delivery_order_violation: "delivery order conflict",

@@ -3,7 +3,7 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  test "sync_pr repairs PR identity and records only a verified terminal merge after readiness", %{repo: repo} do
+  test "sync_pr records only a verified merge, which ends the package and retires the worker", %{repo: repo} do
     original_client = Application.get_env(:symphony_elixir, :sympp_github_client)
     Application.put_env(:symphony_elixir, :sympp_github_client, SymphonyElixir.FakeGitHubClient)
     SymphonyElixir.FakeGitHubClient.clear()
@@ -17,15 +17,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
       end
     end)
 
+    work_request = create_work_request!(repo, repo: "nextide/repo", base_branch: "main", status: "sliced")
+
     assert {:ok, package} =
              WorkPackageRepository.create(
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-READY-SYNC-MERGED",
+                 work_request_id: work_request.id,
                  kind: "standard_pr",
                  repo: "nextide/repo",
                  base_branch: "main",
-                 status: "ready_for_merge"
+                 status: "ready"
                )
              )
 
@@ -35,6 +38,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
                summary: "Branch attached",
                status: "branch_attached",
                payload: %{type: "branch", source_tool: "attach_branch", branch: "fix/ready-sync", head_sha: "head-a"}
+             })
+
+    assert {:ok, _pr} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: package.id,
+               summary: "PR attached",
+               status: "pr_attached",
+               payload: %{type: "pr", source_tool: "attach_pr", url: "https://github.com/nextide/repo/pull/27", repository: "nextide/repo", number: 27, head_sha: "head-a"}
              })
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
@@ -66,7 +77,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
     assert get_in(open_response, ["error", "data", "reason"]) == "pr_not_merged"
     assert {:ok, unchanged_events} = PlanningRepository.list_progress_events(repo, package.id)
     assert length(unchanged_events) == length(initial_events)
-    assert repo.get!(WorkPackage, package.id).status == "ready_for_merge"
+    assert repo.get!(WorkPackage, package.id).status == "ready"
 
     SymphonyElixir.FakeGitHubClient.put_response(
       "nextide/repo",
@@ -89,7 +100,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
         session: session
       )
 
-    assert get_in(merged_response, ["result", "structuredContent", "work_package", "status"]) == "merged"
+    assert get_in(merged_response, ["result", "structuredContent", "work_package", "status"]) == "ended"
     assert get_in(merged_response, ["result", "structuredContent", "pr_sync", "status"]) == "merged"
     assert get_in(merged_response, ["result", "structuredContent", "next_owner"]) == "architect"
     assert get_in(merged_response, ["result", "structuredContent", "next_action"]) == "return_to_architect"
@@ -109,8 +120,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
         session: session
       )
 
-    assert get_in(replay_response, ["result", "structuredContent", "pr_sync", "status"]) == "already_merged"
-    assert get_in(replay_response, ["result", "structuredContent", "next_owner"]) == "architect"
-    assert get_in(replay_response, ["result", "structuredContent", "next_action"]) == "return_to_architect"
+    # Ending the package retired the worker's grant.
+    assert get_in(replay_response, ["error", "data", "reason"]) == "revoked"
   end
 end

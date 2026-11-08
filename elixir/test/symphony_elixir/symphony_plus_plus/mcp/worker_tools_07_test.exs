@@ -8,7 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
 
   defp candidate_package(repo, request, id) do
     assert {:ok, package} =
-             CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_request_work_package_attrs(id: id, kind: "docs", status: "reviewing", branch_pattern: "agent/#{id}/worker"))
+             CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_request_work_package_attrs(id: id, kind: "docs", status: "dispatched", branch_pattern: "agent/#{id}/worker"))
 
     package
   end
@@ -76,7 +76,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
   end
 
   test "mark_ready uses lifecycle capability checks", %{repo: repo} do
-    assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-READY-CAP", kind: "mcp", status: "ci_waiting"))
+    assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-READY-CAP", kind: "mcp", status: "dispatched"))
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id, capabilities: ["worker:claim"])
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)

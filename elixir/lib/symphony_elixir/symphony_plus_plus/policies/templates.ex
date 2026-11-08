@@ -5,8 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
     template: "worker_package",
     constraints: %{
       expiry_seconds: nil,
-      planning_depth: "package",
-      terminal_readiness_status: "ready_for_merge"
+      planning_depth: "package"
     },
     required_gates: ["package_acceptance", "human_merge"]
   }
@@ -14,17 +13,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
   @templates %{
     "quick_fix" => %{
       template: "quick_fix",
-      constraints: %{expiry_seconds: nil, planning_depth: "brief", terminal_readiness_status: "ready_for_merge"},
+      constraints: %{expiry_seconds: nil, planning_depth: "brief"},
       required_gates: []
     },
     "hotfix" => %{
       template: "hotfix",
-      constraints: %{expiry_seconds: nil, planning_depth: "incident", terminal_readiness_status: "ready_for_merge"},
+      constraints: %{expiry_seconds: nil, planning_depth: "incident"},
       required_gates: ["human_merge"]
     },
     "docs" => %{
       template: "docs",
-      constraints: %{expiry_seconds: nil, planning_depth: "brief", terminal_readiness_status: "ready_for_merge"},
+      constraints: %{expiry_seconds: nil, planning_depth: "brief"},
       required_gates: []
     },
     "adapter" => @worker_package_policy,
@@ -38,7 +37,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
     "hooks" => @worker_package_policy,
     "investigation" => %{
       template: "investigation",
-      constraints: %{expiry_seconds: nil, planning_depth: "findings", terminal_readiness_status: "ready_for_merge"},
+      constraints: %{expiry_seconds: nil, planning_depth: "findings"},
       required_gates: ["findings_documented"]
     }
   }
@@ -47,8 +46,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
           template: String.t(),
           constraints: %{
             expiry_seconds: pos_integer() | nil,
-            planning_depth: String.t(),
-            terminal_readiness_status: String.t()
+            planning_depth: String.t()
           },
           required_gates: [String.t()]
         }
@@ -60,6 +58,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
       :error -> {:error, :unknown_policy_template}
     end
   end
+
+  @doc "The policy template that governs a WorkPackage: its explicit template, else its kind."
+  @spec for_work_package(map()) ::
+          {:ok, template()} | {:error, :unknown_policy_template}
+  def for_work_package(%{policy_template: policy_template}) when is_binary(policy_template) and policy_template != "",
+    do: expand(policy_template)
+
+  def for_work_package(%{kind: kind}) when is_binary(kind), do: expand(kind)
+  def for_work_package(_work_package), do: {:error, :unknown_policy_template}
 
   @spec resolve_key([String.t()]) ::
           {:ok, String.t(), template()} | {:error, :policy_template_mismatch | :unknown_policy_template}

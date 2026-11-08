@@ -269,7 +269,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp architect_tool_description("reconcile_work_request"), do: "Dry-run or apply deterministic WorkRequest delivery closeout repairs from structured PR/GitHub evidence."
 
   defp architect_tool_description("record_work_package_delivery") do
-    "Record an idempotent work-package delivery closeout. Required evidence depends on outcome: pr_merged needs PR evidence, completed_no_pr needs direct evidence, superseded needs successor and reason, and abandoned needs rationale. Use abandoned for cleaned no-code failed dispatches that never reached implementation. Terminal delivery clears any active blocker residue."
+    "End a WorkPackage with its one ending record; replays with the same key are idempotent. Evidence depends on outcome: pr_merged needs PR evidence, completed_no_pr needs direct evidence, superseded needs a same-WorkRequest successor and reason, abandoned needs rationale; finished and skipped need none. Any chief or architect may record finished. Ending clears active blocker residue."
   end
 
   defp architect_tool_description(tool) when tool in ["cleanup_work_request_work_package_runtime", "revoke_work_package_worker_key"],
@@ -298,7 +298,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
     do: "Create or edit one dependency intent between WorkPackage or Group endpoints; the backend derives effective WorkPackage edges."
 
   defp architect_tool_description("delete_dependency"), do: "Remove one dependency intent from the claimed current WorkRequest."
-  defp architect_tool_description("skip_work_package"), do: "Skip a WorkPackage that belongs to the claimed current WorkRequest."
+  defp architect_tool_description("skip_work_package"), do: "End a planned WorkPackage of the claimed current WorkRequest as skipped."
 
   defp architect_tool_description("dispatch_work_package"),
     do: "Activate one planned WorkPackage and return ids, status, workspace and assignment_uri. Read that resource for the worker bootstrap, or request detail: full inline."
@@ -310,5 +310,5 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
       "Recycle stale or superseded runtime authority for the WorkPackage linked to a scoped WorkRequest WorkPackage after superseded or abandoned delivery evidence is supplied. Revokes linked worker grants, releases local claim leases, clears recoverable worker MCP session bindings, and records audit evidence before delivery closeout."
 
   defp delivery_runtime_tool_description("revoke_work_package_worker_key"),
-    do: "Revoke one live worker grant for the WorkPackage linked to a scoped WorkRequest WorkPackage during in-progress recycle or delivery closeout cleanup."
+    do: "Revoke one live worker grant for a dispatched, ready or ended WorkPackage of a scoped WorkRequest, to recycle its worker or clean up before closeout. Leaves the package status unchanged."
 end

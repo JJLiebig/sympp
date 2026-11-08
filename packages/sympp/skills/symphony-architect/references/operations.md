@@ -100,7 +100,7 @@ does not determine role. Ordinary workers still own their review cycle.
 4. Verify the backend worker's exact-head checks and native review handoff, then
    set `upsert_dependency(candidate_head_sha: "<40-character backend head>")`
    with a concrete prerequisite WP and the wiring WP or Group as dependent.
-   The backend must be `ready_for_merge` with current matching branch/PR head;
+   The backend must be `ready` with current matching branch/PR head;
    ready state alone is not qualification. `read_plan` exposes expanded constraints;
    overlapping pinned/unpinned edges all apply. A prerequisite Group cannot name
    one candidate. Across repositories use these explicit edges, not a Git branch stack.
@@ -131,4 +131,10 @@ Record other terminal outcomes with `record_work_package_delivery`:
 - `outcome: "superseded"`: `evidence` is
   `{"superseded":{"successor_work_package_id":"...","superseded_reason":"..."}}`.
 - `outcome: "abandoned"`: `evidence` is
-  `{"abandoned":{"abandoned_rationale":"..."}}`.
+  `{"abandoned":{"abandoned_rationale":"..."}}`. Allowed while `dispatched` or `ready`.
+- `outcome: "finished"` or `"skipped"`: no `evidence`. `finished` needs a
+  `dispatched` or `ready` package; `skipped` needs a `planned` one.
+
+`superseded` is allowed from any open status; the other endings need a
+dispatched or ready package. A second ending with different evidence is refused
+with the outcome already recorded.

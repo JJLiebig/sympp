@@ -41,7 +41,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
   end
 
   test "delivery evidence remains terminal truth after package status drift", %{repo: repo} do
-    {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready_for_merge")
+    {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready")
 
     attrs =
       delivery_attrs(%{
@@ -55,7 +55,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
       })
 
     assert {:ok, _delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
-    assert {:ok, _drifted} = WorkPackageRepository.update(repo, linked_package.id, %{status: "ready_for_worker"})
+    assert {:ok, _drifted} = WorkPackageRepository.update(repo, linked_package.id, %{status: "dispatched"})
 
     assert {:error, :work_package_terminal} =
              AgentRunRepository.start_run(repo, %{work_package_id: linked_package.id, status: "starting"})
@@ -76,7 +76,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
   end
 
   test "PR merged recovery closeout merges stale linked package and retires worker grant", %{repo: repo} do
-    {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready_for_worker")
+    {work_request, work_package, linked_package} = linked_slice!(repo, status: "dispatched")
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
     assert {:ok, _assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "stale-worker")
@@ -95,22 +95,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
     assert {:ok, delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
     assert delivery.outcome == "pr_merged"
 
-    assert repo.get!(WorkPackage, linked_package.id).status == "merged"
+    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
     assert %AccessGrant{revoked_at: %DateTime{}} = repo.get!(AccessGrant, minted.grant.id)
 
     assert [event] = repo.all(ProgressEvent)
-    assert event.status == "merged"
-    assert event.payload["previous_status"] == "ready_for_worker"
+    assert event.status == "ended"
+    assert event.payload["previous_status"] == "dispatched"
     assert event.payload["retired_worker_grant_ids"] == [minted.grant.id]
     assert "worker_grant_active" in event.payload["runtime_reason_codes_before_closeout"]
 
     assert {:ok, %{counts: %{"delivered" => 1}, work_packages: [slice]}} = DeliveryBoard.project(repo, work_request.id)
     assert slice.operational_state.key == "delivered"
-    assert slice.work_package.raw_status == "merged"
+    assert slice.work_package.raw_status == "ended"
   end
 
   test "PR merged recovery closeout ignores stale agent runtime rows that are not operationally active", %{repo: repo} do
-    {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready_for_merge")
+    {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready")
 
     assert {:ok, agent_run} =
              AgentRunRepository.start_run(repo, %{
@@ -139,7 +139,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
 
     assert {:ok, delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
     assert delivery.outcome == "pr_merged"
-    assert repo.get!(WorkPackage, linked_package.id).status == "merged"
+    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
 
     assert [event] = repo.all(ProgressEvent)
     assert "agent_run_stale" in event.payload["runtime_reason_codes_before_closeout"]
@@ -151,7 +151,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
   end
 
   test "PR merged recovery closeout releases the current claim lease", %{repo: repo} do
-    {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready_for_worker")
+    {work_request, work_package, linked_package} = linked_slice!(repo, status: "dispatched")
 
     assert {:ok, claim_lease} =
              ClaimLeaseService.claim(
@@ -174,136 +174,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
 
     assert {:ok, delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
     assert delivery.outcome == "pr_merged"
-    assert repo.get!(WorkPackage, linked_package.id).status == "merged"
+    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
 
     assert %ClaimLease{status: "released", release_reason: "pr_merged_delivery_closeout"} =
              repo.get!(ClaimLease, claim_lease.id)
-  end
-
-  test "abandoned closeout accepts an already-abandoned no-code package after worker authority is cleared", %{repo: repo} do
-    {work_request, work_package, linked_package} =
-      linked_slice!(repo,
-        work_request_id: "WR-DELIVERY-ABANDONED-ALREADY-TERMINAL",
-        status: "ready_for_worker"
-      )
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
-    assert {:ok, _assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "stopped-worker")
-
-    assert {:ok, claim_lease} =
-             ClaimLeaseService.claim(
-               repo,
-               linked_package.id,
-               %{
-                 "actor_kind" => "agent",
-                 "actor_id" => "local:stopped-worker",
-                 "actor_display_name" => "stopped-worker"
-               },
-               stale_after_ms: 60_000
-             )
-
-    assert {:ok, _released_lease} = ClaimLeaseService.release(repo, claim_lease.id, reason: "worker stopped before code")
-    assert {:ok, _revoked_grant} = AccessGrantService.revoke(repo, minted.grant.id)
-
-    assert {:ok, _abandoned_progress} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: linked_package.id,
-               summary: "Worker stopped before implementation.",
-               status: "abandoned",
-               idempotency_key: "abandoned-before-closeout",
-               payload: %{
-                 "previous_status" => "ready_for_worker",
-                 "next_status" => "abandoned"
-               }
-             })
-
-    assert {:ok, _abandoned_package} = WorkPackageRepository.update(repo, linked_package.id, %{status: "abandoned", worktree_path: nil})
-
-    attrs =
-      delivery_attrs(%{
-        outcome: "abandoned",
-        idempotency_key: "delivery-abandoned-already-terminal",
-        abandoned_rationale: "Worker stopped before implementation and the package was already marked abandoned."
-      })
-
-    assert {:ok, delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
-    assert delivery.outcome == "abandoned"
-    assert repo.get!(WorkPackage, linked_package.id).status == "abandoned"
-
-    closeout_event = repo.all(ProgressEvent) |> Enum.find(&(&1.payload["source_tool"] == "record_work_package_delivery"))
-    assert closeout_event.payload["previous_status"] == "abandoned"
-    assert "package_terminal" in closeout_event.payload["runtime_reason_codes_before_closeout"]
-  end
-
-  test "abandoned closeout accepts an already-abandoned package with recycled inactive runtime", %{repo: repo} do
-    {work_request, work_package, linked_package} =
-      linked_slice!(
-        repo,
-        work_request_id: "WR-DELIVERY-ABANDONED-RECYCLED-RUNTIME",
-        status: "ready_for_worker"
-      )
-
-    assert {:ok, _runtime_cleanup_event} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: linked_package.id,
-               summary: "Worker runtime was recycled before delivery closeout.",
-               status: "cleaned",
-               idempotency_key: "abandoned-recycled-runtime-before-closeout",
-               payload: %{
-                 "source_tool" => "cleanup_work_request_work_package_runtime",
-                 "delivery_evidence" => %{"outcome" => "abandoned"},
-                 "runtime_cleanup" => %{"status" => "cleaned"}
-               }
-             })
-
-    assert {:ok, _abandoned_package} = WorkPackageRepository.update(repo, linked_package.id, %{status: "abandoned", worktree_path: nil})
-
-    attrs =
-      delivery_attrs(%{
-        outcome: "abandoned",
-        idempotency_key: "delivery-abandoned-recycled-runtime",
-        abandoned_rationale: "The package was already abandoned and its worker runtime had already been recycled."
-      })
-
-    assert {:ok, delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
-    assert delivery.outcome == "abandoned"
-    assert repo.get!(WorkPackage, linked_package.id).status == "abandoned"
-
-    closeout_event = repo.all(ProgressEvent) |> Enum.find(&(&1.payload["source_tool"] == "record_work_package_delivery"))
-    assert closeout_event.payload["previous_status"] == "abandoned"
-    assert "worker_recycled" in closeout_event.payload["runtime_reason_codes_before_closeout"]
-    assert "package_terminal" in closeout_event.payload["runtime_reason_codes_before_closeout"]
-  end
-
-  test "abandoned closeout rejects generic recycled runtime evidence without abandonment proof", %{repo: repo} do
-    {work_request, work_package, linked_package} =
-      linked_slice!(
-        repo,
-        work_request_id: "WR-DELIVERY-ABANDONED-GENERIC-RECYCLED",
-        status: "ready_for_worker"
-      )
-
-    assert {:ok, _generic_recycle_event} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: linked_package.id,
-               summary: "A generic worker runtime recycle happened before closeout.",
-               status: "claimed",
-               idempotency_key: "abandoned-generic-recycled-runtime",
-               payload: %{"source_tool" => "claim_local_assignment"}
-             })
-
-    assert {:ok, _abandoned_package} = WorkPackageRepository.update(repo, linked_package.id, %{status: "abandoned", worktree_path: nil})
-
-    attrs =
-      delivery_attrs(%{
-        outcome: "abandoned",
-        idempotency_key: "delivery-abandoned-generic-recycled-runtime",
-        abandoned_rationale: "Generic runtime recycle evidence must not prove abandonment."
-      })
-
-    assert {:error, :active_runtime} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
-
-    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
   end
 
   test "abandoned closeout retires current worker authority on an already-abandoned package", %{repo: repo} do
@@ -311,7 +185,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
       linked_slice!(
         repo,
         work_request_id: "WR-DELIVERY-ABANDONED-CURRENT-RUNTIME",
-        status: "ready_for_worker"
+        status: "dispatched"
       )
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
@@ -359,8 +233,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
              repo.get!(ClaimLease, claim_lease.id)
   end
 
-  test "replayed closeout requires matching audit and terminal state", %{repo: repo} do
-    {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready_for_merge")
+  test "a replayed closeout returns the recorded delivery and keeps the request complete", %{repo: repo} do
+    {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready")
 
     attrs =
       delivery_attrs(%{
@@ -373,27 +247,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
         merge_commit_sha: "legacy-790"
       })
 
-    assert {:ok, delivery} = Repository.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
-    assert {:ok, _merged} = WorkPackageRepository.update_status(repo, linked_package.id, "ready_for_merge", "merged")
-
-    assert {:ok, _event} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: linked_package.id,
-               summary: "Recorded WorkRequest delivery closeout: pr_merged",
-               status: "merged",
-               idempotency_key: "work_request_delivery_closeout:#{work_request.id}:#{work_package.id}:#{attrs.idempotency_key}",
-               payload: %{
-                 type: "work_request_delivery_closeout",
-                 source_tool: "record_work_package_delivery",
-                 work_request_id: work_request.id,
-                 work_package_id: work_package.id,
-                 delivery_id: delivery.id,
-                 outcome: "pr_merged",
-                 previous_status: "ready_for_merge",
-                 next_status: "merged",
-                 status_changed: true
-               }
-             })
+    assert {:ok, delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
+    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
 
     assert {:ok, replay} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
     assert replay.id == delivery.id
@@ -401,7 +256,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
   end
 
   test "colliding closeout progress does not bypass validation or terminal mutation", %{repo: repo} do
-    {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready_for_merge")
+    {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready")
     delivery_idempotency_key = "delivery-progress-collision"
 
     assert {:ok, _colliding_event} =
@@ -439,7 +294,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
 
     assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
     assert repo.aggregate(ProgressEvent, :count, :id) == 1
-    assert repo.get!(WorkPackage, linked_package.id).status == "ready_for_merge"
+    assert repo.get!(WorkPackage, linked_package.id).status == "ready"
   end
 
   test "investigation no-PR closeout releases stale claim leases and closes the linked package", %{repo: repo} do
@@ -448,7 +303,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
         work_request_id: "WR-DELIVERY-INVESTIGATION-NO-PR",
         work_package_id: "wp_o3kgjdl7gausbmqi",
         kind: "investigation",
-        status: "ready_for_merge"
+        status: "ready"
       )
 
     assert {:ok, claim_lease} =
@@ -471,7 +326,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
 
     assert {:ok, delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
     assert delivery.outcome == "completed_no_pr"
-    assert repo.get!(WorkPackage, linked_package.id).status == "closed"
+    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
 
     assert %ClaimLease{status: "released", release_reason: "completed_no_pr_delivery_closeout"} =
              repo.get!(ClaimLease, claim_lease.id)
@@ -485,7 +340,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
     {work_request, work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-DELIVERY-STALE-AGENT-RUN",
-        status: "ready_for_merge"
+        status: "ready"
       )
 
     assert {:ok, agent_run} =
@@ -495,27 +350,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
                last_seen_at: DateTime.add(DateTime.utc_now(:microsecond), -301, :second)
              })
 
-    assert {:ok, _closed} = WorkPackageRepository.update_status(repo, linked_package.id, "ready_for_merge", "closed")
-
     attrs =
       delivery_attrs(%{
         outcome: "completed_no_pr",
         idempotency_key: "delivery-stale-agent-run",
-        no_pr_evidence: "The package status is terminal, and the only runtime evidence is stale."
+        no_pr_evidence: "The only runtime evidence is stale."
       })
 
     assert {:ok, delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
     assert delivery.outcome == "completed_no_pr"
 
     assert [event] = repo.all(ProgressEvent)
-    assert event.payload["previous_status"] == "closed"
+    assert event.payload["previous_status"] == "ready"
     assert "agent_run_stale" in event.payload["runtime_reason_codes_before_closeout"]
     assert event.payload["ignored_stale_agent_run_ids"] == [agent_run.id]
   end
 
   defp linked_slice!(repo, overrides) do
     kind = Keyword.get(overrides, :kind, "mcp")
-    status = Keyword.get(overrides, :status, "reviewing")
+    status = Keyword.get(overrides, :status, "dispatched")
     request_id = Keyword.get_lazy(overrides, :work_request_id, fn -> "WR-DELIVERY-#{System.unique_integer([:positive])}" end)
 
     work_request = create_work_request!(repo, id: request_id, status: "ready_for_slicing")

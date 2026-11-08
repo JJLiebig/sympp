@@ -47,7 +47,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
 
           Repo.update_all(
             from(work_package in WorkPackage, where: work_package.id == ^work_package_id),
-            set: [status: "merged", updated_at: DateTime.utc_now(:microsecond)]
+            set: [status: "ended", updated_at: DateTime.utc_now(:microsecond)]
           )
 
         _race ->
@@ -82,7 +82,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
 
           Repo.update_all(
             from(work_package in WorkPackage, where: work_package.id == ^work_package_id),
-            set: [status: "skipped", updated_at: DateTime.utc_now(:microsecond)]
+            set: [status: "ended", updated_at: DateTime.utc_now(:microsecond)]
           )
 
         _race ->
@@ -716,10 +716,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
 
   test "terminal work package state rejects claims without mutating the grant", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(status: "dispatched"))
 
     assert {:ok, minted} = Service.mint_worker_grant(repo, work_package.id)
-    assert {:ok, _work_package} = WorkPackageRepository.update_status(repo, work_package.id, "ready_for_worker", "merged")
+    work_package |> Ecto.Changeset.change(status: "ended") |> repo.update!()
 
     assert {:error, :work_package_terminal} =
              Service.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
@@ -731,7 +731,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
 
   test "terminal work package claim race rejects atomically without mutating the grant", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(status: "dispatched"))
 
     assert {:ok, minted} = Service.mint_worker_grant(repo, work_package.id)
 
@@ -749,9 +749,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     assert grant.claimed_by == nil
   end
 
-  test "skipped work package mint race rejects atomically without creating worker authority", %{repo: repo} do
+  test "ended work package mint race rejects atomically without creating worker authority", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(status: "dispatched"))
 
     try do
       TerminalMintRaceRepo.arm(work_package.id)
@@ -762,7 +762,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
       TerminalMintRaceRepo.disarm()
     end
 
-    assert repo.get!(WorkPackage, work_package.id).status == "skipped"
+    assert repo.get!(WorkPackage, work_package.id).status == "ended"
     assert repo.aggregate(AccessGrant, :count, :id) == 0
   end
 
@@ -1445,7 +1445,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
         work_request_id: work_request_id,
         sequence: 1,
         goal: "Persist scope",
-        status: "ready_for_worker",
+        status: "dispatched",
         dispatched_at: DateTime.utc_now(:microsecond)
       )
     )
@@ -1468,7 +1468,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
         attrs[:repo],
         attrs[:base_branch],
         "[]",
-        "implementing",
+        "dispatched",
         "[]",
         attrs[:phase_id],
         now,

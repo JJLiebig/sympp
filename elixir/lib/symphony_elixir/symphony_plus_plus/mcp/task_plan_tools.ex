@@ -13,7 +13,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
-  @terminal_work_package_statuses ["skipped", "merged", "closed", "abandoned"]
+  @terminal_work_package_statuses ["ended"]
 
   @plan_argument_keys ["expected_version", "nodes"]
   @plan_node_keys ["body", "id", "status", "title"]
@@ -258,7 +258,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
   defp timestamp_version_part(nil), do: nil
   defp timestamp_version_part(%DateTime{} = timestamp), do: DateTime.to_unix(timestamp, :microsecond)
 
-  defp reject_ready_work_package(%WorkPackage{status: "ready_for_merge"}),
+  defp reject_ready_work_package(%WorkPackage{status: "ready"}),
     do: {:tool_error, "already_ready"}
 
   defp reject_ready_work_package(%WorkPackage{}), do: :ok

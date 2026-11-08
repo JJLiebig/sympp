@@ -129,7 +129,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert {:ok, approved} = CanonicalWorkPackageFixtures.add_work_package(repo, in_scope.id, work_request_work_package_attrs(id: "WRS-MCP-WR-APPROVED"))
     assert {:ok, skipped} = CanonicalWorkPackageFixtures.add_work_package(repo, in_scope.id, work_request_work_package_attrs(id: "WRS-MCP-WR-SKIPPED"))
     repo.update!(Ecto.Changeset.change(approved, status: "approved"))
-    repo.update!(Ecto.Changeset.change(skipped, status: "skipped"))
+    assert {:ok, _skipped} = CanonicalWorkPackageFixtures.end_work_package(repo, in_scope.id, skipped.id, %{outcome: "skipped"})
 
     counts_before = {
       repo.aggregate(WorkRequest, :count),
@@ -187,7 +187,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
              "work_package_count" => 3,
              "planned_work_package_count" => 1,
              "dispatched_work_package_count" => 0,
-             "skipped_work_package_count" => 1
+             "ended_work_package_count" => 1
            }
 
     refute inspect(list_response) =~ "WR-MCP-WR-OTHER-REPO"

@@ -37,7 +37,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.FinishedPackageLimitsTest do
 
   test "operator board caps finished package cards while preserving totals", %{repo: repo} do
     assert {:ok, _active} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-DASH-ACTIVE-CAP", status: "planning"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-DASH-ACTIVE-CAP", status: "dispatched"))
 
     base_time = DateTime.utc_now(:microsecond)
 
@@ -61,8 +61,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.FinishedPackageLimitsTest do
     end
 
     assert {:ok, operator_board} = Dashboard.operator_board(repo, finished_work_package_limit: 2)
-    assert [%{id: "SYMPP-DASH-ACTIVE-CAP"}] = operator_board.groups["planning"]
-    assert Enum.map(operator_board.groups["merged"], & &1.id) == ["SYMPP-DASH-FINISHED-CAP-4", "SYMPP-DASH-FINISHED-CAP-3"]
+    assert [%{id: "SYMPP-DASH-ACTIVE-CAP"}] = operator_board.groups["dispatched"]
+    assert Enum.map(operator_board.groups["ended"], & &1.id) == ["SYMPP-DASH-FINISHED-CAP-4", "SYMPP-DASH-FINISHED-CAP-3"]
     assert operator_board.total_count == 6
     assert operator_board.visible_count == 3
 
@@ -74,7 +74,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.FinishedPackageLimitsTest do
            }
 
     assert {:ok, full_board} = Dashboard.board(repo)
-    assert length(full_board.groups["merged"]) == 5
+    assert length(full_board.groups["ended"]) == 5
     assert full_board.package_limits.finished_work_packages.truncated == false
 
     hidden_ids =
@@ -92,7 +92,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.FinishedPackageLimitsTest do
                hidden_work_package_ids: MapSet.new(hidden_ids)
              )
 
-    assert Enum.map(hidden_board.groups["merged"], & &1.id) == ["SYMPP-DASH-FINISHED-CAP-4", "SYMPP-DASH-FINISHED-CAP-2"]
+    assert Enum.map(hidden_board.groups["ended"], & &1.id) == ["SYMPP-DASH-FINISHED-CAP-4", "SYMPP-DASH-FINISHED-CAP-2"]
     assert hidden_board.total_count == 5
     assert hidden_board.visible_count == 3
 
@@ -105,7 +105,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.FinishedPackageLimitsTest do
   end
 
   defp create_finished_package!(repo, id, timestamp) do
-    assert {:ok, work_package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: id, status: "merged"))
+    assert {:ok, work_package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: id, status: "ended"))
     repo.update!(Ecto.Changeset.change(work_package, inserted_at: timestamp, updated_at: timestamp))
   end
 

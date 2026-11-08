@@ -4,12 +4,10 @@ defmodule SymphonyElixir.Tracker do
   """
 
   alias SymphonyElixir.Config
-  alias SymphonyElixir.SymphonyPlusPlus.TrackerStates
 
   @callback fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   @callback fetch_issues_by_states([String.t()]) :: {:ok, [term()]} | {:error, term()}
   @callback fetch_issue_states_by_ids([String.t()]) :: {:ok, [term()]} | {:error, term()}
-  @callback dispatch_filters_match?(term()) :: boolean()
   @callback create_comment(String.t(), String.t()) :: :ok | {:error, term()}
   @callback update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
   @callback start_agent_run(term(), keyword()) :: {:ok, term()} | {:error, term()}
@@ -21,8 +19,7 @@ defmodule SymphonyElixir.Tracker do
   @callback mark_agent_run_failed(String.t(), String.t() | nil) :: {:ok, term()} | {:error, term()}
   @callback mark_agent_run_stopped(String.t(), String.t() | nil) :: {:ok, term()} | {:error, term()}
 
-  @optional_callbacks dispatch_filters_match?: 1,
-                      start_agent_run: 2,
+  @optional_callbacks start_agent_run: 2,
                       list_active_agent_runs: 0,
                       heartbeat_agent_run: 2,
                       mark_agent_run_running: 2,
@@ -44,17 +41,6 @@ defmodule SymphonyElixir.Tracker do
   @spec fetch_issue_states_by_ids([String.t()]) :: {:ok, [term()]} | {:error, term()}
   def fetch_issue_states_by_ids(issue_ids) do
     adapter().fetch_issue_states_by_ids(issue_ids)
-  end
-
-  @spec dispatch_filters_match?(term()) :: boolean()
-  def dispatch_filters_match?(issue) do
-    adapter = adapter()
-
-    if function_exported?(adapter, :dispatch_filters_match?, 1) do
-      adapter.dispatch_filters_match?(issue)
-    else
-      true
-    end
   end
 
   @spec create_comment(String.t(), String.t()) :: :ok | {:error, term()}
@@ -136,15 +122,7 @@ defmodule SymphonyElixir.Tracker do
   def adapter do
     case Config.settings!().tracker.kind do
       "memory" -> SymphonyElixir.Tracker.Memory
-      kind -> adapter_for_kind(kind)
-    end
-  end
-
-  defp adapter_for_kind(kind) do
-    if TrackerStates.tracker_kind?(kind) do
-      SymphonyElixir.SymphonyPlusPlus.TrackerAdapter
-    else
-      SymphonyElixir.Linear.Adapter
+      _ -> SymphonyElixir.Linear.Adapter
     end
   end
 end

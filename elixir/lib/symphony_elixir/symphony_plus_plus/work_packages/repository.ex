@@ -2,31 +2,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
   @moduledoc false
 
   alias Ecto.Changeset
-  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
-
-  @terminal_statuses ["skipped", "merged", "closed", "abandoned"]
-  @delivery_closeout_terminal_statuses ["merged", "closed", "abandoned"]
 
   import Ecto.Query, only: [from: 2]
 
   @type repo :: module()
   @type error ::
           :database_busy
-          | :active_blocker
-          | :active_runtime
           | :not_found
           | :id_already_exists
-          | :invalid_status
-          | :stale_status
-          | :work_package_mismatch
           | {:constraint_failed, String.t()}
           | {:migration_failed, term()}
           | {:storage_failed, String.t()}
@@ -93,30 +79,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
 
   @spec update(repo(), String.t(), map()) :: {:ok, WorkPackage.t()} | {:error, error()}
   def update(repo, id, attrs) when is_atom(repo) and is_binary(id) and is_map(attrs) do
-    result =
-      if terminal_status_update?(attrs) do
-        update_with_terminal_cleanup(repo, id, attrs)
-      else
-        update_directly(repo, id, attrs)
-      end
-
-    notify_dashboard(result, repo)
+    repo
+    |> update_directly(id, attrs)
+    |> notify_dashboard(repo)
   rescue
     error in Ecto.ConstraintError -> normalize_constraint_error(error)
     error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp update_with_terminal_cleanup(repo, id, attrs) do
-    repo.transaction(fn ->
-      with {:ok, work_package} <- get(repo, id),
-           {:ok, updated} <- work_package |> WorkPackage.update_changeset(attrs) |> repo.update(),
-           :ok <- clear_terminal_attention(repo, updated) do
-        updated
-      else
-        {:error, reason} -> repo.rollback(reason)
-      end
-    end)
-    |> normalize_transaction_result()
   end
 
   defp update_directly(repo, id, attrs) do
@@ -127,298 +95,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     end
   end
 
-  @spec update_status(repo(), String.t(), String.t(), String.t()) :: {:ok, WorkPackage.t()} | {:error, error()}
-  @spec update_status(repo(), String.t(), String.t(), String.t(), keyword()) ::
-          {:ok, WorkPackage.t()} | {:error, error()}
-  def update_status(repo, id, current_status, next_status, opts \\ [])
-      when is_atom(repo) and is_binary(id) and is_binary(current_status) and is_binary(next_status) and is_list(opts) do
-    with :ok <- validate_status(current_status),
-         :ok <- validate_status(next_status),
-         {:ok, expected_contract_revision} <- expected_contract_revision(opts) do
-      update_valid_status(repo, id, current_status, next_status, expected_contract_revision)
-      |> notify_dashboard(repo)
-    end
-  end
-
-  @spec reactivate_if_unblocked(repo(), String.t()) :: {:ok, WorkPackage.t()} | {:error, error()}
-  def reactivate_if_unblocked(repo, id) when is_atom(repo) and is_binary(id) do
-    with {:ok, work_package} <- get(repo, id) do
-      maybe_reactivate_if_unblocked(repo, work_package)
-    end
-  end
-
-  defp maybe_reactivate_if_unblocked(repo, %WorkPackage{status: "blocked"} = work_package) do
-    with {:ok, progress_events} <- PlanningRepository.list_progress_events(repo, work_package.id) do
-      if Enum.any?(BlockerProjection.blockers(progress_events), & &1.active) do
-        {:ok, work_package}
-      else
-        update_status(repo, work_package.id, "blocked", "active")
-      end
-    end
-  end
-
-  defp maybe_reactivate_if_unblocked(_repo, %WorkPackage{} = work_package), do: {:ok, work_package}
-
-  @doc false
-  @spec close_delivery_work_package(repo(), WorkRequest.t(), WorkPackage.t(), String.t()) ::
-          {:ok, map() | nil} | {:error, error()}
-  @spec close_delivery_work_package(repo(), WorkRequest.t(), WorkPackage.t(), String.t(), keyword()) ::
-          {:ok, map() | nil} | {:error, error()}
-  def close_delivery_work_package(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, next_status, opts \\ [])
-      when is_atom(repo) and is_binary(next_status) and is_list(opts) do
-    repo.transaction(fn ->
-      with {:ok, closeout} <- close_delivery_package(repo, work_request, work_package, next_status, opts),
-           :ok <- clear_terminal_attention(repo, closeout.work_package) do
-        closeout
-      else
-        {:error, reason} -> repo.rollback(reason)
-      end
-    end)
-    |> normalize_transaction_result()
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  @doc false
-  @spec clear_terminal_attention(repo(), WorkPackage.t() | [WorkPackage.t()]) :: :ok | {:error, error()}
-  def clear_terminal_attention(repo, %WorkPackage{} = work_package), do: clear_terminal_attention(repo, [work_package])
-  def clear_terminal_attention(_repo, []), do: :ok
-
-  def clear_terminal_attention(repo, work_packages) when is_atom(repo) and is_list(work_packages) do
-    with :ok <- resolve_active_blockers(repo, Enum.map(work_packages, & &1.id)) do
-      WorktreeCleanupQueue.enqueue_terminal(repo, work_packages)
-    end
-  end
-
-  defp close_delivery_package(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, next_status, opts) do
-    with :ok <- validate_delivery_closeout_status(next_status),
-         :ok <- validate_delivery_closeout_package(work_package, work_request, next_status) do
-      update_delivery_package(repo, work_package, work_request, next_status, opts)
-    end
-  end
-
-  defp update_delivery_package(repo, %WorkPackage{status: next_status} = work_package, work_request, next_status, _opts) do
-    update_delivery_closeout_status(repo, work_package, work_request, next_status)
-  end
-
-  defp update_delivery_package(repo, %WorkPackage{} = work_package, work_request, next_status, opts) do
-    with :ok <- reject_active_delivery_closeout_context(repo, work_package.id, opts) do
-      update_delivery_closeout_status(repo, work_package, work_request, next_status)
-    end
-  end
-
-  defp update_valid_status(repo, id, current_status, next_status, expected_contract_revision) do
-    now = DateTime.utc_now(:microsecond)
-
-    repo.transaction(fn ->
-      id
-      |> status_update_query(current_status, expected_contract_revision)
-      |> repo.update_all(set: [status: next_status, updated_at: now])
-      |> case do
-        {1, _rows} ->
-          return_status_updated_work_package_or_rollback(repo, id, next_status)
-
-        {0, _rows} ->
-          repo.rollback(stale_status_error(repo, id))
-      end
-    end)
-    |> case do
-      {:ok, work_package} -> {:ok, work_package}
-      {:error, error} -> error
-    end
-  end
-
-  defp return_status_updated_work_package_or_rollback(repo, id, next_status) when next_status in @terminal_statuses do
-    work_package = repo.get!(WorkPackage, id)
-
-    case clear_terminal_attention(repo, work_package) do
-      :ok -> work_package
-      {:error, reason} -> repo.rollback(reason)
-    end
-  end
-
-  defp return_status_updated_work_package_or_rollback(repo, id, _next_status) do
-    case WorkRequestRepository.clear_completion_for_work_package(repo, id) do
-      :ok -> repo.get!(WorkPackage, id)
-      {:error, reason} -> repo.rollback(reason)
-    end
-  end
-
   defp notify_dashboard({:ok, %WorkPackage{}} = result, repo) do
     unless repo.in_transaction?(), do: DashboardPubSub.broadcast_changed()
     result
   end
 
   defp notify_dashboard(result, _repo), do: result
-
-  defp validate_status(status) do
-    if status in WorkPackage.statuses() do
-      :ok
-    else
-      {:error, :invalid_status}
-    end
-  end
-
-  defp expected_contract_revision(opts) do
-    case Keyword.get(opts, :expected_contract_revision) do
-      nil -> {:ok, nil}
-      revision when is_integer(revision) and revision > 0 -> {:ok, revision}
-      _revision -> {:error, :stale_status}
-    end
-  end
-
-  defp validate_delivery_closeout_status(status) do
-    if status in @delivery_closeout_terminal_statuses do
-      :ok
-    else
-      {:error, :invalid_status}
-    end
-  end
-
-  defp validate_delivery_closeout_package(%WorkPackage{} = work_package, %WorkRequest{} = work_request, next_status) do
-    with :ok <- validate_delivery_package_compatibility(work_package, work_request) do
-      validate_delivery_terminal_status_compatibility(work_package, next_status)
-    end
-  end
-
-  defp validate_delivery_package_compatibility(%WorkPackage{} = work_package, %WorkRequest{} = work_request) do
-    if work_package.work_request_id == work_request.id do
-      :ok
-    else
-      {:error, :work_package_mismatch}
-    end
-  end
-
-  defp validate_delivery_terminal_status_compatibility(%WorkPackage{status: status}, next_status)
-       when status in @terminal_statuses and status != next_status do
-    {:error, :stale_status}
-  end
-
-  defp validate_delivery_terminal_status_compatibility(%WorkPackage{}, _next_status), do: :ok
-
-  defp update_delivery_closeout_status(repo, %WorkPackage{} = work_package, %WorkRequest{} = work_request, next_status) do
-    now = DateTime.utc_now(:microsecond)
-    previous_status = work_package.status
-
-    repo.update_all(
-      delivery_closeout_update_query(work_package, work_request),
-      set: [status: next_status, updated_at: now]
-    )
-    |> case do
-      {1, _rows} ->
-        {:ok,
-         %{
-           work_package: repo.get!(WorkPackage, work_package.id),
-           previous_status: previous_status,
-           next_status: next_status,
-           changed?: true
-         }}
-
-      {0, _rows} ->
-        stale_delivery_closeout_error(repo, work_package.id, previous_status, next_status)
-    end
-  end
-
-  defp delivery_closeout_update_query(%WorkPackage{} = work_package, %WorkRequest{} = work_request) do
-    from(package in WorkPackage,
-      where: package.id == ^work_package.id,
-      where: package.status == ^work_package.status,
-      where: package.work_request_id == ^work_request.id
-    )
-  end
-
-  defp stale_delivery_closeout_error(repo, id, previous_status, next_status) do
-    case get(repo, id) do
-      {:ok, %WorkPackage{status: ^next_status} = work_package} ->
-        {:ok,
-         %{
-           work_package: work_package,
-           previous_status: previous_status,
-           next_status: next_status,
-           changed?: false
-         }}
-
-      {:ok, %WorkPackage{status: status}} when status != previous_status ->
-        {:error, :stale_status}
-
-      {:ok, %WorkPackage{}} ->
-        {:error, :work_package_mismatch}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp reject_active_delivery_closeout_context(repo, work_package_id, opts) do
-    context = WorkPackageActivity.context(repo, work_package_id)
-    allow_active_blockers? = Keyword.get(opts, :allow_active_blockers?, false)
-    allow_active_runtime? = Keyword.get(opts, :allow_active_runtime?, false)
-
-    cond do
-      get_in(context, [:blocker_state, :active?]) == true and not allow_active_blockers? -> {:error, :active_blocker}
-      get_in(context, [:runtime_state, :active?]) == true and not allow_active_runtime? -> {:error, :active_runtime}
-      true -> :ok
-    end
-  end
-
-  defp resolve_active_blockers(repo, work_package_ids) do
-    with {:ok, owned_events} <- PlanningRepository.list_progress_events(repo, work_package_ids),
-         {:ok, targeting_events} <-
-           PlanningRepository.list_progress_events_for_blockers_targeting_work_packages(
-             repo,
-             work_package_ids
-           ) do
-      terminal_work_package_ids = MapSet.new(work_package_ids)
-
-      (owned_events ++ targeting_events)
-      |> Enum.uniq_by(& &1.id)
-      |> Enum.group_by(& &1.work_package_id)
-      |> Enum.sort_by(fn {owner_id, _events} -> owner_id end)
-      |> Enum.reduce_while(:ok, &resolve_targeted_blocker_group(repo, terminal_work_package_ids, &1, &2))
-    end
-  end
-
-  defp resolve_targeted_blocker_group(repo, terminal_work_package_ids, {owner_id, events}, :ok) do
-    events
-    |> BlockerProjection.blockers()
-    |> Enum.filter(&terminal_cleanup_blocker?(&1, owner_id, terminal_work_package_ids))
-    |> Enum.reduce_while(:ok, &resolve_active_blocker(repo, owner_id, &1, &2))
-    |> case do
-      :ok -> {:cont, :ok}
-      {:error, reason} -> {:halt, {:error, reason}}
-    end
-  end
-
-  defp terminal_cleanup_blocker?(%{active: true, blocked_item: %{kind: "work_package", id: target_id}}, _owner_id, terminal_work_package_ids),
-    do: MapSet.member?(terminal_work_package_ids, target_id)
-
-  defp terminal_cleanup_blocker?(blocker, owner_id, terminal_work_package_ids),
-    do: blocker.active and MapSet.member?(terminal_work_package_ids, owner_id)
-
-  defp resolve_active_blocker(repo, work_package_id, blocker, :ok) do
-    case PlanningRepository.append_progress_event(repo, %{
-           work_package_id: work_package_id,
-           summary: "Cleared blocker after terminal transition: #{blocker.summary || blocker.id}",
-           body: "The WorkPackage or its owning WorkRequest reached a terminal state.",
-           status: "resolved",
-           idempotency_key: "terminal-cleanup:#{work_package_id}:#{blocker.id}:#{blocker.event_id}",
-           payload: %{
-             type: "blocker",
-             source_tool: "resolve_blocker",
-             blocker_id: blocker.id,
-             resolution: "Owning work reached a terminal state.",
-             active: false
-           }
-         }) do
-      {:ok, _event} -> {:cont, :ok}
-      {:error, reason} -> {:halt, {:error, reason}}
-    end
-  end
-
-  defp terminal_status_update?(attrs), do: (Map.get(attrs, :status) || Map.get(attrs, "status")) in @terminal_statuses
-
-  defp normalize_transaction_result({:ok, result}), do: {:ok, result}
-  defp normalize_transaction_result({:error, reason}), do: {:error, reason}
 
   defp normalize_insert_result({:ok, work_package}), do: {:ok, work_package}
 
@@ -451,27 +133,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
 
   defp normalize_constraint_error(%Ecto.ConstraintError{type: type}) do
     {:error, {:constraint_failed, Atom.to_string(type)}}
-  end
-
-  defp stale_status_error(repo, id) do
-    case get(repo, id) do
-      {:ok, _work_package} -> {:error, :stale_status}
-      {:error, :not_found} = error -> error
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp status_update_query(id, current_status, nil) do
-    from(work_package in WorkPackage,
-      where: work_package.id == ^id and work_package.status == ^current_status
-    )
-  end
-
-  defp status_update_query(id, current_status, expected_contract_revision) do
-    from(work_package in WorkPackage,
-      where: work_package.id == ^id and work_package.status == ^current_status,
-      where: work_package.contract_revision == ^expected_contract_revision
-    )
   end
 
   defp normalize_exqlite_error(error) do

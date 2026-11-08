@@ -170,43 +170,6 @@ You are working on a Linear issue {{ issue.identifier }}.
 Title: {{ issue.title }} Body: {{ issue.description }}
 ```
 
-sympp work package workflows can use `tracker.kind: Symphony_pp` (the lowercase
-`symphony_pp` alias is also accepted) in a separate workflow file such as
-`WORKFLOW.Symphony_pp.md`:
-
-```md
----
-tracker:
-  kind: Symphony_pp
-  assignee: "worker-1"
-  active_states:
-    - ready_for_worker
-    - implementing
-  terminal_states:
-    - merged
-    - closed
-  filters:
-    repos:
-      - nextide/symphony-plus-plus
-    base_branches:
-      - origin/symphony-plus-plus/beta
-    work_kinds:
-      - adapter
-workspace:
-  root: ~/code/symphony-workspaces
-codex:
-  command: codex app-server
----
-
-You are working on sympp work package {{ issue.identifier }}.
-```
-
-Run it by passing the custom workflow path:
-
-```bash
-./bin/symphony /path/to/WORKFLOW.Symphony_pp.md
-```
-
 Notes:
 
 - If a value is missing, defaults are used.
@@ -228,12 +191,6 @@ Notes:
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
 - `tracker.api_key` reads from `LINEAR_API_KEY` when unset or when value is `$LINEAR_API_KEY`.
-- `tracker.kind: Symphony_pp` does not read Linear fallback secrets. Set `tracker.assignee` to the
-  worker actor id that owns claimed sympp worker grants.
-- For sympp workflows, `tracker.filters.repos`, `tracker.filters.base_branches`, and
-  `tracker.filters.work_kinds` restrict which work packages can be exposed to dispatch. Empty
-  lists mean no restriction for that dimension; use explicit filters when a workflow must stay
-  scoped to one repo, base branch, or work kind.
 - For path values, `~` is expanded to the home directory.
 - For env-backed path values, use `$VAR`. `workspace.root` resolves `$VAR` before path handling,
   while `codex.command` stays a shell command string and any `$VAR` expansion there happens in the

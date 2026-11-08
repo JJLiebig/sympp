@@ -8,6 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyInputs do
   alias SymphonyElixir.SymphonyPlusPlus.OperationalLineage
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryResolution
 
@@ -15,7 +16,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyInputs do
   def context(repo, work_packages, candidates?) do
     retired =
       work_packages
-      |> Enum.filter(&((value(&1, :status) || value(&1, :raw_status)) in ["skipped", "merged", "closed", "abandoned"]))
+      |> Enum.filter(&Lifecycle.ended?(value(&1, :status) || value(&1, :raw_status)))
       |> Enum.map(&%{id: value(&1, :id), work_request_id: value(&1, :work_request_id)})
 
     result = if retired == [], do: {:ok, %{}}, else: OperationalLineage.delivery_successors(repo, retired)
@@ -43,7 +44,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyInputs do
     Enum.map(edges, fn edge ->
       prerequisite = edge.prerequisite_work_package_id
       dependent = edge.dependent_work_package_id
-      delivered = DeliveryResolution.resolved?(prerequisite, packages, deliveries, successors)
+      delivered = DeliveryResolution.satisfies_dependents?(prerequisite, packages, deliveries, successors)
       head = metadata |> Map.get(prerequisite, %{}) |> value(:pr) |> value(:head_sha)
       dependent_head = current_head(Map.get(metadata, dependent, %{}))
       consumed = consumed_inputs(Map.get(events, dependent, []), dependent_head)
@@ -91,14 +92,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyInputs do
         |> reason(Enum.any?(constraints, &(not &1.input_current)), "dependency_inputs_stale")
         |> reason(Enum.any?(constraints, &(not &1.delivered_before)), "delivery_order_violation")
 
-      ready = state.status == "ready_for_merge"
-      terminal = state.status in ["skipped", "merged", "closed", "abandoned"] or not is_nil(state.delivery_outcome)
+      ready = Lifecycle.ready?(state.status)
+      terminal = Lifecycle.ended?(state.status) or not is_nil(state.delivery_outcome)
 
       %{
         work_package_id: id,
         eligible: ready and not terminal and reasons == [],
         reason_codes: if(ready or terminal, do: reasons, else: ["not_ready" | reasons]),
-        next_action: if(terminal, do: nil, else: next_action(reasons, state.status))
+        next_action: next_action(state.status, reasons, terminal)
       }
     end)
   end
@@ -180,7 +181,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyInputs do
   defp candidate_state(pin, package, metadata, delivery) do
     cond do
       current_head(metadata) != pin -> "stale_head"
-      value(package, :status) == "ready_for_merge" or value(delivery, :outcome) == "pr_merged" -> "current"
+      Lifecycle.ready?(value(package, :status)) or value(delivery, :outcome) == "pr_merged" -> "current"
       true -> "not_ready"
     end
   end
@@ -219,7 +220,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyInputs do
           is_integer(merged_at) and is_integer(delivered_at) and delivered_at <= merged_at
         end)
 
-      DeliveryResolution.resolved?(id, packages, prior_deliveries, successors)
+      DeliveryResolution.satisfies_dependents?(id, packages, prior_deliveries, successors)
     else
       true
     end
@@ -237,17 +238,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyInputs do
   defp timestamp(_time), do: nil
   defp reason(reasons, true, reason), do: reasons ++ [reason]
   defp reason(reasons, false, _reason), do: reasons
-  defp next_action([], "ready_for_merge"), do: "verify_native_checks_and_review_then_merge"
-  defp next_action([], "planned"), do: "dispatch_work_package"
-  defp next_action([], _status), do: "finish_worker_qualification"
+  # Merge eligibility only adds dependency reasons on top of `ready`; every
+  # other next action comes from the lifecycle.
+  defp next_action(_status, _reasons, true), do: nil
 
-  defp next_action(reasons, _status) do
-    cond do
-      "delivery_order_violation" in reasons -> "resolve_delivery_order_violation"
-      "candidate_pin_stale" in reasons or "dependency_inputs_stale" in reasons -> "select_current_candidate_and_requalify_affected_work"
-      true -> "deliver_prerequisites"
+  defp next_action(status, [_reason | _rest] = reasons, false) do
+    if Lifecycle.ready?(status) do
+      cond do
+        "delivery_order_violation" in reasons -> "resolve_delivery_order_violation"
+        "candidate_pin_stale" in reasons or "dependency_inputs_stale" in reasons -> "select_current_candidate_and_requalify_affected_work"
+        true -> "deliver_prerequisites"
+      end
+    else
+      Lifecycle.next_action(status, %{dependencies_met?: "dependency_not_delivered" not in reasons}).action
     end
   end
+
+  defp next_action(status, [], false), do: Lifecycle.next_action(status).action
 
   defp value(map, key) when is_map(map), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
   defp value(_map, _key), do: nil

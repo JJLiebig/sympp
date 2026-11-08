@@ -1,8 +1,10 @@
 defmodule CanonicalWorkPackageFixtures do
   @moduledoc false
 
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   def add_work_package(repo, work_request_id, attrs) do
@@ -21,6 +23,23 @@ defmodule CanonicalWorkPackageFixtures do
 
       nil ->
         {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Ends a package with the given ending row through the real closeout path.
+  A planned package is first moved to where the outcome may be recorded from.
+  """
+  def end_work_package(repo, work_request_id, work_package_id, attrs) do
+    attrs = Map.new(attrs, fn {key, value} -> {to_string(key), value} end)
+    outcome = Map.fetch!(attrs, "outcome")
+
+    with {:ok, package} <- get_work_package(repo, work_request_id, work_package_id) do
+      if package.status not in Lifecycle.ending_sources(outcome) and package.status == "planned" do
+        repo.update!(Ecto.Changeset.change(package, status: "dispatched", dispatched_at: package.dispatched_at || now()))
+      end
+
+      DeliveryCloseout.record(repo, work_request_id, work_package_id, Map.put_new(attrs, "idempotency_key", "fixture-ending:#{work_package_id}"))
     end
   end
 
@@ -53,7 +72,7 @@ defmodule CanonicalWorkPackageFixtures do
   end
 
   defp canonicalize_target(repo, %WorkPackage{id: id} = planned, %WorkPackage{id: id}) do
-    status = if planned.status == "planned", do: "ready_for_worker", else: planned.status
+    status = if planned.status == "planned", do: "dispatched", else: planned.status
     repo.update!(Ecto.Changeset.change(planned, status: status, dispatched_at: now()))
   end
 

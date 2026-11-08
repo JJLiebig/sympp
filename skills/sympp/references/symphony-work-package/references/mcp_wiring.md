@@ -126,7 +126,7 @@ session connected to the same ledger as dispatch. Pass `work_package_id` and,
 when provided, `claimed_by`. Before claim, `get_current_assignment()` succeeds
 with `assignment: null` and a claim or reclaim action. Reuse the successful claim
 assignment; recheck only if binding evidence conflicts or the session reconnects.
-The first successful claim atomically activates a `ready_for_worker` package.
+Claims never change the package status; only a dispatched or ready package can be claimed.
 Release changes authorization and scope without changing the advertised tool
 catalog.
 

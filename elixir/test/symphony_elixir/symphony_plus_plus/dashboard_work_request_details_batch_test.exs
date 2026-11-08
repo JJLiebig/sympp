@@ -59,11 +59,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
 
   test "full and compact packages forward canonical integration eligibility within board budgets", %{repo: repo} do
     request = create_work_request!(repo, status: "sliced")
-    backend = eligibility_package!(repo, request, "BACKEND", "ready_for_merge")
-    ui = eligibility_package!(repo, request, "UI", "ready_for_merge")
-    stale = eligibility_package!(repo, request, "STALE", "ready_for_merge")
-    missing_backend = eligibility_package!(repo, request, "MISSING-BACKEND", "reviewing")
-    missing = eligibility_package!(repo, request, "MISSING", "reviewing")
+    backend = eligibility_package!(repo, request, "BACKEND", "ready")
+    ui = eligibility_package!(repo, request, "UI", "ready")
+    stale = eligibility_package!(repo, request, "STALE", "ready")
+    missing_backend = eligibility_package!(repo, request, "MISSING-BACKEND", "dispatched")
+    missing = eligibility_package!(repo, request, "MISSING", "dispatched")
     backend_head = String.duplicate("a", 40)
     ui_head = String.duplicate("b", 40)
     stale_head = String.duplicate("c", 40)

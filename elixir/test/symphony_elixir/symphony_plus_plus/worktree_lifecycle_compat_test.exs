@@ -96,7 +96,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeLifecycleCompatTest do
     assert {:ok, package} =
              Repository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-WT-LEGACY-BASE", kind: "mcp", base_branch: "main"))
 
-    package = repo.update!(Ecto.Changeset.change(package, base_branch: "origin/main", status: "active"))
+    package = repo.update!(Ecto.Changeset.change(package, base_branch: "origin/main", status: "dispatched"))
 
     assert {:ok, prepared} =
              WorktreeLifecycle.prepare(

@@ -42,12 +42,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewObservationTest do
 
       if expected == "inspection_needed" do
         assert signal.observation_state == "stale"
-        qualified = %{package | status: "ready_for_merge"}
-        eligibility = %{eligible: true, reason_codes: [], next_action: "verify_native_checks_and_review_then_merge"}
+        qualified = %{package | status: "ready"}
+        eligibility = %{eligible: true, reason_codes: [], next_action: "merge_pr"}
         summary = %{review_signal: signal, merge_eligibility: eligibility}
         activity = Signals.activity(qualified, summary, %{key: "merge_ready"}, [])
         assert activity["next_actor"] == "architect"
-        assert activity["next_action"] == "inspect_changed_since_review"
+        assert activity["next_action"] == "sync_pr"
         assert Signals.board_state(qualified, summary, nil).stage == "merge"
       end
     end
@@ -325,7 +325,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewObservationTest do
       plugin: plugin,
       package: %WorkPackage{
         id: "wp-observed",
-        status: "reviewing",
+        status: "dispatched",
         base_branch: "beta",
         worktree_path: worktree,
         review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "fast"}}
