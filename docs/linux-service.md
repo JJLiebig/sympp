@@ -69,8 +69,17 @@ sympp update
 
 Setup retrieves the credential privately over SSH and installs the panel when
 Herdr-app is present. `sympp update` refreshes the skill and client registrations,
-then rebuilds and restarts the factory over that same SSH host, preserving its
+then updates the factory locally (a loopback server) or over that same SSH host, preserving its
 ledger, repository root, port, workflow and service name. Never print the credential.
+
+Factory updates refuse dirty checkouts and overlapping updates immediately. The
+running readiness revision determines whether a build is needed. Changes confined
+to `skills/`, `docs/`, `plans/` and top-level Markdown files skip the build and
+restart; unknown paths rebuild. Builds finish before the service stops. Failed
+readiness restores the previous release and unit, waits for readiness again, and
+exits nonzero. Build logs are in the factory home's `logs/install.log`. No timer
+is installed. Existing MCP sessions keep using unchanged tools; failed calls to
+removed tools or changed input schemas ask the agent to restart its session.
 
 For a separate factory, set `SYMPP_REMOTE_HOME`, `SYMPP_REMOTE_PORT`, and
 `SYMPP_REMOTE_SERVICE` on the client before setup. Setup saves them for updates.

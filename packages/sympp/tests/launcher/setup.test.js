@@ -133,7 +133,7 @@ cp.spawnSync = (command, args, options) => {
   if (command === 'ssh') {
     if (args[0] === '-G') return { status: 0, stdout: 'hostname 100.64.1.2' };
     if (args.at(-1).startsWith('cat ')) return { status: 0, stdout: 'fixture-token' };
-    fs.appendFileSync(process.env.UPDATE_LOG, 'factory\\n'); return { status: ['factory', 'both'].includes(process.env.UPDATE_FAIL) ? 1 : 0 };
+    fs.appendFileSync(process.env.UPDATE_LOG, 'factory\\n'); return { status: ['factory', 'both'].includes(process.env.UPDATE_FAIL) ? 1 : 0, stdout: 'factory: updated\\n' };
   }
   return real(command, args, options);
 };`);

@@ -1078,6 +1078,11 @@ async function resolveHealthyRuntime(runtimeFile, pluginRoot, cancelled) {
 }
 
 async function bridge(identity, state, runtimeFile) {
+  const sessionContract = (await backendHealth(identity.backend))?.contract;
+  let sessionTools = null;
+  const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object"
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+  const schemas = tools => new Map(tools.map(tool => [tool.name, JSON.stringify(canonical(tool.inputSchema))]));
   const pluginRoot = path.resolve(__dirname, "..");
   const clientId = `bridge-${process.pid}-${crypto.randomUUID().replace(/-/g, "")}`;
   let current = { identity, state, mcpUrl: `${identity.backend}/mcp` };
@@ -1351,7 +1356,27 @@ async function bridge(identity, state, runtimeFile) {
         protocol = protocolFrom(response.lines) || requestProtocol;
       }
       for (const content of response.lines) {
-        const output = require("./sympp-session-location.js").remoteWorktreeResponse(content);
+        let forwarded = content;
+        if (parsed?.method === "tools/list") {
+          const tools = JSON.parse(content).result?.tools;
+          if (Array.isArray(tools)) sessionTools = schemas(tools);
+        }
+        if (parsed?.method === "tools/call") {
+          const payload = JSON.parse(content);
+          if ([-32601, -32602].includes(payload.error?.code) && sessionContract && sessionTools?.has(parsed.params?.name)) {
+            const health = await backendHealth(current.identity.backend);
+            if (health?.contract && health.contract !== sessionContract) {
+              const listed = await mcpPost(current.mcpUrl, JSON.stringify({ jsonrpc: "2.0", id: "bridge-current-tools", method: "tools/list", params: {} }), sessionId, protocol, timeoutMs);
+              const tools = listed.lines.map(line => JSON.parse(line)).find(result => Array.isArray(result.result?.tools))?.result.tools;
+              const name = parsed.params.name;
+              if (tools && schemas(tools).get(name) !== sessionTools.get(name)) {
+                payload.error.message = `${name.startsWith("sympp.") ? name : `sympp.${name}`} was updated and ${schemas(tools).has(name) ? "its schema changed" : "it was removed"}; restart the session to reload the sympp MCP bridge.`;
+                forwarded = JSON.stringify(payload);
+              }
+            }
+          }
+        }
+        const output = require("./sympp-session-location.js").remoteWorktreeResponse(forwarded);
         process.stdout.write(`${output.replace(/\r?\n/g, "")}\n`);
       }
     }
