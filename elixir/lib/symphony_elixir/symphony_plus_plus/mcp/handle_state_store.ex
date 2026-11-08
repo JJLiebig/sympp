@@ -2,7 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HandleStateStore do
   @moduledoc false
 
   alias Ecto.Adapters.SQL
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{LedgerNamespace, Server, Session}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{LedgerNamespace, Server}
 
   @server Server
   @agent Module.concat(Server, HandleState)
@@ -24,60 +24,44 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HandleStateStore do
     :ok
   end
 
+  @doc "Restores whether an explicit state key was initialized."
   @spec restore(term(), Server.t()) :: Server.t()
-  def restore(payload, %{__struct__: @server, initialized: false, session: nil, state_key_explicit: true} = server) do
-    if initialize_request?(payload), do: server, else: restore_explicit(server)
-  end
+  def restore(payload, %{__struct__: @server} = server) do
+    cond do
+      initialize_request?(payload) and not server.initialized ->
+        if not server.state_key_explicit, do: delete(server)
+        server
 
-  def restore(payload, %{__struct__: @server, state_key_explicit: true} = server) do
-    if initialize_request?(payload) do
-      if server.initialized, do: restore_explicit(server), else: %{server | initialized: false, session: nil}
-    else
-      restore_explicit(server)
+      true ->
+        case lookup(server) do
+          {%{__struct__: @server} = stored, _timestamp_ms, _explicit?} ->
+            %{server | initialized: server.initialized or stored.initialized, state_key_version: stored.state_key_version}
+
+          _missing ->
+            server
+        end
     end
   end
 
-  def restore(payload, %{__struct__: @server, state_key_explicit: false} = server) do
-    if initialize_request?(payload) do
-      case {server.initialized, lookup(server)} do
-        {true, _stored} ->
-          server
-
-        {false, {%{__struct__: @server}, _timestamp_ms, _explicit?}} ->
-          delete(server)
-          %{server | initialized: false, session: nil}
-
-        _stored ->
-          server
-      end
-    else
-      restore(server)
-    end
-  end
-
-  def restore(_payload, %{__struct__: @server} = server), do: restore(server)
-
+  @doc "Remembers a successful initialize, and keeps a known state key fresh."
   @spec persist(term(), map() | [map()] | nil, Server.t(), Server.t()) :: Server.t()
-  def persist(payload, response, %{__struct__: @server, state_key_explicit: true} = server, %{__struct__: @server} = updated_server) do
-    if initialize_request?(payload) do
-      case response do
-        %{"result" => _result} ->
-          timestamp_ms = put(updated_server)
-          %{updated_server | state_key_version: timestamp_ms}
+  def persist(payload, response, %{__struct__: @server} = server, %{__struct__: @server} = updated_server) do
+    cond do
+      initialize_request?(payload) and match?(%{"result" => _result}, response) ->
+        %{updated_server | state_key_version: put(updated_server)}
 
-        %{"error" => %{"data" => %{"reason" => "already_initialized"}}} ->
-          updated_server
+      initialize_request?(payload) and server.state_key_explicit and not match?(%{"error" => %{"data" => %{"reason" => "already_initialized"}}}, response) ->
+        delete(server)
+        %{updated_server | state_key_version: nil}
 
-        _response ->
-          invalidate_explicit(server)
-          %{updated_server | state_key_version: nil}
-      end
-    else
-      persist(server, updated_server)
+      lookup(updated_server) != nil ->
+        refresh(updated_server)
+        updated_server
+
+      true ->
+        updated_server
     end
   end
-
-  def persist(_payload, _response, %{__struct__: @server} = server, %{__struct__: @server} = updated_server), do: persist(server, updated_server)
 
   @spec repo_query(term(), String.t(), list(), keyword()) :: term()
   def repo_query(repo, sql, params, opts) when is_atom(repo) do
@@ -94,98 +78,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HandleStateStore do
 
   def repo_query(repo, sql, params, opts), do: SQL.query(repo, sql, params, opts)
 
-  defp restore_explicit(%{__struct__: @server} = server) do
-    case lookup(server) do
-      {%{__struct__: @server} = stored, timestamp_ms, _explicit?} ->
-        state_key_version = stored.state_key_version || timestamp_ms
-
-        session_refresh_required? =
-          stored.session_refresh_required or stale_explicit_session?(server, state_key_version)
-
-        session = if session_refresh_required?, do: nil, else: server.session
-
-        %{
-          server
-          | initialized: server.initialized or stored.initialized,
-            session: session,
-            client_location: server.client_location || stored.client_location,
-            state_key_version: state_key_version,
-            session_refresh_required: session_refresh_required?
-        }
-        |> restore_stale_assignment(server, stored, session_refresh_required?)
-
-      _stored ->
-        server
-    end
-  end
-
-  defp restore_stale_assignment(updated, server, stored, refresh?) do
-    discarded_session = if refresh?, do: server.session
-    previous_role = if match?(%Session{}, discarded_session), do: discarded_session.assignment.grant_role
-    previous_claim = Session.architect_claim_arguments(discarded_session)
-
-    %{
-      updated
-      | stale_assignment_role: server.stale_assignment_role || previous_role || stored.stale_assignment_role,
-        stale_architect_claim: server.stale_architect_claim || previous_claim || stored.stale_architect_claim
-    }
-  end
-
-  defp restore(%{__struct__: @server} = server) do
-    case lookup(server) do
-      {%{__struct__: @server} = stored, _timestamp_ms, _explicit?} ->
-        %{
-          server
-          | initialized: server.initialized or stored.initialized,
-            session: server.session || stored.session,
-            client_location: server.client_location || stored.client_location,
-            stale_assignment_role: server.stale_assignment_role || stored.stale_assignment_role,
-            stale_architect_claim: server.stale_architect_claim || stored.stale_architect_claim
-        }
-
-      _stored ->
-        server
-    end
-  end
-
-  defp persist(%{__struct__: @server} = server, %{__struct__: @server} = updated_server) do
-    timestamp_ms =
-      cond do
-        updated_server.session_refresh_required ->
-          put(updated_server)
-
-        server.session_refresh_required != updated_server.session_refresh_required ->
-          put(updated_server)
-
-        binding_changed?(server, updated_server) ->
-          put(updated_server)
-
-        lookup(updated_server) != nil ->
-          refresh(updated_server)
-
-        true ->
-          nil
-      end
-
-    if is_integer(timestamp_ms), do: %{updated_server | state_key_version: timestamp_ms}, else: updated_server
-  end
-
-  defp binding_changed?(server, updated_server) do
-    fields = [:initialized, :session, :stale_assignment_role, :stale_architect_claim]
-    Map.take(server, fields) != Map.take(updated_server, fields)
-  end
-
-  defp stale_explicit_session?(%{__struct__: @server, session_refresh_required: true, state_key_version: version}, timestamp_ms) when version == timestamp_ms, do: true
-  defp stale_explicit_session?(%{__struct__: @server, session: nil}, _timestamp_ms), do: false
-  defp stale_explicit_session?(%{__struct__: @server, session: %Session{}, state_key_version: nil}, _timestamp_ms), do: false
-  defp stale_explicit_session?(%{__struct__: @server, state_key_version: nil}, _timestamp_ms), do: true
-  defp stale_explicit_session?(%{__struct__: @server, state_key_version: state_key_version}, timestamp_ms), do: timestamp_ms > state_key_version
-
   defp put(%{__struct__: @server} = server) do
     key = key(server)
     timestamp_ms = monotonic_ms()
     state_key_version = System.unique_integer([:monotonic, :positive])
-    stored_server = %{stored_server(server) | state_key_version: state_key_version}
+    stored_server = %{server | state_key_version: state_key_version}
     update(&Map.put(&1, key, {stored_server, timestamp_ms, server.state_key_explicit}))
     state_key_version
   end
@@ -194,33 +91,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HandleStateStore do
     update(&Map.delete(&1, key(server)))
     :ok
   end
-
-  defp invalidate_explicit(%{__struct__: @server} = server) do
-    timestamp_ms = monotonic_ms()
-    state_key_version = System.unique_integer([:monotonic, :positive])
-
-    tombstone =
-      server
-      |> stored_server()
-      |> Map.merge(%{initialized: false, session: nil, state_key_version: state_key_version})
-
-    update(&Map.put(&1, key(server), {tombstone, timestamp_ms, true}))
-    :ok
-  end
-
-  defp stored_server(%{__struct__: @server, state_key_explicit: true} = server) do
-    role = if match?(%Session{}, server.session), do: server.session.assignment.grant_role
-    claim = Session.architect_claim_arguments(server.session)
-
-    %{
-      server
-      | session: nil,
-        stale_assignment_role: role || server.stale_assignment_role,
-        stale_architect_claim: claim || server.stale_architect_claim
-    }
-  end
-
-  defp stored_server(%{__struct__: @server} = server), do: server
 
   defp lookup(%{__struct__: @server} = server), do: get() |> Map.get(key(server))
 

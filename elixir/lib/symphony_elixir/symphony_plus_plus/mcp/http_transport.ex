@@ -2,15 +2,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
   @moduledoc """
   Route-free HTTP MCP transport core for decoded JSON-RPC payloads.
 
-  This module preserves initialized HTTP MCP state, including bound sessions
-  returned by local WR/WP claim tools. It does not own Plug, CORS, cookie,
-  current-alias, explicit reconnect, or browser auth semantics.
+  This module preserves initialized HTTP MCP state per MCP session id. After a
+  restart the id is unknown and the bridge initializes again. It does not own
+  Plug, CORS, cookie, current-alias, explicit reconnect, or browser auth
+  semantics.
   """
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, FailedCall, HerdrBinding, HTTPStateStore}
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Server, Session, SessionRecovery}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.Server
 
-  @assignment_resource "sympp://assignment/current"
   @work_package_resource_prefix "sympp://work-packages/"
   @client_lock_key "__sympp_mcp_client_lock__"
   @current_state_key "__sympp_mcp_current_state__"
@@ -105,15 +105,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
     end
   end
 
-  defp handle_missing_state(%Config{} = config, payload, client_key, state_key, live_handle) when is_function(live_handle, 3) do
+  defp handle_missing_state(%Config{}, payload, client_key, state_key, live_handle) when is_function(live_handle, 3) do
     case handle_with_live_repo(payload, client_key, state_key, live_handle) do
-      {:error, :ledger_unavailable, ^payload} -> recover_or_unknown_state(config, payload, client_key, state_key)
+      {:error, :ledger_unavailable, ^payload} -> {:ok, result(unknown_state_key_error(payload), nil)}
       result -> result
     end
   end
 
-  defp handle_missing_state(%Config{} = config, payload, client_key, state_key, _live_handle) do
-    recover_or_unknown_state(config, payload, client_key, state_key)
+  defp handle_missing_state(%Config{}, payload, _client_key, _state_key, _live_handle) do
+    {:ok, result(unknown_state_key_error(payload), nil)}
   end
 
   defp handle_with_live_repo(payload, client_key, state_key, live_handle) do
@@ -125,17 +125,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
     end
   end
 
-  defp recover_or_unknown_state(%Config{} = config, payload, client_key, state_key) do
-    case recover_existing_state(config, client_key, state_key) do
-      {:ok, %Server{} = server} ->
-        :ok = HTTPStateStore.put(config, client_key, state_key, server)
-        process_existing_state(config, payload, client_key, state_key)
-
-      :not_found ->
-        {:ok, result(unknown_state_key_error(payload), nil)}
-    end
-  end
-
   defp process_new_initialize(%Config{} = config, payload, client_key) do
     state_key = new_state_key()
 
@@ -144,7 +133,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
     end)
   end
 
-  defp process_existing_state(%Config{} = config, payload, client_key, state_key, live_handle \\ nil) do
+  defp process_existing_state(%Config{} = config, payload, client_key, state_key, live_handle) do
     process_state(config, payload, client_key, state_key, false, live_handle, fn ->
       Server.new(config, state_key: state_key, local_daemon_trusted: config.local_daemon_trusted)
     end)
@@ -161,9 +150,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
     else
       case status do
         :stored ->
-          %Server{} = updated_server = maybe_updated_server
-          SessionRecovery.remember(config, client_key, state_key, payload, updated_server, response)
-          {:ok, result(response, state_key, HerdrBinding.response_binding(payload, response, updated_server))}
+          %Server{} = maybe_updated_server
+          {:ok, result(response, state_key, HerdrBinding.response_binding(payload, response))}
 
         :skipped ->
           {:ok, result(response, nil)}
@@ -189,16 +177,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
     end
   end
 
-  defp recover_existing_state(%Config{} = config, client_key, state_key) do
-    SessionRecovery.rehydrate(config, client_key, state_key)
-  end
-
   defp transient_response(%Config{} = config, payload) do
     {response, _server} = Server.handle_response_state(payload, Server.new(config))
     response
   end
 
-  defp missing_state?(%Server{initialized: false, session: nil}), do: true
+  defp missing_state?(%Server{initialized: false}), do: true
   defp missing_state?(%Server{}), do: false
 
   defp result(response, state_key, herdr_binding \\ nil) do
@@ -219,18 +203,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
   defp initialize_request?(payloads) when is_list(payloads), do: Enum.any?(payloads, &initialize_request?/1)
   defp initialize_request?(_payload), do: false
 
-  defp repo_backed_followup?(%{"method" => "tools/list"}, %Server{session: %Session{}}), do: true
-  defp repo_backed_followup?(%{"method" => "resources/list"}, %Server{session: nil}), do: false
   defp repo_backed_followup?(payload, %Server{}), do: repo_backed_followup?(payload)
 
-  defp repo_backed_followup?(%{"method" => "resources/list"}), do: true
   defp repo_backed_followup?(%{"method" => "resources/read", "params" => %{"uri" => uri}}), do: protected_resource_uri?(uri)
   defp repo_backed_followup?(%{"method" => "tools/call", "params" => %{"name" => "sympp.health"}}), do: false
   defp repo_backed_followup?(%{"method" => "tools/call"}), do: true
   defp repo_backed_followup?(_payload), do: false
 
   defp protected_resource_uri?(uri) when is_binary(uri) do
-    uri == @assignment_resource or String.starts_with?(uri, @work_package_resource_prefix)
+    String.starts_with?(uri, @work_package_resource_prefix)
   end
 
   defp protected_resource_uri?(_uri), do: false

@@ -5,52 +5,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
 
-  @spec claimable_tool_specs(Config.t()) :: [ToolCatalog.tool_spec()]
-  def claimable_tool_specs(%Config{} = config) do
-    [health_tool_spec()] ++
-      local_assignment_claim_tool_specs(config) ++
-      local_architect_assignment_claim_tool_specs(config)
-  end
-
-  @spec callable_claim_tool_specs(Config.t()) :: [ToolCatalog.tool_spec()]
-  def callable_claim_tool_specs(%Config{} = config) do
-    introspection_tool_specs() ++ profile_claim_tool_specs(config)
-  end
-
-  @spec unbound_tool_specs_for_config(Config.t()) :: [ToolCatalog.tool_spec()]
-  def unbound_tool_specs_for_config(%Config{} = config) do
-    [health_tool_spec(), assignment_release_tool_spec()] ++
-      Enum.map(ToolCatalog.solo_tools(), &SoloTools.tool_spec/1) ++
-      unbound_scoped_tool_specs() ++
-      local_assignment_claim_tool_specs(config) ++
-      local_architect_assignment_claim_tool_specs(config) ++
-      Enum.map(ToolCatalog.bootstrap_tools(), &bootstrap_tool_spec/1)
-  end
-
-  @spec callable_unbound_tool_specs_for_config(Config.t()) :: [ToolCatalog.tool_spec()]
-  def callable_unbound_tool_specs_for_config(%Config{} = config) do
-    introspection_tool_specs() ++
-      unbound_profile_tool_specs(config) ++ Enum.map(ToolCatalog.bootstrap_tools(), &bootstrap_tool_spec/1)
-  end
-
+  @doc """
+  Tools listed for a surface profile. `:full` lists everything; `:architect`
+  the WorkRequest tools; `:coordinator` and `:solo` health and Solo; `:worker`
+  only health, because workers make no sympp calls.
+  """
   @spec startup_tool_specs(:full | :worker | :architect | :coordinator | :solo, Config.t()) :: [ToolCatalog.tool_spec()]
-  def startup_tool_specs(profile, %Config{} = config) do
-    config = Map.put(config, :surface_profile, profile)
-
+  def startup_tool_specs(profile, %Config{}) do
     case profile do
-      :worker ->
-        worker_session_tool_specs() ++ local_assignment_claim_tool_specs(config)
-
-      :architect ->
-        architect_tools = architect_session_tool_specs(current_work_request?: true)
-        architect_tools ++ local_architect_assignment_claim_tool_specs(config) ++ [bootstrap_tool_spec("register_chief")]
-
-      profile when profile in [:coordinator, :solo] ->
-        chief_tools = if(profile == :coordinator, do: [bootstrap_tool_spec("register_chief")], else: [])
-        introspection_tool_specs() ++ Enum.map(ToolCatalog.solo_tools(), &SoloTools.tool_spec/1) ++ chief_tools
-
-      :full ->
-        unbound_tool_specs_for_config(config) ++ local_operator_tool_specs()
+      :worker -> [health_tool_spec()]
+      :architect -> [health_tool_spec(), bootstrap_tool_spec("create_work_request")] ++ architect_tool_specs()
+      profile when profile in [:coordinator, :solo] -> [health_tool_spec() | solo_tool_specs()]
+      :full -> [health_tool_spec()] ++ solo_tool_specs() ++ [bootstrap_tool_spec("create_work_request")] ++ architect_tool_specs() ++ local_operator_tool_specs()
     end
     |> Enum.uniq_by(& &1["name"])
     |> Enum.map(&put_access_annotation/1)
@@ -60,42 +26,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp put_access_annotation(%{"name" => name} = spec),
     do: Map.put(spec, "annotations", %{"readOnlyHint" => ToolCatalog.tool_access(name) == :read})
 
-  defp introspection_tool_specs,
-    do: [health_tool_spec(), assignment_release_tool_spec(), worker_tool_spec("get_current_assignment")]
-
-  defp unbound_profile_tool_specs(%Config{surface_profile: profile}) when profile in [:coordinator, :solo],
-    do: Enum.map(ToolCatalog.solo_tools(), &SoloTools.tool_spec/1)
-
-  defp unbound_profile_tool_specs(%Config{surface_profile: :worker} = config), do: local_assignment_claim_tool_specs(config)
-  defp unbound_profile_tool_specs(%Config{surface_profile: :architect} = config), do: local_architect_assignment_claim_tool_specs(config)
-
-  defp unbound_profile_tool_specs(%Config{surface_profile: :full} = config) do
-    Enum.map(ToolCatalog.solo_tools(), &SoloTools.tool_spec/1) ++ profile_claim_tool_specs(config)
-  end
-
-  defp profile_claim_tool_specs(%Config{surface_profile: :worker} = config), do: local_assignment_claim_tool_specs(config)
-  defp profile_claim_tool_specs(%Config{surface_profile: :architect} = config), do: local_architect_assignment_claim_tool_specs(config)
-  defp profile_claim_tool_specs(%Config{surface_profile: profile}) when profile in [:coordinator, :solo], do: []
-
-  defp profile_claim_tool_specs(%Config{} = config),
-    do: local_assignment_claim_tool_specs(config) ++ local_architect_assignment_claim_tool_specs(config)
-
-  @spec architect_session_tool_specs(keyword()) :: [ToolCatalog.tool_spec()]
-  def architect_session_tool_specs(opts) do
-    current_work_request? = Keyword.get(opts, :current_work_request?, false)
-
-    [
-      health_tool_spec(),
-      assignment_release_tool_spec(),
-      worker_tool_spec("get_current_assignment")
-      | Enum.map(ToolCatalog.architect_tools(), &architect_tool_spec(&1, current_work_request?))
-    ]
-  end
-
-  @spec worker_session_tool_specs() :: [ToolCatalog.tool_spec()]
-  def worker_session_tool_specs do
-    [health_tool_spec(), assignment_release_tool_spec() | Enum.map(ToolCatalog.worker_tools(), &worker_tool_spec/1)]
-  end
+  defp solo_tool_specs, do: Enum.map(ToolCatalog.solo_tools(), &SoloTools.tool_spec/1)
+  defp architect_tool_specs, do: Enum.map(ToolCatalog.architect_tools(), &architect_tool_spec/1)
 
   @spec lean_tool_specs([ToolCatalog.tool_spec()]) :: [ToolCatalog.tool_spec()]
   def lean_tool_specs(specs), do: Enum.map(specs, &lean_tool_spec/1)
@@ -107,42 +39,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
     %{
       "name" => ToolCatalog.health_tool(),
       "title" => "sympp health",
-      "description" => "Returns server version, ledger reachability, and safe ledger identity without exposing package data.",
+      "description" => "Returns server version, ledger reachability and identity, and the caller's Herdr terminal with the WorkRequests it owns.",
       "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
-    }
-  end
-
-  defp worker_tool_spec(name) do
-    %{
-      "name" => name,
-      "title" => name,
-      "description" => worker_tool_description(name),
-      "inputSchema" => InputSchemas.worker_tool_input_schema(name)
-    }
-  end
-
-  defp worker_tool_description("read_work_package_document"),
-    do: "Read a scoped WorkPackage document. Large progress pages summarize recent events; use detail: full with the same document/before_sequence for complete evidence."
-
-  defp worker_tool_description(name), do: "sympp worker tool #{name}."
-
-  defp unbound_worker_tool_spec(name) do
-    %{
-      "name" => name,
-      "title" => name,
-      "description" => worker_tool_description(name),
-      "inputSchema" => InputSchemas.unbound_worker_tool_input_schema(name)
-    }
-  end
-
-  defp assignment_release_tool_spec do
-    name = ToolCatalog.assignment_release_tool()
-
-    %{
-      "name" => name,
-      "title" => name,
-      "description" => "Release only the current MCP session assignment binding and its matching current claim lease when available, without exposing secrets.",
-      "inputSchema" => InputSchemas.assignment_release_tool_input_schema()
     }
   end
 
@@ -155,22 +53,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
     }
   end
 
-  defp bootstrap_tool_description("register_chief"),
-    do: "Register this trusted local session as the current chief for a domain. Records attribution and location only; grants no claim or dispatch authority."
-
   defp bootstrap_tool_description("create_work_request"),
-    do: "Create a local sympp WorkRequest with creator provenance and return a redacted architect handoff."
-
-  defp local_architect_assignment_claim_tool_spec do
-    name = ToolCatalog.local_architect_assignment_claim_tool()
-
-    %{
-      "name" => name,
-      "title" => name,
-      "description" => "Claim or reconnect a ledger-backed local WorkRequest architect assignment without private handoff files.",
-      "inputSchema" => InputSchemas.local_architect_assignment_claim_tool_input_schema()
-    }
-  end
+    do: "Create a WorkRequest. The calling terminal becomes its owner unless own is false."
 
   defp local_operator_tool_spec(name) do
     %{
@@ -182,48 +66,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   end
 
   defp local_operator_tool_description("record_work_request_operator_decision") do
-    "Record a redacted local-operator decision on a WorkRequest by id. Requires an unbound trusted local HTTP MCP session with an explicit state key and a file-backed local ledger; does not require ownership of that WorkRequest."
+    "Record a redacted local-operator decision on a WorkRequest by id. Any Herdr terminal may record one; ownership is not required."
   end
 
   defp local_operator_tool_description("summarize_failed_mcp_calls") do
-    "Summarize process-local redacted failed MCP call envelopes without exposing raw requests or durable history. Failures are counted only while the operator setting capture_failed_mcp_calls is on; capture_enabled reports it. Requires an unbound trusted local HTTP MCP session."
-  end
-
-  defp unbound_scoped_tool_specs do
-    Enum.map(ToolCatalog.architect_tools() -- ToolCatalog.worker_tools(), &explicit_work_request_architect_tool_spec/1) ++
-      Enum.map(ToolCatalog.worker_tools(), &unbound_worker_tool_spec/1)
-  end
-
-  defp architect_tool_spec(name, true), do: architect_tool_spec(name)
-  defp architect_tool_spec(name, false), do: explicit_work_request_architect_tool_spec(name)
-
-  defp explicit_work_request_architect_tool_spec(name) do
-    spec = architect_tool_spec(name)
-
-    if ToolCatalog.current_work_request_tool?(name) do
-      spec
-      |> Map.put("description", unbound_current_work_request_description(name))
-      |> Map.put("inputSchema", InputSchemas.explicit_work_request_architect_tool_input_schema(name))
-    else
-      spec
-    end
-  end
-
-  defp unbound_current_work_request_description(name) do
-    name
-    |> architect_tool_description()
-    |> String.replace("the claimed current WorkRequest", "the explicit WorkRequest")
-    |> String.replace("claimed current WorkRequest", "explicit WorkRequest")
-  end
-
-  defp lean_tool_spec(%{"name" => name, "description" => "sympp worker tool " <> name_and_period} = spec) do
-    if name_and_period == name <> ".", do: Map.drop(spec, ["title", "description"]), else: Map.delete(spec, "title")
+    "Summarize process-local redacted failed MCP call envelopes without exposing raw requests or durable history. Failures are counted only while the operator setting capture_failed_mcp_calls is on; capture_enabled reports it."
   end
 
   defp lean_tool_spec(spec), do: Map.delete(spec, "title")
-
-  defp local_assignment_claim_tool_specs(%Config{}), do: [worker_tool_spec(ToolCatalog.local_assignment_claim_tool())]
-  defp local_architect_assignment_claim_tool_specs(%Config{}), do: [local_architect_assignment_claim_tool_spec()]
 
   defp architect_tool_spec(name) do
     %{
@@ -234,7 +84,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
     }
   end
 
-  defp architect_tool_description("list_work_requests"), do: "List WorkRequests scoped to the architect grant's repo and base branch."
+  defp architect_tool_description("list_work_requests"), do: "List WorkRequests in the ledger, newest first."
 
   defp architect_tool_description("read_work_request"),
     do: "Read a compact WorkRequest overview: status, description, open questions, package next actions and recent decisions. Use detail: full for all contracts and history."
@@ -254,11 +104,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp architect_tool_description("append_progress"),
     do: "Append an idempotent progress event to an explicit descendant WorkPackage."
 
-  defp architect_tool_description("resolve_blocker"), do: "Resolve a blocker event for a policy-scoped descendant WorkPackage."
-
-  defp architect_tool_description("force_release_work_package_claim"),
-    do:
-      "Force-release a WorkPackage's worker claim, including active leases and reservations left after release. Any authenticated architect may target any WorkRequest. Invalidates previous worker sessions and records an audit reason; leaves package status and delivery unchanged."
+  defp architect_tool_description("resolve_blocker"), do: "Resolve a blocker on a WorkPackage of a WorkRequest you own."
 
   defp architect_tool_description("read_delivery_board"), do: "Read a compact scoped WorkRequest delivery board; detail: full includes complete package and closeout evidence."
   defp architect_tool_description("attach_branch"), do: "Update canonical branch metadata for an explicit descendant WorkPackage."
@@ -272,8 +118,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
     "End a WorkPackage with its one ending record; replays with the same key are idempotent. Evidence depends on outcome: pr_merged needs PR evidence, completed_no_pr needs direct evidence, superseded needs a same-WorkRequest successor and reason, abandoned needs rationale; finished and skipped need none. Any chief or architect may record finished. Ending clears active blocker residue."
   end
 
-  defp architect_tool_description(tool) when tool in ["cleanup_work_request_work_package_runtime", "revoke_work_package_worker_key"],
-    do: delivery_runtime_tool_description(tool)
+  defp architect_tool_description("set_report"),
+    do: "Patch the operator report on a WorkRequest you own: brief, eta and parking. null clears a field; clearing parking records that work resumed."
 
   defp architect_tool_description("set_work_request_status"), do: "Move a scoped WorkRequest between valid statuses with optimistic current-status checking."
   defp architect_tool_description("ask_question"), do: "Add a clarification question to a scoped WorkRequest."
@@ -284,11 +130,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp architect_tool_description("record_decision"),
     do: "Record a durable decision log entry on a scoped WorkRequest. source_type must be one of: #{Enum.join(DecisionLogEntry.source_types(), ", ")}."
 
-  defp architect_tool_description("slice_work_request"), do: "Atomically slice the claimed WorkRequest into canonical WorkPackages."
+  defp architect_tool_description("slice_work_request"), do: "Atomically slice a WorkRequest you own into canonical WorkPackages."
   defp architect_tool_description("update_work_package"), do: "Update one canonical WorkPackage contract using its optimistic contract revision."
 
   defp architect_tool_description("upsert_group") do
-    "Create, rename, reparent, or reorder an optional Group inside the claimed current WorkRequest. Groups organize WorkPackages and have no lifecycle."
+    "Create, rename, reparent, or reorder an optional Group inside a WorkRequest you own. Groups organize WorkPackages and have no lifecycle."
   end
 
   defp architect_tool_description("delete_group"),
@@ -297,18 +143,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp architect_tool_description("upsert_dependency"),
     do: "Create or edit one dependency intent between WorkPackage or Group endpoints; the backend derives effective WorkPackage edges."
 
-  defp architect_tool_description("delete_dependency"), do: "Remove one dependency intent from the claimed current WorkRequest."
-  defp architect_tool_description("skip_work_package"), do: "End a planned WorkPackage of the claimed current WorkRequest as skipped."
+  defp architect_tool_description("delete_dependency"), do: "Remove one dependency intent from a WorkRequest you own."
+  defp architect_tool_description("skip_work_package"), do: "End a planned WorkPackage of a WorkRequest you own as skipped."
 
   defp architect_tool_description("dispatch_work_package"),
     do: "Activate one planned WorkPackage and return ids, status, workspace and assignment_uri. Read that resource for the worker bootstrap, or request detail: full inline."
 
   defp architect_tool_description("prepare_work_package_worktree"), do: "Prepare a scoped WorkPackage git worktree and record only its worktree_path."
-
-  defp delivery_runtime_tool_description("cleanup_work_request_work_package_runtime"),
-    do:
-      "Recycle stale or superseded runtime authority for the WorkPackage linked to a scoped WorkRequest WorkPackage after superseded or abandoned delivery evidence is supplied. Revokes linked worker grants, releases local claim leases, clears recoverable worker MCP session bindings, and records audit evidence before delivery closeout."
-
-  defp delivery_runtime_tool_description("revoke_work_package_worker_key"),
-    do: "Revoke one live worker grant for a dispatched, ready or ended WorkPackage of a scoped WorkRequest, to recycle its worker or clean up before closeout. Leaves the package status unchanged."
 end

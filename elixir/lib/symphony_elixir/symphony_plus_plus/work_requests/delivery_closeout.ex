@@ -1,8 +1,6 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
-  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository, as: ClaimLeaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
@@ -35,11 +33,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   @type error ::
           Repository.error()
           | WorkPackageRepository.error()
-          | ClaimLeaseRepository.error()
           | PlanningRepository.error()
           | :active_blocker
           | :active_runtime
-          | :claim_not_current
           | :idempotency_key_conflict
           | :malformed_pr_evidence
           | :missing_strong_pr_evidence
@@ -351,7 +347,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   end
 
   defp replay_closeout_context(context, event) do
-    current = closeout_context(context, [], [], allow_active_blockers?: false)
+    current = closeout_context(context, allow_active_blockers?: false)
     recorded_reasons = List.wrap(map_value((event && event.payload) || %{}, :runtime_reason_codes_before_closeout))
 
     current
@@ -443,17 +439,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     context = WorkPackageActivity.context(repo, work_package_id)
     allow_active_blockers? = allow_active_blockers?(delivery, opts)
 
-    with :ok <- validate_closeout_context(context, delivery, opts),
-         {:ok, retired_worker_grant_ids} <- retire_live_worker_grants(repo, work_package_id),
-         {:ok, retired_claim_lease_ids} <-
-           retire_current_claim_leases(repo, work_package_id, "#{delivery.outcome}_delivery_closeout") do
-      {:ok,
-       closeout_context(
-         context,
-         retired_worker_grant_ids,
-         retired_claim_lease_ids,
-         allow_active_blockers?: allow_active_blockers?
-       )}
+    with :ok <- validate_closeout_context(context, delivery, opts) do
+      {:ok, closeout_context(context, allow_active_blockers?: allow_active_blockers?)}
     end
   end
 
@@ -470,10 +457,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   defp delivery_closeout_opts(_attrs), do: [allow_active_blockers?: true]
 
   defp empty_closeout_context do
-    closeout_context(WorkPackageActivity.empty_context(), [], [], allow_active_blockers?: false)
+    closeout_context(WorkPackageActivity.empty_context(), allow_active_blockers?: false)
   end
 
-  defp closeout_context(context, retired_worker_grant_ids, retired_claim_lease_ids, opts) do
+  defp closeout_context(context, opts) do
     runtime_reason_codes = List.wrap(get_in(context, [:runtime_state, :reason_codes]))
 
     %{
@@ -481,67 +468,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
       blocker_reason_codes: List.wrap(get_in(context, [:blocker_state, :reason_codes])),
       runtime_reason_codes: runtime_reason_codes,
       ignored_stale_agent_run_ids: List.wrap(get_in(context, [:runtime_state, :stale_agent_run_ids])),
-      retired_worker_grant_ids: retired_worker_grant_ids,
-      retired_claim_lease_ids: retired_claim_lease_ids,
       defer_worktree_cleanup?: Enum.any?(runtime_reason_codes, &live_runtime_reason?/1),
       allow_active_blockers?: Keyword.get(opts, :allow_active_blockers?, false)
     }
   end
 
-  defp live_runtime_reason?(reason),
-    do:
-      reason in [
-        "claim_lease_active",
-        "agent_run_active",
-        "worker_grant_active",
-        "architect_grant_active"
-      ]
-
-  defp retire_current_claim_leases(repo, work_package_id, reason) do
-    case ClaimLeaseRepository.retire_current_for_work_package(
-           repo,
-           work_package_id,
-           reason
-         ) do
-      {:ok, claim_leases} -> {:ok, Enum.map(claim_leases, & &1.id)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp retire_live_worker_grants(repo, work_package_id) do
-    revoke_worker_grants(
-      live_worker_grants(repo, work_package_id, DateTime.utc_now(:microsecond)),
-      repo
-    )
-  end
-
-  defp revoke_worker_grants(grants, repo) do
-    now = DateTime.utc_now(:microsecond)
-
-    grants
-    |> Enum.reduce_while({:ok, []}, fn %AccessGrant{} = grant, {:ok, grant_ids} ->
-      case grant |> AccessGrant.revoke_changeset(now) |> repo.update() do
-        {:ok, %AccessGrant{} = revoked_grant} -> {:cont, {:ok, [revoked_grant.id | grant_ids]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, grant_ids} -> {:ok, Enum.reverse(grant_ids)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp live_worker_grants(repo, work_package_id, %DateTime{} = now) do
-    repo.all(
-      from(grant in AccessGrant,
-        where: grant.work_package_id == ^work_package_id,
-        where: grant.grant_role == "worker",
-        where: is_nil(grant.revoked_at),
-        where: is_nil(grant.expires_at) or grant.expires_at > ^now,
-        order_by: [asc: grant.inserted_at, asc: grant.id]
-      )
-    )
-  end
+  defp live_runtime_reason?(reason), do: reason == "agent_run_active"
 
   defp closeout_replay?(repo, %WorkPackage{id: work_package_id}) do
     case WorkPackageRepository.get(repo, work_package_id) do
@@ -687,8 +619,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     |> put_non_empty(:blocker_reason_codes, closeout_context.blocker_reason_codes)
     |> put_non_empty(:runtime_reason_codes_before_closeout, closeout_context.runtime_reason_codes)
     |> put_non_empty(:ignored_stale_agent_run_ids, closeout_context.ignored_stale_agent_run_ids)
-    |> put_non_empty(:retired_worker_grant_ids, closeout_context.retired_worker_grant_ids)
-    |> put_non_empty(:retired_claim_lease_ids, closeout_context.retired_claim_lease_ids)
   end
 
   defp put_non_empty(payload, _key, []), do: payload

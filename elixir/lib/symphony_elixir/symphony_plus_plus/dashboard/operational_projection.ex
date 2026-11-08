@@ -1,7 +1,6 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
@@ -85,10 +84,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     runtime = Map.fetch!(context, :runtime)
     metadata = Map.fetch!(context, :metadata)
     readiness_context = Map.fetch!(context, :readiness_context)
-    grants = Map.fetch!(context, :grants)
     lineage = Map.fetch!(context, :lineage)
     missing_readiness = if work_package.status in @ready_statuses, do: missing_readiness_evidence(readiness_context), else: []
-    activity = work_package_activity(work_package, progress_events, agent_runs, runtime, metadata, grants, Map.get(context, :worker_signal))
+    activity = work_package_activity(work_package, progress_events, agent_runs, runtime, metadata, Map.get(context, :worker_signal))
 
     attention_items =
       work_package_attention_items(work_package, blockers, %{
@@ -207,7 +205,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     %{
       id: run.id,
       work_package_id: run.work_package_id,
-      access_grant_id: run.access_grant_id,
       actor_id: run.actor_id,
       status: run.status,
       runtime_state: runtime_state(run),
@@ -286,7 +283,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   end
 
   defp pickup_operational_state(status, %{has_active_worker: true}) when status != "planned" do
-    operational_state("active", "Active", "info", "Worker grant or runtime evidence indicates work is active now.", status)
+    operational_state("active", "Active", "info", "Runtime evidence indicates work is active now.", status)
   end
 
   defp pickup_operational_state(status, %{has_started: true}) when status != "planned" do
@@ -467,7 +464,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
          agent_runs,
          runtime,
          metadata,
-         grants,
          worker_signal
        ) do
     has_active_worker = match?(%{status: "active"}, worker_signal)
@@ -489,7 +485,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       has_started: has_started,
       has_active_worker: has_active_worker,
       has_prepared_worktree: has_prepared_worktree,
-      last_activity_at: latest_package_activity_at(work_package, progress_events, agent_runs, grants, has_activity),
+      last_activity_at: latest_package_activity_at(work_package, progress_events, agent_runs, has_activity),
       is_stale: has_started and not has_active_worker
     }
   end
@@ -502,14 +498,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       metadata_activity?(metadata)
   end
 
-  defp latest_package_activity_at(_work_package, _progress_events, _agent_runs, _grants, false), do: nil
+  defp latest_package_activity_at(_work_package, _progress_events, _agent_runs, false), do: nil
 
-  defp latest_package_activity_at(%WorkPackage{} = work_package, progress_events, agent_runs, grants, true) do
+  defp latest_package_activity_at(%WorkPackage{} = work_package, progress_events, agent_runs, true) do
     [
       work_package.updated_at,
       latest_progress_datetime(progress_events),
-      latest_agent_run_datetime(agent_runs),
-      latest_grant_activity_datetime(grants)
+      latest_agent_run_datetime(agent_runs)
     ]
     |> latest_datetime()
     |> timestamp()
@@ -526,12 +521,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     |> Enum.flat_map(fn %AgentRun{} = run ->
       [run.last_seen_at, run.finished_at, run.started_at, run.updated_at, run.inserted_at]
     end)
-    |> latest_datetime()
-  end
-
-  defp latest_grant_activity_datetime(grants) do
-    grants
-    |> Enum.flat_map(fn %AccessGrant{} = grant -> [grant.claimed_at, grant.updated_at, grant.inserted_at] end)
     |> latest_datetime()
   end
 

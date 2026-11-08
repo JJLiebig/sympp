@@ -404,7 +404,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCall do
 
   defp safe_tool_metadata(_context, _payload), do: {"unknown", [], 0, 0}
 
-  defp tool_specs(%{config: %Config{}} = server), do: Surface.tool_specs_for_server(server)
+  defp tool_specs(%{config: %Config{} = config}), do: {:ok, Surface.tool_specs(config)}
   defp tool_specs(%Config{}), do: {:error, :server_context_required}
 
   defp safe_argument_keys(%{"arguments" => arguments}, %{"inputSchema" => %{"properties" => properties}})

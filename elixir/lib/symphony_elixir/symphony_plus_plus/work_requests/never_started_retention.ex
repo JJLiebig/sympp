@@ -5,7 +5,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.NeverStartedRetention do
 
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{ArchitectHandoff, Repository, WorkRequest}
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{Repository, WorkRequest}
 
   # Legacy dispatches may predate dispatched_at; these states already imply execution.
 
@@ -49,22 +50,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.NeverStartedRetention do
 
   defp never_started_ids(repo, requests) do
     ids = Enum.map(requests, & &1.id)
-    anchors = Map.new(requests, &{ArchitectHandoff.anchor_id_for_work_request(&1), &1.id})
-    anchor_ids = Map.keys(anchors)
 
     started_ids =
       repo.all(
         from(package in WorkPackage,
-          where: package.work_request_id in ^ids or package.id in ^anchor_ids,
+          where: package.work_request_id in ^ids,
           where:
             not is_nil(package.dispatched_at) or package.status in ^Lifecycle.in_flight_statuses() or
-              fragment("EXISTS (SELECT 1 FROM sympp_agent_runs WHERE work_package_id = ?)", package.id) or
-              fragment("EXISTS (SELECT 1 FROM sympp_claim_leases WHERE work_package_id = ?)", package.id) or
-              fragment("EXISTS (SELECT 1 FROM sympp_access_grants WHERE work_package_id = ? AND claimed_at IS NOT NULL)", package.id),
-          select: {package.work_request_id, package.id}
+              fragment("EXISTS (SELECT 1 FROM sympp_agent_runs WHERE work_package_id = ?)", package.id),
+          select: package.work_request_id
         )
       )
-      |> MapSet.new(fn {request_id, package_id} -> request_id || Map.fetch!(anchors, package_id) end)
+      |> Enum.concat(repo.all(from(worked_on in WorkedOn, where: worked_on.subject_kind == "work_request" and worked_on.subject_id in ^ids, select: worked_on.subject_id)))
+      |> MapSet.new()
 
     Enum.reject(ids, &MapSet.member?(started_ids, &1))
   end

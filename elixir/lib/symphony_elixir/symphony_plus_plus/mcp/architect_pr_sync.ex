@@ -18,15 +18,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     PullRequestProgress
   }
 
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.Session
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, WorkPackage, WorkPackageActivity}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
 
-  @spec sync(module(), Session.t(), WorkPackage.t(), map()) :: {:ok, map()} | {:error, term()} | {:tool_error, term()}
-  def sync(repo, %Session{} = session, %WorkPackage{} = work_package, arguments)
+  @spec sync(module(), Actor.t(), WorkPackage.t(), map()) :: {:ok, map()} | {:error, term()} | {:tool_error, term()}
+  def sync(repo, %Actor{} = actor, %WorkPackage{} = work_package, arguments)
       when is_map_key(arguments, "url") or is_map_key(arguments, "number") do
     client = Application.get_env(:symphony_elixir, :sympp_github_client, DefaultClient)
 
@@ -37,7 +37,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
          :ok <- require_delivery_scope(work_package, payload),
          :ok <- require_exact_head(payload, expected_head),
          :ok <- require_merge_evidence(payload),
-         {:ok, result} <- persist(repo, session, work_package, payload, pr_facts(metadata, payload)) do
+         {:ok, result} <- persist(repo, actor, work_package, payload, pr_facts(metadata, payload)) do
       if PullRequestProgress.merged?(payload) do
         MergeReconciler.reconcile_work_package(repo, work_package.id, pr_payload: payload, client: DryClient, metadata: payload)
       else
@@ -46,14 +46,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     end
   end
 
-  def sync(repo, %Session{} = session, %WorkPackage{} = work_package, %{"head_sha" => _head} = arguments) do
+  def sync(repo, %Actor{} = actor, %WorkPackage{} = work_package, %{"head_sha" => _head} = arguments) do
     with {:ok, state} <- PlanningRepository.get_state(repo, work_package.id),
          {:ok, current} <- PullRequestProgress.current_pr_state(state.progress_events) do
-      sync(repo, session, work_package, Map.put(arguments, "url", current.ref.url))
+      sync(repo, actor, work_package, Map.put(arguments, "url", current.ref.url))
     end
   end
 
-  def sync(repo, %Session{}, %WorkPackage{} = work_package, _arguments) do
+  def sync(repo, %Actor{}, %WorkPackage{} = work_package, _arguments) do
     MergeReconciler.reconcile_work_package(repo, work_package.id)
   end
 
@@ -77,19 +77,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     if PullRequestProgress.merged?(payload), do: PullRequest.validate_merge_evidence(payload), else: :ok
   end
 
-  defp persist(repo, session, work_package, payload, pr_facts) do
+  defp persist(repo, actor, work_package, payload, pr_facts) do
     repo.transaction(fn ->
       with :ok <- lock_package(repo, work_package),
            {:ok, current} <- WorkPackageRepository.get(repo, work_package.id),
            :ok <- require_handoff(repo, current, payload),
            {:ok, candidate_head} <- candidate_head(repo, current),
-           :ok <- append_snapshot(repo, session, current, payload),
+           :ok <- append_snapshot(repo, actor, current, payload),
            {:ok, state} <- PlanningRepository.get_state(repo, current.id),
            {:ok, graph} <- ExecutionGraph.evaluate(repo, current.work_request_id),
            facts = qualification_facts(current, graph, pr_facts, candidate_head, payload),
            qualification = Lifecycle.qualification(facts),
            gates = readiness_gates(state),
-           {:ok, updated} <- reconcile_qualification(repo, session, current, qualification, gates, payload) do
+           {:ok, updated} <- reconcile_qualification(repo, actor, current, qualification, gates, payload) do
         %{status: updated.status, head_sha: payload["head_sha"], readiness_reasons: qualification_reasons(qualification) ++ gates}
       else
         {:error, reason} -> repo.rollback(reason)
@@ -146,22 +146,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
   # eligibility on the board instead of unqualifying it.
   defp readiness_gates(state), do: state |> OperationalProjection.readiness_failure_reasons() |> Enum.map(& &1["gate"])
 
-  defp reconcile_qualification(repo, session, %WorkPackage{} = package, qualification, gates, payload) do
+  defp reconcile_qualification(repo, actor, %WorkPackage{} = package, qualification, gates, payload) do
     qualifies? = qualification == :qualified and gates == []
 
     cond do
       PullRequestProgress.merged?(payload) -> {:ok, package}
       Lifecycle.dispatched?(package) and qualifies? -> Lifecycle.transition(repo, package, :qualify)
-      Lifecycle.ready?(package) and qualification != :qualified -> unqualify(repo, session, package, qualification, payload)
+      Lifecycle.ready?(package) and qualification != :qualified -> unqualify(repo, actor, package, qualification, payload)
       true -> {:ok, package}
     end
   end
 
-  defp unqualify(repo, session, %WorkPackage{} = package, qualification, payload) do
+  defp unqualify(repo, actor, %WorkPackage{} = package, qualification, payload) do
     event = %{"type" => "lifecycle", "event" => "unqualify", "reasons" => qualification_reasons(qualification), "head_sha" => payload["head_sha"]}
 
     with {:ok, updated} <- Lifecycle.transition(repo, package, :unqualify),
-         {:ok, _event} <- append_event(repo, session, package.id, event, "unqualified") do
+         {:ok, _event} <- append_event(repo, actor, package.id, event, "unqualified") do
       {:ok, updated}
     end
   end
@@ -211,21 +211,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     if runtime.active? or runtime.stale?, do: {:error, :active_runtime}, else: :ok
   end
 
-  defp append_snapshot(repo, session, work_package, payload) do
+  defp append_snapshot(repo, actor, work_package, payload) do
     branch = %{"type" => "branch", "source_tool" => "attach_branch", "branch" => payload["branch"], "head_sha" => payload["head_sha"], "observed_at" => payload["observed_at"]}
 
-    with {:ok, _branch} <- append_event(repo, session, work_package.id, branch, "branch_attached"),
-         {:ok, _attachment} <- append_event(repo, session, work_package.id, Map.put(payload, "source_tool", "attach_pr"), "pr_attached"),
-         {:ok, _snapshot} <- append_event(repo, session, work_package.id, Map.put(payload, "source_tool", "sync_pr"), "pr_synced"),
+    with {:ok, _branch} <- append_event(repo, actor, work_package.id, branch, "branch_attached"),
+         {:ok, _attachment} <- append_event(repo, actor, work_package.id, Map.put(payload, "source_tool", "attach_pr"), "pr_attached"),
+         {:ok, _snapshot} <- append_event(repo, actor, work_package.id, Map.put(payload, "source_tool", "sync_pr"), "pr_synced"),
          {:ok, _changed?} <- PullRequestArtifact.upsert(repo, work_package.id, payload) do
       :ok
     end
   end
 
-  defp append_event(repo, session, work_package_id, payload, status) do
+  defp append_event(repo, actor, work_package_id, payload, status) do
     fingerprint = :crypto.hash(:sha256, Jason.encode!(payload)) |> Base.encode16(case: :lower)
 
-    PlanningRepository.append_audit_progress_event_for_work_package(repo, session.assignment, work_package_id, %{
+    PlanningRepository.append_audit_progress_event_for_work_package(repo, actor, work_package_id, %{
       "summary" => "Architect accepted provider PR evidence",
       "status" => status,
       "idempotency_key" => "architect_pr_sync:#{status}:#{fingerprint}",

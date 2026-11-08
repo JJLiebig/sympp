@@ -3,9 +3,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext
   alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.ClaimToolText
 
-  @summary_fields ~w(action binding_cleared claimed_by grant_role id outcome reachable status summary title uri work_package_id work_request_id)
+  @summary_fields ~w(action id outcome reachable status summary title uri work_package_id work_request_id)
   @text_profile_key {__MODULE__, :text_profile}
 
   @spec with_text_profile(:canonical | :full, (-> result)) :: result when result: term()
@@ -25,12 +24,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
     payload = compact_tool_payload(payload)
     agent_tool_result(payload, fn -> WorkerContext.encode_tool_payload(payload) end)
   end
-
-  @spec claim_tool_result(term()) :: map()
-  def claim_tool_result(payload), do: result(payload, ClaimToolText.claim(payload))
-
-  @spec release_tool_result(term()) :: map()
-  def release_tool_result(payload), do: agent_tool_result(payload, fn -> ClaimToolText.release(payload) end)
 
   @spec agent_tool_result(term()) :: map()
   def agent_tool_result(payload) do
@@ -201,21 +194,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
          "results"
        ])}
 
-  defp compact_tool_entry("runtime_cleanup", key, value) when is_map(value),
-    do:
-      {key,
-       compact_status_payload(value, [
-         "status",
-         "reason",
-         "reason_code",
-         "work_package_id",
-         "revoked_worker_grant_ids",
-         "released_claim_lease_ids",
-         "cleared_session_binding_ids",
-         "cleared_mcp_session_binding_ids",
-         "reason_codes"
-       ])}
-
   defp compact_tool_entry("worker_bootstrap", key, value) when is_map(value),
     do:
       {key,
@@ -235,19 +213,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
          "preferred_skill_set",
          "supported_skill_sets",
          "required_skills"
-       ])}
-
-  defp compact_tool_entry("worker_grant", key, value),
-    do:
-      {key,
-       compact_status_payload(value, [
-         "id",
-         "grant_role",
-         "work_package_id",
-         "capabilities",
-         "expires_at",
-         "secret_in_response",
-         "worker_bootstrap"
        ])}
 
   defp compact_tool_entry(_name, key, value), do: {key, compact_tool_value(value)}

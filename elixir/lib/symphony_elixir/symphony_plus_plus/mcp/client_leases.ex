@@ -5,13 +5,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
   Bridge lease files under `codex-plugin-leases` are the runtime liveness
   authority. When the runtime opts into shutdown-on-idle, this process also
   stops the BEAM after every bridge lease is gone or stale.
+
+  A bridge running in a Herdr terminal names that terminal in its lease. Bridges
+  heartbeat every 60 seconds; a terminal whose last heartbeat is older than the
+  3-minute TTL has unknown liveness, which never ends its ownership.
   """
 
   use GenServer
 
   alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
 
-  @default_ttl_ms 10 * 60 * 1_000
+  @default_ttl_ms 3 * 60 * 1_000
   @default_sweep_ms 30 * 1_000
   @default_shutdown_delay_ms 1_000
   @actions ["attach", "heartbeat", "detach"]
@@ -53,7 +58,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
     with {:ok, client_id} <- lease_id(payload),
          {:ok, action} <- lease_action(payload),
          :ok <- ensure_started() do
-      apply_lease_action(action, client_id)
+      apply_lease_action(action, client_id, terminal_key(payload))
     end
   end
 
@@ -62,12 +67,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
   @spec attach(binary()) :: {:ok, summary()} | {:error, :unavailable}
   def attach(client_id), do: attach(client_id, __MODULE__)
 
-  @spec attach(binary(), GenServer.server()) :: {:ok, summary()} | {:error, :unavailable}
-  def attach(client_id, server), do: lease_call(server, {:attach, client_id})
+  @spec attach(binary(), GenServer.server(), String.t() | nil) :: {:ok, summary()} | {:error, :unavailable}
+  def attach(client_id, server, terminal_key \\ nil), do: lease_call(server, {:attach, client_id, terminal_key})
 
-  @spec heartbeat(binary()) :: {:ok, summary()} | {:error, :unavailable}
-  @spec heartbeat(binary(), GenServer.server()) :: {:ok, summary()} | {:error, :unavailable}
-  def heartbeat(client_id, server \\ __MODULE__), do: lease_call(server, {:heartbeat, client_id})
+  @spec heartbeat(binary(), GenServer.server(), String.t() | nil) :: {:ok, summary()} | {:error, :unavailable}
+  def heartbeat(client_id, server \\ __MODULE__, terminal_key \\ nil), do: lease_call(server, {:heartbeat, client_id, terminal_key})
+
+  @doc "Whether a bridge in this Herdr terminal sent a heartbeat within the TTL."
+  @spec terminal_live?(String.t(), GenServer.server()) :: boolean()
+  def terminal_live?(terminal_key, server \\ __MODULE__) do
+    case Process.whereis(__MODULE__) do
+      nil when server == __MODULE__ -> false
+      _pid -> lease_call(server, {:terminal_live?, terminal_key}) == true
+    end
+  end
+
+  @doc "The Herdr terminal named in a lease payload, if any."
+  @spec terminal_key(map()) :: String.t() | nil
+  def terminal_key(%{"terminal" => terminal}) do
+    case Terminal.from_meta(terminal) do
+      %Terminal{key: key} -> key
+      nil -> nil
+    end
+  end
+
+  def terminal_key(_payload), do: nil
 
   @spec detach(binary(), GenServer.server()) :: {:ok, summary()} | {:error, :unavailable}
   def detach(client_id, server \\ __MODULE__), do: lease_call(server, {:detach, client_id})
@@ -105,22 +129,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
   end
 
   @impl true
-  def handle_call({:attach, client_id}, _from, state) do
+  def handle_call({action, client_id, terminal_key}, _from, state) when action in [:attach, :heartbeat] do
     state =
       state
       |> cancel_shutdown()
-      |> record_lease(client_id)
+      |> record_lease(client_id, terminal_key)
 
     {:reply, {:ok, summary(state)}, state}
   end
 
-  def handle_call({:heartbeat, client_id}, _from, state) do
-    state =
-      state
-      |> cancel_shutdown()
-      |> record_lease(client_id)
-
-    {:reply, {:ok, summary(state)}, state}
+  def handle_call({:terminal_live?, terminal_key}, _from, state) do
+    state = prune_and_notify_idle(state, now_ms())
+    {:reply, Enum.any?(state.leases, fn {_id, lease} -> lease.terminal == terminal_key end), state}
   end
 
   def handle_call({:detach, client_id}, _from, state) do
@@ -216,9 +236,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
     end
   end
 
-  defp apply_lease_action("attach", client_id), do: normalize_lease_result(attach(client_id))
-  defp apply_lease_action("heartbeat", client_id), do: normalize_lease_result(heartbeat(client_id))
-  defp apply_lease_action("detach", client_id), do: normalize_lease_result(detach(client_id))
+  defp apply_lease_action("attach", client_id, terminal_key), do: normalize_lease_result(attach(client_id, __MODULE__, terminal_key))
+  defp apply_lease_action("heartbeat", client_id, terminal_key), do: normalize_lease_result(heartbeat(client_id, __MODULE__, terminal_key))
+  defp apply_lease_action("detach", client_id, _terminal_key), do: normalize_lease_result(detach(client_id))
 
   defp normalize_lease_result({:ok, result}), do: {:ok, result}
   defp normalize_lease_result({:error, _reason}), do: {:error, :client_lease_unavailable}
@@ -246,7 +266,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
   defp lease_action(%{"action" => action}) when action in @actions, do: {:ok, action}
   defp lease_action(_payload), do: {:error, :invalid_action}
 
-  defp record_lease(state, client_id) do
+  defp record_lease(state, client_id, terminal_key) do
     now = now_ms()
     state = prune_and_notify_idle(state, now)
     first_client? = map_size(state.leases) == 0
@@ -256,7 +276,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
       |> Map.put(:lease_seen?, true)
       |> Map.update!(:leases, fn leases ->
         bridge = get_in(leases, [client_id, :bridge]) || local_bridge(state.bridge_lease_dir, client_id)
-        Map.put(leases, client_id, %{last_seen_ms: now, bridge: bridge})
+        terminal = terminal_key || get_in(leases, [client_id, :terminal])
+        Map.put(leases, client_id, %{last_seen_ms: now, bridge: bridge, terminal: terminal})
       end)
 
     if first_client?, do: notify_dashboard_opener(state, :client_attached)

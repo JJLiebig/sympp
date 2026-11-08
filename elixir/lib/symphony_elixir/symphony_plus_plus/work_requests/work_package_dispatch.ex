@@ -3,7 +3,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext
   alias SymphonyElixir.SymphonyPlusPlus.BranchPattern
-  alias SymphonyElixir.SymphonyPlusPlus.Chiefs
   alias SymphonyElixir.SymphonyPlusPlus.CreateWork
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, LedgerNamespace}
@@ -72,7 +71,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
          {:ok, creation} <- CreateWork.activate(repo, work_package, broadcast?: false),
          {:ok, activated} <-
            creation.work_package
-           |> Ecto.Changeset.change(dispatched_by: Chiefs.attribution(Keyword.get(opts, :server)))
+           |> Ecto.Changeset.change(dispatched_by: Keyword.get(opts, :dispatched_by))
            |> repo.update(),
          creation = %{creation | work_package: activated},
          {:ok, bootstrap} <- bootstrap(repo, activated) do

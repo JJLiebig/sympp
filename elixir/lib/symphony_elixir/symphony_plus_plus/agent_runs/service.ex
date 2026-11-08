@@ -1,10 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Service do
   @moduledoc false
 
-  import Ecto.Query, only: [from: 2]
-
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository
 
@@ -20,7 +17,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Service do
         worker_host: Keyword.get(opts, :worker_host),
         worker_task_handle: Keyword.get(opts, :worker_task_handle)
       }
-      |> Map.merge(grant_binding(repo, issue))
 
     Repository.start_run(repo, attrs,
       replace_agent_run_id: Keyword.get(opts, :replace_agent_run_id),
@@ -53,48 +49,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Service do
 
   @spec mark_stopped(Repository.repo(), String.t(), String.t() | nil) :: {:ok, AgentRun.t()} | {:error, error()}
   def mark_stopped(repo, agent_run_id, reason \\ nil), do: Repository.mark_stopped(repo, agent_run_id, reason)
-
-  defp grant_binding(_repo, %Issue{assigned_to_worker: assigned_to_worker}) when assigned_to_worker != true, do: %{}
-
-  defp grant_binding(repo, %Issue{id: work_package_id, assignee_id: assignee_id}) do
-    now = DateTime.utc_now(:microsecond)
-
-    query =
-      from(grant in AccessGrant,
-        where: grant.work_package_id == ^work_package_id,
-        where: grant.grant_role == "worker",
-        where: not is_nil(grant.claimed_at),
-        where: is_nil(grant.revoked_at),
-        where: is_nil(grant.expires_at) or grant.expires_at > ^now,
-        order_by: [desc: grant.claimed_at, asc: grant.id]
-      )
-
-    query
-    |> repo.all()
-    |> select_grant_for_assignee(assignee_id)
-    |> case do
-      %AccessGrant{} = grant ->
-        %{access_grant_id: grant.id, actor_id: grant.claimed_by}
-
-      nil ->
-        %{}
-    end
-  end
-
-  defp select_grant_for_assignee(grants, assignee_id) when is_list(grants) and is_binary(assignee_id) do
-    normalized_assignee_id = normalize_actor_id(assignee_id)
-    Enum.find(grants, &(normalize_actor_id(&1.claimed_by) == normalized_assignee_id))
-  end
-
-  defp select_grant_for_assignee(_grants, _assignee_id), do: nil
-
-  defp normalize_actor_id(actor_id) when is_binary(actor_id) do
-    actor_id
-    |> String.trim()
-    |> String.downcase()
-  end
-
-  defp normalize_actor_id(_actor_id), do: ""
 
   defp compact_attrs(attrs) do
     attrs

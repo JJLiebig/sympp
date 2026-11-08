@@ -1,7 +1,6 @@
 defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.Chiefs
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
@@ -13,12 +12,12 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   alias SymphonyElixir.SymphonyPlusPlus.DeploymentObservation
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.OperatorConfig
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Retention
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.ReviewObservation
-  alias SymphonyElixir.SymphonyPlusPlus.SessionLocations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -162,8 +161,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
        |> Map.put(:work_request_details, details)
        |> Map.take([:generated_at, :work_request_details])
        |> Map.put(:work_packages, Enum.map(active.work_packages, &Map.take(&1, [:id, :active_agent_run])))
-       |> Map.put(:runtime, %{offline: OfflineSandbox.enabled?(), repos_root: SymphonyElixir.Config.factory_repos_root()})
-       |> Map.put(:chiefs, Chiefs.public_current(repo, operator_config))}
+       |> Map.put(:runtime, %{offline: OfflineSandbox.enabled?(), repos_root: SymphonyElixir.Config.factory_repos_root()})}
     end
   end
 
@@ -193,7 +191,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
         :inserted_at,
         :completed_at,
         :operator_report,
-        :architect_session_location,
+        :worked_on,
         :dispatched_by,
         :deployments
       ])
@@ -285,26 +283,25 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
 
   defp put_session_location(work_package, operator_config, projection_context) do
     session = get_in(projection_context, [:work_package_contexts, work_package.id, :current_worker_session])
-    observed = get_in(projection_context, [:package_locations, work_package.id])
-    location = SessionLocations.public(observed, operator_config) || OperatorConfig.session_location(operator_config, session)
-    if location, do: Map.put(work_package, :session_location, location), else: work_package
+
+    case OperatorConfig.session_location(operator_config, session) do
+      nil -> work_package
+      location -> Map.put(work_package, :session_location, location)
+    end
   end
 
-  defp put_work_request_location(work_request, context, projection_context) do
-    observed = get_in(projection_context, [:architect_locations, work_request.id])
-
-    case SessionLocations.public(observed, context.operator_config) do
+  # Which Herdr terminal works on the WorkRequest, with live / unknown /
+  # finished liveness.
+  defp put_work_request_location(work_request, _context, projection_context) do
+    case get_in(projection_context, [:worked_on, work_request.id]) do
       nil -> work_request
-      location -> Map.put(work_request, :architect_session_location, location)
+      owner -> Map.put(work_request, :worked_on, owner)
     end
   end
 
   defp operator_projection_context(repo, work_requests, context) do
     with {:ok, projection} <- Dashboard.operator_projection_context(repo, work_requests, context.work_packages) do
-      {:ok,
-       projection
-       |> Map.put(:architect_locations, SessionLocations.for_targets(repo, "work_request", Enum.map(work_requests, & &1.id)))
-       |> Map.put(:package_locations, SessionLocations.for_targets(repo, "work_package", Enum.map(context.work_packages, & &1.id)))}
+      {:ok, Map.put(projection, :worked_on, Ownership.owners(repo, Enum.map(work_requests, & &1.id)))}
     end
   end
 
@@ -655,7 +652,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
       inserted_at: timestamp(work_request.inserted_at),
       updated_at: timestamp(work_request.updated_at)
     }
-    |> Chiefs.put_attribution(:dispatched_by, work_request.dispatched_by)
+    |> Dashboard.put_attribution(:dispatched_by, work_request.dispatched_by)
   end
 
   @spec operator_work_request_board_details(module(), [map()], term()) :: {:ok, [map()]} | {:error, term()}

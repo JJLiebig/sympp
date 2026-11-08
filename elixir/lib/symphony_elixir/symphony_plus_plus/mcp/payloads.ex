@@ -41,7 +41,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Payloads do
         "branch_pattern" => Redactor.redact_text(work_package.branch_pattern),
         "worktree_path" => Redactor.redact_text(work_package.worktree_path)
       },
-      "worker_grant" => dispatch_worker_grant_payload(Map.fetch!(creation, :worker_grant)),
       "scope" => scope,
       "status" => %{"work_package_status" => work_package.status}
     }
@@ -50,7 +49,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Payloads do
       Map.put(payload, "worker_bootstrap", worker_bootstrap)
     else
       payload
-      |> Map.drop(["coordinates", "status", "worker_grant"])
+      |> Map.drop(["coordinates", "status"])
       |> Map.put("assignment_uri", "sympp://work-packages/#{work_package.id}/worker-bootstrap.json")
     end
   end
@@ -68,14 +67,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Payloads do
     work_package
     |> json_safe_payload()
     |> Redactor.redact_output()
-  end
-
-  @spec dispatch_worker_grant_payload(map()) :: map()
-  def dispatch_worker_grant_payload(worker_grant) when is_map(worker_grant) do
-    worker_grant
-    |> json_safe_payload()
-    |> Map.drop(["display_key", "secret", "secret_hash", "secret_handoff", "secret_returned_once", "worker_secret_handoff"])
-    |> Map.put("secret_in_response", false)
   end
 
   @spec dispatch_worker_bootstrap_payload(map() | nil) :: map() | nil

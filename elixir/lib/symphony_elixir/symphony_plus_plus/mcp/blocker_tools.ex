@@ -6,43 +6,37 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerTools do
   import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments,
     only: [
       optional_argument: 3,
-      optional_string_argument: 3,
       required_argument: 2
     ]
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.Payloads, only: [optional_payload: 1]
 
-  alias SymphonyElixir.SymphonyPlusPlus.Authorization.ActorResolver
-  alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
-  alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
-    Auth,
     Config,
     ProgressEvents,
-    Session,
     ToolResult
   }
 
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @typep mcp_tool_result :: {:ok, map()} | {:error, integer(), String.t(), map()}
 
-  @spec call(String.t(), Config.t(), Session.t() | nil, map()) :: mcp_tool_result()
-  def call("resolve_blocker", %Config{} = config, %Session{assignment: %{grant_role: "architect"}} = session, arguments) do
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_package_id} <- optional_string_argument(arguments, "work_package_id", Session.work_package_id(session)),
+  @spec call(String.t(), Config.t(), Terminal.t(), map()) :: mcp_tool_result()
+  def call("resolve_blocker", %Config{} = config, %Terminal{} = terminal, arguments) do
+    actor = Actor.from_terminal(terminal)
+
+    with {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
          {:ok, blocker_id} <- required_argument(arguments, "blocker_id"),
          {:ok, resolution} <- required_argument(arguments, "resolution"),
          {:ok, summary} <- required_argument(arguments, "summary"),
          {:ok, idempotency_key} <- required_argument(arguments, "idempotency_key"),
          {:ok, caller_payload} <- optional_payload(arguments),
-         {:ok, actor} <- actor_for_package_resource(config.repo, session, :blocker, work_package_id),
-         :ok <- PlanningService.authorize_package_action(config.repo, actor, :blocker_resolve, work_package_id, :blocker),
          idempotency_key = ["resolve_blocker", work_package_id, String.trim(idempotency_key)] |> Enum.join(":"),
          attrs = %{
            "summary" => summary,
@@ -58,17 +52,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerTools do
                "active" => false
              })
          },
-         {:ok, result} <- resolve_architect_blocker(config.repo, session, work_package_id, blocker_id, attrs, idempotency_key) do
+         {:ok, result} <- resolve_architect_blocker(config.repo, actor, work_package_id, blocker_id, attrs, idempotency_key) do
       {:ok, result}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "resolve_blocker", "reason" => reason}}
       {:error, reason} -> architect_error(reason, "resolve_blocker")
-    end
-  end
-
-  defp actor_for_package_resource(repo, %Session{} = session, resource_type, work_package_id) do
-    with {:ok, target} <- PlanningService.package_resource_target(repo, work_package_id, resource_type) do
-      ActorResolver.from_session(session, PlanningService.package_surface_actor_opts(session.assignment, target))
     end
   end
 
@@ -81,45 +69,44 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerTools do
     end
   end
 
-  defp resolve_architect_blocker(repo, %Session{} = session, work_package_id, blocker_id, attrs, idempotency_key) do
+  defp resolve_architect_blocker(repo, %Actor{} = actor, work_package_id, blocker_id, attrs, idempotency_key) do
     run_architect_transaction(repo, fn ->
-      with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
-           :ok <- lock_work_package(repo, work_package_id) do
-        replay_or_resolve_architect_blocker(repo, session, work_package_id, blocker_id, attrs, idempotency_key)
+      with :ok <- lock_work_package(repo, work_package_id) do
+        replay_or_resolve_architect_blocker(repo, actor, work_package_id, blocker_id, attrs, idempotency_key)
       end
     end)
   end
 
-  defp replay_or_resolve_architect_blocker(repo, %Session{} = session, work_package_id, blocker_id, attrs, idempotency_key) do
+  defp replay_or_resolve_architect_blocker(repo, %Actor{} = actor, work_package_id, blocker_id, attrs, idempotency_key) do
     case ProgressEvents.existing_for_work_package(repo, work_package_id, idempotency_key) do
       {:ok, event} ->
         {:ok, ToolResult.tool_result(%{"progress_event" => ProgressEvents.payload(event)})}
 
       {:error, :not_found} ->
-        resolve_new_architect_blocker(repo, session, work_package_id, blocker_id, attrs)
+        resolve_new_architect_blocker(repo, actor, work_package_id, blocker_id, attrs)
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp resolve_new_architect_blocker(repo, %Session{} = session, work_package_id, blocker_id, attrs) do
+  defp resolve_new_architect_blocker(repo, %Actor{} = actor, work_package_id, blocker_id, attrs) do
     with {:ok, progress_events} <- PlanningRepository.list_progress_events(repo, work_package_id) do
       case Enum.find(BlockerProjection.blockers(progress_events), &(&1.id == blocker_id)) do
-        %{active: true} -> append_architect_blocker_resolution(repo, session, work_package_id, attrs)
+        %{active: true} -> append_architect_blocker_resolution(repo, actor, work_package_id, attrs)
         %{} -> {:ok, ToolResult.tool_result(%{"already_resolved" => true, "blocker_id" => blocker_id})}
         nil -> {:tool_error, "blocker_not_found"}
       end
     end
   end
 
-  defp append_architect_blocker_resolution(repo, %Session{} = session, work_package_id, attrs) do
+  defp append_architect_blocker_resolution(repo, %Actor{} = actor, work_package_id, attrs) do
     with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
          :ok <- reject_ready_blocker_provenance(work_package, attrs),
          {:ok, event} <-
            PlanningRepository.append_audit_progress_event_for_work_package(
              repo,
-             session.assignment,
+             actor,
              work_package_id,
              attrs
            ) do
@@ -148,15 +135,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerTools do
 
   defp architect_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
   defp architect_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)
-  defp architect_error(:expired, resource), do: auth_error({:unauthorized, :expired}, resource)
-  defp architect_error(:assignment_revoked, resource), do: auth_error({:unauthorized, :revoked}, resource)
-  defp architect_error(:architect_grant_required, resource), do: auth_error({:unauthorized, :architect_grant_required}, resource)
-  defp architect_error(:insufficient_capability, resource), do: auth_error({:unauthorized, :insufficient_capability}, resource)
-  defp architect_error({:authorization_policy_denied, %Decision{} = decision}, resource), do: MCPError.from_decision(decision, resource)
-  defp architect_error({:authorization_policy_denied, code, message, data}, _resource), do: {:error, code, message, data}
-  defp architect_error(:phase_scope_not_available, resource), do: auth_error(:forbidden, resource)
-  defp architect_error({:phase_scope_not_available, _missing_evidence}, resource), do: auth_error(:forbidden, resource)
-  defp architect_error(:ambiguous_phase_scope, resource), do: auth_error(:forbidden, resource)
   defp architect_error({:work_request_terminal, _terminal_state}, resource), do: auth_error(:forbidden, resource)
   defp architect_error(:forbidden, resource), do: auth_error(:forbidden, resource)
   defp architect_error({:service_unavailable, _reason} = reason, resource), do: auth_error(reason, resource)

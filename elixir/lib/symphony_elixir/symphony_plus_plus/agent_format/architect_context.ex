@@ -15,14 +15,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
     |> encode_agent_payload()
   end
 
-  @spec encode_handoff_reference(map()) :: String.t()
-  def encode_handoff_reference(reference_identifiers) when is_map(reference_identifiers) do
-    reference_identifiers
-    |> handoff_reference_payload()
-    |> Redactor.redact_output()
-    |> encode_agent_payload()
-  end
-
   defp agent_payload(payload, :work_request_read), do: work_request_read_payload(payload)
 
   defp agent_payload(payload, :work_request_product_tree),
@@ -30,9 +22,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
 
   defp agent_payload(payload, :work_request_delivery_board),
     do: delivery_board_agent_payload(payload)
-
-  defp agent_payload(payload, :create_work_request_handoff),
-    do: create_work_request_handoff_payload(payload)
 
   defp agent_payload(payload, _kind), do: payload
 
@@ -79,41 +68,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
       "scope" => payload |> map_value("scope") |> primitive_map(),
       "counts" => board |> map_value("counts") |> primitive_map(),
       "work_packages" => board |> map_value("work_packages") |> list_rows(&delivery_work_package_row/1)
-    }
-  end
-
-  defp create_work_request_handoff_payload(payload) do
-    handoff = map_value(payload, "architect_handoff") || %{}
-
-    %{
-      "agent_context" => "create_work_request_handoff",
-      "status" => text_value(map_value(payload, "status")),
-      "work_request" => payload |> map_value("work_request") |> compact_work_request(),
-      "claim" => payload |> map_value("claim") |> claim_row(),
-      "handoff" => %{
-        "status" => text_value(map_value(handoff, "status")),
-        "phase_id" => handoff |> map_value("phase") |> map_value("id") |> text_value(),
-        "anchor_package_id" => handoff |> map_value("anchor_package") |> map_value("id") |> text_value(),
-        "agent_context_present" => is_binary(map_value(handoff, "agent_context"))
-      },
-      "launch_prompt" => exact_text_value(map_value(payload, "launch_prompt"))
-    }
-  end
-
-  defp handoff_reference_payload(reference_identifiers) do
-    local_claim = map_value(reference_identifiers, "local_architect_claim")
-
-    %{
-      "agent_context" => "architect_handoff_reference",
-      "work_request_id" => exact_text_value(map_value(reference_identifiers, "work_request_id")),
-      "repo" => exact_text_value(map_value(reference_identifiers, "repo")),
-      "base_branch" => exact_text_value(map_value(reference_identifiers, "base_branch")),
-      "phase_id" => exact_text_value(map_value(reference_identifiers, "phase_id")),
-      "architect_anchor_work_package_id" => exact_text_value(map_value(reference_identifiers, "architect_anchor_work_package_id")),
-      "ledger_database" => exact_text_value(map_value(reference_identifiers, "ledger_database")),
-      "claim_tool" => handoff_claim_tool(local_claim),
-      "claim_required_runtime_arguments" => local_claim |> map_value("required_runtime_arguments") |> join_list_lossless(),
-      "local_architect_claim_arguments" => local_claim |> map_value("arguments") |> primitive_map_lossless()
     }
   end
 
@@ -314,22 +268,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
     |> reject_nil_values()
   end
 
-  defp claim_row(nil), do: %{}
-
-  defp claim_row(%{} = claim) do
-    %{
-      "tool" => text_value(map_value(claim, "tool")),
-      "claimed_by" => text_value(map_value(claim, "claimed_by")),
-      "required_runtime_arguments" => claim |> map_value("required_runtime_arguments") |> join_list(),
-      "arguments" => claim |> map_value("arguments") |> primitive_map()
-    }
-  end
-
-  defp claim_row(_value), do: %{}
-
-  defp handoff_claim_tool(%{} = local_claim), do: text_value(map_value(local_claim, "tool"))
-  defp handoff_claim_tool(_local_claim), do: nil
-
   defp list_rows(values, mapper) when is_list(values), do: Enum.map(values, mapper)
   defp list_rows(_values, _mapper), do: []
 
@@ -338,12 +276,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
   end
 
   defp primitive_map(_value), do: %{}
-
-  defp primitive_map_lossless(%{} = map) do
-    Map.new(map, fn {key, value} -> {to_string(key), primitive_value_lossless(value)} end)
-  end
-
-  defp primitive_map_lossless(_value), do: %{}
 
   defp primitive_value(value) when is_binary(value), do: text_value(value)
 
@@ -354,16 +286,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
   defp primitive_value(%{} = map), do: "#{map_size(map)} keys"
   defp primitive_value(value) when is_atom(value), do: Atom.to_string(value)
   defp primitive_value(value), do: inspect(value)
-
-  defp primitive_value_lossless(value) when is_binary(value), do: value
-
-  defp primitive_value_lossless(value)
-       when is_boolean(value) or is_number(value) or is_nil(value), do: value
-
-  defp primitive_value_lossless(values) when is_list(values), do: join_list_lossless(values)
-  defp primitive_value_lossless(%{} = map), do: "#{map_size(map)} keys"
-  defp primitive_value_lossless(value) when is_atom(value), do: Atom.to_string(value)
-  defp primitive_value_lossless(value), do: inspect(value)
 
   defp text_value(nil), do: nil
 
@@ -380,12 +302,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
   defp text_value(value) when is_atom(value), do: Atom.to_string(value)
   defp text_value(value) when is_number(value) or is_boolean(value), do: to_string(value)
   defp text_value(value), do: inspect(value)
-
-  defp exact_text_value(nil), do: nil
-  defp exact_text_value(value) when is_binary(value), do: value
-  defp exact_text_value(value) when is_atom(value), do: Atom.to_string(value)
-  defp exact_text_value(value) when is_number(value) or is_boolean(value), do: to_string(value)
-  defp exact_text_value(value), do: inspect(value)
 
   defp integer_value(value) when is_integer(value), do: value
 
@@ -423,15 +339,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
   end
 
   defp detail_list(_values), do: []
-
-  defp join_list_lossless(values) when is_list(values) do
-    values
-    |> Enum.map(&exact_text_value/1)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.join(", ")
-  end
-
-  defp join_list_lossless(_values), do: nil
 
   defp attention_items(%{} = operational_state) do
     operational_state

@@ -528,7 +528,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore do
   end
 
   defp persistable?(%Server{initialized: true}), do: true
-  defp persistable?(%Server{session: session}) when not is_nil(session), do: true
   defp persistable?(%Server{}), do: false
 
   defp cleanup(%{entries: entries, ttl_ms: ttl_ms} = state) do

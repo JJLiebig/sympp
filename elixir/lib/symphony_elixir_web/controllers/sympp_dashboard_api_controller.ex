@@ -6,17 +6,16 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
-  alias SymphonyElixir.SymphonyPlusPlus.Authorization.Target
+  alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit.Target
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
   alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
-  alias SymphonyElixir.SymphonyPlusPlus.SessionFocus
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixirWeb.Endpoint
   alias SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions
@@ -476,6 +475,34 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     )
   end
 
+  @doc """
+  Operator Release: ends a WorkRequest's live ownership, for an owner that
+  crashed on a machine the factory can't see. The next owner-gated write from
+  any Herdr terminal takes it.
+  """
+  @spec operator_release_work_request(Conn.t(), map()) :: Conn.t()
+  def operator_release_work_request(conn, %{"work_request_id" => work_request_id}) do
+    send_local_operator_response(
+      conn,
+      :dangerous_override,
+      work_request_target(work_request_id),
+      :operator_release_work_request,
+      fn repo ->
+        case Ownership.release(repo, work_request_id) do
+          {:ok, released} ->
+            payload = %{work_request_id: work_request_id, released: Ownership.public(released)}
+            json(conn, mutation_success_payload(payload, %{work_request_id: work_request_id}))
+
+          {:error, :not_owned} ->
+            conn |> put_status(409) |> json(%{error: "not_owned", message: "No terminal works on this WorkRequest."})
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      end
+    )
+  end
+
   @spec operator_clear_work_package_blocker(Conn.t(), map()) :: Conn.t()
   def operator_clear_work_package_blocker(conn, %{"work_package_id" => work_package_id, "blocker_id" => blocker_id} = params) do
     send_local_operator_response(
@@ -549,25 +576,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     end
   end
 
-  @spec operator_create_architect_handoff(Conn.t(), map()) :: Conn.t()
-  def operator_create_architect_handoff(conn, %{"work_request_id" => work_request_id}) do
-    send_local_operator_response(
-      conn,
-      :dangerous_rekey,
-      work_request_target(work_request_id),
-      :operator_create_architect_handoff,
-      fn repo ->
-        with {:ok, handoff} <-
-               ArchitectHandoff.create_or_replay(repo, work_request_id,
-                 local_operator?: true,
-                 handoff_opts: LocalOperatorActions.architect_handoff_opts(repo)
-               ) do
-          json(conn, mutation_success_payload(%{architect_handoff: handoff}, %{work_request_id: work_request_id}))
-        end
-      end
-    )
-  end
-
   @spec operator_dispatch_work_package(Conn.t(), map()) :: Conn.t()
   def operator_dispatch_work_package(conn, %{"work_request_id" => work_request_id, "work_package_id" => work_package_id}) do
     send_local_operator_response(
@@ -591,32 +599,10 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     )
   end
 
-  @spec operator_focus_work_package(Conn.t(), map()) :: Conn.t()
-  def operator_focus_work_package(conn, %{"work_package_id" => id}), do: focus_session(conn, "work_package", id)
-
-  @spec operator_focus_work_request(Conn.t(), map()) :: Conn.t()
-  def operator_focus_work_request(conn, %{"work_request_id" => id}), do: focus_session(conn, "work_request", id)
-
-  defp focus_session(conn, target_kind, target_id) do
-    cond do
-      OfflineSandbox.enabled?() ->
-        conn |> put_status(403) |> json(%{error: "This action is unavailable in the offline beta sandbox."})
-
-      not local_operator_browser?(conn) ->
-        error_response(conn, :unauthorized)
-
-      true ->
-        case Runtime.with_dashboard_repo(&SessionFocus.focus(&1, target_kind, target_id), migrate?: false) do
-          {:error, reason} -> error_response(conn, reason)
-          result -> json(conn, result)
-        end
-    end
-  end
-
   defp send_local_operator_response(conn, action, %Target{} = target, tool, fun)
        when is_atom(action) and is_atom(tool) and is_function(fun, 1) do
     if OfflineSandbox.enabled?() and
-         tool in [:operator_sync_github_prs, :operator_create_architect_handoff, :operator_dispatch_work_package] do
+         tool in [:operator_sync_github_prs, :operator_dispatch_work_package] do
       conn |> put_status(403) |> json(%{error: "This action is unavailable in the offline beta sandbox."})
     else
       send_online_or_local_response(conn, action, target, tool, fun)
@@ -808,7 +794,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   defp error_response(conn, :active_blocker), do: error_response(conn, 412, "active_blocker", "Closeout is blocked by active blockers")
   defp error_response(conn, :active_runtime), do: error_response(conn, 412, "active_runtime", "Closeout is blocked by active worker state")
-  defp error_response(conn, :claim_not_current), do: error_response(conn, 412, "runtime_lease_conflict", "Closeout runtime state changed; retry the action")
   defp error_response(conn, :stale_status), do: error_response(conn, 409, "stale_status", "WorkPackage status changed; refresh and retry")
   defp error_response(conn, :work_package_scope_mismatch), do: error_response(conn, :not_found)
   defp error_response(conn, :work_package_mismatch), do: error_response(conn, 409, "work_package_mismatch", "WorkPackage no longer matches its WorkPackage")

@@ -2,7 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{SoloTools, ToolCatalog}
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.{PlanNode, Renderer}
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{WorkPackage, WorkPackageDelivery}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{DecisionLogEntry, WorkRequest}
 
@@ -15,18 +15,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   def solo_tool_input_schema(name), do: SoloTools.input_schema(name)
 
   @spec bootstrap_tool_input_schema(tool_name()) :: input_schema()
-  def bootstrap_tool_input_schema("register_chief") do
-    schema(
-      %{
-        "domain" => string_schema(),
-        "repos" => %{"type" => "array", "items" => string_schema()},
-        "session_description" => session_description_schema()
-      },
-      ["domain"]
-    )
-    |> Map.put("additionalProperties", true)
-  end
-
   def bootstrap_tool_input_schema("create_work_request") do
     schema(
       %{
@@ -42,11 +30,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         },
         "constraints" => object_schema(),
         "status" => string_enum_schema(WorkRequest.statuses()),
-        "claimed_by" => string_schema(),
+        "own" => boolean_schema() |> Map.put("description", "Make the calling terminal the owner (default true). Pass false when handing the WorkRequest to an architect."),
         "creator_kind" => string_enum_schema(WorkRequest.creator_kinds()),
         "creator_name" => string_schema(),
-        "created_via" => string_schema(),
-        "session_description" => session_description_schema()
+        "created_via" => string_schema()
       },
       ["base_branch", "title", "request_kind", "description"]
     )
@@ -67,7 +54,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
           markdown_string_schema("Non-secret Markdown note on scope or delivery impact.")
           |> Map.put("maxLength", @local_operator_text_max_length),
         "created_by" =>
-          described_string_schema("Optional provenance override. Required without a live claim; otherwise defaults to the claimed actor.")
+          described_string_schema("Optional provenance override. Defaults to the calling terminal.")
           |> Map.put("maxLength", @local_operator_provenance_max_length),
         "source_id" =>
           described_string_schema("Optional local source id, such as a PR review or operator note id.")
@@ -79,123 +66,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
 
   def local_operator_tool_input_schema("summarize_failed_mcp_calls"), do: schema(%{}, [])
 
-  @spec local_architect_assignment_claim_tool_input_schema() :: input_schema()
-  def local_architect_assignment_claim_tool_input_schema do
-    schema(
-      %{
-        "work_request_id" => string_schema(),
-        "architect_anchor_work_package_id" => string_schema(),
-        "repo" => string_schema(),
-        "base_branch" => string_schema(),
-        "phase_id" => string_schema(),
-        "caller_id" => string_schema(),
-        "session_description" => session_description_schema(),
-        "claimed_by" => string_schema()
-      },
-      ["work_request_id"]
-    )
-  end
-
-  @spec assignment_release_tool_input_schema() :: input_schema()
-  def assignment_release_tool_input_schema do
-    schema(%{"reason" => described_string_schema("Optional non-secret release reason; secrets are redacted before storage.")}, [])
-  end
-
-  @spec worker_tool_input_schema(tool_name()) :: input_schema()
-  def worker_tool_input_schema("claim_local_assignment") do
-    schema(
-      %{
-        "work_package_id" => string_schema(),
-        "session_description" => session_description_schema(),
-        "claimed_by" => string_schema()
-      },
-      ["work_package_id"]
-    )
-  end
-
-  def worker_tool_input_schema("get_current_assignment") do
-    schema(%{"session_description" => session_description_schema()}, [])
-  end
-
-  def worker_tool_input_schema(name) when name in ["read_context", "read_task_plan"] do
-    schema(%{}, [])
-  end
-
-  def worker_tool_input_schema("mark_ready") do
-    schema(%{}, [])
-  end
-
-  def worker_tool_input_schema("read_work_package_document") do
-    schema(
-      %{
-        "document" => string_enum_schema(Renderer.virtual_files()),
-        "detail" => payload_detail_schema(),
-        "before_sequence" => integer_schema() |> Map.put("minimum", 1)
-      },
-      ["document"]
-    )
-    |> Map.put("additionalProperties", true)
-  end
-
-  def worker_tool_input_schema("update_task_plan") do
-    schema(
-      %{
-        "expected_version" => integer_schema(),
-        "nodes" => plan_nodes_schema()
-      },
-      ["expected_version", "nodes"]
-    )
-  end
-
-  def worker_tool_input_schema("append_finding") do
-    schema(
-      session_scoped_properties(%{
-        "body" => markdown_string_schema("Human-facing finding details in Markdown."),
-        "id" => string_schema(),
-        "idempotency_key" => string_schema(),
-        "severity" => string_schema(),
-        "title" => string_schema()
-      }),
-      ["title", "body", "idempotency_key"]
-    )
-  end
-
-  def worker_tool_input_schema("append_progress") do
-    schema(progress_properties(), ["summary", "idempotency_key"])
-  end
-
-  def worker_tool_input_schema("attach_branch") do
-    schema(metadata_properties(%{"branch" => string_schema(), "head_sha" => string_schema()}), ["head_sha"])
-  end
-
-  def worker_tool_input_schema("attach_pr") do
-    schema(metadata_properties(pr_metadata_properties()), [])
-    |> require_pr_identity_and_head()
-  end
-
-  def worker_tool_input_schema("sync_pr") do
-    schema(metadata_properties(sync_pr_metadata_properties()), [])
-  end
-
-  @spec unbound_worker_tool_input_schema(tool_name()) :: input_schema()
-  def unbound_worker_tool_input_schema("update_task_plan"), do: worker_tool_input_schema("update_task_plan")
-
-  def unbound_worker_tool_input_schema(name) do
-    schema = worker_tool_input_schema(name)
-
-    if ToolCatalog.hidden_worker_argument_keys(name) == ["work_package_id"] do
-      put_in(schema, ["properties", "work_package_id"], string_schema())
-    else
-      schema
-    end
-  end
-
+  @doc """
+  The published input schema of an architect tool. A tool that names its
+  WorkRequest only through `work_request_id` requires it; one that also takes
+  a required `work_package_id` may omit it.
+  """
   @spec architect_tool_input_schema(tool_name()) :: input_schema()
-  def architect_tool_input_schema("read_task_plan") do
+  def architect_tool_input_schema(name), do: name |> architect_schema() |> require_work_request_target()
+
+  defp require_work_request_target(%{"properties" => %{"work_request_id" => _}, "required" => required} = schema) do
+    if "work_package_id" in required or "work_request_id" in required,
+      do: schema,
+      else: %{schema | "required" => ["work_request_id" | required]}
+  end
+
+  defp require_work_request_target(schema), do: schema
+
+  defp architect_schema("read_task_plan") do
     schema(%{"work_package_id" => string_schema()}, ["work_package_id"])
   end
 
-  def architect_tool_input_schema("update_task_plan") do
+  defp architect_schema("update_task_plan") do
     schema(
       %{
         "work_package_id" => string_schema(),
@@ -206,7 +97,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("append_finding") do
+  defp architect_schema("append_finding") do
     schema(
       scoped_properties(%{
         "body" => markdown_string_schema("Human-facing finding details in Markdown."),
@@ -219,11 +110,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("append_progress") do
+  defp architect_schema("append_progress") do
     schema(progress_properties(:explicit), ["work_package_id", "summary", "idempotency_key"])
   end
 
-  def architect_tool_input_schema("list_work_requests") do
+  defp architect_schema("list_work_requests") do
     schema(
       %{
         "status" => string_schema(),
@@ -234,11 +125,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("read_work_request") do
-    schema(%{"work_request_id" => string_schema(), "session_description" => session_description_schema(), "detail" => payload_detail_schema()}, ["work_request_id"])
+  defp architect_schema("read_work_request") do
+    schema(%{"work_request_id" => string_schema(), "detail" => payload_detail_schema()}, ["work_request_id"])
   end
 
-  def architect_tool_input_schema("read_plan") do
+  defp architect_schema("read_plan") do
     schema(
       %{
         "work_request_id" => described_string_schema("Scoped WorkRequest id to project."),
@@ -252,7 +143,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("read_delivery_board") do
+  defp architect_schema("read_delivery_board") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -262,7 +153,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("sync_pr") do
+  defp architect_schema("sync_pr") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -277,7 +168,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     |> Map.put("additionalProperties", true)
   end
 
-  def architect_tool_input_schema("attach_branch") do
+  defp architect_schema("attach_branch") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -289,7 +180,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("reconcile_work_request") do
+  defp architect_schema("reconcile_work_request") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -297,26 +188,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "apply" =>
           boolean_schema()
           |> Map.put("description", "When false or omitted, only report proposed closeout repairs. When true, apply through record_work_package_delivery."),
-        "recorded_by" => described_string_schema("Optional closeout actor for applied repairs. Defaults to the claimed architect identity.")
+        "recorded_by" => described_string_schema("Optional closeout actor for applied repairs. Defaults to the calling terminal.")
       },
       []
     )
   end
 
-  def architect_tool_input_schema("force_release_work_package_claim") do
-    schema(
-      %{
-        "work_package_id" => described_string_schema("WorkPackage whose worker claim must be released, including outside the architect's current WorkRequest."),
-        "reason" => described_string_schema("Audit reason for force-releasing the worker claim.")
-      },
-      ["work_package_id", "reason"]
-    )
-  end
-
-  def architect_tool_input_schema(tool) when tool in ["cleanup_work_request_work_package_runtime", "revoke_work_package_worker_key"],
-    do: delivery_runtime_tool_input_schema(tool)
-
-  def architect_tool_input_schema("record_work_package_delivery") do
+  defp architect_schema("record_work_package_delivery") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -329,14 +207,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
             "How the WorkPackage ended. finished ends a dispatched or ready package whose PR waits on someone else; it completes the WorkRequest but never satisfies dependents. skipped ends a planned package."
           ),
         "idempotency_key" => described_string_schema("Stable caller-provided key for replay. Reusing the same key and evidence returns the existing delivery; conflicting evidence is rejected."),
-        "recorded_by" => described_string_schema("Optional closeout actor. Defaults to the claimed architect identity."),
+        "recorded_by" => described_string_schema("Optional closeout actor. Defaults to the calling terminal."),
         "evidence" => work_package_delivery_evidence_schema()
       },
       ["work_package_id", "outcome", "idempotency_key"]
     )
   end
 
-  def architect_tool_input_schema("resolve_blocker") do
+  defp architect_schema("resolve_blocker") do
     schema(
       progress_properties(:explicit)
       |> Map.merge(%{
@@ -344,11 +222,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "resolution" => string_schema(),
         "status" => string_enum_schema(["resolved"])
       }),
-      ["blocker_id", "resolution", "summary", "idempotency_key"]
+      ["work_package_id", "blocker_id", "resolution", "summary", "idempotency_key"]
     )
   end
 
-  def architect_tool_input_schema("set_work_request_status") do
+  defp architect_schema("set_report") do
+    nullable_text = %{"type" => ["string", "null"], "description" => "New text; null clears it."}
+
+    schema(
+      %{
+        "work_request_id" => string_schema(),
+        "brief" => nullable_text,
+        "eta" => nullable_text,
+        "parking" => %{
+          "type" => ["object", "null"],
+          "additionalProperties" => false,
+          "properties" => %{"reason" => string_schema()},
+          "required" => ["reason"],
+          "description" => "Why the WorkRequest is parked; null records that it resumed."
+        }
+      },
+      ["work_request_id"]
+    )
+  end
+
+  defp architect_schema("set_work_request_status") do
     schema(
       %{
         "work_request_id" => string_schema(),
@@ -359,7 +257,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("ask_question") do
+  defp architect_schema("ask_question") do
     schema(
       %{
         "work_request_id" => string_schema(),
@@ -373,7 +271,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("answer_question") do
+  defp architect_schema("answer_question") do
     schema(
       %{
         "work_request_id" => string_schema(),
@@ -386,7 +284,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("answer_question_and_record_decision") do
+  defp architect_schema("answer_question_and_record_decision") do
     schema(
       %{
         "work_request_id" => string_schema(),
@@ -405,7 +303,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("close_question") do
+  defp architect_schema("close_question") do
     schema(
       %{
         "work_request_id" => string_schema(),
@@ -416,7 +314,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("record_decision") do
+  defp architect_schema("record_decision") do
     schema(
       %{
         "work_request_id" => string_schema(),
@@ -431,7 +329,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("slice_work_request") do
+  defp architect_schema("slice_work_request") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -445,7 +343,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("update_work_package") do
+  defp architect_schema("update_work_package") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -457,9 +355,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("upsert_group"), do: upsert_group_schema()
+  defp architect_schema("upsert_group"), do: upsert_group_schema()
 
-  def architect_tool_input_schema("delete_group") do
+  defp architect_schema("delete_group") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -469,9 +367,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("upsert_dependency"), do: upsert_dependency_schema()
+  defp architect_schema("upsert_dependency"), do: upsert_dependency_schema()
 
-  def architect_tool_input_schema("delete_dependency") do
+  defp architect_schema("delete_dependency") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -481,7 +379,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("skip_work_package") do
+  defp architect_schema("skip_work_package") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -491,7 +389,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("dispatch_work_package") do
+  defp architect_schema("dispatch_work_package") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -503,45 +401,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     |> Map.put("additionalProperties", true)
   end
 
-  def architect_tool_input_schema("prepare_work_package_worktree") do
+  defp architect_schema("prepare_work_package_worktree") do
     schema(
       %{
+        "work_request_id" => current_work_request_id_schema(),
         "work_package_id" => string_schema(),
         "target_repo_root" => described_string_schema("Local factory checkout override. Omit for remote factories, which resolve the WorkPackage remote under their repos root."),
         "branch" =>
           described_string_schema("Optional branch override. Omit it to derive a package-unique branch from the WorkPackage id or branch_pattern template. Exact branch patterns are used unchanged.")
       },
       ["work_package_id"]
-    )
-  end
-
-  defp delivery_runtime_tool_input_schema("cleanup_work_request_work_package_runtime") do
-    schema(
-      %{
-        "work_request_id" => current_work_request_id_schema(),
-        "work_package_id" => described_string_schema("Dispatched WorkPackage whose runtime artifacts are being cleaned up."),
-        "outcome" =>
-          ["superseded", "abandoned"]
-          |> string_enum_schema()
-          |> Map.put("description", "Delivery outcome being prepared. cleanup_work_request_work_package_runtime only supports superseded or abandoned closeout cleanup."),
-        "reason" => described_string_schema("Redacted audit reason for recycling linked worker runtime before delivery closeout."),
-        "successor_work_package_id" => described_string_schema("Required for outcome superseded; must belong to the same WorkRequest."),
-        "superseded_reason" => markdown_string_schema("Required Markdown reason for outcome superseded."),
-        "abandoned_rationale" => markdown_string_schema("Required Markdown rationale for outcome abandoned.")
-      },
-      ["work_package_id", "outcome", "reason"]
-    )
-  end
-
-  defp delivery_runtime_tool_input_schema("revoke_work_package_worker_key") do
-    schema(
-      %{
-        "work_request_id" => current_work_request_id_schema(),
-        "work_package_id" => described_string_schema("Dispatched WorkPackage whose worker grant is being revoked."),
-        "grant_id" => described_string_schema("Live worker grant id for the WorkPackage. Raw worker secrets are never accepted or returned."),
-        "reason" => described_string_schema("Redacted audit reason for revoking the worker grant during recut, recycle, or delivery closeout cleanup.")
-      },
-      ["work_package_id", "grant_id", "reason"]
     )
   end
 
@@ -576,42 +445,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   defp work_package_delivery_evidence_field_schema(%{type: :positive_integer, description: description}),
     do: positive_integer_schema() |> Map.put("description", description)
 
-  @spec explicit_work_request_architect_tool_input_schema(tool_name()) :: input_schema()
-  def explicit_work_request_architect_tool_input_schema(name) do
-    schema = architect_tool_input_schema(name)
-
-    schema
-    |> put_in(["required"], ["work_request_id" | schema["required"]])
-    |> put_in(["properties", "work_request_id"], explicit_work_request_id_schema())
-  end
-
   defp schema(properties, required) do
     %{"type" => "object", "additionalProperties" => false, "properties" => properties, "required" => required}
   end
 
-  defp always_validate(schema, constraint), do: Map.merge(schema, %{"if" => %{}, "then" => constraint})
-
-  defp require_pr_identity_and_head(schema) do
-    always_validate(schema, %{
-      "allOf" => [
-        %{"anyOf" => [%{"required" => ["url"]}, %{"required" => ["number"]}]},
-        %{
-          "anyOf" => [
-            %{"required" => ["head_sha"]},
-            %{"required" => ["metadata"], "properties" => %{"metadata" => metadata_head_schema()}}
-          ]
-        }
-      ]
-    })
-  end
-
   defp scoped_properties(properties), do: Map.put(properties, "work_package_id", string_schema())
-  defp session_scoped_properties(properties), do: properties
 
-  defp progress_properties(scope \\ :session)
-
-  defp progress_properties(:session) do
-    session_scoped_properties(%{
+  defp progress_properties(:explicit) do
+    scoped_properties(%{
       "summary" => string_schema(),
       "body" => markdown_nullable_string_schema("Optional human-facing Markdown body."),
       "status" => string_schema(),
@@ -620,91 +461,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     })
   end
 
-  defp progress_properties(:explicit), do: progress_properties(:session) |> scoped_properties()
-
-  defp metadata_properties(properties) do
-    properties
-    |> Map.merge(%{
-      "body" => markdown_nullable_string_schema("Optional human-facing Markdown body."),
-      "idempotency_key" => string_schema(),
-      "payload" => object_schema(),
-      "status" => string_schema(),
-      "summary" => string_schema()
-    })
-    |> session_scoped_properties()
-  end
-
-  defp pr_metadata_properties do
-    %{
-      "url" => string_schema(),
-      "number" => pr_number_schema(),
-      "repository" => string_schema(),
-      "head_sha" => string_schema(),
-      "metadata" => object_schema()
-    }
-  end
-
-  defp sync_pr_metadata_properties do
-    pr_metadata_properties()
-    |> Map.take(~w(url number repository))
-    |> Map.put("recovery", sync_pr_recovery_schema())
-  end
-
-  defp sync_pr_recovery_schema do
-    %{
-      "type" => "object",
-      "additionalProperties" => false,
-      "properties" => %{
-        "url" => string_schema(),
-        "html_url" => string_schema(),
-        "number" => pr_number_schema(),
-        "repository" => string_schema(),
-        "head_sha" => nonblank_string_schema(),
-        "branch" => string_schema(),
-        "base_branch" => string_schema(),
-        "base_sha" => string_schema(),
-        "changed_files" => changed_files_schema(),
-        "changed_files_count" => nonnegative_integer_schema(),
-        "check_summary" => canonical_status_schema(~w(passing failing pending unknown)),
-        "review_state" => canonical_status_schema(~w(approved changes_requested review_required unknown)),
-        "merge_state" => canonical_merge_state_schema(),
-        "merged_at" => string_schema(),
-        "merge_commit_sha" => string_schema(),
-        "observed_at" => string_schema(),
-        "provider_reference" => string_schema()
-      },
-      "allOf" => [
-        %{"anyOf" => [%{"required" => ["url"]}, %{"required" => ["html_url"]}, %{"required" => ["number", "repository"]}]},
-        %{"required" => ["head_sha"]}
-      ]
-    }
-  end
-
-  defp canonical_status_schema(statuses) do
-    %{
-      "type" => "object",
-      "additionalProperties" => false,
-      "properties" => %{"status" => string_enum_schema(statuses)},
-      "required" => ["status"]
-    }
-  end
-
-  defp canonical_merge_state_schema do
-    canonical_status_schema(~w(merged clean blocked pending unknown))
-    |> put_in(["properties", "merged"], boolean_schema())
-  end
-
   defp string_schema, do: %{"type" => "string"}
   defp described_string_schema(description), do: Map.put(string_schema(), "description", description)
 
   defp current_work_request_id_schema,
-    do:
-      described_string_schema(
-        "Optional when the claimed architect WorkRequest session has exactly one current WorkRequest. When omitted, that WorkRequest is used; pass an explicit id for another authorized WorkRequest."
-      )
-
-  defp explicit_work_request_id_schema,
-    do: described_string_schema("Required WorkRequest id. Compact current-WorkRequest omission is available only after claiming an architect WorkRequest.")
+    do: described_string_schema("WorkRequest id. Optional when work_package_id is given: the package's WorkRequest is used.")
 
   defp markdown_string_schema(description), do: described_string_schema(description)
   defp string_enum_schema(values) when is_list(values), do: %{"type" => "string", "enum" => values}
@@ -857,26 +618,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   defp string_array_schema, do: %{"type" => "array", "items" => nonblank_string_schema()}
   defp described_string_array_schema(description), do: Map.put(string_array_schema(), "description", description)
 
-  defp changed_files_schema,
-    do: %{"anyOf" => [%{"type" => "array", "items" => %{"anyOf" => [nonblank_string_schema(), object_schema()]}}, nonnegative_integer_schema()]}
-
-  defp metadata_head_schema do
-    %{
-      "type" => "object",
-      "additionalProperties" => true,
-      "properties" => %{
-        "head_sha" => string_schema(),
-        "head" => %{
-          "type" => "object",
-          "additionalProperties" => true,
-          "properties" => %{"sha" => string_schema()},
-          "required" => ["sha"]
-        }
-      },
-      "anyOf" => [%{"required" => ["head_sha"]}, %{"required" => ["head"]}]
-    }
-  end
-
   defp plan_nodes_schema do
     %{
       "type" => "array",
@@ -896,10 +637,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
 
   defp task_title_schema do
     described_string_schema("Title is the short name: 2–5 words, max 40 characters after trimming, e.g. Board read access. Put detail in the description.")
-  end
-
-  defp session_description_schema do
-    described_string_schema("Optional human-readable place to find this session outside Herdr, such as Terminal window: widget work.")
   end
 
   defp payload_detail_schema do
