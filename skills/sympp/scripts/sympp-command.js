@@ -87,21 +87,24 @@ function update() {
     const skillCheckFailed = label === 'skill' && /Failed to check skills|No installed skills found|No global skills tracked|No project skills|cannot be (?:checked|updated) automatically|Skipped/i.test((result.stdout || '') + (result.stderr || ''));
     if (result.error || result.status !== 0 || skillCheckFailed) {
       process.stderr.write((result.stdout || '') + (result.stderr || ''));
-      failures.push(`${label} failed. ${label === 'skill' ? 'Run npx skills update sympp -g, then retry sympp update.' : label === 'setup' ? 'Run sympp setup again with your original server and host selection.' : 'Run the factory installer over SSH to inspect the build or service error, then retry sympp update.'}`);
+      failures.push(`${label} failed. ${label === 'skill' ? 'Run npx skills update sympp -g, then retry sympp update.' : label === 'setup' ? 'Run sympp setup again with your original server and host selection.' : 'Inspect the factory update error, then retry sympp update.'}`);
       return;
     }
-    process.stdout.write(`${label}: updated\n`);
+    process.stdout.write(label === 'factory' ? result.stdout : `${label}: updated\n`);
   };
   if (process.platform === 'win32') step('skill', 'powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '& npx.cmd skills update sympp -g; exit $LASTEXITCODE'], { cwd: os.homedir() });
   else step('skill', 'npx', ['skills', 'update', 'sympp', '-g'], { cwd: os.homedir() });
   // Spawn after the skill update so setup comes from the newly installed bundle.
   step('setup', process.execPath, [path.join(__dirname, 'setup-sympp.js'), '--host', saved.setup.hosts,
     ...(saved.setup.server ? ['--server', saved.setup.server] : [])], { cwd: saved.setup.cwd });
-  if (saved.setup.server && !saved.setup.server.startsWith('http://')) {
+  if (saved.setup.server) {
     const script = fs.readFileSync(path.join(__dirname, 'update-sympp-service.sh'), 'utf8');
     const service = saved.setup.remote?.SYMPP_REMOTE_SERVICE || 'sympp';
     if (!/^[a-zA-Z0-9_-]+$/.test(service)) throw new Error('Invalid remote service name. Run sympp setup again.');
-    step('factory', 'ssh', ['-o', 'BatchMode=yes', saved.setup.server, `bash -s -- ${quote(service)}`], { input: script });
+    if (saved.setup.server.startsWith('http://')) {
+      const endpoint = new URL(saved.setup.server);
+      if (process.platform === 'linux' && ['127.0.0.1', 'localhost'].includes(endpoint.hostname)) step('factory', 'bash', ['-s', '--', service, endpoint.port || '80'], { input: script });
+    } else step('factory', 'ssh', ['-o', 'BatchMode=yes', saved.setup.server, `bash -s -- ${quote(service)}`], { input: script });
   }
   if (failures.length) throw new Error(failures.join(' '));
 }

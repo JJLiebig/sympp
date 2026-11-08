@@ -17,6 +17,9 @@ const sourceRoot = installedRoot;
 const sourcePluginRoot = installedRoot;
 const revision = "b".repeat(40);
 const contract = "c".repeat(64);
+let currentContract = contract;
+let failSchemaLookup = false;
+let failLegacyHealth = false;
 let server;
 let bridge;
 const productRoot = path.join(temporaryRoot, "product");
@@ -42,8 +45,9 @@ async function main() {
 
   server = http.createServer((request, response) => {
     if (request.method === "GET" && request.url === "/mcp/readiness") {
+      if (failLegacyHealth) return response.writeHead(404).end();
       return response.end(JSON.stringify({ status: "ok", factory_owned_worktrees: true,
-        source: { mcp_contract: { fingerprint: contract } }, ledger: { reachable: true, identity: { kind: "sqlite", default_home: true } } }));
+        source: { mcp_contract: { fingerprint: currentContract } }, ledger: { reachable: true, identity: { kind: "sqlite", default_home: true } } }));
     }
     if (request.method === "GET" && request.url === "/sympp/board") return response.end("<title>sympp Dashboard</title>");
     if (request.method === "POST" && request.url === "/mcp/client-lease") {
@@ -51,7 +55,7 @@ async function main() {
       request.on("data", (chunk) => { body += chunk; });
       request.on("end", () => {
         const lease = JSON.parse(body);
-        if (lease.action === "attach") {
+        if (lease.action === "attach" && process.platform === "win32") {
           // Directory metadata changes during attach must not look like installed payload edits.
           if (process.platform === "win32") {
             const now = new Date();
@@ -73,10 +77,26 @@ async function main() {
     request.on("end", () => {
       const body = Buffer.concat(chunks).toString("utf8");
       const message = JSON.parse(body);
+      if (failLegacyHealth && message.method === "initialize") return request.socket.destroy();
       if (["create_work_request", "prepare_work_package_worktree"].includes(message.params?.name)) {
         response.writeHead(200, { "Content-Type": "application/json", "Mcp-Session-Id": "test-session" });
         return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id,
           result: { content: [{ type: "text", text: "forwarded" }], structuredContent: message.params.arguments } }));
+      }
+      if (message.method === "tools/list") {
+        if (failSchemaLookup) { failSchemaLookup = false; return request.socket.destroy(); }
+        const names = currentContract === contract ? ["test.removed", "test.arguments", "test.conflict", "test.unchanged"] : ["test.arguments", "test.conflict", "test.unchanged", "test.added"];
+        response.writeHead(200, { "Content-Type": "application/json" });
+        return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { tools: names.map(name => ({ name,
+          inputSchema: { type: "object", properties: ["test.arguments", "test.conflict"].includes(name) && currentContract !== contract ? { required_new: { type: "string" } } : {} },
+        })) } }));
+      }
+      if (message.params?.name === "test.conflict" || message.params?.name === "test.unchanged" || message.params?.name === "test.removed" || message.params?.name === "test.arguments" || message.params?.name === "test.denied") {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: {
+          code: message.params.name === "test.removed" ? -32601 : ["test.arguments", "test.conflict"].includes(message.params.name) ? -32602 : -32000,
+          message: "original error", data: { tool: message.params.name, reason: message.params.name === "test.conflict" ? "idempotency_conflict" : message.params.arguments?.removed_argument ? "unexpected_argument" : "invalid_tool_arguments" },
+        } }));
       }
       const key = message.params && message.params.name === "record_work_package_delivery" && message.params.arguments.idempotency_key;
       if (message.params && message.params.name === "test.forward") forwardSessions.push(request.headers["mcp-session-id"]);
@@ -138,6 +158,7 @@ async function main() {
 
   const environment = { ...process.env, HOME: path.join(temporaryRoot, "profile"), USERPROFILE: path.join(temporaryRoot, "profile"), SYMPP_HOME: symppHome, SYMPP_RUNTIME_FILE: runtimeFile, SYMPP_MCP_BRIDGE_MODE: "http" };
   for (const name of ["SYMPP_DATABASE", "SYMPP_REPO_ROOT", "SYMPP_BACKEND_PORT", "SYMPP_DASHBOARD_PORT", "SYMPP_BACKEND_URL", "SYMPP_DASHBOARD_ORIGIN", "SYMPP_SERVER_URL", "SYMPP_SERVER_TOKEN_FILE", "SYMPP_SERVER_NAME"]) delete environment[name];
+  if (process.platform !== "win32") environment.SYMPP_SERVER_URL = backend;
   bridge = spawn(process.execPath, [path.join(installedRoot, "scripts", "start-sympp-mcp-bridge.js")], {
     env: environment,
     cwd: productRoot,
@@ -145,7 +166,7 @@ async function main() {
   });
   let stderr = "";
   bridge.stderr.on("data", (chunk) => { stderr += chunk; });
-  await new Promise((resolve, reject) => {
+  if (process.platform === "win32") await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error(`Bridge did not attach. ${stderr}`)), 5000);
     bridge.stderr.on("data", () => {
       if (!stderr.includes("MCP bridge attached")) return;
@@ -195,7 +216,42 @@ async function main() {
   bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "prepare_work_package_worktree", arguments: { work_package_id: "wp-local", target_repo_root: productRoot } } })}\n`);
   assert.deepEqual((await responsePromise).result.structuredContent, { work_package_id: "wp-local" });
 
+  for (const [id, name] of [[11, "test.removed"], [12, "test.arguments"]]) {
+    responsePromise = readResponse(id);
+    bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: {} } })}\n`);
+    assert.equal((await responsePromise).error.message, "original error");
+  }
+  responsePromise = readResponse(16);
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 16, method: "tools/list", params: {} })}\n`);
+  await responsePromise;
+  currentContract = "d".repeat(64);
+  responsePromise = readResponse(10);
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 10, method: "tools/call", params: { name: "test.forward", arguments: {} } })}\n`);
+  assert.equal((await responsePromise).result.content[0].text, "forwarded");
 
+  responsePromise = readResponse(22);
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 22, method: "tools/call", params: { name: "test.arguments", arguments: { removed_argument: true } } })}\n`);
+  assert.match((await responsePromise).error.message, /was updated.*restart the session/);
+  failLegacyHealth = true;
+  responsePromise = readResponse(23);
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 23, method: "tools/call", params: { name: "test.arguments", arguments: {} } })}\n`);
+  assert.equal((await responsePromise).error.message, "original error");
+  failLegacyHealth = false;
+  failSchemaLookup = true;
+  responsePromise = readResponse(19);
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 19, method: "tools/call", params: { name: "test.removed", arguments: {} } })}\n`);
+  assert.equal((await responsePromise).error.message, "original error");
+  responsePromise = readResponse(20);
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 20, method: "tools/call", params: { name: "test.added", arguments: {} } })}\n`);
+  assert.equal((await responsePromise).result.content[0].text, "forwarded");
+  for (const [id, name] of [[13, "test.removed"], [14, "test.arguments"], [15, "test.denied"], [17, "test.unchanged"], [21, "test.conflict"]]) {
+    responsePromise = readResponse(id);
+    bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: {} } })}\n`);
+    const error = (await responsePromise).error;
+    if (name === "test.denied" || name === "test.unchanged" || name === "test.conflict") assert.equal(error.message, "original error");
+    else assert.match(error.message, /was updated.*restart the session/);
+    assert.equal(error.data.tool, name);
+  }
 }
 
 function readResponse(id) {

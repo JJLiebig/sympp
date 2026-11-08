@@ -34,7 +34,7 @@ test("Skills service setup selects divergent branches and older tags, preserving
   const installer = path.resolve(__dirname, "../../packages/sympp/scripts/setup-sympp-service.sh");
   const receipt = path.join(root, "revision");
   const refReceipt = path.join(root, 'selected-ref');
-  const env = { ...process.env, SYMPP_SERVICE_SOURCE: checkout, INSTALLED_REVISION: receipt, INSTALLED_REF: refReceipt };
+  const env = { ...process.env, XDG_RUNTIME_DIR: root, SYMPP_HOME: path.join(root, 'factory'), SYMPP_SERVICE_SOURCE: checkout, INSTALLED_REVISION: receipt, INSTALLED_REF: refReceipt };
   for (const [ref, expected] of [["feature", feature], ["old", old]]) {
     run("bash", [installer], root, { ...env, SYMPP_SERVICE_REF: ref });
     assert.equal(fs.readFileSync(receipt, "utf8").trim(), expected);
@@ -42,6 +42,9 @@ test("Skills service setup selects divergent branches and older tags, preserving
   }
   run('bash', [installer], root, env);
   assert.equal(fs.readFileSync(refReceipt, 'utf8'), process.env.SYMPP_SERVICE_REF || 'main');
+  const locked = spawnSync('flock', ['-n', path.join(root, 'sympp-factory-update.lock'), 'bash', installer], { cwd: root, env, encoding: 'utf8' });
+  assert.notEqual(locked.status, 0);
+  assert.match(locked.stderr, /Another factory update is running/);
   const beforeDirty = fs.readFileSync(receipt, 'utf8').trim();
   fs.writeFileSync(path.join(checkout, "local-work"), "keep");
   const refused = spawnSync("bash", [installer], { cwd: root, env: { ...env, SYMPP_SERVICE_REF: "main" }, encoding: "utf8" });
@@ -66,10 +69,12 @@ test('detached checkout installs pin the selected revision and only reuse matchi
   const revision = git('rev-parse', 'HEAD');
   for (const command of ['systemctl', 'ss']) fs.writeFileSync(path.join(bin, command), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'mise'), '#!/bin/sh\nprintf "%s" "$SYMPP_SERVICE_REF" > "$REF_RECEIPT"\nexit 42\n', { mode: 0o755 });
-  const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, SYMPP_HOME: path.join(root, 'factory'), SYMPP_DATABASE: path.join(root, 'ledger.sqlite3'), SYMPP_REPOS_ROOT: path.join(root, 'repos'), SYMPP_SERVICE_REF: '', SYMPP_SERVICE_HOST: '127.0.0.1', REF_RECEIPT: receipt };
+  const env = { ...process.env, XDG_RUNTIME_DIR: root, PATH: bin + path.delimiter + process.env.PATH, SYMPP_HOME: path.join(root, 'factory'), SYMPP_DATABASE: path.join(root, 'ledger.sqlite3'), SYMPP_REPOS_ROOT: path.join(root, 'repos'), SYMPP_SERVICE_REF: '', SYMPP_SERVICE_HOST: '127.0.0.1', REF_RECEIPT: receipt };
   const selected = () => {
     const result = spawnSync('bash', [path.join(repo, 'scripts/install-sympp-checkout.sh')], { env, cwd: root, encoding: 'utf8' });
-    assert.equal(result.status, 42, result.stderr); // Stop at the build boundary, before any service changes.
+    assert.notEqual(result.status, 0, result.stderr); // A failed build must leave the service untouched.
+    assert.equal(fs.existsSync(path.join(env.SYMPP_HOME, 'service/current')), false);
+    assert.match(result.stderr, /Factory build failed/);
     return fs.readFileSync(receipt, 'utf8');
   };
   assert.equal(selected(), revision);
@@ -99,10 +104,11 @@ test('client update rebuilds the saved checkout with its factory repository root
   const reposRoot = path.join(root, 'factory repos'), receipt = path.join(root, 'receipt');
   const environment = path.join(root, 'environment'), fragment = path.join(root, 'config/systemd/user/qa.service');
   fs.mkdirSync(path.dirname(fragment), { recursive: true }); fs.writeFileSync(fragment, '');
-  const values = { SYMPP_HOME: path.join(root, 'factory'), SYMPP_DATABASE: path.join(root, 'factory/ledger.sqlite3'), SYMPP_SERVICE_HOST: '127.0.0.1', SYMPP_REPOS_ROOT: reposRoot, SYMPP_SERVICE_SOURCE: checkout, SYMPP_SERVICE_REF: 'main' };
+  const values = { SYMPP_HOME: path.join(root, 'factory'), SYMPP_DATABASE: path.join(root, 'factory/ledger.sqlite3'), SYMPP_SERVICE_HOST: '127.0.0.1', SYMPP_BACKEND_PORT: '1', SYMPP_REPOS_ROOT: reposRoot, SYMPP_SERVICE_SOURCE: checkout, SYMPP_SERVICE_REF: 'main' };
   fs.writeFileSync(environment, Object.entries(values).map(([key, value]) => JSON.stringify(key + '=' + value)).join(' '));
-  fs.writeFileSync(path.join(bin, 'systemctl'), '#!/bin/sh\ncase "$*" in *Environment*) cat "$ENVIRONMENT_FILE";; *FragmentPath*) printf "%s\\n" "$FRAGMENT_FILE";; *) exit 1;; esac\n', { mode: 0o755 });
-  const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, ENVIRONMENT_FILE: environment, FRAGMENT_FILE: fragment, RECEIPT: receipt, SYMPP_REPOS_ROOT: path.join(root, 'wrong shell root') };
+  fs.writeFileSync(path.join(bin, 'systemctl'), '#!/bin/sh\ncase "$*" in *Environment*) cat "$ENVIRONMENT_FILE";; *FragmentPath*) printf "%s\\n" "$FRAGMENT_FILE";; *MainPID*) printf "0\\n";; *) exit 1;; esac\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'ss'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const env = { ...process.env, XDG_RUNTIME_DIR: root, PATH: bin + path.delimiter + process.env.PATH, ENVIRONMENT_FILE: environment, FRAGMENT_FILE: fragment, RECEIPT: receipt, SYMPP_REPOS_ROOT: path.join(root, 'wrong shell root') };
   const updater = path.resolve(__dirname, '../../packages/sympp/scripts/update-sympp-service.sh');
   const result = spawnSync('bash', [updater, 'qa'], { cwd: root, env, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -145,4 +151,80 @@ test('board opens the saved factory with a private fragment and never logs its c
   });
   assert.equal(authorization, null);
   assert.equal(new URL(fs.readFileSync(receipt, 'utf8')).hash, '');
+});
+
+test('factory updates skip current and procedure-only revisions but rebuild unknown paths', { skip: process.platform !== 'linux' }, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sympp-update-paths-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const upstream = path.join(root, 'origin'), checkout = path.join(root, 'source'), bin = path.join(root, 'bin');
+  fs.mkdirSync(path.join(upstream, 'scripts'), { recursive: true }); fs.mkdirSync(bin);
+  const git = (...args) => {
+    const result = spawnSync('git', args, { cwd: upstream, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr); return result.stdout.trim();
+  };
+  git('init', '-b', 'main'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.test');
+  const receipt = path.join(root, 'built');
+  fs.writeFileSync(path.join(upstream, 'scripts/install-sympp-checkout.sh'), '#!/bin/sh\nprintf built > "$RECEIPT"\n');
+  git('add', '.'); git('commit', '-qm', 'runtime'); git('clone', upstream, checkout);
+  const running = git('rev-parse', 'HEAD');
+  let serveReadiness = true;
+  const server = require('node:http').createServer((request, response) => serveReadiness ? response.end(JSON.stringify({ status: 'ok', ledger: { reachable: true }, source: { revision: running } })) : response.writeHead(404).end());
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const fragment = path.join(root, 'config/systemd/user/qa.service');
+  fs.mkdirSync(path.dirname(fragment), { recursive: true }); fs.writeFileSync(fragment, '');
+  const values = { SYMPP_HOME: path.join(root, 'factory'), SYMPP_SERVICE_HOST: '127.0.0.1', SYMPP_BACKEND_PORT: String(server.address().port), SYMPP_SERVICE_SOURCE: checkout, SYMPP_SERVICE_REF: 'main' };
+  const environment = path.join(root, 'environment');
+  fs.writeFileSync(environment, Object.entries(values).map(([key, value]) => JSON.stringify(key + '=' + value)).join(' '));
+  fs.writeFileSync(path.join(bin, 'systemctl'), '#!/bin/sh\ncase "$*" in *Environment*) cat "$ENVIRONMENT_FILE";; *FragmentPath*) printf "%s\\n" "$FRAGMENT_FILE";; *) exit 1;; esac\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'systemctl'), '#!/bin/sh\ncase "$*" in *Environment*) cat "$ENVIRONMENT_FILE";; *FragmentPath*) printf "%s\\n" "$FRAGMENT_FILE";; *MainPID*) printf "%s\\n" "$LISTENER_PID";; *) exit 1;; esac\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'ss'), '#!/bin/sh\nprintf "LISTEN 0 128 127.0.0.1:%s *:* users:(pid=%s,fd=1)\\n" "$LISTENER_PORT" "$LISTENER_PID"\nprintf "LISTEN 0 128 [::]:%s [::]:* users:(pid=1,fd=1) v6only:1\\n" "$LISTENER_PORT"\n', { mode: 0o755 });
+  const env = { ...process.env, XDG_RUNTIME_DIR: root, PATH: bin + path.delimiter + process.env.PATH, LISTENER_PID: String(process.pid), LISTENER_PORT: values.SYMPP_BACKEND_PORT, ENVIRONMENT_FILE: environment, FRAGMENT_FILE: fragment, RECEIPT: receipt };
+  const updater = path.resolve(__dirname, '../../packages/sympp/scripts/update-sympp-service.sh');
+  const update = () => require('node:util').promisify(require('node:child_process').execFile)('bash', [updater, 'qa'], { cwd: root, env });
+  await assert.rejects(require('node:util').promisify(require('node:child_process').execFile)('bash', [updater, 'qa', '1'], { cwd: root, env }), /does not match/);
+  assert.match((await update()).stdout, /already current/);
+  const procedure = path.join(upstream, 'packages/sympp/skills/worker/SKILL.md');
+  fs.mkdirSync(path.dirname(procedure), { recursive: true }); fs.writeFileSync(procedure, 'procedure update');
+  git('add', '.'); git('commit', '-qm', 'procedure');
+  assert.match((await update()).stdout, /runtime unchanged/);
+  assert.equal(git('-C', checkout, 'config', '--get', 'sympp.serviceRef'), 'main');
+  assert.equal(git('-C', checkout, 'config', '--get', 'sympp.serviceRevision'), git('rev-parse', 'HEAD'));
+  assert.equal(fs.existsSync(receipt), false);
+  serveReadiness = false;
+  env.LISTENER_PID = '0';
+  await assert.rejects(update(), /belongs to another process/);
+  assert.equal(fs.existsSync(receipt), false);
+  env.LISTENER_PID = String(process.pid);
+  serveReadiness = true;
+  fs.writeFileSync(path.join(upstream, 'unknown-runtime'), 'new runtime input');
+  git('add', '.'); git('commit', '-qm', 'runtime');
+  await update();
+  assert.equal(fs.readFileSync(receipt, 'utf8'), 'built');
+});
+
+test('failed activation restores the previous release, unit and readiness settings', { skip: process.platform !== 'linux' }, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sympp-activation-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const server = require('node:http').createServer((request, response) => response.end(JSON.stringify({ status: 'ok', ledger: { reachable: true }, source: { revision: 'previous' } })));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => server.close());
+  const repo = path.join(root, 'repo'), bin = path.join(root, 'bin'), home = path.join(root, 'factory');
+  const unit = path.join(root, 'config/systemd/user/qa.service');
+  for (const directory of ['scripts', 'elixir/_build/prod/rel/symphony_elixir/bin']) fs.mkdirSync(path.join(repo, directory), { recursive: true });
+  fs.mkdirSync(bin); fs.mkdirSync(path.dirname(unit), { recursive: true }); fs.mkdirSync(path.join(home, 'service/old'), { recursive: true });
+  fs.symlinkSync(path.join(home, 'service/old'), path.join(home, 'service/current'));
+  const previousUnit = `Environment="SYMPP_SOURCE_REVISION=previous"\nEnvironment="SYMPP_BACKEND_PORT=${server.address().port}"\nEnvironment="SYMPP_SERVICE_HOST=127.0.0.1"\n`;
+  fs.writeFileSync(unit, previousUnit);
+  fs.copyFileSync(path.resolve(__dirname, '../install-sympp-checkout.sh'), path.join(repo, 'scripts/install-sympp-checkout.sh'));
+  for (const args of [['init', '-b', 'main'], ['config', 'user.name', 'Fixture'], ['config', 'user.email', 'fixture@example.test'], ['add', '.'], ['commit', '-qm', 'candidate']]) assert.equal(spawnSync('git', args, { cwd: repo }).status, 0);
+  fs.writeFileSync(path.join(bin, 'mise'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'systemctl'), '#!/bin/sh\ncase "$*" in *link*) exit 42;; *MainPID*) printf "%s\\n" "$LISTENER_PID";; *) exit 0;; esac\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'ss'), '#!/bin/sh\nprintf "LISTEN 0 128 127.0.0.1:%s *:* users:(pid=%s,fd=1)\\n" "$OLD_PORT" "$LISTENER_PID"\n', { mode: 0o755 });
+  const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, XDG_RUNTIME_DIR: root, XDG_CONFIG_HOME: path.join(root, 'config'), SYMPP_HOME: home, SYMPP_REPOS_ROOT: root, SYMPP_SERVICE_NAME: 'qa', SYMPP_SERVICE_HOST: '192.0.2.1', SYMPP_BACKEND_PORT: '1', LISTENER_PID: String(process.pid), OLD_PORT: String(server.address().port) };
+  const exec = require('node:util').promisify(require('node:child_process').execFile);
+  await assert.rejects(exec('bash', [path.join(repo, 'scripts/install-sympp-checkout.sh')], { env }), error => {
+    assert.equal(error.code, 1); assert.match(error.stderr, /previous release restored and ready/); return true;
+  });
+  assert.equal(fs.readlinkSync(path.join(home, 'service/current')), path.join(home, 'service/old'));
+  assert.equal(fs.readFileSync(unit, 'utf8'), previousUnit);
 });
