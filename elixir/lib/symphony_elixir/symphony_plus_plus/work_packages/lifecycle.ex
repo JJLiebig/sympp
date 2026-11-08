@@ -292,20 +292,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
   defp ended_blocker?(blocker, owner_id, ended_ids), do: blocker.active and MapSet.member?(ended_ids, owner_id)
 
   defp resolve_blocker(repo, work_package_id, blocker, :ok) do
-    case PlanningRepository.append_progress_event(repo, %{
-           work_package_id: work_package_id,
-           summary: "Cleared blocker after terminal transition: #{blocker.summary || blocker.id}",
-           body: "The WorkPackage or its owning WorkRequest reached a terminal state.",
-           status: "resolved",
-           idempotency_key: "terminal-cleanup:#{work_package_id}:#{blocker.id}:#{blocker.event_id}",
-           payload: %{
-             type: "blocker",
-             source_tool: "resolve_blocker",
-             blocker_id: blocker.id,
-             resolution: "Owning work reached a terminal state.",
-             active: false
-           }
-         }) do
+    case PlanningRepository.append_progress_event(
+           repo,
+           %{
+             work_package_id: work_package_id,
+             summary: "Cleared blocker after terminal transition: #{blocker.summary || blocker.id}",
+             body: "The WorkPackage or its owning WorkRequest reached a terminal state.",
+             status: "resolved",
+             idempotency_key: "terminal-cleanup:#{work_package_id}:#{blocker.id}:#{blocker.event_id}",
+             payload: %{
+               type: "blocker",
+               source_tool: "resolve_blocker",
+               blocker_id: blocker.id,
+               resolution: "Owning work reached a terminal state.",
+               active: false
+             }
+           },
+           allow_archived: true
+         ) do
       {:ok, _event} -> {:cont, :ok}
       {:error, reason} -> {:halt, {:error, reason}}
     end

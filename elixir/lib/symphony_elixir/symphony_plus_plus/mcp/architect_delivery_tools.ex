@@ -1083,7 +1083,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
         "idempotency_key" => ProgressEvents.metadata_idempotency_key(payload),
         "payload" => payload
       },
-      runtime_authority: true
+      allow_archived: true
     )
   end
 

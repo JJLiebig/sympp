@@ -63,10 +63,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   end
 
   @spec append_progress_event(repo(), map()) :: {:ok, ProgressEvent.t()} | {:error, error()}
-  def append_progress_event(repo, attrs) when is_atom(repo) and is_map(attrs) do
+  @spec append_progress_event(repo(), map(), keyword()) :: {:ok, ProgressEvent.t()} | {:error, error()}
+  def append_progress_event(repo, attrs, opts \\ []) when is_atom(repo) and is_map(attrs) and is_list(opts) do
     repo.transaction(fn ->
       changeset_fun = &ProgressEvent.create_changeset/1
-      opts = [trusted_audit_metadata: false]
+      opts = [trusted_audit_metadata: false, allow_archived: Keyword.get(opts, :allow_archived, false)]
 
       case append_progress_event_in_transaction(repo, attrs, changeset_fun, opts) do
         {:ok, event} -> event
@@ -113,7 +114,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
                attrs,
                &ProgressEvent.create_changeset(&1, trusted_audit_metadata: true),
                trusted_audit_metadata: true,
-               runtime_authority: Keyword.get(opts, :runtime_authority, false)
+               allow_archived: Keyword.get(opts, :allow_archived, false)
              ),
            :ok <- validate_replayed_event_scope(assignment, event) do
         event
@@ -137,11 +138,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   end
 
   # Callers hold a transaction, so the archive check and the insert are atomic.
-  # Audits of releasing, revoking or reclaiming runtime authority
-  # (`runtime_authority: true`, set only by those trusted paths) stay possible,
-  # so a worker left running on an archived WorkRequest can still be stopped.
+  # Two kinds of system bookkeeping pass `allow_archived: true` and stay possible
+  # on an archived WorkRequest: audits of releasing, revoking or reclaiming
+  # runtime authority, so a worker left running there can still be stopped, and
+  # clearing a blocker because the package it blocked ended.
   defp append_progress_event_in_transaction(repo, attrs, changeset_fun, opts) do
-    with :ok <- require_writable_progress(repo, attrs, Keyword.get(opts, :runtime_authority, false)),
+    with :ok <- require_writable_progress(repo, attrs, Keyword.get(opts, :allow_archived, false)),
          {:ok, attrs} <- normalize_append_attrs(attrs, Keyword.fetch!(opts, :trusted_audit_metadata)),
          :not_found <-
            existing_progress_event_by_idempotency_key_with_retry(repo, attrs, append_retry_attempts()) do

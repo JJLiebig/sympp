@@ -48,7 +48,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageClaimRelease do
                "status" => "worker_claim_released",
                "payload" => payload
              },
-             runtime_authority: true
+             allow_archived: true
            ) do
       {:ok, Map.merge(payload, %{"audit_event" => %{"id" => event.id}, "next_action" => "claim_local_assignment"})}
     end

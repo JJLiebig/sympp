@@ -345,7 +345,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
         "idempotency_key" => metadata_idempotency_key(payload),
         "payload" => payload
       },
-      runtime_authority: true
+      allow_archived: true
     )
   end
 
@@ -718,7 +718,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
         "idempotency_key" => metadata_idempotency_key(payload),
         "payload" => payload
       },
-      runtime_authority: true
+      allow_archived: true
     )
   end
 

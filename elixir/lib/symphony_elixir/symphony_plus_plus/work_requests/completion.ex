@@ -145,7 +145,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   defp archive_in_phase(_repo, %WorkRequest{archived_at: %DateTime{}} = work_request, _phase), do: {:ok, work_request}
 
   defp archive_in_phase(repo, %WorkRequest{} = work_request, phase) when phase in @archivable_phases,
-    do: archive_work_request(repo, work_request, "manual", @archivable_phases)
+    do: archive_work_request(repo, work_request, "manual", &archivable_phase?/2)
 
   defp archive_in_phase(_repo, %WorkRequest{}, _phase), do: {:error, :not_completed}
 
@@ -199,8 +199,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     candidates
     |> Enum.filter(fn {work_request, clock} -> is_nil(work_request.archived_at) and DateTime.compare(clock, cutoff) != :gt end)
     |> Enum.map(&elem(&1, 0))
-    |> archive_all(repo, "age", ["done"])
+    |> archive_all(repo, "age", &done_since?(&1, &2, fn clock -> DateTime.compare(clock, cutoff) != :gt end))
   end
+
+  defp archivable_phase?(_work_request, %{phase: phase}), do: phase in @archivable_phases
 
   defp restore_unexpired(repo, candidates, cutoff) do
     candidates
@@ -221,15 +223,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
       scoped
       |> Enum.sort_by(fn {work_request, clock} -> {DateTime.to_unix(clock, :microsecond), DateTime.to_unix(work_request.inserted_at, :microsecond), work_request.id} end)
       |> Enum.drop(-@completed_visible_limit)
-      |> Enum.map(&elem(&1, 0))
     end)
-    |> archive_all(repo, "limit", ["done"])
+    |> archive_overflow_candidates(repo)
   end
 
-  defp archive_all(work_requests, repo, archive_reason, phases) do
-    work_requests
-    |> Enum.reduce_while({:ok, []}, fn work_request, {:ok, archived_ids} ->
-      case archive_work_request(repo, work_request, archive_reason, phases) do
+  # An overflow candidate is archived only if its clock is unchanged, so a
+  # concurrent restore keeps it visible.
+  defp archive_overflow_candidates(candidates, repo) do
+    Enum.reduce_while(candidates, {:ok, []}, fn {work_request, clock}, {:ok, archived_ids} ->
+      eligible? = fn current, summary -> done_since?(current, summary, &(DateTime.compare(&1, clock) == :eq)) end
+
+      case archive_work_request(repo, work_request, "limit", eligible?) do
         {:ok, %WorkRequest{id: id}} -> {:cont, {:ok, [id | archived_ids]}}
         {:error, :not_completed} -> {:cont, {:ok, archived_ids}}
         {:error, reason} -> {:halt, {:error, reason}}
@@ -241,15 +245,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     end
   end
 
-  # The phase is checked again inside the archive transaction, so a candidate
-  # that gained new work since it was selected is not archived.
-  defp archive_work_request(repo, %WorkRequest{id: id}, archive_reason, phases) when is_binary(id) do
+  defp done_since?(%WorkRequest{} = current, %{phase: "done", completed_at: %DateTime{} = completed_at}, clock_check),
+    do: clock_check.(retention_clock(completed_at, current.restored_at))
+
+  defp done_since?(%WorkRequest{}, _summary, _clock_check), do: false
+
+  defp archive_all(work_requests, repo, archive_reason, eligible?) do
+    work_requests
+    |> Enum.reduce_while({:ok, []}, fn work_request, {:ok, archived_ids} ->
+      case archive_work_request(repo, work_request, archive_reason, eligible?) do
+        {:ok, %WorkRequest{id: id}} -> {:cont, {:ok, [id | archived_ids]}}
+        {:error, :not_completed} -> {:cont, {:ok, archived_ids}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, archived_ids} -> {:ok, Enum.reverse(archived_ids)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # Eligibility is checked again inside the archive transaction against the
+  # current WorkRequest, so a candidate that gained new work or was restored
+  # since it was selected is not archived.
+  defp archive_work_request(repo, %WorkRequest{id: id}, archive_reason, eligible?) when is_binary(id) do
     now = DateTime.utc_now(:microsecond)
 
     repo.transaction(fn ->
       with {:ok, %WorkRequest{archived_at: nil} = current} <- Repository.get(repo, id),
-           {:ok, %{phase: phase}} <- Phase.load_one(repo, current),
-           true <- phase in phases,
+           {:ok, summary} <- Phase.load_one(repo, current),
+           true <- eligible?.(current, summary),
            {1, _rows} <-
              repo.update_all(
                from(work_request in WorkRequest, where: work_request.id == ^id and is_nil(work_request.archived_at)),

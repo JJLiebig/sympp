@@ -186,7 +186,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:error, :work_request_archived} = PlanningRepository.append_audit_progress_event_for_work_package(repo, assignment, package.id, release)
 
     assert {:ok, %ProgressEvent{status: "worker_claim_released"}} =
-             PlanningRepository.append_audit_progress_event_for_work_package(repo, assignment, package.id, release, runtime_authority: true)
+             PlanningRepository.append_audit_progress_event_for_work_package(repo, assignment, package.id, release, allow_archived: true)
   end
 
   test "the operator archives only done or unresolved work, and completes any work", %{repo: repo} do
