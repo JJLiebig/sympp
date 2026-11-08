@@ -33,25 +33,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
   @doc """
   Runs an owner-gated write for `terminal` on a WorkRequest.
 
-  Ownership is taken atomically before the write runs. If the write fails and
-  this call had just taken ownership, the new row is removed again, so a failed
-  write leaves ownership as it was.
+  Ownership is taken atomically, in its own short write transaction, before the
+  write runs, so the SQLite write lock is never held across a write's network
+  calls. A terminal that starts an owner-gated write owns the WorkRequest even
+  if that write then fails validation.
   """
   @spec gated(repo(), String.t(), Terminal.t(), (-> result)) ::
           result | {:error, {:owned_by_other_terminal, owner()}} | {:error, term()}
         when result: term()
   def gated(repo, work_request_id, %Terminal{} = terminal, fun) when is_function(fun, 0) do
     case acquire(repo, work_request_id, terminal) do
-      {:ok, %WorkedOn{}, :held} ->
-        fun.()
-
-      {:ok, %WorkedOn{} = row, :acquired} ->
-        result = fun.()
-        if failed?(result), do: repo.delete_all(from(worked_on in WorkedOn, where: worked_on.id == ^row.id))
-        result
-
-      {:error, _reason} = error ->
-        error
+      {:ok, %WorkedOn{}, _how} -> fun.()
+      {:error, _reason} = error -> error
     end
   end
 
@@ -191,13 +184,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
   end
 
   @doc """
-  A bridge detached cleanly. Its terminal's rows end unless the factory's own
-  herdr-core still sees that terminal live.
+  A bridge detached cleanly. Its terminal's rows end unless another bridge in
+  that terminal still holds a fresh lease, or the factory's own herdr-core
+  still sees the terminal live.
   """
   @spec detached(repo(), String.t()) :: :ok
   def detached(repo, terminal_key) when is_binary(terminal_key) do
-    with {core_id, address} <- Terminal.split_key(terminal_key),
-         view when not is_tuple(view) <- HerdrCore.view(core_id, address) do
+    with false <- ClientLeases.terminal_live?(terminal_key),
+         {core_id, address} <- Terminal.split_key(terminal_key),
+         view when not is_tuple(view) <- HerdrCore.view(core_id, address, confirm: true) do
       finish_all(repo, from(worked_on in WorkedOn, where: worked_on.terminal_key == ^terminal_key), "terminal_finished")
     else
       _live_or_invalid -> :ok
@@ -283,7 +278,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
 
   defp finished_on_factory_core?(%WorkedOn{terminal_key: key}) do
     case Terminal.split_key(key) do
-      {core_id, address} -> HerdrCore.view(core_id, address) == :finished
+      {core_id, address} -> HerdrCore.view(core_id, address, confirm: true) == :finished
       :error -> false
     end
   end
@@ -318,8 +313,4 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
   end
 
   defp notify_acquired(result), do: result
-
-  defp failed?({:error, _reason}), do: true
-  defp failed?({:error, _code, _message, _data}), do: true
-  defp failed?(_result), do: false
 end

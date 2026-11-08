@@ -18,10 +18,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   @type view :: {:live, map()} | :finished | :unseen | :unknown
   @type snapshot :: %{core_id: String.t(), terminals: %{String.t() => map()}}
 
-  @doc "How the factory's core sees one terminal."
-  @spec view(String.t(), String.t()) :: view()
-  def view(core_id, address) when is_binary(core_id) and is_binary(address) do
-    case snapshot() do
+  @doc """
+  How the factory's core sees one terminal. With `confirm: true`, a terminal
+  the cached snapshot shows finished or doesn't list is checked against a fresh
+  snapshot, so a terminal started since the last read is never taken as
+  finished. Use it before refusing a write or taking ownership over.
+  """
+  @spec view(String.t(), String.t(), keyword()) :: view()
+  def view(core_id, address, opts \\ []) when is_binary(core_id) and is_binary(address) do
+    case view_in(snapshot(false), core_id, address) do
+      :finished -> if Keyword.get(opts, :confirm, false), do: view_in(snapshot(true), core_id, address), else: :finished
+      view -> view
+    end
+  end
+
+  defp view_in(snapshot, core_id, address) do
+    case snapshot do
       {:ok, %{core_id: ^core_id, terminals: terminals}} ->
         case Map.get(terminals, address) do
           %{"state" => "live"} = record -> {:live, record}
@@ -49,27 +61,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
     end
   end
 
-  @doc false
-  @spec clear_cache() :: :ok
-  def clear_cache do
-    :persistent_term.erase(@cache_key)
-    :ok
-  end
-
-  @spec snapshot() :: {:ok, snapshot()} | :unavailable
-  defp snapshot do
+  @spec snapshot(boolean()) :: {:ok, snapshot()} | :unavailable
+  defp snapshot(fresh?) do
     case Application.get_env(:symphony_elixir, :sympp_herdr_core, "hc") do
       nil -> :unavailable
       fun when is_function(fun, 0) -> normalize(fun.())
-      command when is_binary(command) -> cached_command_snapshot(command)
+      command when is_binary(command) -> cached_command_snapshot(command, fresh?)
     end
   end
 
-  defp cached_command_snapshot(command) do
+  defp cached_command_snapshot(command, fresh?) do
     now = System.monotonic_time(:millisecond)
 
     case :persistent_term.get(@cache_key, nil) do
-      {^command, at, result} when now - at < @cache_ms ->
+      {^command, at, result} when not fresh? and now - at < @cache_ms ->
         result
 
       _stale ->

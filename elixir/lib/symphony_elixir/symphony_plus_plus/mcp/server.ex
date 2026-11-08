@@ -501,7 +501,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
            "message" => "Writes need a Herdr terminal identity from the sympp bridge. Run this agent in a Herdr terminal; reads still work here."
          }}
 
-      HerdrCore.view(terminal.core_id, terminal.address) == :finished ->
+      HerdrCore.view(terminal.core_id, terminal.address, confirm: true) == :finished ->
         {:error, -32_001, "Unauthorized", %{"tool" => name, "reason" => "terminal_not_live"}}
 
       true ->

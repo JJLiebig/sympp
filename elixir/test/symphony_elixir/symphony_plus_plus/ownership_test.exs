@@ -155,10 +155,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
     assert [%WorkedOn{display_address: "testbox/t1"}] = live_owner_rows(repo, work_request.id)
   end
 
-  test "a failed write does not take ownership", %{repo: repo, work_request: work_request} do
+  test "starting a write takes ownership even when the write itself fails validation", %{repo: repo, work_request: work_request} do
     response = mcp_tool(repo, "t1", "set_report", %{"work_request_id" => work_request.id, "parking" => %{"reason" => "  "}})
 
     assert error_reason(response) == "invalid_operator_report_parking"
+    assert [%WorkedOn{display_address: "testbox/t1"}] = live_owner_rows(repo, work_request.id)
+  end
+
+  test "one bridge detaching keeps ownership while another bridge in the terminal still heartbeats", %{repo: repo, work_request: work_request} do
+    own!(repo, work_request.id, "t1")
+    terminal = %{"core_id" => MCPHarness.test_core_id(), "terminal_id" => "t1"}
+    assert {:ok, _} = ClientLeases.handle_payload(%{"client_id" => "bridge-a", "action" => "attach", "terminal" => terminal})
+    assert {:ok, _} = ClientLeases.handle_payload(%{"client_id" => "bridge-b", "action" => "attach", "terminal" => terminal})
+
+    assert {:ok, _} = ClientLeases.handle_payload(%{"client_id" => "bridge-a", "action" => "detach", "terminal" => terminal})
+    assert :ok = Ownership.detached(repo, test_terminal("t1").key)
+    assert [_still_owned] = live_owner_rows(repo, work_request.id)
+
+    assert {:ok, _} = ClientLeases.handle_payload(%{"client_id" => "bridge-b", "action" => "detach", "terminal" => terminal})
+    assert :ok = Ownership.detached(repo, test_terminal("t1").key)
     assert [] = live_owner_rows(repo, work_request.id)
   end
 

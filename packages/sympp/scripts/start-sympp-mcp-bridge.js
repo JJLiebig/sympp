@@ -1124,6 +1124,8 @@ async function bridge(identity, state, runtimeFile) {
     const interval = stale > 1000 ? Math.min(requested, Math.max(1000, stale - Math.min(60000, Math.max(1000, Math.floor(stale / 10))))) : requested;
     heartbeat = setInterval(() => {
       clientLease(current.mcpUrl, clientId, "heartbeat", false).then((response) => {
+        // A heartbeat records the lease too, so a remote bridge whose first attach failed still detaches.
+        if (response && remoteConnection) attached = true;
         if (!response && !closing && current.state.backend.managed === true) {
           trace("backend_recovery_trigger", { source: "heartbeat", session_present: Boolean(sessionId) });
           recover("heartbeat").catch((error) => {
@@ -1303,10 +1305,8 @@ async function bridge(identity, state, runtimeFile) {
     if (remoteConnection && sessionLocation.native) {
       await sessionLocation.refresh();
       const leaseResponse = await clientLease(current.mcpUrl, clientId, "attach", false);
-      if (leaseResponse) {
-        attached = true;
-        scheduleHeartbeat(leaseResponse);
-      }
+      if (leaseResponse) attached = true;
+      scheduleHeartbeat(leaseResponse);
     }
     input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity, terminal: false });
     input.once("close", () => sessionLocation.close());
