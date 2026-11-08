@@ -207,17 +207,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
   end
 
   @doc """
-  Keeps a bound session's live claim fresh during a read when its grant is
-  still live. A read never reclaims a stale claim and never fails or unbinds
-  because of claim state.
+  Checks a bound session's claim for a read without reclaiming it. A live
+  claim with a live grant is renewed; otherwise the session becomes unbound
+  (stale), as `get_current_assignment` reports, and the read still proceeds.
   """
   @spec refresh_current_session_claim_for_read(Server.t(), String.t(), map()) :: {:ok, Server.t()}
   def refresh_current_session_claim_for_read(%Server{} = server, method, params) do
-    with true <- bound_session_call?(server, method, params),
-         {:ok, %Server{} = refreshed} <- require_current_session_claim(server, false, false) do
-      {:ok, refreshed}
+    if bound_session_call?(server, method, params) do
+      case require_current_session_claim(server, false, false) do
+        {:ok, %Server{} = refreshed} -> {:ok, refreshed}
+        {:error, _code, _message, _data, %Server{} = unbound} -> {:ok, unbound}
+        _unavailable -> {:ok, server}
+      end
     else
-      _not_refreshed -> {:ok, server}
+      {:ok, server}
     end
   end
 
