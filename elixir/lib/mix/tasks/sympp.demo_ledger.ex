@@ -25,6 +25,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.Workflow
@@ -211,6 +212,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
            {:ok, work_packages} <- seed_work_packages(),
            {:ok, _question} <- seed_human_decision_prompt(),
            {:ok, _evidence} <- seed_work_package_evidence(),
+           {:ok, _endings} <- work_packages |> Enum.map(&{&1.work_request_id, &1.id, seed_ending(&1.id)}) |> end_demo_packages(),
            {:ok, solo_sessions} <- seed_solo_sessions(),
            {:ok, scenario_records} <- seed_scenario(scenario),
            {_, nil} <- normalize_demo_timestamps() do
@@ -239,6 +241,8 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
          {:ok, work_packages} <-
            scenario |> scenario_work_package_specs() |> insert_all(&create_scenario_work_package/1),
          {:ok, _edges} <- scenario |> scenario_dependency_specs() |> insert_all(&create_scenario_dependency/1),
+         {:ok, _endings} <-
+           scenario |> scenario_work_package_specs() |> Enum.map(fn {id, wr, _seq, _title, ending, _repo} -> {wr, id, ending} end) |> end_demo_packages(),
          {:ok, _deliveries} <- scenario |> scenario_delivery_specs() |> insert_all(&create_scenario_delivery/1) do
       {:ok, %{work_request_ids: Enum.map(work_requests, & &1.id), work_package_ids: Enum.map(work_packages, & &1.id)}}
     end
@@ -257,17 +261,17 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
 
   defp scenario_work_package_specs("multi-repo") do
     [
-      {"SYMPP-DEMO-WP-MULTI-CONTRACT", "SYMPP-DEMO-WR-MULTI", 1, "Publish shared contract", "merged", "nextide/demo-contracts"},
-      {"SYMPP-DEMO-WP-MULTI-API", "SYMPP-DEMO-WR-MULTI", 2, "Adopt contract in API", "ready_for_worker", "nextide/demo-api"},
-      {"SYMPP-DEMO-WP-MULTI-WEB", "SYMPP-DEMO-WR-MULTI", 3, "Adopt contract in web", "implementing", "nextide/demo-web"},
-      {"SYMPP-DEMO-WP-MULTI-WORKER", "SYMPP-DEMO-WR-MULTI", 4, "Adopt contract in worker", "planning", "nextide/demo-worker"}
+      {"SYMPP-DEMO-WP-MULTI-CONTRACT", "SYMPP-DEMO-WR-MULTI", 1, "Publish shared contract", "pr_merged", "nextide/demo-contracts"},
+      {"SYMPP-DEMO-WP-MULTI-API", "SYMPP-DEMO-WR-MULTI", 2, "Adopt contract in API", "dispatched", "nextide/demo-api"},
+      {"SYMPP-DEMO-WP-MULTI-WEB", "SYMPP-DEMO-WR-MULTI", 3, "Adopt contract in web", "dispatched", "nextide/demo-web"},
+      {"SYMPP-DEMO-WP-MULTI-WORKER", "SYMPP-DEMO-WR-MULTI", 4, "Adopt contract in worker", "planned", "nextide/demo-worker"}
     ]
   end
 
   defp scenario_work_package_specs("superseded") do
     [
-      {"SYMPP-DEMO-WP-OLD", "SYMPP-DEMO-WR-SUPERSEDED", 1, "Original broad package", "closed", @demo_repo},
-      {"SYMPP-DEMO-WP-REPLACEMENT", "SYMPP-DEMO-WR-SUPERSEDED", 2, "Narrow replacement package", "ready_for_worker", @demo_repo},
+      {"SYMPP-DEMO-WP-OLD", "SYMPP-DEMO-WR-SUPERSEDED", 1, "Original broad package", "dispatched", @demo_repo},
+      {"SYMPP-DEMO-WP-REPLACEMENT", "SYMPP-DEMO-WR-SUPERSEDED", 2, "Narrow replacement package", "dispatched", @demo_repo},
       {"SYMPP-DEMO-WP-DEFERRED-SKIP", "SYMPP-DEMO-WR-SUPERSEDED", 3, "Skipped speculative follow-up", "skipped", @demo_repo}
     ]
   end
@@ -275,7 +279,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   defp scenario_work_package_specs("large") do
     for index <- 1..30 do
       id = large_package_id(index)
-      status = Enum.at(["merged", "implementing", "ready_for_worker", "planning"], rem(index - 1, 4))
+      status = Enum.at(["pr_merged", "dispatched", "dispatched", "planned"], rem(index - 1, 4))
       {id, "SYMPP-DEMO-WR-LARGE", index, "Execution graph package #{index}", status, @demo_repo}
     end
   end
@@ -314,7 +318,9 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
     |> then(&WorkRequestRepository.create(Repo, &1))
   end
 
-  defp create_scenario_work_package({id, work_request_id, sequence, title, status, repo}) do
+  defp create_scenario_work_package({id, work_request_id, sequence, title, seed, repo}) do
+    status = seed_status(seed)
+
     WorkPackageRepository.create(Repo, %{
       id: id,
       work_request_id: work_request_id,
@@ -331,10 +337,48 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
       review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "fast"}},
       acceptance_criteria: acceptance_criteria(title),
       status: status,
-      dispatched_at: if(status in ["planned", "skipped"], do: nil, else: @demo_now),
+      dispatched_at: if(status == "planned", do: nil, else: @demo_now),
       owner_id: "local-demo-worker"
     })
   end
+
+  # Seeds name either a status or the outcome the package ends with; ended
+  # packages are seeded where that ending starts and then ended for real.
+  defp seed_status(seed) when seed in ["pr_merged", "completed_no_pr"], do: "dispatched"
+  defp seed_status("skipped"), do: "planned"
+  defp seed_status(status), do: status
+
+  defp end_demo_packages(endings) do
+    endings
+    |> Enum.filter(fn {_work_request_id, _id, ending} -> ending in ["pr_merged", "completed_no_pr", "skipped"] end)
+    |> insert_all(fn {work_request_id, id, ending} ->
+      DeliveryCloseout.record_in_transaction(Repo, work_request_id, id, ending_attrs(id, ending))
+    end)
+  end
+
+  defp ending_attrs(id, "pr_merged") do
+    number = :erlang.phash2(id, 900) + 100
+
+    %{
+      "outcome" => "pr_merged",
+      "idempotency_key" => "demo-ending:#{id}",
+      "recorded_by" => "demo-operator",
+      "pr_url" => "https://example.invalid/symphony-plus-plus/pull/#{number}",
+      "pr_merged_at" => @demo_now,
+      "merge_commit_sha" => String.duplicate("a", 40)
+    }
+  end
+
+  defp ending_attrs(id, "completed_no_pr") do
+    %{
+      "outcome" => "completed_no_pr",
+      "idempotency_key" => "demo-ending:#{id}",
+      "recorded_by" => "demo-operator",
+      "no_pr_evidence" => "Synthetic demo package closed without a pull request."
+    }
+  end
+
+  defp ending_attrs(id, "skipped"), do: %{"outcome" => "skipped", "idempotency_key" => "skip_work_package:#{id}"}
 
   defp create_scenario_dependency({work_request_id, dependent_id, prerequisite_id}),
     do: create_scenario_dependency({work_request_id, dependent_id, prerequisite_id, "depends_on"})
@@ -355,12 +399,12 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   end
 
   defp create_scenario_delivery({work_request_id, work_package_id, successor_id}) do
-    WorkRequestRepository.record_work_package_delivery(Repo, work_request_id, work_package_id, %{
-      outcome: "superseded",
-      idempotency_key: "demo-superseded-delivery",
-      recorded_by: "demo-operator",
-      successor_work_package_id: successor_id,
-      superseded_reason: "Synthetic broad package was recut into a narrower successor."
+    DeliveryCloseout.record_in_transaction(Repo, work_request_id, work_package_id, %{
+      "outcome" => "superseded",
+      "idempotency_key" => "demo-superseded-delivery",
+      "recorded_by" => "demo-operator",
+      "successor_work_package_id" => successor_id,
+      "superseded_reason" => "Synthetic broad package was recut into a narrower successor."
     })
   end
 
@@ -399,17 +443,17 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   defp seed_work_packages do
     [
       work_package_attrs("SYMPP-DEMO-WP-PLANNED", "Planned cockpit filter package", "planned", "mcp"),
-      work_package_attrs("SYMPP-DEMO-WP-SKIPPED", "Skipped broad redesign package", "skipped", "mcp"),
-      work_package_attrs("SYMPP-DEMO-WP-ACTIVE", "Implement cockpit status filters", "implementing", kind("SYMPP-DEMO-WP-ACTIVE")),
-      work_package_attrs("SYMPP-DEMO-WP-QUEUED", "Prepare worker handoff slice", "ready_for_worker", kind("SYMPP-DEMO-WP-QUEUED")),
-      work_package_attrs("SYMPP-DEMO-WP-PLANNING", "Plan API bridge smoke coverage", "planning", kind("SYMPP-DEMO-WP-PLANNING")),
-      work_package_attrs("SYMPP-DEMO-WP-REVIEW", "Review local operator handoff copy", "reviewing", kind("SYMPP-DEMO-WP-REVIEW")),
-      work_package_attrs("SYMPP-DEMO-WP-CI", "Wait for cockpit CI package", "ci_waiting", kind("SYMPP-DEMO-WP-CI")),
-      work_package_attrs("SYMPP-DEMO-WP-READY", "Ready merge evidence package", "ready_for_merge", kind("SYMPP-DEMO-WP-READY")),
-      work_package_attrs("SYMPP-DEMO-WP-BLOCKED", "Blocked product decision package", "blocked", kind("SYMPP-DEMO-WP-BLOCKED")),
-      work_package_attrs("SYMPP-DEMO-WP-MERGED", "Merged demo cleanup package", "merged", kind("SYMPP-DEMO-WP-MERGED")),
-      work_package_attrs("SYMPP-DEMO-WP-MERGED-DOCS", "Merged operator docs package", "merged", kind("SYMPP-DEMO-WP-MERGED-DOCS")),
-      work_package_attrs("SYMPP-DEMO-WP-CLOSED-SPIKE", "Closed duplicate telemetry spike", "closed", kind("SYMPP-DEMO-WP-CLOSED-SPIKE"))
+      work_package_attrs("SYMPP-DEMO-WP-SKIPPED", "Skipped broad redesign package", "planned", "mcp"),
+      work_package_attrs("SYMPP-DEMO-WP-ACTIVE", "Implement cockpit status filters", "dispatched", kind("SYMPP-DEMO-WP-ACTIVE")),
+      work_package_attrs("SYMPP-DEMO-WP-QUEUED", "Prepare worker handoff slice", "dispatched", kind("SYMPP-DEMO-WP-QUEUED")),
+      work_package_attrs("SYMPP-DEMO-WP-PLANNING", "Plan API bridge smoke coverage", "dispatched", kind("SYMPP-DEMO-WP-PLANNING")),
+      work_package_attrs("SYMPP-DEMO-WP-REVIEW", "Review local operator handoff copy", "dispatched", kind("SYMPP-DEMO-WP-REVIEW")),
+      work_package_attrs("SYMPP-DEMO-WP-CI", "Wait for cockpit CI package", "dispatched", kind("SYMPP-DEMO-WP-CI")),
+      work_package_attrs("SYMPP-DEMO-WP-READY", "Ready merge evidence package", "ready", kind("SYMPP-DEMO-WP-READY")),
+      work_package_attrs("SYMPP-DEMO-WP-BLOCKED", "Blocked product decision package", "dispatched", kind("SYMPP-DEMO-WP-BLOCKED")),
+      work_package_attrs("SYMPP-DEMO-WP-MERGED", "Merged demo cleanup package", "dispatched", kind("SYMPP-DEMO-WP-MERGED")),
+      work_package_attrs("SYMPP-DEMO-WP-MERGED-DOCS", "Merged operator docs package", "dispatched", kind("SYMPP-DEMO-WP-MERGED-DOCS")),
+      work_package_attrs("SYMPP-DEMO-WP-CLOSED-SPIKE", "Closed duplicate telemetry spike", "dispatched", kind("SYMPP-DEMO-WP-CLOSED-SPIKE"))
     ]
     |> insert_all(&WorkPackageRepository.create(Repo, &1))
   end
@@ -431,12 +475,17 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
       review_requirement: review_requirement(id),
       acceptance_criteria: acceptance_criteria(title),
       status: status,
-      dispatched_at: if(status in ["planned", "skipped"], do: nil, else: @demo_now),
+      dispatched_at: if(status == "planned", do: nil, else: @demo_now),
       parent_id: nil,
       phase_id: nil,
       owner_id: "local-demo-worker"
     }
   end
+
+  defp seed_ending("SYMPP-DEMO-WP-SKIPPED"), do: "skipped"
+  defp seed_ending(id) when id in ["SYMPP-DEMO-WP-MERGED", "SYMPP-DEMO-WP-MERGED-DOCS"], do: "pr_merged"
+  defp seed_ending("SYMPP-DEMO-WP-CLOSED-SPIKE"), do: "completed_no_pr"
+  defp seed_ending(_id), do: nil
 
   defp work_request_description(title), do: "#{title}. Synthetic local demo data only."
 

@@ -6,6 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperationalLineage do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion
@@ -25,7 +26,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperationalLineage do
   @source_tool "record_operational_lineage"
   @relationships ["superseded_by", "recut_as", "oracle_for"]
   @successor_relationships ["superseded_by", "recut_as"]
-  @closed_statuses ["merged", "closed", "abandoned"]
   @lineage_unavailable_attention %{
     key: "lineage_unavailable",
     label: "Lineage Unavailable",
@@ -433,7 +433,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperationalLineage do
     end
   end
 
-  defp open_status?(status) when is_binary(status), do: status not in @closed_statuses
+  defp open_status?(status) when is_binary(status), do: not Lifecycle.ended?(status)
   defp open_status?(_status), do: false
 
   defp successor_relationship?(%{relationship: relationship}), do: relationship in @successor_relationships

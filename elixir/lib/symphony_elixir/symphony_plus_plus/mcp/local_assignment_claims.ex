@@ -18,7 +18,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service, as: ClaimLeaseService
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
-  alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     Auth,
@@ -36,6 +35,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
@@ -183,12 +183,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
   defp require_optional_local_worktree_scope(%WorkPackage{}, nil), do: :ok
   defp require_optional_local_worktree_scope(%WorkPackage{} = work_package, claim_worktree_path), do: require_local_worktree_scope(work_package, claim_worktree_path)
 
-  defp require_live_local_work_package(%WorkPackage{status: status})
-       when status in ["merged", "closed", "abandoned"] do
-    {:error, :work_package_terminal}
+  defp require_live_local_work_package(%WorkPackage{} = work_package) do
+    if Lifecycle.ended?(work_package), do: {:error, :work_package_terminal}, else: :ok
   end
-
-  defp require_live_local_work_package(%WorkPackage{}), do: :ok
 
   defp validate_local_work_request_scope(_repo, %WorkPackage{}, nil), do: :ok
 
@@ -297,7 +294,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
          {:ok, lease, lease_action} <- ensure_local_assignment_claim_lease(repo, current_work_package, claim),
          {:ok, result, session, _grant_action} <-
            claim_local_assignment_session(repo, current_work_package, claim, lease, lease_action),
-         {:ok, active_work_package} <- activate_local_assignment(repo, current_work_package, session),
+         {:ok, active_work_package} <- activate_local_assignment(current_work_package),
          session = Session.with_claim_lease(session, lease),
          {:ok, claim_event} <- append_local_assignment_claim_event(repo, session, claim, lease, lease_action),
          {:ok, _released_server} <- release_local_assignment_rebind(repo, server, old_session, claim, callbacks) do
@@ -306,32 +303,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
     end
   end
 
-  defp activate_local_assignment(repo, %WorkPackage{status: "ready_for_worker"} = work_package, %Session{} = session) do
-    LifecycleService.transition(repo, work_package, "active", local_assignment_actor(session))
-  end
-
-  defp activate_local_assignment(_repo, %WorkPackage{status: status} = work_package, %Session{})
-       when status in [
-              "active",
-              "blocked",
-              "claimed",
-              "planning",
-              "implementing",
-              "reviewing",
-              "ci_waiting",
-              "ready_for_merge"
-            ],
-       do: {:ok, work_package}
-
-  defp activate_local_assignment(_repo, %WorkPackage{}, %Session{}), do: {:error, :work_package_not_claimable}
-
-  defp local_assignment_actor(%Session{} = session) do
-    %{
-      grant_id: session.assignment.grant_id,
-      grant_role: session.assignment.grant_role,
-      capabilities: session.assignment.capabilities,
-      work_package_id: session.assignment.work_package_id
-    }
+  defp activate_local_assignment(%WorkPackage{} = work_package) do
+    if Lifecycle.in_flight?(work_package), do: {:ok, work_package}, else: {:error, :work_package_not_claimable}
   end
 
   defp local_assignment_claim_payload(claim, %ClaimLease{} = lease, lease_action, claim_event, lifecycle_state) do

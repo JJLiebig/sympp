@@ -97,7 +97,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.DeliveryWorkPackageProjectio
   defp primary_state?(_work_package, _operational_state), do: false
 
   defp terminal_without_delivery_state?(key, attention_reason_codes) do
-    "terminal_package_without_delivery_outcome" in attention_reason_codes and key in ["needs_closeout", "merged", "closed", "abandoned"]
+    "terminal_package_without_delivery_outcome" in attention_reason_codes and key in ["needs_closeout", "merged", "ended"]
   end
 
   defp operational_state_payload(%{} = operational_state, opts) do

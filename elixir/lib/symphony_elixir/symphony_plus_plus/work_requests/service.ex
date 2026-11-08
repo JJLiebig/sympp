@@ -5,6 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Service, as: WorkPackageService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
@@ -79,15 +80,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
   @spec skip_work_package(Repository.repo(), String.t(), String.t()) ::
           {:ok, WorkPackage.t()} | {:error, error()}
   def skip_work_package(repo, work_request_id, id) do
+    attrs = %{"outcome" => "skipped", "idempotency_key" => "skip_work_package:" <> id}
+
     repo.transaction(fn ->
-      with {:ok, work_package} <- Repository.skip_work_package(repo, work_request_id, id),
-           {:ok, _work_request} <- Completion.refresh_in_transaction(repo, work_request_id) do
+      with {:ok, {_delivery, _work_package, _closeout_context}} <-
+             DeliveryCloseout.record_in_transaction(repo, work_request_id, id, attrs),
+           {:ok, work_package} <- Repository.get_work_package(repo, work_request_id, id) do
         work_package
       else
         {:error, reason} -> repo.rollback(reason)
       end
     end)
     |> normalize_transaction_result()
+    |> tap(fn result -> if match?({:ok, _work_package}, result), do: WorktreeCleanupQueue.wake() end)
     |> notify_dashboard()
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)

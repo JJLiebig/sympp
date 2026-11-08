@@ -50,7 +50,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue do
       is_list(work_packages) ->
         enqueue_each(work_packages, &enqueue_terminal(repo, &1, opts))
 
-      work_packages.status in ["skipped", "merged", "closed", "abandoned"] ->
+      work_packages.status == "ended" ->
         case enqueue(repo, work_packages, opts) do
           :ignored -> :ok
           result -> result

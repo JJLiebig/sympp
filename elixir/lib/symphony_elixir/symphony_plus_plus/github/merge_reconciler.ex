@@ -4,16 +4,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{Client, DefaultClient, HttpClient, PullRequest}
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{PullRequestArtifact, PullRequestProgress}
-  alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler
 
-  @operator_actor %{grant_role: "architect", capabilities: ["architect:lifecycle.transition"]}
   @operator_source_tool "operator_sync_prs"
 
   @type repo :: module()
@@ -48,7 +48,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
     with :ok <- OfflineSandbox.require_online(),
          {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
          {:ok, state} <- PlanningRepository.get_state(repo, work_package.id) do
-      if terminal_candidate?(work_package) do
+      if terminal_candidate?(repo, work_package) do
         fetch_and_reconcile_terminal(repo, work_package, state.progress_events, pr_payload, client, client_opts)
       else
         {:ok, error_result(work_package, %{}, :not_merge_ready)}
@@ -73,19 +73,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
     end
   end
 
-  defp merge_ready_candidate?(%WorkPackage{status: "ready_for_merge", kind: kind}) do
-    kind in StateMachine.dispatchable_kinds()
-  end
-
-  defp merge_ready_candidate?(%WorkPackage{work_request_id: request_id, status: status, kind: kind}) when is_binary(request_id) do
-    status in ["ready_for_worker", "active", "claimed", "planning", "implementing", "reviewing", "ci_waiting", "blocked"] and
-      kind in StateMachine.dispatchable_kinds()
+  defp merge_ready_candidate?(%WorkPackage{work_request_id: request_id, kind: kind} = work_package) when is_binary(request_id) do
+    Lifecycle.in_flight?(work_package) and kind in WorkPackage.executable_kinds()
   end
 
   defp merge_ready_candidate?(%WorkPackage{}), do: false
 
-  defp terminal_candidate?(%WorkPackage{status: "merged", kind: kind}), do: kind in StateMachine.dispatchable_kinds()
-  defp terminal_candidate?(%WorkPackage{} = work_package), do: merge_ready_candidate?(work_package)
+  # An ended package is re-checked only when its ending is a recorded merge.
+  defp terminal_candidate?(repo, %WorkPackage{} = work_package) do
+    if Lifecycle.ended?(work_package) do
+      match?(%WorkPackageDelivery{outcome: "pr_merged"}, repo.get_by(WorkPackageDelivery, work_package_id: work_package.id))
+    else
+      merge_ready_candidate?(work_package)
+    end
+  end
 
   defp fetch_and_reconcile_terminal(repo, %WorkPackage{} = work_package, progress_events, pr_payload, client, client_opts) do
     with {:ok, pr_context} <- terminal_pr_context(progress_events, pr_payload),
@@ -102,7 +103,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
     end
   end
 
-  defp reconcile_verified_terminal_merge(repo, %WorkPackage{status: "merged"} = work_package, progress_events, payload, metadata) do
+  defp reconcile_verified_terminal_merge(repo, %WorkPackage{status: "ended"} = work_package, progress_events, payload, metadata) do
     with :ok <- PullRequest.validate_merge_evidence(payload),
          :ok <- existing_merge_evidence(progress_events, work_package, payload) do
       result =
@@ -111,8 +112,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
         |> Map.merge(%{
           status: "already_merged",
           reason: "github_pr_merge_already_recorded",
-          before_status: "merged",
-          after_status: "merged",
+          before_status: work_package.status,
+          after_status: work_package.status,
           merged_at: Map.get(metadata, "merged_at"),
           merge_commit_sha: Map.get(metadata, "merge_commit_sha")
         })
@@ -268,8 +269,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
   end
 
   defp transition_merged(repo, %WorkPackage{} = work_package, payload, metadata) do
-    with :ok <- validate_merge_transition(work_package),
-         {:ok, updated} <- transition_merged_transaction(repo, work_package, payload, metadata) do
+    with {:ok, updated} <- transition_merged_transaction(repo, work_package, payload, metadata) do
       work_package
       |> base_result(payload)
       |> Map.merge(%{
@@ -285,9 +285,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
       {:error, reason} -> error_result(work_package, payload, reason)
     end
   end
-
-  defp validate_merge_transition(%WorkPackage{work_request_id: request_id}) when is_binary(request_id), do: :ok
-  defp validate_merge_transition(work_package), do: StateMachine.validate_transition(work_package, "merged", @operator_actor)
 
   defp transition_merged_transaction(repo, %WorkPackage{} = work_package, payload, metadata) do
     repo
@@ -308,22 +305,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
   defp normalize_transaction_result({:ok, value}), do: {:ok, value}
   defp normalize_transaction_result({:error, reason}), do: {:error, reason}
 
-  defp persist_merged_transition(repo, %WorkPackage{work_request_id: request_id} = work_package, payload, metadata)
-       when is_binary(request_id) do
-    with {:ok, _event} <- append_merge_evidence(repo, work_package, %{work_package | status: "merged"}, payload, metadata),
-         {:ok, _delivery} <- DeliveryReconciler.reconcile_work_package(repo, work_package.id),
-         {:ok, %WorkPackage{status: "merged"} = updated} <- WorkPackageRepository.get(repo, work_package.id) do
-      {:ok, updated}
-    else
-      {:ok, %WorkPackage{}} -> {:error, :stale_status}
-      error -> error
-    end
-  end
-
   defp persist_merged_transition(repo, %WorkPackage{} = work_package, payload, metadata) do
-    with {:ok, updated} <- WorkPackageRepository.update_status(repo, work_package.id, work_package.status, "merged"),
-         {:ok, _event} <- append_merge_evidence(repo, work_package, updated, payload, metadata) do
-      {:ok, updated}
+    with {:ok, _event} <- append_merge_evidence(repo, work_package, payload, metadata),
+         {:ok, _delivery} <- DeliveryReconciler.reconcile_work_package(repo, work_package.id),
+         {:ok, %WorkPackage{} = updated} <- WorkPackageRepository.get(repo, work_package.id) do
+      if Lifecycle.ended?(updated), do: {:ok, updated}, else: {:error, :stale_status}
     end
   end
 
@@ -337,7 +323,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
     })
   end
 
-  defp append_merge_evidence(repo, %WorkPackage{} = before_package, %WorkPackage{} = after_package, payload, metadata) do
+  defp append_merge_evidence(repo, %WorkPackage{} = before_package, payload, metadata) do
     attrs = %{
       "work_package_id" => before_package.id,
       "summary" => "GitHub PR merge reconciled",
@@ -352,7 +338,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
         "number" => payload["number"],
         "head_sha" => payload["head_sha"],
         "before_status" => before_package.status,
-        "after_status" => after_package.status,
         "merged" => true,
         "merged_at" => Map.get(metadata, "merged_at"),
         "merge_commit_sha" => Map.get(metadata, "merge_commit_sha")
@@ -360,7 +345,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
     }
 
     with {:ok, event} <- PlanningRepository.append_progress_event(repo, attrs),
-         :ok <- validate_merge_evidence(event, after_package, payload) do
+         :ok <- validate_merge_evidence(event, payload) do
       {:ok, event}
     end
   end
@@ -369,21 +354,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
     idempotency_key = "operator_github_merge:#{work_package.id}:#{payload["head_sha"] || payload["url"]}"
 
     case Enum.find(progress_events, &(&1.idempotency_key == idempotency_key)) do
-      %ProgressEvent{} = event -> validate_merge_evidence(event, work_package, payload)
+      %ProgressEvent{} = event -> validate_merge_evidence(event, payload)
       nil -> {:error, :missing_merge_evidence}
     end
   end
 
-  defp validate_merge_evidence(
-         %ProgressEvent{status: "github_pr_merged", payload: %{} = event_payload},
-         %WorkPackage{} = after_package,
-         payload
-       ) do
+  defp validate_merge_evidence(%ProgressEvent{status: "github_pr_merged", payload: %{} = event_payload}, payload) do
     event_payload = stringify_keys(event_payload)
 
     cond do
       event_payload["source_tool"] != @operator_source_tool -> {:error, :merge_evidence_conflict}
-      event_payload["after_status"] != after_package.status -> {:error, :merge_evidence_conflict}
       clean_head_sha(event_payload["head_sha"]) != clean_head_sha(payload["head_sha"]) -> {:error, :merge_evidence_conflict}
       event_payload["repository"] != payload["repository"] -> {:error, :merge_evidence_conflict}
       event_payload["number"] != payload["number"] -> {:error, :merge_evidence_conflict}
@@ -393,7 +373,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
     end
   end
 
-  defp validate_merge_evidence(%ProgressEvent{}, %WorkPackage{}, _payload), do: {:error, :merge_evidence_conflict}
+  defp validate_merge_evidence(%ProgressEvent{}, _payload), do: {:error, :merge_evidence_conflict}
 
   defp current_pr_context(progress_events) do
     with {:ok, %{ref: ref}} <- PullRequestProgress.current_pr_state(progress_events, ["attach_pr"]) do

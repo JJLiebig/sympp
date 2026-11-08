@@ -122,13 +122,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerTools do
              session.assignment,
              work_package_id,
              attrs
-           ),
-         {:ok, _work_package} <- WorkPackageRepository.reactivate_if_unblocked(repo, work_package_id) do
+           ) do
       {:ok, ToolResult.tool_result(%{"progress_event" => ProgressEvents.payload(event)})}
     end
   end
 
-  defp reject_ready_blocker_provenance(%WorkPackage{status: "ready_for_merge"}, %{"payload" => payload})
+  defp reject_ready_blocker_provenance(%WorkPackage{status: "ready"}, %{"payload" => payload})
        when is_map_key(payload, "dependency_inputs"),
        do: {:tool_error, "already_ready"}
 

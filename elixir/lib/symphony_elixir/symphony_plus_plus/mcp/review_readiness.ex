@@ -5,11 +5,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
-  alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Session
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
+  alias SymphonyElixir.SymphonyPlusPlus.Policies.Templates
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @type repo :: module()
@@ -28,10 +28,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
            {:ok, blocker_closeout} <- apply_blocker_closeout.(repo, session, blocker_closeout_plan),
            {:ok, state} <- PlanningRepository.get_state(repo, Session.work_package_id(session)),
            :ok <- readiness_gates(state),
-           ready_status = StateMachine.terminal_readiness_status(state.work_package),
-           :ok <- StateMachine.validate_ready_transition(state.work_package, ready_status, actor(session)),
-           {:ok, work_package} <-
-             WorkPackageRepository.update_status(repo, state.work_package.id, state.work_package.status, ready_status) do
+           :ok <- require_policy(state.work_package),
+           {:ok, work_package} <- Lifecycle.transition(repo, state.work_package, :qualify) do
         {:ok, {work_package, blocker_closeout}}
       end
     end)
@@ -72,12 +70,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     end
   end
 
-  defp actor(%Session{} = session) do
-    %{
-      grant_id: session.assignment.grant_id,
-      grant_role: session.assignment.grant_role,
-      capabilities: session.assignment.capabilities,
-      work_package_id: session.assignment.work_package_id
-    }
+  defp require_policy(%WorkPackage{} = work_package) do
+    case Templates.for_work_package(work_package) do
+      {:ok, _policy} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
 end

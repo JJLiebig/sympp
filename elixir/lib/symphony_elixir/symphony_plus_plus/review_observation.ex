@@ -2,13 +2,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewObservation do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @cache_table __MODULE__
   @ttl_ms 120_000
   @timeout_ms 3_000
   @max_output_bytes 64_000
-  @terminal_statuses ["skipped", "merged", "closed", "abandoned"]
 
   @spec observe([WorkPackage.t()], keyword()) :: %{optional(String.t()) => map()}
   def observe(work_packages, opts \\ []) when is_list(work_packages) do
@@ -144,7 +144,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewObservation do
          worktree_path: worktree,
          review_requirement: requirement
        }) do
-    is_binary(id) and status not in @terminal_statuses and
+    is_binary(id) and not Lifecycle.ended?(status) and
       is_binary(worktree) and File.dir?(worktree) and
       map_value(requirement, "type") == "review-suite"
   end

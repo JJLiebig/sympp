@@ -11,8 +11,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
   import Ecto.Query, only: [from: 2]
 
   @active_grant_roles ["worker", "architect"]
-  @ready_package_statuses ["ready_for_merge"]
-  @terminal_package_statuses ["merged", "closed", "abandoned"]
+  @ready_package_statuses ["ready"]
+  @terminal_package_statuses ["ended"]
   @recycle_source_tools ["claim_local_assignment", "revoke_work_package_worker_key", "cleanup_work_request_work_package_runtime", "force_release_work_package_claim"]
   @stale_heartbeat_after_seconds 300
 
@@ -106,7 +106,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
   end
 
   defp current_worker_session(evidence, work_package) do
-    unless terminal_package?(work_package) or match?(%WorkPackage{status: "skipped"}, work_package) do
+    unless terminal_package?(work_package) do
       evidence.active_agent_runs
       |> Enum.max_by(&{timestamp_sort_value(&1.last_seen_at), &1.id}, fn -> nil end)
       |> case do

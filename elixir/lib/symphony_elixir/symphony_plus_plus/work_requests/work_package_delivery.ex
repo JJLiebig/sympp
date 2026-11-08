@@ -10,7 +10,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery do
   @primary_key {:id, :string, autogenerate: false}
   @foreign_key_type :string
 
-  @outcomes ["pr_merged", "completed_no_pr", "superseded", "abandoned"]
+  # Outcomes callers can record. "legacy" exists only on rows the lifecycle
+  # migration wrote for packages that ended before ending rows were required.
+  @outcomes ["pr_merged", "finished", "completed_no_pr", "superseded", "abandoned", "skipped"]
+  @legacy_outcome "legacy"
 
   @evidence_contract %{
     "pr_merged" => [
@@ -34,7 +37,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery do
     ],
     "abandoned" => [
       %{name: "abandoned_rationale", type: :string, required: true, description: "Markdown rationale for abandonment."}
-    ]
+    ],
+    "finished" => [],
+    "skipped" => []
   }
 
   @type evidence_field_spec :: %{
@@ -61,6 +66,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery do
           successor_work_package_id: String.t() | nil,
           superseded_reason: String.t() | nil,
           abandoned_rationale: String.t() | nil,
+          legacy_status: String.t() | nil,
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -81,12 +87,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery do
     field(:successor_work_package_id, :string)
     field(:superseded_reason, :string)
     field(:abandoned_rationale, :string)
+    field(:legacy_status, :string)
 
     timestamps(type: :utc_datetime_usec)
   end
 
   @spec outcomes() :: [String.t()]
   def outcomes, do: @outcomes
+
+  @spec legacy_outcome() :: String.t()
+  def legacy_outcome, do: @legacy_outcome
 
   @spec evidence_field_specs(String.t()) :: [evidence_field_spec()]
   def evidence_field_specs(outcome), do: Map.get(@evidence_contract, outcome, [])
@@ -128,20 +138,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery do
        }}
     end
   end
-
-  @spec terminal_status_for_outcome(String.t()) :: String.t() | nil
-  def terminal_status_for_outcome("pr_merged"), do: "merged"
-  def terminal_status_for_outcome("completed_no_pr"), do: "closed"
-  def terminal_status_for_outcome("superseded"), do: "closed"
-  def terminal_status_for_outcome("abandoned"), do: "abandoned"
-  def terminal_status_for_outcome(_outcome), do: nil
-
-  @spec terminal_status_matches_outcome?(String.t() | nil, String.t() | nil) :: boolean()
-  def terminal_status_matches_outcome?("merged", "pr_merged"), do: true
-  def terminal_status_matches_outcome?("closed", "completed_no_pr"), do: true
-  def terminal_status_matches_outcome?("closed", "superseded"), do: true
-  def terminal_status_matches_outcome?("abandoned", "abandoned"), do: true
-  def terminal_status_matches_outcome?(_status, _outcome), do: false
 
   @spec create_changeset(map()) :: Ecto.Changeset.t()
   def create_changeset(attrs) do

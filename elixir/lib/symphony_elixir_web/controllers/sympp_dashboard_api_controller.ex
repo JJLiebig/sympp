@@ -456,23 +456,16 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     end
   end
 
-  @spec operator_update_work_package_state(Conn.t(), map()) :: Conn.t()
-  def operator_update_work_package_state(conn, %{"work_package_id" => work_package_id} = params) do
+  @spec operator_finish_work_package(Conn.t(), map()) :: Conn.t()
+  def operator_finish_work_package(conn, %{"work_package_id" => work_package_id}) do
     send_local_operator_response(
       conn,
       :dangerous_override,
       work_package_target(work_package_id),
-      :operator_update_work_package_state,
+      :operator_finish_work_package,
       fn repo ->
-        with {:ok, action} <- LocalOperatorActions.local_operator_work_package_status(params),
-             {:ok, work_package} <-
-               LocalOperatorActions.change_work_package_for_local_operator(
-                 repo,
-                 work_package_id,
-                 action,
-                 params
-               ) do
-          json(conn, mutation_success_payload(%{work_package_id: work_package.id}, %{work_package_id: work_package.id}))
+        with {:ok, work_package} <- LocalOperatorActions.finish_work_package_for_local_operator(repo, work_package_id) do
+          json(conn, mutation_success_payload(%{work_package_id: work_package.id, status: work_package.status}, %{work_package_id: work_package.id}))
         end
       end
     )
@@ -808,14 +801,18 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp error_response(conn, :work_request_package_required),
     do: error_response(conn, 422, "work_request_package_required", "A WorkRequest WorkPackage is required")
 
-  defp error_response(conn, :missing_no_pr_evidence), do: error_response(conn, 422, "missing_no_pr_evidence", "No-PR evidence is required")
   defp error_response(conn, :active_blocker), do: error_response(conn, 412, "active_blocker", "Closeout is blocked by active blockers")
   defp error_response(conn, :active_runtime), do: error_response(conn, 412, "active_runtime", "Closeout is blocked by active worker state")
   defp error_response(conn, :claim_not_current), do: error_response(conn, 412, "runtime_lease_conflict", "Closeout runtime state changed; retry the action")
   defp error_response(conn, :stale_status), do: error_response(conn, 409, "stale_status", "WorkPackage status changed; refresh and retry")
   defp error_response(conn, :work_package_scope_mismatch), do: error_response(conn, :not_found)
   defp error_response(conn, :work_package_mismatch), do: error_response(conn, 409, "work_package_mismatch", "WorkPackage no longer matches its WorkPackage")
-  defp error_response(conn, :work_package_not_abandonable), do: error_response(conn, 412, "work_package_not_abandonable", "WorkPackage cannot be abandoned from its current history")
+
+  defp error_response(conn, {:ending_not_allowed, _status, _outcome}),
+    do: error_response(conn, 422, "ending_not_allowed", "WorkPackage can only be finished while dispatched or ready")
+
+  defp error_response(conn, {:delivery_outcome_conflict, outcome}),
+    do: error_response(conn, 409, "already_ended", "WorkPackage already ended as #{outcome}")
 
   defp error_response(conn, :missing_custom_redirect_note) do
     error_response(conn, 422, "missing_custom_redirect_note", "A note is required for the custom answer")

@@ -13,7 +13,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
 
   @active_run_statuses AgentRun.active_statuses()
-  @terminal_work_package_statuses ["skipped", "merged", "closed", "abandoned"]
 
   @type repo :: module()
   @type error ::
@@ -174,7 +173,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
 
   defp reject_terminal_work_package(repo, work_package_id) when is_binary(work_package_id) do
     case repo.get(WorkPackage, work_package_id) do
-      %WorkPackage{status: status} when status in @terminal_work_package_statuses -> {:error, :work_package_terminal}
+      %WorkPackage{status: "ended"} -> {:error, :work_package_terminal}
       %WorkPackage{} -> reject_terminal_delivery(repo, work_package_id)
       nil -> :ok
     end

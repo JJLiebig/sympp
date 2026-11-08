@@ -5,7 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Node
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDeliveryScope
@@ -54,14 +54,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     "updated_at",
     "contract_revision"
   ]
-  @terminal_work_package_statuses ["skipped", "merged", "closed", "abandoned"]
 
   @type repo :: module()
   @type error ::
           :already_answered
           | :already_closed
           | :database_busy
-          | :delivery_outcome_conflict
+          | {:delivery_outcome_conflict, String.t()}
           | :no_work_packages
           | :open_questions
           | :not_found
@@ -336,36 +335,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  @spec skip_work_package(repo(), String.t(), String.t()) :: {:ok, WorkPackage.t()} | {:error, error()}
-  def skip_work_package(repo, work_request_id, id) when is_atom(repo) and is_binary(work_request_id) and is_binary(id) do
-    update_work_package_status(repo, work_request_id, id, "planned", "skipped", ["planned"])
-  end
-
-  @spec record_work_package_delivery(repo(), String.t(), String.t(), map()) ::
-          {:ok, WorkPackageDelivery.t()} | {:error, error()}
-  def record_work_package_delivery(repo, work_request_id, work_package_id, attrs)
-      when is_atom(repo) and is_binary(work_request_id) and is_binary(work_package_id) and is_map(attrs) do
-    repo.transaction(fn ->
-      with {:ok, delivery} <-
-             record_work_package_delivery_in_transaction(
-               repo,
-               work_request_id,
-               work_package_id,
-               attrs
-             ),
-           {:ok, work_package} <- get_work_package(repo, work_request_id, work_package_id),
-           :ok <- WorkPackageRepository.clear_terminal_attention(repo, work_package) do
-        delivery
-      else
-        {:error, reason} -> repo.rollback(reason)
-      end
-    end)
-    |> normalize_transaction_result()
-  rescue
-    error in Ecto.ConstraintError -> normalize_constraint_error(error)
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
   @doc false
   @spec record_work_package_delivery_in_transaction(repo(), String.t(), String.t(), map()) ::
           {:ok, WorkPackageDelivery.t()} | {:error, error()}
@@ -559,14 +528,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
 
   defp validate_question_status(status) do
     if status in ClarificationQuestion.statuses() do
-      :ok
-    else
-      {:error, :invalid_status}
-    end
-  end
-
-  defp require_status(status, allowed_statuses) do
-    if status in allowed_statuses do
       :ok
     else
       {:error, :invalid_status}
@@ -894,7 +855,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     if work_package_delivery_replay?(existing, candidate) do
       existing
     else
-      repo.rollback(:delivery_outcome_conflict)
+      repo.rollback({:delivery_outcome_conflict, existing.outcome})
     end
   end
 
@@ -910,77 +871,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       _error -> false
     end)
   end
-
-  defp update_work_package_status(repo, work_request_id, id, current_status, next_status, allowed_current_statuses) do
-    with :ok <- require_status(current_status, allowed_current_statuses) do
-      now = DateTime.utc_now(:microsecond)
-
-      repo.transaction(fn ->
-        update_work_package_status_row(
-          repo,
-          work_request_id,
-          id,
-          current_status,
-          next_status,
-          allowed_current_statuses,
-          now
-        )
-      end)
-      |> normalize_transaction_result()
-    end
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp update_work_package_status_row(
-         repo,
-         work_request_id,
-         id,
-         current_status,
-         next_status,
-         allowed_current_statuses,
-         now
-       ) do
-    result =
-      from(work_package in WorkPackage,
-        join: work_request in WorkRequest,
-        on: work_request.id == work_package.work_request_id,
-        where:
-          work_package.id == ^id and work_package.work_request_id == ^work_request_id and
-            work_package.status == ^current_status and work_package.status in ^allowed_current_statuses,
-        where: work_request.status in ["ready_for_slicing", "sliced"]
-      )
-      |> repo.update_all(set: [status: next_status, updated_at: now])
-
-    case result do
-      {1, _rows} ->
-        work_package = repo.get!(WorkPackage, id)
-
-        case WorkPackageRepository.clear_terminal_attention(repo, work_package) do
-          :ok -> work_package
-          {:error, reason} -> repo.rollback(reason)
-        end
-
-      {0, _rows} ->
-        repo.rollback(work_package_status_error(repo, work_request_id, id, current_status, next_status))
-    end
-  end
-
-  defp work_package_status_error(repo, work_request_id, id, current_status, next_status) do
-    case repo.get(WorkPackage, id) do
-      %WorkPackage{work_request_id: ^work_request_id, status: ^current_status} ->
-        parent_work_package_status_error(repo, work_request_id, id, current_status, next_status)
-
-      %WorkPackage{work_request_id: ^work_request_id} ->
-        :stale_status
-
-      _work_package ->
-        :not_found
-    end
-  end
-
-  defp parent_work_package_status_error(_repo, _work_request_id, _work_package_id, _current_status, _next_status),
-    do: :invalid_status
 
   defp require_slicing_status(status) when status in ["ready_for_slicing", "sliced"], do: :ok
   defp require_slicing_status(_status), do: {:error, :invalid_status}
@@ -1086,10 +976,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   defp require_contract_revision(%WorkPackage{contract_revision: revision}, revision), do: :ok
   defp require_contract_revision(%WorkPackage{}, _expected_revision), do: {:error, :stale_status}
 
-  defp require_mutable_contract(%WorkPackage{status: status}) when status in @terminal_work_package_statuses,
-    do: {:error, :invalid_status}
-
-  defp require_mutable_contract(%WorkPackage{}), do: :ok
+  defp require_mutable_contract(%WorkPackage{} = work_package) do
+    cond do
+      Lifecycle.ended?(work_package) -> {:error, :invalid_status}
+      Lifecycle.ready?(work_package) -> {:error, :contract_frozen}
+      true -> :ok
+    end
+  end
 
   defp update_contract(repo, %WorkPackage{} = work_package, attrs) do
     attrs =
@@ -1113,7 +1006,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       ])
       |> maybe_sync_policy_template()
       |> maybe_sync_engineering_scope()
-      |> maybe_invalidate_readiness(work_package)
 
     effective_contract =
       work_package
@@ -1121,16 +1013,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       |> normalize_keys()
       |> Map.merge(attrs)
 
-    next_status = Map.get(attrs, "status", work_package.status)
-    contract_attrs = Map.delete(attrs, "status")
-
     with :ok <- validate_executable_work_package_kind(effective_contract),
          :ok <- validate_product_tree_node(repo, work_package.work_request_id, Map.get(attrs, "product_tree_node_id")),
          {:ok, %WorkRequest{} = work_request} <- get(repo, work_package.work_request_id),
          :ok <- WorkPackageDeliveryScope.validate(repo, work_request, effective_contract) do
       work_package
-      |> WorkPackage.update_changeset(contract_attrs)
-      |> Ecto.Changeset.optimistic_lock(:status, fn _current -> next_status end)
+      |> WorkPackage.update_changeset(attrs)
+      |> Ecto.Changeset.optimistic_lock(:status, fn current -> current end)
       |> Ecto.Changeset.optimistic_lock(:contract_revision)
       |> repo.update()
     end
@@ -1149,13 +1038,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       :error -> attrs
     end
   end
-
-  defp maybe_invalidate_readiness(attrs, %WorkPackage{status: status})
-       when status in ["reviewing", "ci_waiting", "ready_for_merge"] do
-    Map.put(attrs, "status", "implementing")
-  end
-
-  defp maybe_invalidate_readiness(attrs, %WorkPackage{}), do: attrs
 
   defp update_existing_work_request(repo, %WorkRequest{} = work_request, attrs) do
     repo.transaction(fn ->

@@ -3,11 +3,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.NeverStartedRetention do
 
   import Ecto.Query, only: [from: 2, exclude: 2]
 
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{ArchitectHandoff, Repository, WorkRequest}
 
   # Legacy dispatches may predate dispatched_at; these states already imply execution.
-  @execution_statuses ["ready_for_worker", "active", "claimed", "implementing", "reviewing", "ci_waiting", "ready_for_merge", "merged"]
 
   @spec archive(Repository.repo(), DateTime.t(), pos_integer()) :: {:ok, [String.t()]} | {:error, Repository.error()}
   def archive(repo, now, days) do
@@ -57,7 +57,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.NeverStartedRetention do
         from(package in WorkPackage,
           where: package.work_request_id in ^ids or package.id in ^anchor_ids,
           where:
-            not is_nil(package.dispatched_at) or package.status in ^@execution_statuses or
+            not is_nil(package.dispatched_at) or package.status in ^Lifecycle.in_flight_statuses() or
               fragment("EXISTS (SELECT 1 FROM sympp_agent_runs WHERE work_package_id = ?)", package.id) or
               fragment("EXISTS (SELECT 1 FROM sympp_claim_leases WHERE work_package_id = ?)", package.id) or
               fragment("EXISTS (SELECT 1 FROM sympp_access_grants WHERE work_package_id = ? AND claimed_at IS NOT NULL)", package.id),
