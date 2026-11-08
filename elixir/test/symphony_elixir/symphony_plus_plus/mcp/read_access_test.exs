@@ -89,6 +89,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadAccessTest do
     assert read.("list_work_requests", %{})["work_requests"] |> Enum.map(& &1["id"]) |> Enum.member?(bound.id)
   end
 
+  test "reads and assignment introspection renew only a live claim and never reclaim one", %{repo: repo} do
+    {work_request, handoff} = claimable_work_request!(repo, "WR-READS-CLAIM-STATE")
+    client = connect!(repo, "client-reads-claim-state")
+    assert tool!(client, "upsert_group", %{"work_request_id" => work_request.id, "title" => "Claim"}).response["result"]
+    anchor_id = handoff.anchor_package.id
+
+    lease_at = fn seen_at ->
+      assert {:ok, lease} = ClaimLeaseService.current_for_work_package(repo, anchor_id)
+      lease |> ClaimLease.update_changeset(%{last_seen_at: seen_at}) |> repo.update!()
+    end
+
+    stale = lease_at.(DateTime.add(DateTime.utc_now(:microsecond), -6, :minute))
+    assert call!(client, "assignment", "resources/read", %{"uri" => "sympp://assignment/current"}).response["result"]
+    assert tool!(client, "get_current_assignment", %{}).response["result"]["structuredContent"]["binding"]["state"] == "stale"
+    assert {:ok, unchanged} = ClaimLeaseService.current_for_work_package(repo, anchor_id)
+    assert {unchanged.id, unchanged.last_seen_at} == {stale.id, stale.last_seen_at}
+
+    # The next write reclaims; a revoked grant then stops reads from renewing it.
+    assert tool!(client, "upsert_group", %{"title" => "Reclaim"}).response["result"]
+    due = lease_at.(DateTime.add(DateTime.utc_now(:microsecond), -1, :minute))
+    assert {:ok, _revoked} = AccessGrantService.revoke(repo, handoff.grant.id)
+    tool!(client, "list_work_requests", %{})
+    assert {:ok, %ClaimLease{last_seen_at: last_seen_at}} = ClaimLeaseService.current_for_work_package(repo, anchor_id)
+    assert last_seen_at == due.last_seen_at
+  end
+
   defp claimable_work_request!(repo, id) do
     work_request = create_work_request!(repo, id: id, status: "ready_for_slicing")
 

@@ -386,7 +386,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
       )
 
     assert {:ok, lease} = ClaimLeaseService.current_for_work_package(repo, package.id)
-    old_seen_at = DateTime.add(DateTime.utc_now(:microsecond), -6, :minute)
+    old_seen_at = DateTime.add(DateTime.utc_now(:microsecond), -1, :minute)
     lease |> ClaimLease.update_changeset(%{last_seen_at: old_seen_at}) |> repo.update!()
 
     {responses, updated_server} =

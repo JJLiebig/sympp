@@ -1516,6 +1516,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       else: SessionBindingTools.require_current_session_claim_for_bound_call(server, method, params)
   end
 
+  defp require_current_session_claim_for_bound_call(%__MODULE__{} = server, "resources/read" = method, params),
+    do: SessionBindingTools.refresh_current_session_claim_for_read(server, method, params)
+
   defp require_current_session_claim_for_bound_call(%__MODULE__{} = server, method, params),
     do: SessionBindingTools.require_current_session_claim_for_bound_call(server, method, params)
 
