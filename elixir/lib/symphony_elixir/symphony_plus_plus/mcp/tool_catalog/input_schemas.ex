@@ -449,6 +449,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     %{"type" => "object", "additionalProperties" => false, "properties" => properties, "required" => required}
   end
 
+  defp always_validate(schema, constraint), do: Map.merge(schema, %{"if" => %{}, "then" => constraint})
+
   defp scoped_properties(properties), do: Map.put(properties, "work_package_id", string_schema())
 
   defp progress_properties(:explicit) do

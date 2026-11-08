@@ -58,8 +58,9 @@ The copy has no MCP/agent access or external worktree/PR actions. Keep its
 offline marker, never promote it to live, and keep copied private data local.
 
 The [connection procedure](references/symphony-work-package/references/mcp_wiring.md)
-covers developer connections and assignment recovery. Skill
-visibility and health probes do not restore claims. Keep credentials out of
+covers developer connections and recovery. Writes need the Herdr terminal identity
+the bridge sends; agents outside Herdr are read-only. `sympp.health` shows the
+caller's terminal and the WorkRequests it owns. Keep credentials out of
 skills, prompts and shared config; ordinary reviewers need no backend.
 
 ## Linux factory server

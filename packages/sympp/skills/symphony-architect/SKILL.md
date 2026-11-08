@@ -7,7 +7,7 @@ description: Use when assigned a sympp WorkRequest, product-tree planning lane, 
 
 When the user selects Herdr-next execution, use the [optional execution helper](../symphony-worker/references/herdr-execution.md)
 to launch the existing bounded worker bootstrap. Keep dispatch and reconciliation
-in the parent; the helper does not claim work or replace standalone orchestration.
+in the parent; the helper does not replace standalone orchestration.
 
 Own product clarification, optional Group organization, WorkPackage planning, worker
 dispatch, guidance routing, and delivery closeout. Do not implement worker
@@ -20,47 +20,35 @@ authorized integration and merges, qualification and delivery to the chief.
 Keep dispatch prompts
 task-specific and supply the full scoped assignment; no worker MCP calls are required.
 Stop for material scope/product ambiguity, missing authority/evidence, branch
-ambiguity, or global Codex/plugin configuration changes. Never expose raw work
-keys, bearer/API/GitHub/Linear/MCP tokens, grant verifiers, private handoff
-payloads, claim secrets, or secret-bearing commands.
+ambiguity, or global Codex/plugin configuration changes. Never expose
+bearer/API/GitHub/Linear/MCP tokens or secret-bearing commands.
 
 ## Start
 
-When the human names this session a domain chief, call
-`register_chief({domain: "Kraken", repos?: ["owner/repo"], session_description?: "Terminal: Kraken chief"})`
-once through trusted local MCP. The bridge reports Herdr location automatically.
-Registration replaces the current chief for that domain, ignoring case, and
-attributes this session's new requests and dispatches; it grants no claim or
-dispatch authority. Ordinary work needs no registration. If this session registers
-several domains, attribution uses its most recent still-current registration.
+Run in a Herdr terminal: writes need the terminal identity the sympp bridge
+sends. Outside Herdr every write fails `read_only_outside_herdr`; reads still work.
 
-1. Read the assigned WorkRequest/package/phase through sympp MCP before planning.
-   An unbound trusted local architect session claims on its first write that
-   names a `work_request_id`. Reads never claim and read exactly the id they
-   name, whatever the session holds. Reconnects retain known scope. Creating
-   a WorkRequest does not select it or switch an existing claim. Before operating on a newly created
-   or different WorkRequest, call `claim_local_architect_assignment` with its
-   returned `local_architect_claim_arguments`. To return to the previous
-   WorkRequest, explicitly claim its id again. See
-   [claim switching and recovery](references/operations.md#bootstrap-recovery).
-   An active claim held by another architect means leave that work with its
-   owner; retry after the claim expires. Do not copy its identity to join it.
-   Worker sessions cannot become architects implicitly. For
-   `phase_scope_not_available` or `work_request_terminal`, follow
-   [bootstrap recovery](references/operations.md#bootstrap-recovery).
+Ownership is "worked on by <terminal>". Your first owner-gated write on a
+WorkRequest (planning, dispatch, `sync_pr`, closeout, blockers, `set_report`)
+makes your terminal its owner; `create_work_request` does the same unless you
+pass `own: false`. Restarting, compacting or `/clear` in the same terminal keeps
+ownership. A write from another terminal fails `owned_by_other_terminal` with the
+owner's address and `next_action` ("ask <address>, or wait until it finishes"):
+leave the work with its owner. Ownership ends when that terminal finishes, its
+agent exits cleanly on a machine the factory can't see, the operator presses
+Release on the board, or the WorkRequest is archived. A lapsed heartbeat never
+ends it. `sympp.health` shows your terminal and the WorkRequests it owns.
+
+1. Read the assigned WorkRequest through sympp MCP before planning. Reads never
+   take ownership. Pass `work_request_id` explicitly; tools that name a
+   `work_package_id` use that package's WorkRequest when you omit it.
 2. For WorkRequest lanes, read `read_work_request(work_request_id)` and
    `read_plan(work_request_id, view?, detail?)` before planning WorkPackages or
    rearranging Groups.
-3. If MCP/session/scope state is unavailable, record/report the blocker. Do not
+3. If MCP or WorkRequest state is unavailable, report the blocker. Do not
    invent state.
 
 ## Context Format
-
-The client bridge reports location automatically inside Herdr. Outside Herdr,
-optionally include `session_description` on an existing `read_work_request`,
-`claim_local_architect_assignment`, or `get_current_assignment` call, for example
-`"Terminal window: widget planning"`. Use words the operator can recognize;
-omit secrets and private connection details. Do not add a registration step.
 
 TOON is presentation only. Send schema-native JSON tool arguments;
 `structuredContent` is the canonical machine-readable result.
@@ -123,23 +111,19 @@ Use `slice_work_request` to create planned packages atomically; there is no
 separate approval/finish step. Use `update_work_package` with
 `expected_contract_revision` for planned contract changes. Root packages need
 no synthetic Group. Skip stale/superseded planned packages. For Group edits,
-secondary repo defaults, or omitted current-WR ids, read
+secondary repo defaults, read
 [planning operations](references/operations.md#planning-operations).
 
 ## Dispatch
 
-For an old claim blocking a replacement worker, an authenticated architect
-may use `force_release_work_package_claim`; read
-[claim repair](references/operations.md#claim-repair) before releasing authority.
-
 Call `dispatch_work_package` for planned packages. It enforces the same graph
 as `read_plan`, rejecting cycles/unmet dependencies, and atomically activates
-the canonical row with optional worker grant/resources and an ordinary assignment
-bootstrap. Dispatch ownership belongs to the architect; workers need no claim.
+the canonical row with an ordinary assignment bootstrap. Dispatch belongs to the
+architect; workers make no sympp calls.
 
 Dispatch defaults to ids, status, recorded workspace/branch pattern and
 `assignment_uri`. Read that URI with MCP `resources/read` and save the returned
-JSON bootstrap for the worker. This read neither dispatches nor claims again.
+JSON bootstrap for the worker. This read does not dispatch again.
 Use `detail: "full"` on the initial dispatch to receive `worker_bootstrap`
 inline with all existing assignment fields. Do not redispatch to fetch details.
 The resource reflects current contract and evidence; capture it before launch.
@@ -174,7 +158,7 @@ Worker prompts contain task-specific data only:
   decisions/dependencies, and contract deviations or assigned budgets.
 - Full scoped acceptance, allowed/forbidden paths, native validation/review,
   stop conditions, and relevant prior findings/decisions from dispatch. No worker
-  MCP setup, claims, status calls, or duplicate review receipts.
+  MCP setup, status calls, or duplicate review receipts.
 - Delivery owner and required PR/no-PR evidence. Scope, acceptance, validation,
   review, and stop conditions come from the current scoped package contract;
   include any task-specific context missing there.
@@ -193,15 +177,14 @@ requests. Ask the chief only when you remain genuinely unsure.
 
 ## Guidance
 
-Optionally write one concise operator report at a meaningful package/phase delivery,
-road bump, or human escalation. Use `append_progress` on your current architect
-anchor with payload `{"type":"architect_operator_report"}` and only changed fields:
-`brief` (2–3 sentences), free-text `eta`, `parking:{reason}`, or
-`human_escalation:{question}`. Set parking/escalation to `null` to resume/resolve;
-the server owns times and preserves other fields. Route human decisions to the chief
-when present, otherwise the user; resolve the escalation after a native conversational
-answer without duplicate worker receipts. Questions and ordinary waits do not declare
-escalations or blockers. No report cadence or extra checklist is required.
+Optionally write one concise operator report at a meaningful package/phase delivery
+or road bump with `set_report(work_request_id, ...)`, sending only changed fields:
+`brief` (2–3 sentences), free-text `eta`, or `parking:{reason}`. Set a field to
+`null` to clear it; clearing `parking` records that work resumed. The server owns
+times and keeps other fields. For a human question that needs the board's
+**Needs you**, use `ask_question` (with a `decision_prompt` for choices) and close
+it once answered. Route human decisions to the chief when present, otherwise the
+user. Questions and ordinary waits are not blockers. No report cadence is required.
 
 - Answer worker questions in the conversation when recorded intent decides them.
   Do not require a duplicate sympp question record. Ordinary waits are not blockers.
@@ -231,7 +214,7 @@ After the worker returns, verify acceptance and the required native checks/revie
 for the exact PR head once. Then call architect `sync_pr` with `work_package_id`,
 `url` (or `number` and `repository`) from the normal handoff. Optional `head_sha`
 must match when supplied. It fetches GitHub evidence and
-applies existing readiness and dependency gates without worker claims or receipts.
+applies existing readiness and dependency gates without worker receipts.
 Readiness does not independently prove native checks/review passed; unknown provider
 fields stay unknown. Missing optional observations do not prevent this workflow.
 Once GitHub reports the attached PR merged, sync, reconciliation and periodic PR
@@ -267,12 +250,8 @@ read [terminal evidence](references/operations.md#terminal-evidence).
 `finished` means the PR waits on someone else: the WorkRequest can complete but
 dependents stay blocked. Any chief or architect may record it.
 
-Do not infer delivery from prose decisions or chat. A successful terminal
-closeout revokes live worker grants and releases
-current claim leases; do not require a separate worker
-or runtime-cleanup step first. Use `cleanup_work_request_work_package_runtime`
-only to recycle runtime without terminal closeout or to clear recoverable worker
-MCP session bindings explicitly.
+Do not infer delivery from prose decisions or chat. Ending a package resolves its
+blockers and queues worktree cleanup; no separate worker or runtime step is needed.
 If package evidence is missing or ambiguous, do not record WorkRequest delivery
 closeout; repair evidence first.
 Record external GitHub merges truthfully even when out of order. Reconciliation
@@ -288,5 +267,5 @@ retire obsolete scope but cannot satisfy dependencies or deliver an all-skipped 
 After required delivery and WR acceptance, optional sanity checks create follow-up
 work; they are not another completion gate.
 
-Human attention is **Needs you**, raised only by the chief or architect with one sentence stating the action: a human question or product/policy approval, access only the human can grant, or recovery exhausted after the system tried. Use `human_escalation:{question}` in the architect report.
+Human attention is **Needs you**, raised only by the chief or architect with one sentence stating the action: a human question or product/policy approval, access only the human can grant, or recovery exhausted after the system tried. Raise it with `ask_question`.
 Read `read_delivery_board` for stale workers (`next_actor: architect`, `inspect_runtime`), blockers and validation evidence; handle silent workers, failing checks and quiet tasks before escalating exhausted recovery. Review rounds, running CI, dependencies, queues and worker-parent questions never need human attention by themselves.

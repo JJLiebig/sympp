@@ -32,12 +32,11 @@ entrypoint. Chiefs understand service responsibilities and coordinate decisions
 across domains. They do not all need to sit under a machine-wide LLM supervisor.
 A current calling agent can own small work without introducing another chief.
 
-Optional chief self-registration and attribution are implemented through the
-packaged [architect](../../packages/sympp/skills/symphony-architect/SKILL.md#start)
-and [coordinator](../../packages/sympp/skills/symphony-coordinator/SKILL.md#start)
-procedures. Registration records domain and session location, never ownership
-or dispatch authority; native boards expose the current chiefs as last-known
-locations.
+Chief attribution comes from terminal labels: the board's chief launcher starts a
+chief terminal labelled `sympp.role=chief` and `sympp.domain=<topic>`, and the
+bridge forwards those labels with each call. There is no registration step; see
+the packaged [coordinator](../../packages/sympp/skills/symphony-coordinator/SKILL.md)
+procedure.
 
 The feature architect owns one substantial request: clarify intent, review the
 plan, slice and dispatch work, resolve findings, integrate, and oversee merges.
@@ -154,7 +153,7 @@ must not authorize a worker takeover or imply delivery.
 
 The packaged
 [architect procedure](../../packages/sympp/skills/symphony-architect/references/operations.md#ui-collaboration-and-candidates)
-owns durable approval, claim handoff, candidate selection, successor replacement
+owns durable approval, reviewer handoff, candidate selection, successor replacement
 and ordered merge. This contract is not a second agent checklist.
 Installed setup and recovery live in [Runtime](../runtime.md); the operator
 view lives in [Operations](../operations.md). Completed implementation and

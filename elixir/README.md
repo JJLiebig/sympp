@@ -96,37 +96,25 @@ there is no business CLI or private-file fallback.
 
 ## WorkRequest Planned-Slice Dispatch
 
-Normal sympp WorkRequest planned-slice dispatch returns a ledger-backed
-worker bootstrap instead of a private worker secret handoff. MCP responses expose
-`worker_bootstrap`. The bootstrap uses `type: "ledger_claim"` and
-`mode: "local_assignment"`, names the `claim_local_assignment` MCP claim path,
-lists the required worker skills, and includes the resolved local ledger
-database when dispatch can identify one.
+Dispatching a planned WorkPackage returns an assignment bootstrap
+(`worker_bootstrap`, or the `assignment_uri` resource) with the worker contract,
+required skills and launch prompt. Workers make no sympp MCP calls; no worker
+secret, grant or private handoff path is issued.
 
-Normal dispatch responses do not include a private handoff path, helper
-command, or secret-retrieval metadata.
+## Ownership And Local Operator Decisions
 
-## Local Operator WorkRequest Decisions
+Writes need the Herdr terminal identity the sympp bridge sends; other callers are
+read-only. The first owner-gated write on a WorkRequest makes the calling
+terminal its owner, and writes from other terminals are refused
+`owned_by_other_terminal`. See [Security](../docs/security.md).
 
-Trusted local HTTP MCP sessions may create WorkRequests and record non-secret
-WorkRequest decisions without claiming each WorkRequest as the owning architect
-through `record_work_request_operator_decision`.
-
-The tool requires an explicit local MCP state key, a trusted local daemon, and
-a local filesystem ledger database. It remains visible with
-`create_work_request` when the MCP wrapper is bound to a worker or architect
-assignment, but it does not widen that assignment's package or WorkRequest
-authority. It is rejected for remote/company database URLs. The tool reuses the
-WorkRequest decision service, stores `source_type: "operator"`, includes caller
-provenance such as `created_by`, and applies the standard redaction pass before
-persisting or returning decision content.
-
-The tool requires `work_request_id`, `decision`, `rationale`, and
-`scope_impact`; `created_by` is required without a live claim, and `source_id`
-is optional. Unexpected, non-string, or overlong fields are rejected.
-
-This path is decision capture only. It does not grant dispatch, child-package
-mutation, worker claim, status mutation, or lifecycle closeout authority.
+`record_work_request_operator_decision` records a non-secret operator decision on
+any WorkRequest without owning it. It requires `work_request_id`, `decision`,
+`rationale`, and `scope_impact`; `created_by` defaults to the calling terminal and
+`source_id` is optional. It stores `source_type: "operator"`, applies the standard
+redaction pass, and rejects unexpected, non-string, or overlong fields. It is
+decision capture only: it grants no dispatch, package mutation, status mutation,
+or lifecycle closeout authority.
 
 ## Configuration
 

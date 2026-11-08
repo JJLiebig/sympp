@@ -19,7 +19,7 @@ This guide describes implemented behavior. The approved beta direction is in
 | Solo Session | Optional persistent plans, progress, findings, decisions, blockers, and validation for ordinary single-agent work. |
 
 A WorkPackage owns its goal, file scope, delivery repository/base, acceptance
-criteria, optional validation/stop/review context, claim, worktree, branch, PR,
+criteria, optional validation/stop/review context, worktree, branch, PR,
 progress, findings, readiness, blockers, and terminal delivery evidence.
 Dispatch activates that record; it does not create a second execution record.
 
@@ -38,20 +38,21 @@ or cyclic successors remain unresolved. Later retirement annotations never
 erase actual historical delivery. Explicit operator completion remains available.
 `sliced` remains the stored planning status; delivery does not change it.
 
-Solo Sessions do not create a WorkRequest, WorkPackage, worker grant, or dispatch.
+Solo Sessions do not create a WorkRequest, WorkPackage, or dispatch.
 All ledger operations, including Solo, use MCP. The packaged
 [agent skills](../packages/sympp/skills/) own operating procedures.
 
 ## Review And Delivery Authority
 
-The architect can optionally author a goal brief, free-text ETA, parking reason,
-and explicit human escalation question. The dashboard and `read_work_request`
-expose these under `work_request.operator_report`, with server-written times.
-Partial edits preserve other fields; resolving an escalation or resuming parked
-work retains the original question/reason and its times. Ordinary questions and
-worker waits are not escalation. Reports neither create/clear blockers nor
-complete/reopen work: `completed_at` remains delivery truth. Reports reuse the
-authenticated architect anchor history; there is no worker reporting cadence.
+The owning architect can optionally set a goal brief, free-text ETA and parking
+reason with `set_report`; `null` clears a field. The report is stored on the
+WorkRequest, and the dashboard and `read_work_request` expose it as
+`work_request.operator_report` with server-written times. Partial edits preserve
+other fields; resuming parked work keeps the reason and its times. A human
+question the architect raised before reports moved stays visible as a pending
+question until answered. New human questions use `ask_question`. Reports neither
+create/clear blockers nor complete/reopen work: `completed_at` remains delivery
+truth. There is no worker reporting cadence.
 
 A declared review requirement identifies a provider and optional arguments,
 such as `review-suite` with its selected mode. It can also name another plugin
@@ -87,20 +88,19 @@ development. See [Runtime](runtime.md) for lifecycle and installation details.
 
 | Layer | Owns |
 |---|---|
-| Ledger | Requests, Groups, packages, questions, decisions, dependencies, grants, progress, and delivery evidence. |
-| MCP | Discovery, claims, scoped reads/mutations, dispatch, readiness, and recovery. |
+| Ledger | Requests, Groups, packages, questions, decisions, dependencies, ownership, progress, and delivery evidence. |
+| MCP | Discovery, reads, owner-gated mutations, dispatch, readiness, and recovery. |
 | Dashboard | Human projection of ledger, GitHub state, and runtime activity. |
 | Plugin packages | Installation, launchers, and authoritative agent procedures. |
 | GitHub | Branches, commits, PRs, checks, reviews, and merge truth. |
 
 Workers receive a complete assignment, run native checks/review, and return a
 normal PR or evidence handoff. The architect owns dispatch, readiness, blockers,
-and delivery reconciliation. Worker MCP access is optional and scoped to one
-WorkPackage; architects claim one WorkRequest. The server
-derives repository, base branch, phase, anchor, worktree, and grant context from
-the ledger and validates supplied context against it. Tool discovery is not
-authorization: calls still check session, role, capabilities, resource scope,
-and lifecycle state. See [Security](security.md).
+and delivery reconciliation from the Herdr terminal that owns the WorkRequest;
+workers make no sympp calls. The server derives repository, base branch and
+worktree context from the ledger and validates supplied context against it.
+Tool discovery is not authorization: writes still check terminal identity,
+WorkRequest ownership and lifecycle state. See [Security](security.md).
 
 `SPEC.md` and the non-sympp parts of `elixir/` describe upstream Symphony:
 tracker polling, workspace management, Codex app-server execution, and runtime
@@ -136,7 +136,7 @@ to qualify the delivered input. Dependencies
 that have never carried a candidate pin continue to require only delivery.
 
 
-`read_context` exposes `dependency_selections`; `read_plan` exposes each expanded
+`read_plan` exposes each expanded
 constraint. A changed pin or candidate head makes affected input provenance stale.
 After qualifying the new input, append its selection for the current dependent head;
 other edges retain their valid selections. Repinning never refreshes old evidence.

@@ -3,14 +3,12 @@ Code.require_file("../mcp_harness.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.CommonHelpers do
   @moduledoc false
 
-  import Ecto.Query, only: [from: 2]
   import ExUnit.Assertions
   alias Ecto.Adapters.SQL
   alias SymphonyElixir.MCPHarness
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Config
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Server
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
 
@@ -123,12 +121,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.CommonHelpers do
     end
   end
 
-  def attach_tool(repo, session, name, arguments) do
+  def attach_tool(repo, terminal, name, arguments) do
     response =
       MCPHarness.request(
         %{"jsonrpc" => "2.0", "id" => name, "method" => "tools/call", "params" => %{"name" => name, "arguments" => arguments}},
         repo: repo,
-        session: session
+        terminal: terminal
       )
 
     assert get_in(response, ["result", "structuredContent", "progress_event", "id"])
@@ -156,43 +154,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.CommonHelpers do
 
   def metadata_idempotency_key(payload) do
     "mcp:" <> Map.get(payload, "type", "metadata") <> ":" <> Base.url_encode64(:erlang.term_to_binary(payload), padding: false)
-  end
-
-  def sync_pr_state(repo, session, url, head_sha) do
-    attach_tool(repo, session, "sync_pr", %{
-      "recovery" => %{
-        "url" => url,
-        "head_sha" => head_sha,
-        "check_summary" => %{"status" => "passing"},
-        "review_state" => %{"status" => "approved"},
-        "merge_state" => %{"status" => "clean", "merged" => false}
-      }
-    })
-  end
-
-  def move_latest_attach_pr_created_at_before_prior_sync(repo, work_package_id) do
-    assert {:ok, progress_events} = PlanningRepository.list_progress_events(repo, work_package_id)
-
-    event =
-      progress_events
-      |> Enum.filter(fn event ->
-        payload = event.payload || %{}
-        payload["source_tool"] == "attach_pr" and payload["head_sha"] == "head-b"
-      end)
-      |> Enum.max_by(&(&1.sequence || 0))
-
-    assert {1, nil} =
-             repo.update_all(
-               from(progress_event in ProgressEvent, where: progress_event.id == ^event.id),
-               set: [created_at: ~U[2020-01-01 00:00:00Z]]
-             )
-  end
-
-  def append_merge_ready_evidence(repo, session, work_package_id, head_sha) do
-    pr_url = "https://github.com/example/repo/pull/#{System.unique_integer([:positive])}"
-
-    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/#{work_package_id}/worker", "head_sha" => head_sha})
-    attach_tool(repo, session, "attach_pr", %{"url" => pr_url, "head_sha" => head_sha})
   end
 
   def review_suite_artifact_id(work_package_id, head_sha) do

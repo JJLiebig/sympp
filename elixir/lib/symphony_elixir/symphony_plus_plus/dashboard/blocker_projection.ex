@@ -72,8 +72,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection do
   def actor(%ProgressEvent{} = event) do
     %{
       id: event.actor_id,
-      type: event.actor_type,
-      access_grant_id: event.access_grant_id
+      type: event.actor_type
     }
   end
 

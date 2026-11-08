@@ -50,18 +50,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.HandoffHelpers do
     path
   end
 
-  def test_dispatch_handoff_store_dir do
-    test_handoff_store_dir()
-    |> Path.join("dispatch-#{System.unique_integer([:positive])}")
-  end
-
-  def test_handoff_opts(claimed_by, store_dir \\ test_handoff_store_dir()) do
-    [
-      claimed_by: claimed_by,
-      store_dir: store_dir
-    ]
-  end
-
   def sqlite_file_uri(path, query) do
     encoded_path =
       path

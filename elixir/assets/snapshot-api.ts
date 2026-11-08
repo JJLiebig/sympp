@@ -146,14 +146,11 @@ const MUTATIONS: Array<[RegExp, Mutation]> = [
   [/^\/work-requests\/([^/]+)\/archive$/, archiveRequest],
   [/^\/work-requests\/([^/]+)\/delete$/, deleteRequest],
   [/^\/work-requests\/([^/]+)\/restore$/, restoreRequest],
-  [/^\/work-requests\/([^/]+)\/architect-handoff$/, architectHandoff],
   [/^\/work-requests\/([^/]+)\/questions\/([^/]+)\/answer$/, answerQuestion],
 ];
 
 async function handlePost(snapshot: Snapshot, route: string, req: IncomingMessage, res: ServerResponse, notify: () => void) {
   const body = await readBody(req);
-  // Like the offline sandbox, a snapshot has no running sessions to bring to the front.
-  if (route.endsWith("/focus")) return sendJson(res, 403, { error: "A snapshot has no running sessions to open." });
   const mutation = MUTATIONS.find(([pattern]) => pattern.test(route));
   if (!mutation) return sendJson(res, 200, { ok: true, simulated: true, refresh: { dashboard: false } });
 
@@ -199,12 +196,6 @@ function restoreRequest(snapshot: Snapshot, id: string) {
   section.work_requests = (section.work_requests ?? []).filter((card: Json) => card.id !== id);
   section.total_count = section.work_requests.length;
   return { work_request: { id, archived_at: null } };
-}
-
-function architectHandoff(snapshot: Snapshot, id: string) {
-  const [card] = requestRecords(snapshot, id);
-  const prompt = `Snapshot preview. A live backend would issue an architect handoff for "${card?.title ?? id}" (${card?.repo ?? "unknown repo"}).`;
-  return { refresh: { dashboard: false }, architect_handoff: { status: "simulated", prompt, work_request: { id, repo: card?.repo, base_branch: card?.base_branch, status: card?.status } } };
 }
 
 function answerQuestion(snapshot: Snapshot, id: string, body: Json) {
