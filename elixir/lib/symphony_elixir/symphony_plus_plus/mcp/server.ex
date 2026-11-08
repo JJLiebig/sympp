@@ -1449,7 +1449,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:error, _code, _message, _data} = error -> error
       {:tool_error, reason} -> invalid_params_error("read_task_plan", reason)
       {:error, :not_found} -> not_found_error("read_task_plan")
-      {:error, reason} -> architect_error(reason, "read_task_plan")
+      {:error, reason} -> local_operator_error(reason, "read_task_plan")
     end
   end
 
