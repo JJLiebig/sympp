@@ -9,24 +9,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HerdrBinding do
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
 
-  @spec response_binding(term(), term()) :: map() | nil
-  def response_binding(payloads, responses) when is_list(payloads) and is_list(responses) do
+  @spec response_binding(term(), term(), module()) :: map() | nil
+  def response_binding(payloads, responses, repo) when is_list(payloads) and is_list(responses) do
     Enum.reduce(payloads, nil, fn payload, binding ->
       case response_for_payload(payload, responses) do
         nil -> binding
-        response -> response_binding(payload, response) || binding
+        response -> response_binding(payload, response, repo) || binding
       end
     end)
   end
 
-  def response_binding(%{"method" => "tools/call", "params" => %{"name" => name} = params}, %{"result" => result} = response) do
+  def response_binding(%{"method" => "tools/call", "params" => %{"name" => name} = params}, %{"result" => result} = response, repo) do
     arguments = if is_map(params["arguments"]), do: params["arguments"], else: %{}
 
     with false <- Map.get(result, "isError", false),
          %Terminal{} = terminal <- Terminal.from_params(params),
          true <- binds?(name, arguments, response),
-         work_request_id when is_binary(work_request_id) <- work_request_id(arguments, response) do
+         work_request_id when is_binary(work_request_id) <- work_request_id(arguments, response, repo) do
       %{"role" => terminal.role, "work_request_id" => work_request_id, "show_inspector" => true}
     else
       _no_binding -> nil
@@ -35,7 +36,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HerdrBinding do
     _error -> nil
   end
 
-  def response_binding(_payload, _response), do: nil
+  def response_binding(_payload, _response, _repo), do: nil
 
   @spec encode(map()) :: String.t()
   def encode(binding) when is_map(binding) do
@@ -47,10 +48,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HerdrBinding do
   defp binds?("create_work_request", _arguments, response), do: is_map(get_in(response, ["result", "structuredContent", "worked_on"]))
   defp binds?(name, arguments, _response), do: ToolCatalog.owner_gated_call?(name, arguments)
 
-  defp work_request_id(arguments, response) do
+  # A package-only call names its WorkRequest through the package.
+  defp work_request_id(arguments, response, repo) do
     nonblank(Map.get(arguments, "work_request_id")) ||
       nonblank(get_in(response, ["result", "structuredContent", "work_request", "id"])) ||
-      nonblank(get_in(response, ["result", "structuredContent", "work_request_id"]))
+      nonblank(get_in(response, ["result", "structuredContent", "work_request_id"])) ||
+      package_work_request_id(repo, nonblank(Map.get(arguments, "work_package_id")))
+  end
+
+  defp package_work_request_id(_repo, nil), do: nil
+
+  defp package_work_request_id(repo, work_package_id) do
+    case WorkPackageRepository.get(repo, work_package_id) do
+      {:ok, %{work_request_id: id}} -> nonblank(id)
+      _missing -> nil
+    end
   end
 
   defp response_for_payload(%{"id" => id}, responses), do: Enum.find(responses, &match?(%{"id" => ^id}, &1))

@@ -151,7 +151,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
       case status do
         :stored ->
           %Server{} = maybe_updated_server
-          {:ok, result(response, state_key, HerdrBinding.response_binding(payload, response))}
+          {:ok, result(response, state_key, HerdrBinding.response_binding(payload, response, config.repo))}
 
         :skipped ->
           {:ok, result(response, nil)}

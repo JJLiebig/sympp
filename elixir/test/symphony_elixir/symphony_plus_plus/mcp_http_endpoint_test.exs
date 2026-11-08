@@ -373,6 +373,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
     assert json_response(refused, 200)["error"]["data"]["reason"] == "owned_by_other_terminal"
     assert get_resp_header(refused, "sympp-herdr-binding") == []
+
+    # A write naming only the package binds the terminal to the package's WorkRequest.
+    sliced =
+      terminal_call(headers, "t1", "slice_work_request", %{
+        "work_request_id" => request_id,
+        "work_packages" => [WorkPackageFactory.attrs(goal: "Bind by package", allowed_file_globs: ["docs/**"], validation_steps: [], stop_conditions: [])]
+      })
+
+    [package_id] = get_in(sliced, ["result", "structuredContent", "work_package_ids"])
+
+    progress =
+      tool_call_request("progress", "append_progress", %{"work_package_id" => package_id, "summary" => "Started", "idempotency_key" => "bind-1"})
+      |> with_terminal("t1")
+      |> post_json(headers)
+
+    assert json_response(progress, 200)["result"]
+    assert herdr_binding(progress)["work_request_id"] == request_id
   end
 
   test "a clean bridge detach ends its terminal's ownership" do
