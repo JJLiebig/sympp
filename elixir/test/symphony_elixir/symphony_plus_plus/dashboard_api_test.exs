@@ -456,9 +456,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  repo,
                  WorkPackageFactory.attrs(
                    id: "SYMPP-DASH-PHASE-REPO-BARE",
-                   kind: "delegation",
+                   kind: "mcp",
                    phase_id: phase.id,
-                   status: "planning",
+                   status: "planned",
                    repo: "sympp",
                    base_branch: "main"
                  )
@@ -477,8 +477,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  )
                )
 
-      assert {:ok, board} = Dashboard.phase_board(repo, phase.id, status: "planning")
-      assert [%{id: bare_id} = card] = board.groups["planning"]
+      assert {:ok, board} = Dashboard.phase_board(repo, phase.id, status: "planned")
+      assert [%{id: bare_id} = card] = board.groups["planned"]
       assert bare_id == bare.id
       assert card.repo == "sympp"
       assert card.repo_key == "sympp"

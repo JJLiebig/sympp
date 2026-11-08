@@ -491,7 +491,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
       "group_id" => nullable_string_schema(),
       "title" => task_title_schema(),
       "goal" => nonblank_string_schema(),
-      "kind" => Map.put(string_enum_schema(WorkPackage.executable_kinds()), "default", "standard_pr"),
+      "kind" => Map.put(string_enum_schema(WorkPackage.kinds()), "default", "standard_pr"),
       "repo" => described_string_schema("Optional delivery repo. Defaults to the WorkRequest primary repo."),
       "base_branch" => described_string_schema("Optional delivery base branch. Defaults to the WorkRequest base branch."),
       "branch_pattern" => described_string_schema("Optional exact branch or {{placeholder}} template."),

@@ -27,8 +27,6 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
 
   @local_operator_actor "local-operator"
   @review_observation_timeout_ms 3_500
-  @architect_handoff_anchor_id_like "SYMPP-WR-ARCH-%"
-  @architect_handoff_anchor_kind "delegation"
 
   @spec operator_dashboard_payload(module()) :: {:ok, map()} | {:error, term()}
   def operator_dashboard_payload(repo) do
@@ -349,7 +347,6 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
 
   defp operator_execution_context(repo, work_requests) do
     with {:ok, context} <- operator_dashboard_context(repo, true, work_requests),
-         {:ok, architect_handoff_anchor_work_package_ids} <- architect_handoff_anchor_work_package_ids(repo),
          {:ok, expired_unwork_request_work_package_ids} <-
            expired_unwork_request_work_package_ids_for_local_operator(
              repo,
@@ -361,7 +358,6 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
         |> effective_hidden_work_package_ids(MapSet.new(context.active_work_request_work_package_ids))
         |> MapSet.union(expired_unwork_request_work_package_ids)
         |> MapSet.union(context.archived_work_request_work_package_ids)
-        |> MapSet.union(architect_handoff_anchor_work_package_ids)
 
       {:ok, Map.put(context, :hidden_work_package_ids, hidden_work_package_ids)}
     end
@@ -499,21 +495,6 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
       end
 
     {:ok, result}
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp architect_handoff_anchor_work_package_ids(repo) do
-    ids =
-      repo.all(
-        from(work_package in WorkPackage,
-          where: work_package.kind == @architect_handoff_anchor_kind,
-          where: like(work_package.id, ^@architect_handoff_anchor_id_like),
-          select: work_package.id
-        )
-      )
-
-    {:ok, MapSet.new(ids)}
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end

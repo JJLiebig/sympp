@@ -269,43 +269,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
 
   test "local operator dashboard omits unowned execution records", %{repo: repo} do
     with_local_operator_endpoint(fn ->
-      anchor =
+      unowned_package =
         create_work_package!(repo,
-          id: "SYMPP-WR-ARCH-DASHBOARD-ANCHOR",
-          kind: "delegation",
-          title: "Architect handoff: Dashboard cleanup",
-          status: "planning",
+          id: "WP-LOCAL-UNOWNED-DELIVERY",
+          kind: "mcp",
+          title: "Package without a WorkRequest",
+          status: "dispatched",
           repo: "nextide/symphony-plus-plus",
           base_branch: "main"
         )
 
-      ordinary_delegation =
-        create_work_package!(repo,
-          id: "WP-LOCAL-DELEGATION-NONANCHOR",
-          kind: "delegation",
-          title: "Delegation delivery package",
-          status: "planning",
-          repo: anchor.repo,
-          base_branch: anchor.base_branch
-        )
-
-      prefixed_delivery_package =
-        create_work_package!(repo,
-          id: "SYMPP-WR-ARCH-DASHBOARD-DELIVERY",
-          kind: "mcp",
-          title: "Prefix-like delivery package",
-          status: "dispatched",
-          repo: anchor.repo,
-          base_branch: anchor.base_branch
-        )
-
       payload = local_operator_dashboard_payload()
 
-      package_ids = dashboard_work_package_ids(payload)
-
-      refute anchor.id in package_ids
-      refute ordinary_delegation.id in package_ids
-      refute prefixed_delivery_package.id in package_ids
+      refute unowned_package.id in dashboard_work_package_ids(payload)
     end)
   end
 

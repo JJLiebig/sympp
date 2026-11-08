@@ -7,9 +7,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
   exactly one ending row (`WorkPackageDelivery`), which is the only record of
   how it ended; `DeliveryCloseout` writes that row and ends the package through
   `transition/4` in the same transaction.
-
-  Architect anchors (kind `delegation`) keep their own `planning` status and
-  never pass through this module.
   """
 
   import Ecto.Query, only: [from: 2]
