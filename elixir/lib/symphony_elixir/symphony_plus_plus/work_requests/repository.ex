@@ -844,6 +844,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     with :ok <- validate_executable_work_package_kind(effective_contract),
          :ok <- validate_product_tree_node(repo, work_package.work_request_id, Map.get(attrs, "product_tree_node_id")),
          {:ok, %WorkRequest{} = work_request} <- get(repo, work_package.work_request_id),
+         :ok <- Phase.require_writable(work_request),
          :ok <- WorkPackageDeliveryScope.validate(repo, work_request, effective_contract) do
       work_package
       |> WorkPackage.update_changeset(attrs)
