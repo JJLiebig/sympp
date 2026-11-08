@@ -194,7 +194,7 @@ function asks(now: number): Ask[] {
 }
 
 function decisions(now: number): Decision[] {
-  const decision = (id: string, goalId: string, text: string, rationale: string, by: Terminal, ago: number): Decision => ({ id, goalId, text, rationale, by, at: now - ago * MIN, state: "recorded", feedback: null, delivered: null });
+  const decision = (id: string, goalId: string, text: string, rationale: string, by: Terminal, ago: number): Decision => ({ id, goalId, text, rationale, by, at: now - ago * MIN, state: "recorded", feedback: null, delivered: null, dismissed: false });
   return [
     decision("dec-alerts-scope", "wr-alerts", "Alerts fire only for streams with a signed sponsor contract.", "Prospect streams have no segment schedule to compare against, so every one would alert.", KRAKEN, 140),
     decision("dec-cards", "wr-owner", "A card appears once a chief's child terminal has a branch or a PR.", "Reviewers and explorers never open branches, so they stay off the board without a special case.", HERDR, 55),
@@ -231,6 +231,8 @@ export function applyDemo(board: Board, action: OperatorAction, now: number): Bo
       return { ...board, asks: board.asks.filter((ask) => ask.id !== action.askId) };
     case "ack":
       return decisionWith(action.decisionId, (entry) => ({ ...entry, state: "acknowledged" }));
+    case "dismiss_feedback":
+      return decisionWith(action.decisionId, (entry) => ({ ...entry, dismissed: true }));
     case "feedback":
       return decisionWith(action.decisionId, (entry) => ({ ...entry, state: "feedback", feedback: action.text, delivered: entry.by.liveness !== "finished" }));
     case "finish":

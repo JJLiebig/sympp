@@ -13,7 +13,7 @@ export function Briefing({ at, views }: { at: number; views: GoalView[] }) {
   const lanes = lanesOf(views, at);
 
   return (
-    <div className="mx-auto max-w-[1080px]">
+    <div className="mx-auto max-w-[1280px]">
       <div className="space-y-4">
         {lanes.main.map((view) => (
           <GoalReport key={view.goal.id} at={at} view={view} />
