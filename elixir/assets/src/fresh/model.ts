@@ -52,7 +52,7 @@ export type Goal = { id: string; title: string; area: string[]; repo: string; ba
 export type Choice = { id: string; label: string; pros: string[]; cons: string[]; recommended?: boolean };
 export type Ask = { id: string; question: string; from: number; by: Terminal; goalId: string | null; pkgId: string | null; cardId: string | null; choices: Choice[] };
 // A product call a chief or architect flagged for review. `delivered` says whether feedback reached its terminal.
-export type Decision = { id: string; goalId: string; text: string; rationale: string | null; by: Terminal; at: number; state: "recorded" | "acknowledged" | "feedback"; feedback: string | null; delivered: boolean | null };
+export type Decision = { id: string; goalId: string; text: string; rationale: string | null; by: Terminal; at: number; state: "recorded" | "acknowledged" | "feedback"; feedback: string | null; delivered: boolean | null; dismissed: boolean };
 // Small work without a WorkRequest: a chief's child terminal with a branch or a PR. `since` is when it reached its state.
 export type CardState = "working" | "review_ci" | "merged" | "done";
 export type Card = { id: string; task: string; repo: string; area: string[]; branch: string; by: Terminal; pr: Pr | null; ci: Ci | null; review: Review | null; state: CardState; since: number; dismissed: boolean };

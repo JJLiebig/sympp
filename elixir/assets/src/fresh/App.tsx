@@ -22,7 +22,7 @@ import { Status, useTabSignal } from "./status";
 
 const DIRECTIONS = [
   { key: "outline", label: "Outline", hint: "Goals that open themselves", view: Outline, width: "max-w-[1280px]" },
-  { key: "briefing", label: "Briefing", hint: "Each goal reports in", view: Briefing, width: "max-w-[1080px]" },
+  { key: "briefing", label: "Briefing", hint: "Each goal reports in", view: Briefing, width: "max-w-[1280px]" },
   { key: "phases", label: "Phases", hint: "Where each goal is on its route", view: Phases, width: "max-w-[1280px]" },
 ] as const;
 const DENSITIES: Array<{ key: Density; label: string; hint: string }> = [

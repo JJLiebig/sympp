@@ -21,7 +21,7 @@ function actionsFor(phase: Phase, moving: number): Action[] {
 }
 
 // A button for one operator action. With `confirm` it takes a second click. A refusal shows next to it.
-export function ActButton({ action, className = "", confirm, label, tone = "text-dim" }: { action: OperatorAction; className?: string; confirm?: string; label: string; tone?: string }) {
+export function ActButton({ action, className = "", confirm, label, look = "rounded px-1.5 py-0.5 text-xs font-medium", tone = "text-dim" }: { action: OperatorAction; className?: string; confirm?: string; label: string; look?: string; tone?: string }) {
   const act = useAct();
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -44,7 +44,7 @@ export function ActButton({ action, className = "", confirm, label, tone = "text
 
   return (
     <span className={`flex shrink-0 items-center gap-2 ${className}`}>
-      <button className={`rounded px-1.5 py-0.5 text-xs font-medium hover:bg-line hover:text-ink disabled:opacity-50 ${armed ? "bg-line text-ink" : tone}`} disabled={busy} type="button" onBlur={() => setArmed(false)} onClick={() => void run()}>
+      <button className={`${look} hover:bg-line hover:text-ink disabled:opacity-50 ${armed ? "bg-line text-ink" : tone}`} disabled={busy} type="button" onBlur={() => setArmed(false)} onClick={() => void run()}>
         {armed ? confirm : label}
       </button>
       {failure ? <span className="text-xs text-fail">{failure}</span> : null}

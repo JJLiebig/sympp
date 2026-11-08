@@ -9,6 +9,7 @@ export type OperatorAction =
   | { kind: "answer"; askId: string; answer: string; choice: string | null }
   | { kind: "ack"; decisionId: string }
   | { kind: "feedback"; decisionId: string; text: string }
+  | { kind: "dismiss_feedback"; decisionId: string }
   | { kind: "release"; subject: Subject }
   | { kind: "finish"; pkgId: string }
   | { kind: "dismiss"; cardIds: string[] }
@@ -35,6 +36,8 @@ function requests(action: OperatorAction): Array<[path: string, body: Record<str
       return [[`${at("asks", action.askId)}/answer`, { answer: action.answer, choice: action.choice }]];
     case "ack":
       return [[`${at("decisions", action.decisionId)}/ack`, {}]];
+    case "dismiss_feedback":
+      return [[`${at("decisions", action.decisionId)}/dismiss`, {}]];
     case "feedback":
       return [[`${at("decisions", action.decisionId)}/feedback`, { text: action.text }]];
     case "release":
