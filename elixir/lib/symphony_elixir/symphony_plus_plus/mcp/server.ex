@@ -1311,9 +1311,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   end
 
   defp dispatch_request_state({:ok, params}, method, id, %__MODULE__{} = server) do
-    with :ok <- refuse_archived_write(server, method, params),
-         {:ok, server} <- auto_claim_architect(server, method, params),
-         {:ok, server} <- require_current_session_claim_for_bound_call(server, method, params) do
+    with {:ok, server} <- auto_claim_architect(server, method, params),
+         {:ok, server} <- require_current_session_claim_for_bound_call(server, method, params),
+         :ok <- refuse_archived_write(server, method, params) do
       case dispatch_with_text_profile(method, params, server) do
         {:ok, result} ->
           {Response.response(id, result), server}
@@ -1337,8 +1337,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     {Response.error(id, code, message, data), server}
   end
 
-  defp refuse_archived_write(%__MODULE__{config: %Config{repo: repo}, session: session}, "tools/call", %{"name" => name} = params),
-    do: ArchivedWorkRequestGuard.check(repo, session, name, Map.get(params, "arguments", %{}))
+  # Runs once the caller is bound (or trusted locally, where reads of any WorkRequest are allowed).
+  defp refuse_archived_write(%__MODULE__{config: %Config{repo: repo}, session: session}, "tools/call", %{"name" => name} = params)
+       when not is_nil(session) do
+    ArchivedWorkRequestGuard.check(repo, session, name, Map.get(params, "arguments", %{}))
+  end
+
+  defp refuse_archived_write(%__MODULE__{config: %Config{repo: repo}} = server, "tools/call", %{"name" => name} = params) do
+    if Surface.local_trusted_tools_enabled?(server),
+      do: ArchivedWorkRequestGuard.check(repo, nil, name, Map.get(params, "arguments", %{})),
+      else: :ok
+  end
 
   defp refuse_archived_write(%__MODULE__{}, _method, _params), do: :ok
 

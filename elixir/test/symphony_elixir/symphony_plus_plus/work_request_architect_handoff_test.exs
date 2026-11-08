@@ -181,6 +181,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestArchitectHandoffTest do
     assert {:error, {:work_request_terminal, :archived}} = ArchitectHandoff.handoff_phase_grant?(repo, grant)
   end
 
+  test "refuses a new handoff for an archived WorkRequest", %{repo: repo, database_path: database_path} do
+    work_request =
+      create_work_request!(repo, id: "WR-ARCH-HANDOFF-ARCHIVED")
+      |> Ecto.Changeset.change(archived_at: DateTime.utc_now(:microsecond), archive_reason: "manual")
+      |> repo.update!()
+
+    assert {:error, :work_request_archived} =
+             ArchitectHandoff.create_or_replay(repo, work_request.id, local_operator?: true, handoff_opts: handoff_opts(database_path))
+
+    assert repo.aggregate(AccessGrant, :count) == 0
+  end
+
   test "fails closed when handoff WorkRequest scope rows are ambiguous", %{
     repo: repo,
     database_path: database_path

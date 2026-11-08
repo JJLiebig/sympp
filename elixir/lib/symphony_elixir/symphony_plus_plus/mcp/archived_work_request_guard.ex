@@ -1,12 +1,12 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchivedWorkRequestGuard do
   @moduledoc """
   Refuses an MCP write whose target WorkRequest is archived, with
-  `next_action: restore`. The target is the `work_request_id` argument, else the
-  WorkRequest of the `work_package_id` argument, else that of the session's
-  assigned package. Reads and writes without a WorkRequest pass.
+  `next_action: restore`. A worker session always targets its assigned package;
+  other callers target the `work_request_id` argument, else the WorkRequest of the
+  `work_package_id` argument. Reads and writes without a WorkRequest pass.
   """
 
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{ErrorDetails, Session, ToolCatalog}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{CurrentWorkRequest, ErrorDetails, Session, ToolCatalog}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{Phase, WorkRequest}
 
@@ -35,16 +35,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchivedWorkRequestGuard do
     end
   end
 
+  defp work_request_id(repo, %Session{assignment: %{grant_role: "worker", work_package_id: id}}, _arguments),
+    do: package_work_request_id(repo, id)
+
   defp work_request_id(repo, session, arguments) do
     cond do
       is_binary(arguments["work_request_id"]) -> arguments["work_request_id"]
       is_binary(arguments["work_package_id"]) -> package_work_request_id(repo, arguments["work_package_id"])
-      true -> package_work_request_id(repo, session_work_package_id(session))
+      true -> current_work_request_id(session)
     end
   end
 
-  defp session_work_package_id(%Session{assignment: %{work_package_id: id}}) when is_binary(id), do: id
-  defp session_work_package_id(_session), do: nil
+  defp current_work_request_id(%Session{} = session) do
+    case CurrentWorkRequest.id_argument(%{}, session) do
+      {:ok, id} -> id
+      _no_single_scope -> nil
+    end
+  end
+
+  defp current_work_request_id(nil), do: nil
 
   defp package_work_request_id(repo, id) when is_binary(id) do
     case repo.get(WorkPackage, id) do

@@ -13,6 +13,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{ArchitectHandoffClaimLease, WorkRequest}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase, as: WorkRequestPhase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
 
   @architect_capabilities [
@@ -110,6 +111,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
     handoff_opts = handoff_opts(opts)
 
     with {:ok, work_request} <- WorkRequestRepository.get(repo, work_request_id),
+         :ok <- WorkRequestPhase.require_writable(work_request),
          :ok <- require_frozen_scope(work_request),
          {:ok, phase} <- get_or_create_phase(repo, work_request),
          {:ok, anchor} <- get_or_create_anchor(repo, work_request, phase),
