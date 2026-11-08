@@ -71,8 +71,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadAccessTest do
     assert read.("read_task_plan", %{"work_package_id" => hd(other_packages).id})["uri"] =~ hd(other_packages).id
     assert read.("reconcile_work_request", %{"work_request_id" => other.id})["work_request"]["id"] == other.id
 
-    assert tool!(client, "get_current_assignment", %{}).response["result"]["structuredContent"]["assignment"]["work_package_id"] ==
-             ArchitectHandoff.anchor_id_for_work_request(bound)
+    anchor_id = ArchitectHandoff.anchor_id_for_work_request(bound)
+    assert tool!(client, "get_current_assignment", %{}).response["result"]["structuredContent"]["assignment"]["work_package_id"] == anchor_id
+
+    # A read neither renews, reclaims nor depends on the claim the session holds.
+    assert {:ok, lease} = ClaimLeaseService.current_for_work_package(repo, anchor_id)
+    stale_seen_at = DateTime.add(DateTime.utc_now(:microsecond), -6, :minute)
+    stale = lease |> ClaimLease.update_changeset(%{last_seen_at: stale_seen_at}) |> repo.update!()
+    assert read.("read_work_request", %{"work_request_id" => bound.id})["work_request"]["id"] == bound.id
+    assert {:ok, after_read} = ClaimLeaseService.current_for_work_package(repo, anchor_id)
+    assert {after_read.id, after_read.last_seen_at} == {stale.id, stale_seen_at}
+
+    stale |> ClaimLease.update_changeset(%{last_seen_at: DateTime.utc_now(:microsecond)}) |> repo.update!()
+    assert {:ok, _paused} = ClaimLeaseService.pause(repo, stale.id, %{"actor_id" => "operator"}, reason: "operator pause")
+    assert read.("read_plan", %{"work_request_id" => other.id})["work_request"]["id"] == other.id
   end
 
   defp claimable_work_request!(repo, id) do

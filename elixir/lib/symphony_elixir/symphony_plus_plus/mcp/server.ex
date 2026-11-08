@@ -69,6 +69,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   @solo_tools ToolCatalog.solo_tools()
   @assignment_release_tool ToolCatalog.assignment_release_tool()
   @local_operator_tools ToolCatalog.local_operator_tools()
+  # Reads whose handlers can serve a trusted session without its binding.
+  @session_free_read_tools ["list_work_requests", "read_work_request", "read_plan", "read_delivery_board"]
+  @trusted_target_read_tools ["list_comments", "read_task_plan", "reconcile_work_request"]
   @explicit_read_target_keys ["work_request_id", "work_package_id", "target_id"]
   @local_assignment_claim_tool ToolCatalog.local_assignment_claim_tool()
   @local_architect_assignment_claim_tool ToolCatalog.local_architect_assignment_claim_tool()
@@ -1503,6 +1506,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     {:error, -32_004, "Not found", %{"tool" => tool, "reason" => "not_found"}}
   end
 
+  defp require_current_session_claim_for_bound_call(%__MODULE__{} = server, "tools/call" = method, params) do
+    if local_trusted_read?(server, params),
+      do: {:ok, server},
+      else: SessionBindingTools.require_current_session_claim_for_bound_call(server, method, params)
+  end
+
   defp require_current_session_claim_for_bound_call(%__MODULE__{} = server, method, params),
     do: SessionBindingTools.require_current_session_claim_for_bound_call(server, method, params)
 
@@ -1628,55 +1637,46 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     build_tool_result(server, fn -> dispatch_call(method, params, server) end)
   end
 
-  defp dispatch_call("tools/call", %{"name" => name} = params, %__MODULE__{} = server) when is_binary(name) do
-    arguments = Map.get(params, "arguments", %{})
-
-    result =
-      if is_map(arguments) and local_trusted_read_call?(server, name, arguments),
-        do: local_trusted_read(name, params, arguments, %{server | session: nil}),
-        else: :not_local_trusted_read
-
-    if result == :not_local_trusted_read, do: dispatch("tools/call", params, server), else: result
+  defp dispatch_call("tools/call", %{"name" => name} = params, %__MODULE__{} = server) do
+    if local_trusted_read?(server, params),
+      do: local_trusted_read(name, params, %{server | session: nil}),
+      else: dispatch("tools/call", params, server)
   end
 
   defp dispatch_call(method, params, %__MODULE__{} = server), do: dispatch(method, params, server)
 
-  # A trusted local session reads any object it names, whatever it is bound to.
-  # Unbound sessions use this path for every read, and the handler refuses an
-  # untrusted connection. Architect sessions use it when the call names its
-  # target instead of relying on the bound WorkRequest.
-  defp local_trusted_read_call?(%__MODULE__{} = server, name, arguments) do
-    ToolCatalog.read_call?(name, arguments) and local_trusted_read_session?(server, arguments)
+  # A trusted local session reads any object it names, whatever it holds, and
+  # such a read neither renews nor reclaims the session's claim. Unbound
+  # sessions route the WorkRequest reads here even without trust, so the
+  # handler can say which connection they need.
+  defp local_trusted_read?(%__MODULE__{} = server, %{"name" => name} = params) when is_binary(name) do
+    arguments = Map.get(params, "arguments", %{})
+    is_map(arguments) and ToolCatalog.read_call?(name, arguments) and local_trusted_read_route?(server, name, arguments)
   end
 
-  defp local_trusted_read_session?(%__MODULE__{session: nil}, _arguments), do: true
+  defp local_trusted_read?(%__MODULE__{}, _params), do: false
 
-  defp local_trusted_read_session?(%__MODULE__{session: %Session{assignment: %{grant_role: "architect"}}} = server, arguments),
-    do: explicit_read_target?(arguments) and Surface.local_trusted_tools_enabled?(server)
+  defp local_trusted_read_route?(%__MODULE__{session: nil}, name, _arguments) when name in @session_free_read_tools, do: true
 
-  defp local_trusted_read_session?(%__MODULE__{}, _arguments), do: false
+  defp local_trusted_read_route?(%__MODULE__{session: session} = server, name, arguments)
+       when name in @session_free_read_tools or name in @trusted_target_read_tools do
+    (is_nil(session) or match?(%Session{assignment: %{grant_role: "architect"}}, session)) and
+      explicit_read_target?(arguments) and Surface.local_trusted_tools_enabled?(server)
+  end
+
+  defp local_trusted_read_route?(%__MODULE__{}, _name, _arguments), do: false
 
   defp explicit_read_target?(arguments),
     do: Enum.any?(@explicit_read_target_keys, &(is_binary(arguments[&1]) and String.trim(arguments[&1]) != ""))
 
-  defp local_trusted_read(name, params, _arguments, server)
-       when name in ["list_work_requests", "read_work_request", "read_plan", "read_delivery_board"] do
+  defp local_trusted_read(name, params, server) when name in @session_free_read_tools do
     with :ok <- prepare_local_trusted_read(server, params, name),
          {:ok, arguments} <- architect_tool_arguments(params, name) do
       ArchitectWorkRequestTools.call(name, server.config, nil, arguments, server: server)
     end
   end
 
-  # These tools also serve bound sessions. Without trust or an explicit target
-  # they keep their claim-first refusal.
-  defp local_trusted_read(name, params, arguments, server)
-       when name in ["list_comments", "read_task_plan", "reconcile_work_request"] do
-    if explicit_read_target?(arguments) and Surface.local_trusted_tools_enabled?(server),
-      do: trusted_only_read(name, params, arguments, server),
-      else: :not_local_trusted_read
-  end
-
-  defp local_trusted_read(_name, _params, _arguments, _server), do: :not_local_trusted_read
+  defp local_trusted_read(name, params, server), do: trusted_only_read(name, params, Map.get(params, "arguments", %{}), server)
 
   defp trusted_only_read("list_comments", params, _arguments, server) do
     case prepare_local_trusted_list_comments_tool_call(server, params) do

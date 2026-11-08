@@ -1276,7 +1276,8 @@ test('architect descendant planning stays scoped through terminal closeout and r
   const staleReader = await factory.client();
   await staleReader.call('claim_local_architect_assignment', { work_request_id: request, claimed_by: 'acceptance-architect' });
   expect((await architect.operator(`/api/v1/sympp/operator/work-requests/${request}/archive`, {})).status).toBe(200);
-  await architect.reject('read_task_plan', { work_package_id: wp }, 'claim_lease_lost');
+  // The archived request's plan stays readable by id; the lost claim only blocks writes and scoped calls.
+  expect((await architect.call('read_task_plan', { work_package_id: wp })).text).toContain('Inspect descendant');
   await staleReader.reject('list_work_requests', {}, 'claim_lease_lost');
 });
 
