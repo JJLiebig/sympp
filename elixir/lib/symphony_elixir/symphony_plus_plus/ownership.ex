@@ -184,14 +184,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
   end
 
   @doc """
-  A bridge detached cleanly. Its terminal's rows end unless another bridge in
-  that terminal still holds a fresh lease, or the factory's own herdr-core
-  still sees the terminal live.
+  The last bridge in a terminal detached cleanly (`ClientLeases` calls this
+  only when no other bridge there holds a fresh lease). The terminal's rows end
+  unless the factory's own herdr-core still sees it live.
   """
   @spec detached(repo(), String.t()) :: :ok
   def detached(repo, terminal_key) when is_binary(terminal_key) do
-    with false <- ClientLeases.terminal_live?(terminal_key),
-         {core_id, address} <- Terminal.split_key(terminal_key),
+    with {core_id, address} <- Terminal.split_key(terminal_key),
          view when not is_tuple(view) <- HerdrCore.view(core_id, address, confirm: true) do
       finish_all(repo, from(worked_on in WorkedOn, where: worked_on.terminal_key == ^terminal_key), "terminal_finished")
     else

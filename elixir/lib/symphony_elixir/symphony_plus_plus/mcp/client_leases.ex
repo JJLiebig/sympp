@@ -53,16 +53,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
     end
   end
 
-  @spec handle_payload(map()) :: {:ok, summary()} | {:error, atom()}
-  def handle_payload(payload) when is_map(payload) do
-    with {:ok, client_id} <- lease_id(payload),
+  @spec handle_payload(term(), (String.t() -> term()) | nil) :: {:ok, summary()} | {:error, atom()}
+  def handle_payload(payload, on_terminal_detached \\ nil) do
+    with true <- is_map(payload) || {:error, :invalid_request},
+         {:ok, client_id} <- lease_id(payload),
          {:ok, action} <- lease_action(payload),
          :ok <- ensure_started() do
-      apply_lease_action(action, client_id, terminal_key(payload))
+      apply_lease_action(action, client_id, terminal_key(payload), on_terminal_detached)
     end
   end
-
-  def handle_payload(_payload), do: {:error, :invalid_request}
 
   @spec attach(binary()) :: {:ok, summary()} | {:error, :unavailable}
   def attach(client_id), do: attach(client_id, __MODULE__)
@@ -94,7 +93,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
   def terminal_key(_payload), do: nil
 
   @spec detach(binary(), GenServer.server()) :: {:ok, summary()} | {:error, :unavailable}
-  def detach(client_id, server \\ __MODULE__), do: lease_call(server, {:detach, client_id})
+  def detach(client_id, server \\ __MODULE__), do: lease_call(server, {:detach, client_id, nil, nil})
+
+  @doc """
+  Detaches a bridge that names a Herdr terminal. When no other bridge in that
+  terminal still holds a fresh lease, `on_last` runs with the terminal key
+  inside this process, so attaches and heartbeats are ordered around it.
+  """
+  @spec detach_terminal(binary(), String.t(), (String.t() -> term()), GenServer.server()) :: {:ok, summary()} | {:error, :unavailable}
+  def detach_terminal(client_id, terminal_key, on_last, server \\ __MODULE__) when is_function(on_last, 1),
+    do: lease_call(server, {:detach, client_id, terminal_key, on_last})
 
   @spec active_count(GenServer.server()) :: non_neg_integer()
   def active_count(server \\ __MODULE__) do
@@ -143,7 +151,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
     {:reply, Enum.any?(state.leases, fn {_id, lease} -> lease.terminal == terminal_key end), state}
   end
 
-  def handle_call({:detach, client_id}, _from, state) do
+  def handle_call({:detach, client_id, terminal_key, on_last}, _from, state) do
     now = now_ms()
 
     state =
@@ -151,6 +159,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
       |> prune_and_notify_idle(now)
       |> delete_lease(client_id)
       |> maybe_schedule_shutdown()
+
+    if is_function(on_last, 1) and not Enum.any?(state.leases, fn {_id, lease} -> lease.terminal == terminal_key end) do
+      run_detached(on_last, terminal_key)
+    end
 
     {:reply, {:ok, summary(state)}, state}
   end
@@ -236,9 +248,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
     end
   end
 
-  defp apply_lease_action("attach", client_id, terminal_key), do: normalize_lease_result(attach(client_id, __MODULE__, terminal_key))
-  defp apply_lease_action("heartbeat", client_id, terminal_key), do: normalize_lease_result(heartbeat(client_id, __MODULE__, terminal_key))
-  defp apply_lease_action("detach", client_id, _terminal_key), do: normalize_lease_result(detach(client_id))
+  defp apply_lease_action("attach", client_id, terminal_key, _on_detached), do: normalize_lease_result(attach(client_id, __MODULE__, terminal_key))
+  defp apply_lease_action("heartbeat", client_id, terminal_key, _on_detached), do: normalize_lease_result(heartbeat(client_id, __MODULE__, terminal_key))
+
+  defp apply_lease_action("detach", client_id, terminal_key, on_detached) when is_binary(terminal_key) and is_function(on_detached, 1),
+    do: normalize_lease_result(detach_terminal(client_id, terminal_key, on_detached))
+
+  defp apply_lease_action("detach", client_id, _terminal_key, _on_detached), do: normalize_lease_result(detach(client_id))
+
+  defp run_detached(on_last, terminal_key) do
+    on_last.(terminal_key)
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
 
   defp normalize_lease_result({:ok, result}), do: {:ok, result}
   defp normalize_lease_result({:error, _reason}), do: {:error, :client_lease_unavailable}

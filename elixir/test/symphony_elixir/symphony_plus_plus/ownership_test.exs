@@ -168,12 +168,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
     assert {:ok, _} = ClientLeases.handle_payload(%{"client_id" => "bridge-a", "action" => "attach", "terminal" => terminal})
     assert {:ok, _} = ClientLeases.handle_payload(%{"client_id" => "bridge-b", "action" => "attach", "terminal" => terminal})
 
-    assert {:ok, _} = ClientLeases.handle_payload(%{"client_id" => "bridge-a", "action" => "detach", "terminal" => terminal})
-    assert :ok = Ownership.detached(repo, test_terminal("t1").key)
+    on_last = &Ownership.detached(repo, &1)
+    assert {:ok, _} = ClientLeases.handle_payload(%{"client_id" => "bridge-a", "action" => "detach", "terminal" => terminal}, on_last)
     assert [_still_owned] = live_owner_rows(repo, work_request.id)
 
-    assert {:ok, _} = ClientLeases.handle_payload(%{"client_id" => "bridge-b", "action" => "detach", "terminal" => terminal})
-    assert :ok = Ownership.detached(repo, test_terminal("t1").key)
+    assert {:ok, _} = ClientLeases.handle_payload(%{"client_id" => "bridge-b", "action" => "detach", "terminal" => terminal}, on_last)
     assert [] = live_owner_rows(repo, work_request.id)
   end
 
