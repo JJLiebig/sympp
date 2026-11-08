@@ -43,7 +43,9 @@ except (OSError, ValueError):
     running = None
 subprocess.run(['git', '-C', str(source), 'checkout', '--quiet', '--detach', target], check=True)
 def non_runtime(path):
-    return path.startswith(('skills/', 'docs/', 'plans/')) or ('/' not in path and path.endswith('.md'))
+    return (path.startswith(('skills/', 'docs/', 'plans/'))
+            or (path.startswith('packages/sympp/skills/') and path.endswith('.md'))
+            or ('/' not in path and path.endswith('.md')))
 needs_build = running != target
 if running and needs_build:
     diff = subprocess.run(['git', '-C', str(source), 'diff', '--name-only', '-z', '--no-renames', running, target], capture_output=True)

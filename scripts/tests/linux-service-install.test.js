@@ -151,3 +151,41 @@ test('board opens the saved factory with a private fragment and never logs its c
   assert.equal(authorization, null);
   assert.equal(new URL(fs.readFileSync(receipt, 'utf8')).hash, '');
 });
+
+test('factory updates skip current and procedure-only revisions but rebuild unknown paths', { skip: process.platform !== 'linux' }, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sympp-update-paths-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const upstream = path.join(root, 'origin'), checkout = path.join(root, 'source'), bin = path.join(root, 'bin');
+  fs.mkdirSync(path.join(upstream, 'scripts'), { recursive: true }); fs.mkdirSync(bin);
+  const git = (...args) => {
+    const result = spawnSync('git', args, { cwd: upstream, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr); return result.stdout.trim();
+  };
+  git('init', '-b', 'main'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.test');
+  const receipt = path.join(root, 'built');
+  fs.writeFileSync(path.join(upstream, 'scripts/install-sympp-checkout.sh'), '#!/bin/sh\nprintf built > "$RECEIPT"\n');
+  git('add', '.'); git('commit', '-qm', 'runtime'); git('clone', upstream, checkout);
+  const running = git('rev-parse', 'HEAD');
+  const server = require('node:http').createServer((request, response) => response.end(JSON.stringify({ status: 'ok', ledger: { reachable: true }, source: { revision: running } })));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const fragment = path.join(root, 'config/systemd/user/qa.service');
+  fs.mkdirSync(path.dirname(fragment), { recursive: true }); fs.writeFileSync(fragment, '');
+  const values = { SYMPP_HOME: path.join(root, 'factory'), SYMPP_SERVICE_HOST: '127.0.0.1', SYMPP_BACKEND_PORT: String(server.address().port), SYMPP_SERVICE_SOURCE: checkout, SYMPP_SERVICE_REF: 'main' };
+  const environment = path.join(root, 'environment');
+  fs.writeFileSync(environment, Object.entries(values).map(([key, value]) => JSON.stringify(key + '=' + value)).join(' '));
+  fs.writeFileSync(path.join(bin, 'systemctl'), '#!/bin/sh\ncase "$*" in *Environment*) cat "$ENVIRONMENT_FILE";; *FragmentPath*) printf "%s\\n" "$FRAGMENT_FILE";; *) exit 1;; esac\n', { mode: 0o755 });
+  const env = { ...process.env, XDG_RUNTIME_DIR: root, PATH: bin + path.delimiter + process.env.PATH, ENVIRONMENT_FILE: environment, FRAGMENT_FILE: fragment, RECEIPT: receipt };
+  const updater = path.resolve(__dirname, '../../packages/sympp/scripts/update-sympp-service.sh');
+  const update = () => require('node:util').promisify(require('node:child_process').execFile)('bash', [updater, 'qa'], { cwd: root, env });
+  assert.match((await update()).stdout, /already current/);
+  const procedure = path.join(upstream, 'packages/sympp/skills/worker/SKILL.md');
+  fs.mkdirSync(path.dirname(procedure), { recursive: true }); fs.writeFileSync(procedure, 'procedure update');
+  git('add', '.'); git('commit', '-qm', 'procedure');
+  assert.match((await update()).stdout, /runtime unchanged/);
+  assert.equal(fs.existsSync(receipt), false);
+  fs.writeFileSync(path.join(upstream, 'unknown-runtime'), 'new runtime input');
+  git('add', '.'); git('commit', '-qm', 'runtime');
+  await update();
+  assert.equal(fs.readFileSync(receipt, 'utf8'), 'built');
+});

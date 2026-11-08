@@ -74,7 +74,8 @@ ledger, repository root, port, workflow and service name. Never print the creden
 
 Factory updates refuse dirty checkouts and overlapping updates immediately. The
 running readiness revision determines whether a build is needed. Changes confined
-to `skills/`, `docs/`, `plans/` and top-level Markdown files skip the build and
+to `skills/`, `docs/`, `plans/`, Markdown under `packages/sympp/skills/`,
+and top-level Markdown files skip the build and
 restart; unknown paths rebuild. Builds finish before the service stops. Failed
 readiness restores the previous release and unit, waits for readiness again, and
 exits nonzero. Build logs are in the factory home's `logs/install.log`. No timer
