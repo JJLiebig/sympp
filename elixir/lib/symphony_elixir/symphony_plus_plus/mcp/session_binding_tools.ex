@@ -208,8 +208,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
 
   @doc """
   Checks a bound session's claim for a read without reclaiming it. A live
-  claim with a live grant is renewed; otherwise the session becomes unbound
-  (stale), as `get_current_assignment` reports, and the read still proceeds.
+  claim with a live grant is renewed, and a stale one is left for the next
+  write to reclaim. A revoked grant or a paused or lost claim unbinds the
+  session as a write would, but the read still proceeds.
   """
   @spec refresh_current_session_claim_for_read(Server.t(), String.t(), map()) :: {:ok, Server.t()}
   def refresh_current_session_claim_for_read(%Server{} = server, method, params) do
@@ -490,8 +491,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
         {:error, :claim_stale} when reclaim_stale? ->
           reclaim_current_session_claim_lease(repo, server, session, lease, preserve_service_unavailable?)
 
+        # Without reclaim, a stale claim stays bound so the next write can reclaim it.
         {:error, :claim_stale} ->
-          lost_current_session_claim(server, :claim_stale)
+          {:ok, %{server | session: Session.with_claim_lease(session, lease)}}
 
         {:error, reason} ->
           preserve_service_error_or_lose_claim(server, reason, preserve_service_unavailable?)

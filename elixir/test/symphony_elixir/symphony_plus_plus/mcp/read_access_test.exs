@@ -91,12 +91,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadAccessTest do
     call!(client, "assignment", "resources/read", %{"uri" => "sympp://assignment/current"})
     assert tool!(client, "list_work_requests", %{}).response["result"]
     assert tool!(client, "read_work_request", %{"work_request_id" => work_request.id}).response["result"]
-    assert tool!(client, "get_current_assignment", %{}).response["result"]["structuredContent"]["binding"]["state"] == "stale"
+    assert tool!(client, "get_current_assignment", %{}).response["result"]["structuredContent"]["assignment"]["work_package_id"] == anchor_id
     assert {:ok, unchanged} = ClaimLeaseService.current_for_work_package(repo, anchor_id)
     assert {unchanged.id, unchanged.last_seen_at} == {stale.id, stale.last_seen_at}
 
-    # The next write reclaims; a revoked grant then stops reads from renewing it.
+    # The next write reclaims the stale claim; a revoked grant then stops reads from renewing it.
     assert tool!(client, "upsert_group", %{"title" => "Reclaim"}).response["result"]
+    live = lease_at.(DateTime.add(DateTime.utc_now(:microsecond), -1, :minute))
+    assert tool!(client, "list_work_requests", %{}).response["result"]
+    assert {:ok, %ClaimLease{last_seen_at: renewed_at}} = ClaimLeaseService.current_for_work_package(repo, anchor_id)
+    assert DateTime.compare(renewed_at, live.last_seen_at) == :gt
     due = lease_at.(DateTime.add(DateTime.utc_now(:microsecond), -1, :minute))
     assert {:ok, _revoked} = AccessGrantService.revoke(repo, handoff.grant.id)
     assert tool!(client, "list_work_requests", %{}).response["result"]
@@ -115,7 +119,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadAccessTest do
     assert {:ok, lease} = ClaimLeaseService.current_for_work_package(repo, package.id)
     lease |> ClaimLease.update_changeset(%{last_seen_at: DateTime.add(DateTime.utc_now(:microsecond), -6, :minute)}) |> repo.update!()
 
-    for {tool, arguments} <- [{"read_task_plan", %{"work_package_id" => foreign.id}}, {"read_work_request", %{"work_request_id" => work_request.id}}] do
+    for {tool, arguments} <- [
+          {"read_task_plan", %{"work_package_id" => foreign.id}},
+          {"read_work_request", %{"work_request_id" => work_request.id}},
+          {"list_comments", %{"target_kind" => "work_package", "target_id" => foreign.id}}
+        ] do
       assert tool!(worker, tool, arguments).response["error"], tool
     end
 

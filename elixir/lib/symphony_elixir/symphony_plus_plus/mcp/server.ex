@@ -1663,8 +1663,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp local_trusted_read?(%__MODULE__{}, _params), do: false
 
-  # A session that last held a worker claim stays scoped even once unbound.
-  defp local_trusted_read_route?(%__MODULE__{session: nil, stale_assignment_role: "worker"}, _name, _arguments), do: false
+  # A session that last held a worker claim gains no session-free reads beyond the unbound ones it already had.
+  defp local_trusted_read_route?(%__MODULE__{session: nil, stale_assignment_role: "worker"}, name, _arguments)
+       when name in ["read_task_plan", "reconcile_work_request"],
+       do: false
+
   defp local_trusted_read_route?(%__MODULE__{session: nil}, name, _arguments) when name in @session_free_read_tools, do: true
 
   defp local_trusted_read_route?(%__MODULE__{session: session} = server, name, arguments)
