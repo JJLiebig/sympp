@@ -434,11 +434,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
     key = item |> map_value("key") |> downcased()
     label = item |> map_value("label") |> downcased()
 
-    key in @guidance_completion_keys or
-      String.contains?(key, "guidance") or
-      String.contains?(key, "question") or
-      String.contains?(label, "guidance") or
-      String.contains?(label, "question")
+    key in @guidance_completion_keys or String.contains?(key, "question") or String.contains?(label, "question")
   end
 
   defp downcased(value) when is_binary(value), do: value |> String.trim() |> String.downcase()

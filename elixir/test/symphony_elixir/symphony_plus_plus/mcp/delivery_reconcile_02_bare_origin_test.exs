@@ -3,9 +3,11 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02BareOriginTest do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle
+
   @moduletag :ci_slow
 
-  test "WorkPackage worktree MCP prepare and cleanup accept bare repo with owner-qualified target origin", %{repo: repo} do
+  test "WorkPackage worktree MCP prepare accepts bare repo with owner-qualified target origin", %{repo: repo} do
     fixture =
       "symphony-plus-plus/beta"
       |> TestSupport.git_repo_fixture!(prefix: "sympp-mcp-bare-origin-worktree")
@@ -85,20 +87,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02BareOriginTest 
       assert comparable_path(prepare_payload["worktree"]["target_repo_root"]) == comparable_path(fixture.repo_root)
       assert File.dir?(prepare_payload["worktree"]["path"])
 
-      cleanup_response =
-        mcp_tool(
-          repo,
-          session,
-          "cleanup_work_package_worktree",
-          %{
-            "work_package_id" => package.id
-          },
-          config: config
-        )
-
-      cleanup_payload = get_in(cleanup_response, ["result", "structuredContent"])
-      assert cleanup_payload["worktree"]["status"] == "cleaned"
-      assert cleanup_payload["work_package"]["worktree_path"] == nil
+      assert {:ok, %{status: "cleaned"}} = WorktreeLifecycle.cleanup(repo, package.id)
+      assert {:ok, %{worktree_path: nil}} = WorkPackageRepository.get(repo, package.id)
       refute File.exists?(prepare_payload["worktree"]["path"])
 
       legacy_prepare_response =
@@ -118,20 +108,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02BareOriginTest 
       assert {:ok, _legacy_package} = WorkPackageRepository.update(repo, package.id, %{worktree_target_repo_root: nil})
       File.rm_rf!(legacy_prepare_payload["worktree"]["path"])
 
-      legacy_cleanup_response =
-        mcp_tool(
-          repo,
-          session,
-          "cleanup_work_package_worktree",
-          %{
-            "work_package_id" => package.id
-          },
-          config: config
-        )
-
-      legacy_cleanup_payload = get_in(legacy_cleanup_response, ["result", "structuredContent"])
-      assert legacy_cleanup_payload["worktree"]["status"] == "stale_record_cleared"
-      assert legacy_cleanup_payload["work_package"]["worktree_path"] == nil
+      assert {:ok, %{status: "stale_record_cleared"}} = WorktreeLifecycle.cleanup(repo, package.id)
+      assert {:ok, %{worktree_path: nil}} = WorkPackageRepository.get(repo, package.id)
     after
       restore_env("CODEX_HOME", previous_codex_home)
     end

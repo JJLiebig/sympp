@@ -1,13 +1,11 @@
 defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.DefaultClient
   alias SymphonyElixir.SymphonyPlusPlus.HumanDecisionPrompt
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -336,48 +334,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
       {:error, reason} -> {:error, reason}
     end
   end
-
-  @spec local_operator_comment_attrs(map()) :: map()
-  def local_operator_comment_attrs(params) do
-    %{
-      "target_kind" => text_param(params, "target_kind"),
-      "target_id" => text_param(params, "target_id"),
-      "body" => text_param(params, "body"),
-      "source_type" => "operator",
-      "author_name" => @local_operator_actor
-    }
-  end
-
-  @spec local_operator_comment_resolution_attrs(map()) :: map()
-  def local_operator_comment_resolution_attrs(params) do
-    %{
-      "resolved_by" => @local_operator_actor,
-      "resolved_source_type" => "operator",
-      "resolution_note" => text_param(params, "resolution_note", "")
-    }
-  end
-
-  @spec comment_payload(Comment.t()) :: map()
-  def comment_payload(%Comment{} = comment) do
-    %{
-      id: comment.id,
-      target_kind: comment.target_kind,
-      target_id: comment.target_id,
-      body: Redactor.redact_text(comment.body),
-      source_type: comment.source_type,
-      author_name: Redactor.redact_text(comment.author_name),
-      status: comment.status,
-      resolved_by: Redactor.redact_text(comment.resolved_by),
-      resolved_source_type: comment.resolved_source_type,
-      resolved_at: timestamp(comment.resolved_at),
-      resolution_note: Redactor.redact_text(comment.resolution_note),
-      inserted_at: timestamp(comment.inserted_at),
-      updated_at: timestamp(comment.updated_at)
-    }
-  end
-
-  defp timestamp(%DateTime{} = timestamp), do: DateTime.to_iso8601(timestamp)
-  defp timestamp(nil), do: nil
 
   @spec scoped_question(module(), String.t(), String.t()) :: {:ok, ClarificationQuestion.t()} | {:error, term()}
   def scoped_question(repo, work_request_id, question_id) when is_binary(work_request_id) and is_binary(question_id) do

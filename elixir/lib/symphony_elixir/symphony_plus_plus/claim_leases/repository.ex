@@ -86,7 +86,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository do
     now = now(opts)
 
     with {:ok, %ClaimLease{} = claim_lease} <- get(repo, id),
-         :ok <- require_status(claim_lease, ["active"]),
+         :ok <- require_active(claim_lease),
          :ok <- require_not_stale(claim_lease, now, heartbeat_current_stale_after_ms(attrs, opts)) do
       update_claim_lease(
         repo,
@@ -94,25 +94,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository do
         attrs
         |> renewal_attrs()
         |> Map.put(:last_seen_at, now),
-        ["active"]
-      )
-    end
-  end
-
-  @spec pause(repo(), String.t(), map(), keyword()) :: {:ok, ClaimLease.t()} | {:error, error()}
-  def pause(repo, id, attrs, opts \\ []) when is_atom(repo) and is_binary(id) and is_map(attrs) and is_list(opts) do
-    now = now(opts)
-
-    with {:ok, %ClaimLease{} = claim_lease} <- get(repo, id),
-         :ok <- require_status(claim_lease, ["active"]),
-         :ok <- require_not_stale(claim_lease, now) do
-      update_claim_lease(
-        repo,
-        claim_lease,
-        attrs
-        |> Map.take([:paused_by_actor_id, "paused_by_actor_id", :pause_reason, "pause_reason"])
-        |> Map.merge(%{status: "paused", paused_at: now, last_seen_at: now}),
-        ["active"]
+        :not_active
       )
     end
   end
@@ -122,15 +104,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository do
     now = now(opts)
 
     with {:ok, %ClaimLease{} = claim_lease} <- get(repo, id),
-         :ok <- require_status(claim_lease, ClaimLease.active_statuses()),
-         :ok <- require_releasable(claim_lease, now) do
+         :ok <- require_current(claim_lease),
+         :ok <- require_not_stale(claim_lease, now) do
       update_claim_lease(
         repo,
         claim_lease,
         attrs
         |> Map.take([:release_reason, "release_reason"])
         |> Map.merge(%{status: "released", released_at: now, last_seen_at: now}),
-        ClaimLease.active_statuses()
+        :claim_not_current
       )
     end
   end
@@ -274,16 +256,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository do
     |> Map.put("previous_claim_id", current.id)
   end
 
-  defp require_status(%ClaimLease{status: status}, statuses) do
-    if status in statuses do
-      :ok
-    else
-      status_error(statuses)
-    end
-  end
+  defp require_active(%ClaimLease{status: "active"}), do: :ok
+  defp require_active(%ClaimLease{}), do: {:error, :not_active}
 
-  defp status_error(["active"]), do: {:error, :not_active}
-  defp status_error(_statuses), do: {:error, :claim_not_current}
+  defp require_current(%ClaimLease{status: status}) do
+    if status in ClaimLease.active_statuses(), do: :ok, else: {:error, :claim_not_current}
+  end
 
   defp require_stale(%ClaimLease{} = claim_lease, now, current_stale_after_ms) do
     if ClaimLease.stale?(claim_lease, now, current_stale_after_ms), do: :ok, else: {:error, :claim_not_stale}
@@ -297,22 +275,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository do
     if ClaimLease.stale?(claim_lease, now, current_stale_after_ms), do: {:error, :claim_stale}, else: :ok
   end
 
-  defp require_releasable(%ClaimLease{status: "paused"}, _now), do: :ok
-  defp require_releasable(%ClaimLease{} = claim_lease, now), do: require_not_stale(claim_lease, now)
-
-  defp update_claim_lease(repo, %ClaimLease{} = claim_lease, attrs, allowed_statuses) do
+  defp update_claim_lease(repo, %ClaimLease{} = claim_lease, attrs, conflict_error) do
     changeset = ClaimLease.update_changeset(claim_lease, attrs)
 
     if changeset.valid? do
       query =
         from(stored in ClaimLease,
           where: stored.id == ^claim_lease.id,
-          where: stored.status in ^allowed_statuses
+          where: stored.status in ^ClaimLease.active_statuses()
         )
 
       case repo.update_all(query, set: update_changes(changeset)) do
         {1, _rows} -> get(repo, claim_lease.id)
-        {0, _rows} -> status_error(allowed_statuses)
+        {0, _rows} -> {:error, conflict_error}
       end
     else
       {:error, changeset}

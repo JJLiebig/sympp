@@ -5,7 +5,6 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
-    CommentProjection,
     OperationalProjection,
     Sanitizer,
     WorkRequestCards
@@ -21,7 +20,6 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   alias SymphonyElixir.SymphonyPlusPlus.ReviewObservation
   alias SymphonyElixir.SymphonyPlusPlus.SessionLocations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -86,7 +84,6 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
 
     with {:ok, execution_signals} <-
            Dashboard.operator_work_package_signals(repo, context.active_work_request_work_package_ids, opts),
-         {:ok, guidance_requests} <- Dashboard.human_guidance_requests(repo, opts),
          {:ok, work_request_details} <-
            operator_work_request_board_details(repo, work_requests, context.repo_identity_catalog, board_detail_opts) do
       {:ok,
@@ -95,7 +92,6 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
          active_blocking_edges: execution_signals.active_blocking_edges,
          work_packages: execution_signals.work_packages,
          work_request_details: operator_board_labels(work_request_details, context, projection_context),
-         guidance_requests: guidance_requests,
          deferred: %{dashboard_sections: false}
        }}
     end
@@ -160,34 +156,19 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
          context = Map.put(context, :operator_config, operator_config),
          {:ok, projection_context} <- operator_projection_context(repo, work_requests, context),
          {:ok, active} <- execution_dashboard_payload(repo, context, work_requests, projection_context) do
-      guidance = DeliveryBoard.guidance_requests_by_work_package_id(repo, Enum.map(context.work_packages, & &1.id))
-      details = Enum.map(active.work_request_details, &native_attention_detail(&1, guidance))
+      details = Enum.map(active.work_request_details, &native_attention_detail/1)
 
       {:ok,
        active
        |> Map.put(:work_request_details, details)
-       |> Map.take([:generated_at, :work_request_details, :guidance_requests])
+       |> Map.take([:generated_at, :work_request_details])
        |> Map.put(:work_packages, Enum.map(active.work_packages, &Map.take(&1, [:id, :active_agent_run])))
        |> Map.put(:runtime, %{offline: OfflineSandbox.enabled?(), repos_root: SymphonyElixir.Config.factory_repos_root()})
        |> Map.put(:chiefs, Chiefs.public_current(repo, operator_config))}
     end
   end
 
-  defp native_attention_detail(detail, guidance) do
-    asks = native_asks(detail, guidance)
-
-    packages =
-      Enum.map(detail.work_packages, fn package ->
-        if get_in(package, [:activity_signal, :next_actor]) == "human" and
-             not Enum.any?(asks, &(&1.work_package_id == package.id)) do
-          put_in(package, [:activity_signal, :next_actor], "architect")
-        else
-          package
-        end
-      end)
-
-    detail |> Map.put(:asks, asks) |> Map.put(:work_packages, packages)
-  end
+  defp native_attention_detail(detail), do: Map.put(detail, :asks, native_asks(detail))
 
   # Keep this projection aligned with parseBoard/buildJob/buildPackage in Herdr's model.js.
   # The web inspector continues to receive the complete detail projection.
@@ -251,8 +232,8 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   end
 
   @doc false
-  @spec native_asks(map(), map()) :: [map()]
-  def native_asks(detail, guidance) do
+  @spec native_asks(map()) :: [map()]
+  def native_asks(detail) do
     request_id = detail.work_request.id
 
     questions =
@@ -260,14 +241,6 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
       |> Enum.filter(&(&1.status == "open"))
       |> Enum.map(fn question ->
         native_ask(question.id, "clarification", question.question, nil, "/api/v1/sympp/herdr/work-requests/#{URI.encode_www_form(request_id)}/questions/#{URI.encode_www_form(question.id)}/answer")
-      end)
-
-    packages =
-      Enum.flat_map(detail.work_packages, fn package ->
-        guidance
-        |> Map.get(package.id, [])
-        |> Enum.filter(&(&1.status == "human_info_needed"))
-        |> Enum.map(&native_guidance_ask(package.id, &1))
       end)
 
     escalation = get_in(detail, [:work_request, :operator_report, "human_escalation"])
@@ -279,16 +252,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
         []
       end
 
-    Enum.filter(questions ++ packages ++ architect, &(is_binary(&1.text) and String.trim(&1.text) != ""))
-  end
-
-  defp native_guidance_ask(package_id, request) do
-    route =
-      if request.status == "human_info_needed" do
-        "/api/v1/sympp/herdr/work-packages/#{URI.encode_www_form(package_id)}/guidance/#{URI.encode_www_form(request.id)}/answer"
-      end
-
-    native_ask(request.id, "guidance", request.question, package_id, route)
+    Enum.filter(questions ++ architect, &(is_binary(&1.text) and String.trim(&1.text) != ""))
   end
 
   defp native_ask(id, kind, text, package_id, route) do
@@ -419,15 +383,13 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
           work_packages: work_packages,
           work_package_contexts: work_package_contexts,
           product_trees_by_request: product_trees_by_request,
-          deliveries_by_slice_id: deliveries_by_slice_id,
-          comment_count_context: comment_count_context
+          deliveries_by_slice_id: deliveries_by_slice_id
         } ->
           [
             work_packages: work_packages,
             work_package_contexts: work_package_contexts,
             product_trees_by_request: product_trees_by_request,
-            deliveries_by_slice_id: deliveries_by_slice_id,
-            comment_count_context: comment_count_context
+            deliveries_by_slice_id: deliveries_by_slice_id
           ]
 
         _other ->
@@ -565,12 +527,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     with {:ok, work_request} <- WorkRequestRepository.get(repo, work_request_id),
          {:ok, questions} <- WorkRequestRepository.list_questions(repo, work_request_id),
          {:ok, decisions} <- WorkRequestRepository.list_decisions(repo, work_request_id),
-         {:ok, selected_work_package} <- operator_selected_work_package(repo, work_request_id, opts),
-         comment_targets =
-           [{"work_request", work_request_id}] ++
-             if(selected_work_package, do: [{"work_package", selected_work_package.id}], else: []),
-         {:ok, comment_context} <- Dashboard.comment_context(repo, comment_targets) do
-      comment_counts = CommentProjection.counts_for(comment_context, "work_request", work_request_id)
+         {:ok, selected_work_package} <- operator_selected_work_package(repo, work_request_id, opts) do
       newest_decisions = Enum.reverse(decisions)
       visible_decisions = if Keyword.get(opts, :all_decisions?, false), do: newest_decisions, else: Enum.take(newest_decisions, 3)
 
@@ -579,14 +536,11 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
           work_request: operator_work_request_enrichment(work_request),
           clarification_questions: Enum.map(questions, &Dashboard.clarification_question/1),
           decision_logs: Enum.map(visible_decisions, &Dashboard.decision_log_entry/1),
-          comments: CommentProjection.comments_for(comment_context, "work_request", work_request_id),
           summary: %{
             open_question_count: Enum.count(questions, &(&1.status == "open")),
             answered_question_count: Enum.count(questions, &(&1.status == "answered")),
             closed_question_count: Enum.count(questions, &(&1.status == "closed")),
-            decision_count: length(decisions),
-            comment_count: comment_counts.comment_count,
-            open_comment_count: comment_counts.open_comment_count
+            decision_count: length(decisions)
           }
         }
 
@@ -595,7 +549,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
          Map.put(
            payload,
            :work_packages,
-           Dashboard.work_package_payloads([selected_work_package], %{}, false, comment_context, delivery_board: nil)
+           Dashboard.work_package_payloads([selected_work_package], %{}, false, delivery_board: nil)
          )
        else
          payload

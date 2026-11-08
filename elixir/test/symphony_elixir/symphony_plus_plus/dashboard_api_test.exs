@@ -19,16 +19,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service, as: ClaimLeaseService
-  alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
-  alias SymphonyElixir.SymphonyPlusPlus.Comments.Service, as: CommentService
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards
   alias SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
-  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
-  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.Repository, as: GuidanceRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Config
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Server
   alias SymphonyElixir.SymphonyPlusPlus.OperationalLineage
@@ -113,8 +109,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       "sympp_work_request_clarification_questions",
       "sympp_work_request_decision_logs",
       "sympp_work_packages",
-      "sympp_work_package_deliveries",
-      "sympp_comments"
+      "sympp_work_package_deliveries"
     ]
 
     def all(query) do
@@ -194,8 +189,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     repo.delete_all(PlanNode)
     repo.delete_all(SoloSessionEntry)
     repo.delete_all(SoloSession)
-    repo.delete_all(GuidanceRequest)
-    repo.delete_all(Comment)
     repo.delete_all(AccessGrant)
     repo.delete_all(WorkPackageDelivery)
     repo.delete_all(WorkPackage)
@@ -683,7 +676,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           [],
           [original, successor],
           contexts,
-          %{},
           %{},
           delivery_board: boards[request.id]
         )
@@ -1407,21 +1399,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  })
                )
 
-      assert {:ok, _comment} =
-               CommentService.create(repo, %{
-                 target_kind: "work_request",
-                 target_id: work_request.id,
-                 body: "Full comment should stay lazy.",
-                 source_type: "operator",
-                 author_name: "operator"
-               })
-
       dashboard = local_operator_dashboard_payload()
       compact_detail = work_request_detail(dashboard, work_request.id)
       [compact_slice] = compact_detail["work_packages"]
 
       refute Map.has_key?(compact_detail, "decision_logs")
-      refute Map.has_key?(compact_detail, "comments")
       refute Map.has_key?(compact_detail["work_request"], "human_description")
       refute Map.has_key?(compact_detail["work_request"], "constraints")
       refute Map.has_key?(compact_slice, "acceptance_criteria")
@@ -1442,11 +1424,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                "WRD-LOCAL-COMPACT-DETAIL-3"
              ]
 
-      assert [%{"body" => "Full comment should stay lazy."}] = enrichment["comments"]
       assert enrichment["work_request"]["human_description"] == "Full operator detail should stay lazy."
       assert enrichment["work_request"]["constraints"] == %{"heavy" => "constraint"}
       assert enrichment["summary"]["decision_count"] == 5
-      assert enrichment["summary"]["comment_count"] == 1
       refute Map.has_key?(enrichment, "work_packages")
       refute Map.has_key?(enrichment, "product_tree")
       refute Map.has_key?(enrichment, "delivery_board")
@@ -1510,20 +1490,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                    title: "Bare scoped solo"
                  })
 
-        guidance_grant = create_claimed_worker_grant(repo, work_package.id, "repo-identity-worker")
-
-        assert {:ok, _guidance_request} =
-                 GuidanceRequestRepository.create(repo, %{
-                   work_package_id: work_package.id,
-                   requester_grant_id: guidance_grant.id,
-                   requested_by: "repo-identity-worker",
-                   idempotency_key: "repo-identity-guidance",
-                   summary: "Needs repo identity decision",
-                   question: "Which repo identity should the dashboard show?",
-                   context: "Operator dashboard canonical repo identity coverage.",
-                   status: "human_info_needed"
-                 })
-
         payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard"), 200)
         deferred_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/deferred"), 200)
         archived_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard?surface=archived"), 200)
@@ -1536,16 +1502,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
         assert [%{"work_request" => %{"repo_key" => "sympp", "repo_remote" => "JJLiebig/sympp"}}] =
                  deferred_payload["work_request_details"]
-
-        assert [
-                 %{
-                   "repo" => "sympp",
-                   "repo_key" => "sympp",
-                   "repo_display" => "sympp",
-                   "repo_remote" => "JJLiebig/sympp",
-                   "repo_aliases" => ["JJLiebig/sympp", "sympp"]
-                 }
-               ] = deferred_payload["guidance_requests"]["guidance_requests"]
 
         refute Map.has_key?(payload, "archived_work_requests")
         refute Map.has_key?(payload, "solo_sessions")
@@ -2122,15 +2078,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   test "stale workers and failing checks route recovery to the architect" do
     alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals
     package = %SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage{status: "implementing"}
-    stale = Signals.activity(package, %{worker_signal: %{status: "stale"}}, %{key: "implementing"}, [], [])
+    stale = Signals.activity(package, %{worker_signal: %{status: "stale"}}, %{key: "implementing"}, [])
     assert stale["next_actor"] == "architect"
     assert stale["next_action"] == "inspect_runtime"
-    failing = Signals.activity(package, %{pr_signal: %{checks: %{status: "failing"}}}, %{key: "implementing"}, [], [])
+    failing = Signals.activity(package, %{pr_signal: %{checks: %{status: "failing"}}}, %{key: "implementing"}, [])
     assert failing["next_actor"] == "architect"
     assert failing["next_action"] == "inspect_validation"
   end
 
-  test "native asks omit textless waits and architect-routed guidance" do
+  test "native asks omit textless waits and resolved escalations" do
     detail = %{
       work_request: %{id: "wr-asks", operator_report: %{"human_escalation" => %{"question" => "Approve the scope?", "raised_at" => "2026-11-06T01:00:00Z", "resolved_at" => nil}}},
       clarification_questions: [],
@@ -2139,16 +2095,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
     assert [
              %{kind: "architect", text: "Approve the scope?", answer_route: nil}
-           ] = asks = LocalOperatorDashboard.native_asks(detail, %{})
+           ] = asks = LocalOperatorDashboard.native_asks(detail)
 
-    assert LocalOperatorDashboard.native_asks(detail, %{}) == asks
+    assert LocalOperatorDashboard.native_asks(detail) == asks
     resolved = put_in(detail, [:work_request, :operator_report, "human_escalation", "resolved_at"], "2026-11-06T02:00:00Z")
-    assert [] = LocalOperatorDashboard.native_asks(resolved, %{})
-    guidance = %{"wp-asks" => [%{id: "g", status: "open", question: "Chief can answer"}]}
-    assert [] = LocalOperatorDashboard.native_asks(resolved, guidance)
-    escalated = put_in(guidance, ["wp-asks", Access.at(0), :status], "human_info_needed")
-    assert [%{text: "Chief can answer", answer_route: route}] = LocalOperatorDashboard.native_asks(resolved, escalated)
-    assert String.ends_with?(route, "/guidance/g/answer")
+    assert [] = LocalOperatorDashboard.native_asks(resolved)
   end
 
   test "Herdr board exposes answerable asks and distinguishes prepared, fresh and stale workers", %{repo: repo} do
@@ -2160,20 +2111,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert {:ok, _run} = AgentRunRepository.start_run(repo, %{work_package_id: live.id, status: "running"})
       assert {:ok, _run} = AgentRunRepository.start_run(repo, %{work_package_id: stale.id, status: "running", last_seen_at: DateTime.add(DateTime.utc_now(:microsecond), -600, :second)})
       assert {:ok, question} = WorkRequestRepository.ask_question(repo, request.id, question_attrs(question: "Which region?"))
-      grant = create_claimed_worker_grant(repo, queued.id, "lens-worker")
-
-      assert {:ok, guidance} =
-               GuidanceRequestRepository.create(repo, %{
-                 work_package_id: queued.id,
-                 requester_grant_id: grant.id,
-                 requested_by: "lens-worker",
-                 idempotency_key: "lens-guidance",
-                 summary: "Choose region",
-                 question: "Use Europe?",
-                 context: "Deployment choice"
-               })
-
-      assert {:ok, _guidance} = GuidanceRequestRepository.escalate_human_info_needed(repo, guidance.id, %{human_info_reason: "Operator decides", recommended_language: "en"})
+      create_claimed_worker_grant(repo, queued.id, "lens-worker")
 
       read = fn ->
         board = build_conn() |> Map.put(:host, "localhost") |> Map.put(:remote_ip, {127, 0, 0, 1}) |> get("/api/v1/sympp/herdr/dashboard") |> json_response(200)
@@ -2188,11 +2126,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       asks = Map.new(detail["asks"], &{&1["id"], &1})
       assert asks[question.id]["text"] == "Which region?"
       assert asks[question.id]["kind"] == "clarification"
-      assert asks[guidance.id]["text"] == "Use Europe?"
-      assert asks[guidance.id]["work_package_id"] == queued.id
-      assert asks[guidance.id]["kind"] == "guidance"
       assert json_response(post(native_operator_conn(), asks[question.id]["answer_route"], Jason.encode!(%{answer: "Europe"})), 200)["ok"]
-      assert json_response(post(native_operator_conn(), asks[guidance.id]["answer_route"], Jason.encode!(%{answer: "Yes"})), 200)["ok"]
       assert read.()["asks"] == []
     end)
   end
@@ -2372,8 +2306,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
         for path <- [
               "/api/v1/sympp/herdr/work-requests",
-              "/api/v1/sympp/herdr/work-requests/#{work_request.id}/questions/missing/answer",
-              "/api/v1/sympp/herdr/work-packages/#{active.id}/guidance/missing/answer"
+              "/api/v1/sympp/herdr/work-requests/#{work_request.id}/questions/missing/answer"
             ] do
           mutation =
             native_operator_conn()
@@ -2389,8 +2322,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         for method <- [:post, :options],
             path <- [
               "/api/v1/sympp/herdr/work-requests",
-              "/api/v1/sympp/herdr/work-requests/#{work_request.id}/questions/missing/answer",
-              "/api/v1/sympp/herdr/work-packages/#{active.id}/guidance/missing/answer"
+              "/api/v1/sympp/herdr/work-requests/#{work_request.id}/questions/missing/answer"
             ] do
           request =
             native_operator_conn()
@@ -2453,7 +2385,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
-  test "cold Herdr details refresh native review and expose guidance without board warmup", %{repo: repo} do
+  test "cold Herdr details refresh native review without board warmup", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       work_request = create_work_request!(repo, id: "WR-HERDR-COLD-REVIEW", status: "ready_for_slicing")
       root = Path.join(System.tmp_dir!(), "herdr-cold-review-#{System.unique_integer([:positive])}")
@@ -2468,40 +2400,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           worktree_path: root,
           review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "fast", "base" => "origin/beta"}}
         )
-
-      needs_human = create_work_package!(repo, id: "WP-HERDR-HUMAN", work_request_id: work_request.id, status: "blocked", owner_id: "human-wait-owner")
-      grant = create_claimed_worker_grant(repo, needs_human.id, "guidance-worker")
-
-      assert {:ok, guidance} =
-               GuidanceRequestRepository.create(repo, %{
-                 work_package_id: needs_human.id,
-                 requester_grant_id: grant.id,
-                 requested_by: "guidance-worker",
-                 idempotency_key: "herdr-human-guidance",
-                 summary: "Approve changed UX",
-                 question: "Keep the approved interaction?",
-                 context: "A product decision is needed."
-               })
-
-      native_answer = fn package_id, attrs ->
-        native_operator_conn()
-        |> post("/api/v1/sympp/herdr/work-packages/#{package_id}/guidance/#{guidance.id}/answer", Jason.encode!(attrs))
-      end
-
-      assert json_response(native_answer.(needs_human.id, %{answer: "Cannot bypass architect guidance"}), 422)["error"]["code"] == "invalid_status"
-      assert repo.get!(GuidanceRequest, guidance.id).status == "open"
-
-      assert {:ok, _guidance} =
-               GuidanceRequestRepository.escalate_human_info_needed(repo, guidance.id, %{
-                 human_info_reason: "Product decision required",
-                 recommended_language: "en",
-                 blocker_id: "herdr-human-guidance",
-                 decision_prompt: %{
-                   "tl_dr" => "Choose the approved UX",
-                   "details" => "The human owns this product decision.",
-                   "options" => [%{"id" => "keep", "label" => "Keep", "answer" => "Keep the approved interaction."}]
-                 }
-               })
 
       script = Path.join(root, "review.py")
 
@@ -2585,41 +2483,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         ready_activity = ready_package.activity_signal
         assert ready_activity["next_action"] == "verify_native_checks_and_review_then_merge"
         assert ready_activity["next_actor"] == "architect"
-        human_activity = packages[needs_human.id]["activity_signal"]
-        assert human_activity["accountable_owner"]["id"] == "human-wait-owner"
-        assert human_activity["waiting_reason"] == "Product decision required"
-        assert human_activity["next_actor"] == "human"
-        assert human_activity["next_action"] == "answer_guidance"
-
-        attrs = %{answer_choice: "keep", answer_note: "Retain keyboard access.", future_field: true}
-
-        assert :ok =
-                 repo.checkout(fn ->
-                   before_refusal = repo.query!("SELECT total_changes()", []).rows
-                   assert json_response(native_answer.(reviewing.id, attrs), 404)["error"]["code"] == "not_found"
-
-                   operator_mismatch =
-                     local_operator_conn()
-                     |> post("/api/v1/sympp/operator/work-packages/#{reviewing.id}/guidance/#{guidance.id}/answer", attrs)
-
-                   assert json_response(operator_mismatch, 404)["error"]["code"] == "not_found"
-                   assert repo.query!("SELECT total_changes()", []).rows == before_refusal
-                   :ok
-                 end)
-
-        assert json_response(native_answer.(needs_human.id, %{answer_choice: "unknown"}), 422)["error"]["code"] == "invalid_answer_choice"
-        assert repo.get!(GuidanceRequest, guidance.id).status == "human_info_needed"
-        assert repo.get!(GuidanceRequest, guidance.id).answer == nil
-
-        assert :ok = DashboardPubSub.subscribe()
-        answered = json_response(native_answer.(needs_human.id, attrs), 200)
-        assert answered["refresh"] == %{"dashboard" => true, "work_package_id" => needs_human.id}
-        assert_received :operator_dashboard_changed
-        persisted = repo.get!(GuidanceRequest, guidance.id)
-        assert persisted.answer == "Keep the approved interaction. Retain keyboard access."
-        assert persisted.answered_by == "local-operator"
-        assert persisted.status == "answered"
-        assert json_response(native_answer.(needs_human.id, attrs), 422)["error"]["code"] == "invalid_status"
       after
         :ets.delete(observation, {:observation, Path.expand(root), "origin/beta"})
         :ets.delete(observation, :review_suite_script)
@@ -3154,7 +3017,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       expired = create_completed_delivered_work_request!(repo, "WR-LOCAL-DELETE-ARCHIVED", stale_at)
       assert {:ok, expired} = WorkRequestService.archive(repo, expired.id)
       expired = set_work_request_archived_at!(expired, repo, stale_at)
-      expired_slice_id = "WRS-#{expired.id}"
 
       linked_expired = create_work_request!(repo, id: "WR-LOCAL-DELETE-LINKED", status: "ready_for_slicing")
 
@@ -3186,36 +3048,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert {:ok, recent} = WorkRequestService.archive(repo, recent.id)
       recent = set_work_request_archived_at!(recent, repo, fresh_at)
 
-      assert {:ok, request_comment} =
-               CommentService.create(repo, %{
-                 id: "comment-local-delete-wr",
-                 target_kind: "work_request",
-                 target_id: expired.id,
-                 body: "Remove with archived request",
-                 source_type: "operator",
-                 author_name: "dashboard-test"
-               })
-
-      assert {:ok, slice_comment} =
-               CommentService.create(repo, %{
-                 id: "comment-local-delete-slice",
-                 target_kind: "work_package",
-                 target_id: expired_slice_id,
-                 body: "Remove with archived slice",
-                 source_type: "operator",
-                 author_name: "dashboard-test"
-               })
-
-      assert {:ok, kept_comment} =
-               CommentService.create(repo, %{
-                 id: "comment-local-keep-archived",
-                 target_kind: "work_request",
-                 target_id: recent.id,
-                 body: "Keep recent archive",
-                 source_type: "operator",
-                 author_name: "dashboard-test"
-               })
-
       run_operator_retention(repo)
       payload = local_operator_dashboard_payload()
 
@@ -3226,10 +3058,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert recent.id in archived_ids
       assert {:error, :not_found} = WorkRequestService.get(repo, expired.id)
       assert {:error, :not_found} = WorkRequestService.get(repo, linked_expired.id)
-      assert {:error, :not_found} = CommentService.get(repo, request_comment.id)
-      assert {:error, :not_found} = CommentService.get(repo, slice_comment.id)
       assert {:ok, ^recent} = WorkRequestService.get(repo, recent.id)
-      assert {:ok, ^kept_comment} = CommentService.get(repo, kept_comment.id)
       assert linked_package.id in payload["settings"]["hidden_work_package_ids"]
       refute linked_package.id in dashboard_work_package_ids(payload)
     end)
@@ -3897,20 +3726,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert {:ok, open_question} =
                WorkRequestRepository.ask_question(repo, work_request.id, question_attrs(id: "WRQ-LOCAL-COMPLETE-STATE"))
 
-      guidance_grant = create_claimed_worker_grant(repo, work_package.id, "worker-local-complete")
-
-      assert {:ok, guidance_request} =
-               GuidanceRequestRepository.create(repo, %{
-                 work_package_id: work_package.id,
-                 requester_grant_id: guidance_grant.id,
-                 requested_by: "worker-local-complete",
-                 idempotency_key: "guidance-local-complete",
-                 summary: "Needs a terminal decision",
-                 question: "Should this unfinished package continue?",
-                 context: "Force completion must clear attached attention.",
-                 status: "human_info_needed"
-               })
-
       assert {:ok, _blocker} =
                PlanningRepository.append_progress_event(repo, %{
                  work_package_id: work_package.id,
@@ -3957,8 +3772,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert persisted_question.id == open_question.id
       assert persisted_question.status == "closed"
 
-      assert {:error, :not_found} = GuidanceRequestRepository.get(repo, guidance_request.id)
-
       assert {:ok, progress_events} = PlanningRepository.list_progress_events(repo, work_package.id)
       refute Enum.any?(BlockerProjection.blockers(progress_events), & &1.active)
 
@@ -4000,20 +3813,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       assert {:ok, _dispatched} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, work_package.id, "approved", linked_package.id)
 
-      guidance_grant = create_claimed_worker_grant(repo, linked_package.id, "worker-local-delete")
-
-      assert {:ok, guidance_request} =
-               GuidanceRequestRepository.create(repo, %{
-                 work_package_id: linked_package.id,
-                 requester_grant_id: guidance_grant.id,
-                 requested_by: "worker-local-delete",
-                 idempotency_key: "guidance-local-delete",
-                 summary: "Delete attached guidance",
-                 question: "Should this request be deleted?",
-                 context: "Deletion must remove attached attention.",
-                 status: "human_info_needed"
-               })
-
       assert {:ok, blocker_event} =
                PlanningRepository.append_progress_event(repo, %{
                  work_package_id: linked_package.id,
@@ -4024,16 +3823,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  payload: %{type: "blocker", source_tool: "report_blocker", blocker_id: "blocker-local-delete", active: true}
                })
 
-      assert {:ok, request_comment} =
-               CommentService.create(repo, %{
-                 id: "comment-local-delete-direct-wr",
-                 target_kind: "work_request",
-                 target_id: work_request.id,
-                 body: "Delete with request",
-                 source_type: "operator",
-                 author_name: "dashboard-test"
-               })
-
       payload =
         local_operator_conn()
         |> post("/api/v1/sympp/operator/work-requests/#{work_request.id}/delete", %{})
@@ -4042,9 +3831,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert get_in(payload, ["work_request", "id"]) == work_request.id
       assert get_in(payload, ["refresh", "work_request_id"]) == work_request.id
       assert {:error, :not_found} = WorkRequestService.get(repo, work_request.id)
-      assert {:error, :not_found} = CommentService.get(repo, request_comment.id)
       assert {:error, :not_found} = WorkPackageRepository.get(repo, linked_package.id)
-      assert {:error, :not_found} = GuidanceRequestRepository.get(repo, guidance_request.id)
       assert repo.get(ProgressEvent, blocker_event.id) == nil
       assert repo.get(ClarificationQuestion, open_question.id) == nil
       assert {:ok, settings} = OperatorSettingsRepository.get(repo)
@@ -4060,76 +3847,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert audit.action == "dangerous_delete"
       assert audit.target_id == work_request.id
       assert audit.tool_metadata["name"] == "operator_delete_work_request"
-    end)
-  end
-
-  test "local operator can create and resolve comments through the dashboard API", %{repo: repo} do
-    with_local_operator_endpoint(fn ->
-      work_request = create_work_request!(repo, id: "WR-LOCAL-COMMENTS", status: "ready_for_slicing")
-
-      create_payload =
-        local_operator_conn()
-        |> post("/api/v1/sympp/operator/comments", %{
-          "target_kind" => "work_request",
-          "target_id" => work_request.id,
-          "body" => "Operator note sk-secret123",
-          "source_type" => "worker",
-          "author_name" => "github_pat_12345678"
-        })
-        |> json_response(201)
-
-      assert %{"comment" => %{"id" => comment_id, "status" => "open"}} = create_payload
-      assert get_in(create_payload, ["comment", "body"]) == "Operator note [REDACTED]"
-      assert get_in(create_payload, ["comment", "source_type"]) == "operator"
-      assert get_in(create_payload, ["comment", "author_name"]) == "local-operator"
-      refute Map.has_key?(create_payload, "dashboard")
-      assert get_in(create_payload, ["refresh", "comment_target_kind"]) == "work_request"
-      assert get_in(create_payload, ["refresh", "comment_target_id"]) == work_request.id
-
-      created_detail_payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/work-requests/#{work_request.id}")
-        |> json_response(200)
-
-      assert get_in(created_detail_payload, ["summary", "open_comment_count"]) == 1
-
-      assert {:ok, %Comment{source_type: "operator", author_name: "local-operator", body: "Operator note [REDACTED]"}} = CommentService.get(repo, comment_id)
-
-      resolve_payload =
-        local_operator_conn()
-        |> post("/api/v1/sympp/operator/comments/#{comment_id}/resolve", %{
-          "resolved_by" => "spoofed-worker",
-          "resolved_source_type" => "worker",
-          "resolution_note" => "Handled bearer abcdefgh"
-        })
-        |> json_response(200)
-
-      assert get_in(resolve_payload, ["comment", "status"]) == "resolved"
-      assert get_in(resolve_payload, ["comment", "resolved_by"]) == "local-operator"
-      assert get_in(resolve_payload, ["comment", "resolved_source_type"]) == "operator"
-      assert get_in(resolve_payload, ["comment", "resolution_note"]) == "Handled [REDACTED]"
-      refute Map.has_key?(resolve_payload, "dashboard")
-
-      resolved_detail_payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/work-requests/#{work_request.id}")
-        |> json_response(200)
-
-      assert get_in(resolved_detail_payload, ["summary", "comment_count"]) == 1
-      assert get_in(resolved_detail_payload, ["summary", "open_comment_count"]) == 0
-      assert {:ok, %Comment{resolution_note: "Handled [REDACTED]"}} = CommentService.get(repo, comment_id)
-
-      overlong_payload =
-        local_operator_conn()
-        |> post("/api/v1/sympp/operator/comments", %{
-          "target_kind" => "work_request",
-          "target_id" => work_request.id,
-          "body" => String.duplicate("x", Comment.max_body_length() + 1)
-        })
-        |> json_response(422)
-
-      assert get_in(overlong_payload, ["error", "code"]) == "invalid_request"
-      assert get_in(overlong_payload, ["error", "message"]) =~ "body"
     end)
   end
 

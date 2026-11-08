@@ -76,11 +76,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
   def record_work_package_delivery(repo, work_request_id, work_package_id, attrs),
     do: notify_dashboard(DeliveryCloseout.record(repo, work_request_id, work_package_id, attrs))
 
-  @spec skip_work_package(Repository.repo(), String.t(), String.t(), String.t()) ::
+  @spec skip_work_package(Repository.repo(), String.t(), String.t()) ::
           {:ok, WorkPackage.t()} | {:error, error()}
-  def skip_work_package(repo, work_request_id, id, current_status) do
+  def skip_work_package(repo, work_request_id, id) do
     repo.transaction(fn ->
-      with {:ok, work_package} <- Repository.skip_work_package(repo, work_request_id, id, current_status),
+      with {:ok, work_package} <- Repository.skip_work_package(repo, work_request_id, id),
            {:ok, _work_request} <- Completion.refresh_in_transaction(repo, work_request_id) do
         work_package
       else

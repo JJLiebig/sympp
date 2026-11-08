@@ -102,7 +102,7 @@ async function remoteArguments(body, factoryOwned) {
     if (params.name === "register_chief" && Array.isArray(args.repos)) args.repos = await Promise.all(args.repos.map(repo));
     if (params.name === "slice_work_request" && Array.isArray(args.work_packages)) args.work_packages = await Promise.all(args.work_packages.map(repoObject));
     if (params.name === "update_work_package") args.patch = await repoObject(args.patch);
-    if (["prepare_work_package_worktree", "cleanup_work_package_worktree"].includes(params.name)) delete args.target_repo_root;
+    if (params.name === "prepare_work_package_worktree") delete args.target_repo_root;
     return { ...payload, params: { ...params, arguments: args } };
   }
   const payload = JSON.parse(body);

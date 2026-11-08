@@ -66,34 +66,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue do
     enqueue_each(work_packages, &enqueue(repo, &1, opts))
   end
 
-  @spec queue_retryable_cleanup(module(), WorkPackage.t(), term(), keyword()) ::
-          {:ok, map()} | {:error, term()}
-  def queue_retryable_cleanup(repo, %WorkPackage{} = work_package, reason, opts \\ []) do
-    if retryable_cleanup_failure?(reason) do
-      case enqueue(repo, work_package, opts) do
-        :ok ->
-          {:ok,
-           %{
-             work_package: work_package,
-             status: "cleanup_queued",
-             worktree_path: work_package.worktree_path,
-             branch: nil,
-             base_branch: work_package.base_branch,
-             repo_root: work_package.worktree_target_repo_root,
-             target_repo_root: work_package.worktree_target_repo_root
-           }}
-
-        :ignored ->
-          {:error, :unsafe_worktree_path}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    else
-      {:error, reason}
-    end
-  end
-
   defp enqueue_each(work_packages, enqueue) do
     Enum.reduce_while(work_packages, :ok, fn work_package, :ok ->
       case enqueue.(work_package) do
@@ -103,14 +75,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue do
       end
     end)
   end
-
-  defp retryable_cleanup_failure?({:worktree_cleanup_failed, %{stage: "residue_removal", rule: "durable_preflight_proof"}}),
-    do: true
-
-  defp retryable_cleanup_failure?({:git_failed, _status, %{stage: "git_worktree_remove", rule: "durable_preflight_proof"}}),
-    do: true
-
-  defp retryable_cleanup_failure?(_reason), do: false
 
   @spec wake(GenServer.server()) :: :ok
   def wake(server \\ __MODULE__) do
@@ -245,7 +209,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue do
     context = WorkPackageActivity.context(repo, work_package.id)
     worker_status = get_in(context, [:worker_signal, :status])
     runtime_active? = get_in(context, [:runtime_state, :active?]) == true
-    worker_status in ["active", "paused"] or runtime_active?
+    worker_status == "active" or runtime_active?
   end
 
   defp postpone(repo, entry, reason, opts, now) do

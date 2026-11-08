@@ -25,7 +25,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
 
       seed_legacy_ledger!()
 
-      assert @cutover_version in Ecto.Migrator.run(Repo, Migrations.all(), :up, all: true, log: false)
+      assert @cutover_version in Ecto.Migrator.run(Repo, Migrations.all(), :up, to: @cutover_version, log: false)
 
       assert [["WP-LINKED", "WR-CANONICAL-MIGRATION", "PTN-CANONICAL", 1, "Linked legacy goal", "ready_for_worker"]] =
                rows!("""

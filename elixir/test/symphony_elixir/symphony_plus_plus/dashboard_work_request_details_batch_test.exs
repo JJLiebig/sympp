@@ -4,7 +4,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
   import Phoenix.ConnTest
   import Plug.Conn, only: [put_req_header: 3]
 
-  alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
@@ -52,7 +51,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
     repo.delete_all(WorkPackage)
     repo.delete_all(DecisionLogEntry)
     repo.delete_all(ClarificationQuestion)
-    repo.delete_all(Comment)
     repo.delete_all(WorkRequest)
     repo.delete_all(WorkPackage)
     repo.delete_all(OperatorSettings)

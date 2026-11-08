@@ -160,9 +160,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant do
           "read:phase",
           "read:work_request",
           "write:work_request",
-          "dispatch:work_request",
-          "read:guidance_request",
-          "write:guidance_request"
+          "dispatch:work_request"
         ])
     )
   end
@@ -205,8 +203,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant do
         "read:work_request",
         "write:work_request",
         "dispatch:work_request",
-        "read:guidance_request",
-        "write:guidance_request",
         "write:phase_plan"
       ]
   end

@@ -283,15 +283,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
     if map_value(observation, "provider_status") in ["stale", "invalidated", "head_changed_after_review"], do: "stale", else: "current"
   end
 
-  @spec activity(WorkPackage.t(), map(), map(), [map()], [map()]) :: map()
-  def activity(work_package, summary, operational_state, events, guidance) do
+  @spec activity(WorkPackage.t(), map(), map(), [map()]) :: map()
+  def activity(work_package, summary, operational_state, events) do
     worker = map_value(summary, "worker_signal") || %{}
     review = map_value(summary, "review_signal") || %{}
     runtime = map_value(summary, "runtime_state") || %{}
     stage = activity_stage(work_package, operational_state, review)
     latest_event = List.last(events)
     started_at = review_started_at(stage, review)
-    {waiting_reason, next_actor, next_action} = next_activity(work_package, summary, guidance, review, worker)
+    {waiting_reason, next_actor, next_action} = next_activity(work_package, summary, review, worker)
 
     %{
       work_package_id: work_package.id,
@@ -342,15 +342,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
     |> Sanitizer.timestamp()
   end
 
-  defp next_activity(work_package, summary, guidance, review, worker) do
-    guidance_wait = guidance_wait(guidance)
+  defp next_activity(work_package, summary, review, worker) do
     dependency = map_value(summary, "dependency_signal") || %{}
     eligibility = Map.get(summary, :merge_eligibility, %{})
     dependency_reason = Enum.find(Map.get(eligibility, :reason_codes, []), &(&1 != "not_ready"))
 
     cond do
       work_package.status in ["skipped", "merged", "closed", "abandoned"] -> {nil, nil, nil}
-      guidance_wait -> guidance_wait
       dependency_reason -> {dependency_reason, "architect", eligibility[:next_action]}
       Map.get(dependency, :unmet_work_package_ids, []) != [] -> {"unmet_dependencies", "prerequisite_owner", "resolve_dependencies"}
       get_in(summary, [:blocker_state, :active?]) -> {"active_blocker", "architect", "resolve_blocker"}
@@ -359,21 +357,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
     end
   end
 
-  defp guidance_wait(guidance) do
-    human = Enum.find(guidance, &(&1.status == "human_info_needed"))
-    open = Enum.find(guidance, &(&1.status == "open"))
-
-    cond do
-      human && is_binary(human.question) && String.trim(human.question) != "" -> {human.human_info_reason || human.summary, "human", "answer_guidance"}
-      human -> {"missing_human_question", "architect", "answer_guidance"}
-      open -> {open.summary, "architect", "answer_guidance"}
-      true -> nil
-    end
-  end
-
   defp next_runtime_activity(work_package, review, worker, eligibility) do
     cond do
-      worker[:status] == "paused" -> {"worker_paused", "worker", "resume"}
       worker[:status] == "stale" -> {"runtime_stale", "architect", "inspect_runtime"}
       review[:status] == "inspection_needed" -> {"review_head_changed", "architect", "inspect_changed_since_review"}
       review[:next_action] not in [nil, "none"] -> {if(review[:next_action] == "wait", do: "review_in_progress"), "worker", review[:next_action]}
@@ -387,7 +372,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   defp status_activity(_status, _eligibility), do: {nil, nil, nil}
 
   defp observation_state(%{stale?: true}, _package), do: "stale"
-  defp observation_state(%{paused?: true}, _package), do: "paused"
   defp observation_state(%{active_agent_run_ids: [_ | _]}, _package), do: "current"
   defp observation_state(%{current_actor: actor}, _package) when is_map(actor), do: "current"
 

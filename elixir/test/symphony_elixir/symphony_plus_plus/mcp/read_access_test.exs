@@ -15,17 +15,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadAccessTest do
           {"read_plan", %{"work_request_id" => work_request.id}},
           {"read_delivery_board", %{"work_request_id" => work_request.id}},
           {"reconcile_work_request", %{"work_request_id" => work_request.id}},
-          {"read_task_plan", %{"work_package_id" => package.id}},
-          {"list_comments", %{"target_kind" => "work_request", "target_id" => work_request.id}}
+          {"read_task_plan", %{"work_package_id" => package.id}}
         ] do
       result = tool!(client, tool, arguments)
       assert result.response["result"], "#{tool}: #{inspect(result.response)}"
       assert result.herdr_binding == nil, tool
     end
 
-    refused = tool!(client, "list_guidance_requests", %{"work_request_id" => work_request.id})
+    refused = tool!(client, "reconcile_work_request", %{})
     assert %{"reason" => "claim_required", "action" => "claim_local_architect_assignment", "message" => message} = refused.response["error"]["data"]
-    assert message =~ "list_guidance_requests"
+    assert message =~ "reconcile_work_request"
     assert refused.herdr_binding == nil
 
     assert {:error, _no_lease} = ClaimLeaseService.current_for_work_package(repo, handoff.anchor_package.id)
@@ -121,8 +120,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadAccessTest do
 
     for {tool, arguments} <- [
           {"read_task_plan", %{"work_package_id" => foreign.id}},
-          {"read_work_request", %{"work_request_id" => work_request.id}},
-          {"list_comments", %{"target_kind" => "work_package", "target_id" => foreign.id}}
+          {"read_work_request", %{"work_request_id" => work_request.id}}
         ] do
       assert tool!(worker, tool, arguments).response["error"], tool
     end

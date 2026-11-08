@@ -178,9 +178,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalClaimLeases do
     now = DateTime.utc_now(:microsecond)
 
     cond do
-      lease.status == "paused" ->
-        {:error, :claim_lease_paused}
-
       ClaimLease.stale?(lease, now, stale_after_ms) ->
         reclaim(repo, work_package_id, actor, stale_after_ms, stale_reason)
 

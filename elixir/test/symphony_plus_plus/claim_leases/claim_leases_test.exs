@@ -93,7 +93,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeasesTest do
 
     columns = column_names(repo, "sympp_claim_leases")
 
-    for column <- ~w(id work_package_id access_grant_id claim_group_id previous_claim_id actor_kind actor_id status last_seen_at stale_after_ms stale_at paused_at reclaimed_at released_at) do
+    for column <- ~w(id work_package_id access_grant_id claim_group_id previous_claim_id actor_kind actor_id status last_seen_at stale_after_ms stale_at reclaimed_at released_at) do
       assert column in columns
     end
 
@@ -110,7 +110,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeasesTest do
   test "claim lease transitions preserve actor identity and continuity through stale reclaim", %{repo: repo} do
     now = ~U[2026-05-26 10:00:00Z]
     heartbeat_at = DateTime.add(now, 500, :millisecond)
-    pause_at = DateTime.add(now, 600, :millisecond)
     reclaim_at = DateTime.add(now, 2_000, :millisecond)
 
     assert {:ok, work_package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-CLAIM-RECLAIM"))
@@ -159,12 +158,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeasesTest do
     assert claim.released_at == nil
     refute ClaimLease.stale?(claim, DateTime.add(now, 1_400, :millisecond))
     assert ClaimLease.stale?(claim, reclaim_at)
-
-    assert {:ok, paused} = Service.pause(repo, claim.id, %{actor_id: "agent-1"}, now: pause_at, reason: "operator pause")
-    assert paused.status == "paused"
-    assert DateTime.compare(paused.paused_at, pause_at) == :eq
-    assert paused.paused_by_actor_id == "agent-1"
-    assert paused.pause_reason == "operator pause"
 
     assert {:ok, replacement} =
              Service.reclaim_stale(
@@ -522,7 +515,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeasesTest do
     end
   end
 
-  test "paused heartbeat, actor attribution, release fencing and stale reclaim preserve lease ownership", %{repo: repo} do
+  test "released heartbeat, release fencing and stale reclaim preserve lease ownership", %{repo: repo} do
     now = DateTime.utc_now(:microsecond)
     stale_started_at = ~U[2026-01-01 00:00:00Z]
     assert {:ok, work_package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-CLAIM-DEFAULTS"))
@@ -539,11 +532,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeasesTest do
                now: now
              )
 
-    assert {:ok, paused} = Service.pause(repo, claim.id, %{"actor_id" => "agent-default"})
-    assert paused.paused_by_actor_id == "agent-default"
-    assert {:error, :not_active} = Service.heartbeat(repo, paused.id)
-    assert {:ok, released} = Service.release(repo, paused.id)
+    assert {:ok, released} = Service.release(repo, claim.id)
     assert released.status == "released"
+    assert {:error, :not_active} = Service.heartbeat(repo, released.id)
     assert {:error, :claim_not_current} = Service.release(repo, released.id)
 
     assert {:ok, stale_claim} =

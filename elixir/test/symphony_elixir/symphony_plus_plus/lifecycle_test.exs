@@ -5,8 +5,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.WorkKey
-  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
-  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.Repository, as: GuidanceRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
@@ -29,7 +27,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
   end
 
   setup %{repo: repo} do
-    repo.delete_all(GuidanceRequest)
     repo.delete_all(ProgressEvent)
     repo.delete_all(AccessGrant)
     repo.delete_all(WorkPackage)
@@ -42,41 +39,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     assert {:error, :worker_cannot_mark_merged} = Service.transition(repo, package.id, "merged", worker_actor!(repo, package))
   end
 
-  test "terminal transition clears only the package's human-action residue and replays idempotently", %{repo: repo} do
+  test "terminal transition clears only the package's blocker residue and replays idempotently", %{repo: repo} do
     assert {:ok, package} =
              Repository.create(repo, WorkPackageFactory.attrs(kind: "hotfix", status: "ready_for_merge"))
 
     assert {:ok, sibling} = Repository.create(repo, WorkPackageFactory.attrs(kind: "hotfix", status: "reviewing"))
     actor = architect_actor!(repo, package)
-
-    assert {:ok, guidance} =
-             GuidanceRequestRepository.create(repo, %{
-               work_package_id: package.id,
-               requester_grant_id: actor.grant_id,
-               requested_by: "architect-1",
-               idempotency_key: "terminal-guidance",
-               summary: "Need a decision",
-               question: "Which closeout path should be used?",
-               context: "Terminal cleanup regression"
-             })
-
-    assert {:ok, answered_guidance} =
-             GuidanceRequestRepository.create(repo, %{
-               work_package_id: package.id,
-               requester_grant_id: actor.grant_id,
-               requested_by: "architect-1",
-               idempotency_key: "terminal-guidance-answered",
-               summary: "Preserve a decision",
-               question: "Which path was selected?",
-               context: "Answered decision history"
-             })
-
-    assert {:ok, answered_guidance} =
-             GuidanceRequestRepository.answer(repo, answered_guidance.id, %{
-               answer: "Use the reviewed path.",
-               answered_by: "operator",
-               answered_at: DateTime.utc_now(:microsecond)
-             })
 
     append_active_blocker!(repo, package.id, "terminal-blocker")
     append_active_blocker!(repo, sibling.id, "nonterminal-blocker")
@@ -112,8 +80,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
              })
 
     assert {:ok, terminal} = Service.transition(repo, package.id, "merged", actor)
-    assert repo.get(GuidanceRequest, guidance.id) == nil
-    assert repo.get!(GuidanceRequest, answered_guidance.id).status == "answered"
 
     terminal_blocker_state = WorkPackageActivity.context(repo, package.id).blocker_state
     assert terminal_blocker_state.active?

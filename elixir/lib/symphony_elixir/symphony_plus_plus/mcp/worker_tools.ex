@@ -19,7 +19,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{DryClient, MergeReconciler}
-  alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     ArchitectDeliveryTools,
@@ -54,7 +53,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     "update_task_plan",
     "append_finding",
     "append_progress",
-    "abandon",
     "attach_branch",
     "attach_pr",
     "sync_pr",
@@ -192,19 +190,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
 
   def call("append_progress", %Config{} = config, session, arguments) do
     append_scoped_progress(config.repo, session, arguments, "append_progress", %{})
-  end
-
-  def call("abandon", %Config{} = config, session, arguments) do
-    with {:ok, session} <- scoped_session(config.repo, session, arguments),
-         :ok <- authorize_current_package_policy(config.repo, session, :work_package_update, :work_package),
-         {:ok, reason} <- required_argument(arguments, "reason"),
-         {:ok, work_package} <- abandon_transaction(config.repo, session, reason) do
-      {:ok, ToolResult.tool_result(%{"work_package" => work_package_payload(work_package)})}
-    else
-      {:tool_error, reason} -> invalid_params_error("abandon", reason)
-      {:error, _code, _message, _data} = error -> error
-      {:error, reason} -> worker_error(reason, "abandon")
-    end
   end
 
   def call("attach_branch", %Config{} = config, session, arguments) do
@@ -490,63 +475,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     end
   end
 
-  defp abandon_transaction(repo, %Session{} = session, reason) do
-    run_worker_transaction(repo, fn ->
-      with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
-           :ok <- ProgressEvents.reject_ready_evidence_mutation(repo, session, "abandon"),
-           {:ok, %WorkPackage{status: status} = work_package} when status in ["active", "blocked"] <-
-             WorkPackageRepository.get(repo, Session.work_package_id(session)),
-           {:ok, blocker_closeout_plan} <-
-             ArchitectDeliveryTools.prepare_scoped_blocker_closeout(
-               repo,
-               session,
-               [work_package.id],
-               %{
-                 "blocker_closeout" => %{
-                   "decision" => "still_active",
-                   "summary" => "Preserved active blocker when worker abandoned the work package"
-                 }
-               },
-               "abandon"
-             ),
-           {:ok, _event} <- append_abandon_event(repo, session, work_package.status, reason),
-           {:ok, abandoned} <- LifecycleService.transition(repo, work_package, "abandoned", actor(session)),
-           {:ok, _blocker_closeout} <-
-             ArchitectDeliveryTools.apply_prepared_blocker_closeout(repo, session, blocker_closeout_plan) do
-        {:ok, abandoned}
-      else
-        {:ok, %WorkPackage{}} -> {:tool_error, "work_package_not_active"}
-        error -> error
-      end
-    end)
-  end
-
-  defp append_abandon_event(repo, %Session{} = session, from_status, reason) do
-    payload = %{"type" => "status_transition", "from_status" => from_status, "to_status" => "abandoned"}
-    idempotency_key = ProgressEvents.metadata_idempotency_key(Map.put(payload, "reason", reason))
-
-    attrs = %{
-      "summary" => "Work package abandoned",
-      "body" => reason,
-      "status" => "abandoned",
-      "idempotency_key" => idempotency_key,
-      "payload" => Map.put(payload, "source_tool", "abandon")
-    }
-
-    case ProgressEvents.append_or_replay(repo, session, attrs, idempotency_key, "abandon") do
-      {:ok, _result} ->
-        PlanningRepository.get_progress_event_by_idempotency_key(
-          repo,
-          session.assignment.work_package_id,
-          idempotency_key,
-          session.assignment.grant_id
-        )
-
-      error ->
-        error
-    end
-  end
-
   defp append_authenticated_idempotent_finding(repo, %Session{} = session, work_package_id, finding_id, attrs) do
     transaction_fun = fn ->
       append_authenticated_idempotent_finding_tx(repo, session, work_package_id, finding_id, attrs)
@@ -816,15 +744,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   defp metadata_tool_response({:error, _code, _message, _data} = error, _tool), do: error
   defp metadata_tool_response({:tool_error, reason}, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason}}
   defp metadata_tool_response({:error, reason}, tool), do: worker_error(reason, tool)
-
-  defp actor(%Session{} = session) do
-    %{
-      grant_id: session.assignment.grant_id,
-      grant_role: session.assignment.grant_role,
-      capabilities: session.assignment.capabilities,
-      work_package_id: session.assignment.work_package_id
-    }
-  end
 
   defp worker_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
   defp worker_error({:unauthorized, :work_package_terminal}, resource), do: terminal_auth_error(resource)

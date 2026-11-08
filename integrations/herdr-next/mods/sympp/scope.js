@@ -7,7 +7,7 @@ import { NOWHERE, spaceRepo, spaceById } from "./levels.js";
 
 const LIVE = new Set(["build", "checks", "review", "merge"]);
 const keyOf = (value) => shortRepo(value ?? "").toLowerCase();
-const isOpen = (q) => q.status === "open" || q.status === "human_info_needed";
+const isOpen = (q) => q.status === "open";
 
 // Package progress carries no inferred human attention.
 export function packageEvidence(pkg, now, needsYou = false) {
@@ -52,7 +52,7 @@ export const unmanned = (pkg) => pkg.stage === "build" && pkg.dispatchedAt === n
 
 // A question the panel can answer: the board's own route when it gives one.
 function answerable(job, ask) {
-  const known = [...job.questions, ...job.guidance].find((q) => q.id === ask.id);
+  const known = job.questions.find((q) => q.id === ask.id);
   return { key: `ask:${ask.id}`, id: ask.id, kind: "ask", jobId: job.id, pkgId: ask.pkgId, text: ask.text, prompt: known?.prompt ?? null, status: "open", route: ask.route };
 }
 
@@ -66,7 +66,7 @@ export function asksOf(job) {
   const asks = [];
   for (const need of job.needs) {
     if (need.kind === "ask") asks.push({ key: need.key, text: need.text, question: null, pkgId: null });
-    else if (need.id) asks.push({ key: need.key, text: need.text, question: [...job.guidance, ...job.questions].find((q) => q.key === need.key) ?? null, pkgId: need.pkgId });
+    else if (need.id) asks.push({ key: need.key, text: need.text, question: job.questions.find((q) => q.key === need.key) ?? null, pkgId: need.pkgId });
   }
   for (const q of job.questions.filter(isOpen)) asks.push({ key: q.key, text: q.text, question: q, pkgId: null });
   const seen = new Set();

@@ -26,8 +26,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Target do
           | :validation_note
           | :review_evidence
           | :blocker
-          | :comment
-          | :guidance_request
           | :delivery_board
           | :delivery_closeout
           | :dashboard
@@ -89,9 +87,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Target do
              :finding,
              :validation_note,
              :review_evidence,
-             :blocker,
-             :comment,
-             :guidance_request
+             :blocker
            ] and
              is_binary(work_package_id) do
     opts = Keyword.put(opts, :work_package_id, work_package_id)

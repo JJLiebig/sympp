@@ -283,7 +283,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloTools do
       "base_branch" => Redactor.redact_text(session.base_branch),
       "workspace_path" => Redactor.redact_text(session.workspace_path),
       "caller_id" => Redactor.redact_text(session.caller_id),
-      "session_key" => Redactor.redact_text(session.session_key),
       "title" => Redactor.redact_text(session.title),
       "status" => Redactor.redact_text(session.status),
       "last_activity_at" => timestamp(session.last_activity_at),

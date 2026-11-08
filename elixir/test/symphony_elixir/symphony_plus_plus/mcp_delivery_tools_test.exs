@@ -107,7 +107,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     overview_packages = read.("read_work_request", %{"work_request_id" => work_request.id})["work_packages"]
     assert %{"next_action" => "dispatch_work_package"} = Enum.find(overview_packages, &(&1["id"] == active["id"]))
 
-    read.("skip_work_package", %{"work_request_id" => work_request.id, "work_package_id" => List.last(packages).id, "current_status" => "planned"})
+    read.("skip_work_package", %{"work_request_id" => work_request.id, "work_package_id" => List.last(packages).id})
 
     for detail <- ["summary", "full"] do
       board = read.("read_delivery_board", %{"work_request_id" => work_request.id, "detail" => detail})

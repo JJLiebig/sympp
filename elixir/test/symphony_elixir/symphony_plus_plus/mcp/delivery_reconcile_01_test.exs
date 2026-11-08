@@ -5,6 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
 
   alias SymphonyElixir.FakeGitHubClient
   alias SymphonyElixir.GitHubPullRequestFixtures
+  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository, as: ClaimLeaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
 
   test "unbound reads redact historical credential-bearing request and delivery scope", %{repo: repo} do
@@ -225,23 +226,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
                  stale_after_ms: 1
                )
 
-      for ownership <- [:stale, :paused] do
-        if ownership == :paused do
-          assert {:ok, _paused} =
-                   ClaimLeaseService.pause(repo, other_owner.id, %{"actor_id" => "operator"},
-                     reason: "Owner paused",
-                     now: other_owner.last_seen_at
-                   )
-        end
+      refused = mcp_tool(repo, session, "sync_pr", handoff)
+      assert refused["error"]
+      assert repo.get!(WorkPackage, approved_slice.id).status == "ready_for_worker"
+      assert {:ok, unchanged} = PlanningRepository.get_state(repo, approved_slice.id)
+      refute Enum.any?(unchanged.progress_events, &(&1.payload["source_tool"] == "sync_pr"))
 
-        refused = mcp_tool(repo, session, "sync_pr", handoff)
-        assert refused["error"]
-        assert repo.get!(WorkPackage, approved_slice.id).status == "ready_for_worker"
-        assert {:ok, unchanged} = PlanningRepository.get_state(repo, approved_slice.id)
-        refute Enum.any?(unchanged.progress_events, &(&1.payload["source_tool"] == "sync_pr"))
-      end
-
-      assert {:ok, _released} = ClaimLeaseService.release(repo, other_owner.id, reason: "Architect confirmed the owner finished")
+      assert {:ok, [_retired]} =
+               ClaimLeaseRepository.retire_current_for_work_package(repo, other_owner.work_package_id, "Architect confirmed the owner finished")
 
       assert {:ok, claimed_grant} = AccessGrantService.claim_local_worker_grant(repo, approved_slice.id, claimed_by: "grant-only-worker")
       grant_owned = mcp_tool(repo, session, "sync_pr", handoff)

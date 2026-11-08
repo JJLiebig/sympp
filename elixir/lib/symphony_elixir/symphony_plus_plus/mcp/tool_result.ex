@@ -159,22 +159,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
   defp compact_tool_entry("progress_event", key, value),
     do: {key, compact_status_payload(value, ["id", "status", "summary", "idempotency_key"])}
 
-  defp compact_tool_entry("guidance_request", key, value),
-    do:
-      {key,
-       compact_status_payload(value, [
-         "id",
-         "work_package_id",
-         "summary",
-         "question",
-         "status",
-         "requested_by",
-         "answered_by",
-         "human_info_reason",
-         "recommended_language",
-         "blocker_id"
-       ])}
-
   defp compact_tool_entry("clarification_question", key, value),
     do: {key, compact_status_payload(value, ["id", "status", "sequence"])}
 
@@ -290,7 +274,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
       present?(Map.get(status, "current_status")) -> Map.get(status, "current_status")
       present?(Map.get(status, "work_request_status")) -> Map.get(status, "work_request_status")
       present?(Map.get(status, "work_package_status")) -> Map.get(status, "work_package_status")
-      present?(Map.get(status, "guidance_request_status")) -> Map.get(status, "guidance_request_status")
       true -> "inspect_status"
     end
   end

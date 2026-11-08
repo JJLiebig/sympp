@@ -1,8 +1,6 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Payloads do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
-  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -17,67 +15,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Payloads do
       payload when is_map(payload) -> {:ok, payload}
       _payload -> {:tool_error, "invalid_payload"}
     end
-  end
-
-  @spec guidance_request_cards([GuidanceRequest.t()]) :: [map()]
-  def guidance_request_cards(guidance_requests) do
-    Enum.map(guidance_requests, &guidance_request_card_payload/1)
-  end
-
-  @spec comment_payload(Comment.t()) :: map()
-  def comment_payload(%Comment{} = comment) do
-    %{
-      "id" => comment.id,
-      "target_kind" => comment.target_kind,
-      "target_id" => comment.target_id,
-      "body" => Redactor.redact_text(comment.body),
-      "source_type" => comment.source_type,
-      "author_name" => Redactor.redact_text(comment.author_name),
-      "status" => comment.status,
-      "resolved_by" => Redactor.redact_text(comment.resolved_by),
-      "resolved_source_type" => comment.resolved_source_type,
-      "resolved_at" => timestamp(comment.resolved_at),
-      "resolution_note" => Redactor.redact_text(comment.resolution_note),
-      "inserted_at" => timestamp(comment.inserted_at),
-      "updated_at" => timestamp(comment.updated_at)
-    }
-  end
-
-  @spec guidance_request_card_payload(GuidanceRequest.t()) :: map()
-  def guidance_request_card_payload(%GuidanceRequest{} = guidance_request) do
-    %{
-      "id" => guidance_request.id,
-      "work_package_id" => guidance_request.work_package_id,
-      "summary" => Redactor.redact_text(guidance_request.summary),
-      "status" => guidance_request.status,
-      "requested_by" => guidance_request.requested_by,
-      "answered_by" => guidance_request.answered_by,
-      "blocker_id" => guidance_request.blocker_id,
-      "inserted_at" => timestamp(guidance_request.inserted_at),
-      "updated_at" => timestamp(guidance_request.updated_at)
-    }
-  end
-
-  @spec guidance_request_payload(GuidanceRequest.t()) :: map()
-  def guidance_request_payload(%GuidanceRequest{} = guidance_request) do
-    %{
-      "id" => guidance_request.id,
-      "work_package_id" => guidance_request.work_package_id,
-      "summary" => Redactor.redact_text(guidance_request.summary),
-      "question" => Redactor.redact_text(guidance_request.question),
-      "context" => Redactor.redact_text(guidance_request.context),
-      "status" => guidance_request.status,
-      "requested_by" => guidance_request.requested_by,
-      "answer" => Redactor.redact_text(guidance_request.answer),
-      "answered_by" => guidance_request.answered_by,
-      "answered_at" => timestamp(guidance_request.answered_at),
-      "human_info_reason" => Redactor.redact_text(guidance_request.human_info_reason),
-      "recommended_language" => Redactor.redact_text(guidance_request.recommended_language),
-      "decision_prompt" => Redactor.redact_output(guidance_request.decision_prompt),
-      "blocker_id" => guidance_request.blocker_id,
-      "inserted_at" => timestamp(guidance_request.inserted_at),
-      "updated_at" => timestamp(guidance_request.updated_at)
-    }
   end
 
   @spec dispatch_work_package_result_payload(map(), map(), String.t()) :: map()

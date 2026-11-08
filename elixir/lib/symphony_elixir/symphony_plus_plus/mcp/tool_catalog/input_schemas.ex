@@ -1,13 +1,13 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{SoloTools, ToolCatalog}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.{PlanNode, Renderer}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{WorkPackage, WorkPackageDelivery}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{DecisionLogEntry, WorkRequest}
 
   @local_operator_provenance_max_length 512
+  @local_operator_text_max_length 4_000
   @type tool_name :: String.t()
   @type input_schema :: map()
 
@@ -53,34 +53,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   end
 
   @spec local_operator_tool_input_schema(tool_name()) :: input_schema()
-  def local_operator_tool_input_schema("add_work_request_comment") do
-    schema(
-      %{
-        "work_request_id" => described_string_schema("Target WorkRequest id."),
-        "body" =>
-          markdown_string_schema("Non-secret Markdown comment body. Redacted before storage and response.")
-          |> Map.put("maxLength", Comment.max_body_length()),
-        "created_by" =>
-          described_string_schema("Optional provenance override. Required without a live claim; otherwise defaults to the claimed actor.")
-          |> Map.put("maxLength", @local_operator_provenance_max_length)
-      },
-      ["work_request_id", "body"]
-    )
-  end
-
   def local_operator_tool_input_schema("record_work_request_operator_decision") do
     schema(
       %{
         "work_request_id" => described_string_schema("Target WorkRequest id."),
         "decision" =>
           described_string_schema("Non-secret decision summary text. Redacted before storage and response.")
-          |> Map.put("maxLength", Comment.max_body_length()),
+          |> Map.put("maxLength", @local_operator_text_max_length),
         "rationale" =>
           markdown_string_schema("Non-secret Markdown rationale for the decision.")
-          |> Map.put("maxLength", Comment.max_body_length()),
+          |> Map.put("maxLength", @local_operator_text_max_length),
         "scope_impact" =>
           markdown_string_schema("Non-secret Markdown note on scope or delivery impact.")
-          |> Map.put("maxLength", Comment.max_body_length()),
+          |> Map.put("maxLength", @local_operator_text_max_length),
         "created_by" =>
           described_string_schema("Optional provenance override. Required without a live claim; otherwise defaults to the claimed actor.")
           |> Map.put("maxLength", @local_operator_provenance_max_length),
@@ -179,46 +164,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     schema(progress_properties(), ["summary", "idempotency_key"])
   end
 
-  def worker_tool_input_schema("add_comment") do
-    schema(
-      session_scoped_properties(%{
-        "target_kind" => string_enum_schema(Comment.target_kinds()),
-        "target_id" => string_schema(),
-        "body" => markdown_string_schema("Human-facing Markdown comment body.") |> Map.put("maxLength", Comment.max_body_length())
-      }),
-      ["body"]
-    )
-    |> require_comment_target_id_for_explicit_work_request()
-  end
-
-  def worker_tool_input_schema("list_comments") do
-    schema(
-      session_scoped_properties(%{
-        "target_kind" => string_enum_schema(Comment.target_kinds()),
-        "target_id" => string_schema()
-      }),
-      []
-    )
-    |> require_comment_target_id_for_explicit_work_request()
-  end
-
-  def worker_tool_input_schema("resolve_comment") do
-    schema(
-      session_scoped_properties(%{
-        "comment_id" => string_schema(),
-        "resolution_note" => markdown_string_schema("Optional Markdown resolution note.") |> Map.put("maxLength", Comment.max_resolution_note_length())
-      }),
-      ["comment_id"]
-    )
-  end
-
-  def worker_tool_input_schema("read_guidance_request") do
-    schema(session_scoped_properties(%{"guidance_request_id" => string_schema()}), ["guidance_request_id"])
-  end
-
-  def worker_tool_input_schema("abandon"),
-    do: schema(%{"reason" => markdown_string_schema("Why this work package is being abandoned.")}, ["reason"])
-
   def worker_tool_input_schema("attach_branch") do
     schema(metadata_properties(%{"branch" => string_schema(), "head_sha" => string_schema()}), ["head_sha"])
   end
@@ -307,16 +252,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("list_comments") do
-    schema(
-      scoped_properties(%{
-        "target_kind" => string_enum_schema(Comment.target_kinds()),
-        "target_id" => string_schema()
-      }),
-      ["target_kind", "target_id"]
-    )
-  end
-
   def architect_tool_input_schema("read_delivery_board") do
     schema(
       %{
@@ -401,27 +336,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("add_comment") do
-    schema(
-      scoped_properties(%{
-        "target_kind" => string_enum_schema(Comment.target_kinds()),
-        "target_id" => string_schema(),
-        "body" => markdown_string_schema("Human-facing Markdown comment body.") |> Map.put("maxLength", Comment.max_body_length())
-      }),
-      ["target_kind", "target_id", "body"]
-    )
-  end
-
-  def architect_tool_input_schema("resolve_comment") do
-    schema(
-      scoped_properties(%{
-        "comment_id" => string_schema(),
-        "resolution_note" => markdown_string_schema("Optional Markdown resolution note.") |> Map.put("maxLength", Comment.max_resolution_note_length())
-      }),
-      ["comment_id"]
-    )
-  end
-
   def architect_tool_input_schema("resolve_blocker") do
     schema(
       progress_properties(:explicit)
@@ -431,47 +345,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "status" => string_enum_schema(["resolved"])
       }),
       ["blocker_id", "resolution", "summary", "idempotency_key"]
-    )
-  end
-
-  def architect_tool_input_schema("list_guidance_requests") do
-    schema(
-      %{
-        "status" => string_schema(),
-        "work_package_id" => string_schema(),
-        "work_request_id" =>
-          described_string_schema(
-            "Optional WorkRequest id whose linked WorkPackage guidance should be listed. When omitted from a current WorkRequest claim and work_package_id is also omitted, the current WorkRequest is used. Explicit values require read:work_request."
-          )
-      },
-      []
-    )
-  end
-
-  def architect_tool_input_schema("read_guidance_request") do
-    schema(scoped_properties(%{"guidance_request_id" => string_schema()}), ["guidance_request_id"])
-  end
-
-  def architect_tool_input_schema("answer_guidance_request") do
-    schema(
-      %{
-        "guidance_request_id" => string_schema(),
-        "answer" => markdown_string_schema("Human-facing guidance answer in Markdown."),
-        "answered_by" => string_schema()
-      },
-      ["guidance_request_id", "answer"]
-    )
-  end
-
-  def architect_tool_input_schema("escalate_guidance_request") do
-    schema(
-      %{
-        "guidance_request_id" => string_schema(),
-        "reason" => markdown_string_schema("Human-facing escalation reason in Markdown."),
-        "recommended_language" => markdown_string_schema("Recommended human-facing Markdown language."),
-        "decision_prompt" => decision_prompt_schema()
-      },
-      ["guidance_request_id", "reason", "recommended_language"]
     )
   end
 
@@ -506,7 +379,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "work_request_id" => string_schema(),
         "question_id" => string_schema(),
         "expected_question_status" => string_schema(),
-        "current_status" => described_string_schema("Deprecated alias for expected_question_status."),
         "answer" => markdown_string_schema("Human-facing clarification answer in Markdown."),
         "answered_by" => string_schema()
       },
@@ -520,7 +392,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "work_request_id" => string_schema(),
         "question_id" => string_schema(),
         "expected_question_status" => string_schema(),
-        "current_status" => described_string_schema("Deprecated alias for expected_question_status."),
         "answer" => markdown_string_schema("Human-facing clarification answer in Markdown."),
         "answered_by" => string_schema(),
         "source_type" => string_enum_schema(DecisionLogEntry.source_types()),
@@ -539,8 +410,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
       %{
         "work_request_id" => string_schema(),
         "question_id" => string_schema(),
-        "expected_question_status" => string_schema(),
-        "current_status" => described_string_schema("Deprecated alias for expected_question_status.")
+        "expected_question_status" => string_schema()
       },
       ["work_request_id", "question_id"]
     )
@@ -615,10 +485,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
-        "work_package_id" => string_schema(),
-        "current_status" => string_schema()
+        "work_package_id" => string_schema()
       },
-      ["work_package_id", "current_status"]
+      ["work_package_id"]
     )
   end
 
@@ -641,16 +510,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "target_repo_root" => described_string_schema("Local factory checkout override. Omit for remote factories, which resolve the WorkPackage remote under their repos root."),
         "branch" =>
           described_string_schema("Optional branch override. Omit it to derive a package-unique branch from the WorkPackage id or branch_pattern template. Exact branch patterns are used unchanged.")
-      },
-      ["work_package_id"]
-    )
-  end
-
-  def architect_tool_input_schema("cleanup_work_package_worktree") do
-    schema(
-      %{
-        "work_package_id" => string_schema(),
-        "target_repo_root" => described_string_schema("Optional target product repository root override. Prepared worktrees remember the root used during prepare.")
       },
       ["work_package_id"]
     )
@@ -743,16 +602,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
           ]
         }
       ]
-    })
-  end
-
-  defp require_comment_target_id_for_explicit_work_request(schema) do
-    Map.merge(schema, %{
-      "if" => %{
-        "required" => ["target_kind"],
-        "properties" => %{"target_kind" => %{"enum" => ["work_request"]}}
-      },
-      "then" => %{"required" => ["target_id"]}
     })
   end
 

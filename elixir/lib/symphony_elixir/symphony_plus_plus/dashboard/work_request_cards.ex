@@ -5,7 +5,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
   alias SymphonyElixir.SymphonyPlusPlus.Chiefs
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
-    CommentProjection,
     DeliveryWorkPackageProjection,
     OperationalProjection,
     Sanitizer
@@ -64,18 +63,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     work_request_ids = Enum.map(work_requests, & &1.id)
 
     with {:ok, question_context} <- question_context(repo, work_request_ids),
-         {:ok, work_packages} <- work_packages(repo, work_request_ids, opts),
-         {:ok, comment_context} <- card_comment_context(repo, work_requests, work_packages, opts) do
+         {:ok, work_packages} <- work_packages(repo, work_request_ids, opts) do
       work_packages_by_request = Enum.group_by(work_packages, & &1.work_request_id)
       work_package_counts = work_packages |> Enum.map(&{&1.work_request_id, &1.status}) |> status_counts()
 
       summaries =
         Map.new(work_requests, fn work_request ->
           request_work_packages = Map.get(work_packages_by_request, work_request.id, [])
-          comment_counts = CommentProjection.work_request_counts(comment_context, work_request, request_work_packages)
 
           {work_request.id,
-           Map.merge(comment_counts, %{
+           %{
              open_question_count: status_count(question_context.counts, work_request.id, "open"),
              answered_question_count: status_count(question_context.counts, work_request.id, "answered"),
              work_package_count: length(request_work_packages),
@@ -87,7 +84,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
              completion_source: work_request.completion_source,
              archived_at: timestamp(work_request.archived_at),
              archive_reason: work_request.archive_reason
-           })}
+           }}
         end)
 
       repo_identity_catalog = Dashboard.repo_identity_catalog_from_opts(opts, Enum.map(work_requests, & &1.repo))
@@ -120,7 +117,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
           [WorkPackage.t()],
           map(),
           map(),
-          map(),
           keyword()
         ) :: map()
   def work_request_payload(
@@ -129,7 +125,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
         work_packages,
         work_package_contexts,
         repo_identity_catalog,
-        comment_context,
         opts
       ) do
     question_state = %{
@@ -165,13 +160,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
         Keyword.get(opts, :delivery_state_opts, [])
       )
     )
-    |> CommentProjection.put_counts(
-      CommentProjection.work_request_counts(
-        comment_context,
-        work_request,
-        Keyword.get(opts, :comment_work_packages, work_packages)
-      )
-    )
   end
 
   defp card_summaries(_repo, [], _opts), do: {:ok, %{}}
@@ -182,7 +170,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     with {:ok, question_context} <- question_context(repo, work_request_ids),
          {:ok, decision_counts} <- decision_counts(repo, work_request_ids),
          {:ok, work_packages} <- work_packages(repo, work_request_ids),
-         {:ok, comment_context} <- card_comment_context(repo, work_requests, work_packages, opts),
          {:ok, work_package_contexts} <- card_work_package_contexts(repo, work_packages, opts) do
       question_counts = question_context.counts
       work_packages_by_request = Enum.group_by(work_packages, & &1.work_request_id)
@@ -197,7 +184,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
           question_context.states,
           decision_counts,
           work_packages_by_request,
-          comment_context,
           work_package_contexts,
           %{boards: delivery_boards, state_opts: delivery_state_opts}
         )
@@ -211,7 +197,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
          question_states,
          decision_counts,
          work_packages_by_request,
-         comment_context,
          work_package_contexts,
          delivery_context
        ) do
@@ -232,7 +217,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
       Map.new(work_requests, fn %WorkRequest{} = work_request ->
         work_packages = Map.get(visible_work_packages_by_request, work_request.id, [])
         all_work_packages = Map.get(work_packages_by_request, work_request.id, [])
-        comment_counts = CommentProjection.work_request_counts(comment_context, work_request, all_work_packages)
         open_question_count = status_count(question_counts, work_request.id, "open")
 
         question_state =
@@ -266,8 +250,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
            answered_question_count: status_count(question_counts, work_request.id, "answered"),
            closed_question_count: status_count(question_counts, work_request.id, "closed"),
            decision_count: Map.get(decision_counts, work_request.id, 0),
-           comment_count: comment_counts.comment_count,
-           open_comment_count: comment_counts.open_comment_count,
            work_package_count: length(work_packages),
            execution_status: WorkRequest.execution_status(Enum.map(all_work_packages, & &1.status)),
            planned_work_package_count: Enum.count(work_packages, &(&1.status == "planned")),
@@ -326,18 +308,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
          _context ->
            false
        end)}
-    end
-  end
-
-  defp card_comment_context(repo, work_requests, work_packages, opts) do
-    targets =
-      Enum.map(work_requests, &{"work_request", &1.id}) ++
-        Enum.map(work_packages, &{"work_package", &1.id})
-
-    case Keyword.fetch(opts, :comment_count_context) do
-      {:ok, comment_count_context} when is_map(comment_count_context) -> {:ok, comment_count_context}
-      :error -> Dashboard.comment_count_context(repo, targets)
-      {:ok, _other} -> {:error, :not_found}
     end
   end
 

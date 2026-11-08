@@ -6,7 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport07Test do
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{HTTPStateStore, HTTPTransport}
 
-  test "embedded architect batches recover stale ownership and reject paused leases", %{repo: repo} do
+  test "embedded architect batches recover stale ownership", %{repo: repo} do
     work_request =
       create_work_request!(repo,
         id: "WR-HTTP-STABLE-ARCHITECT-CATALOG",
@@ -117,12 +117,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport07Test do
     assert is_binary(get_in(recovered_owner.response, ["result", "structuredContent", "group", "id"]))
     assert {:ok, current_lease} = ClaimLeaseService.current_for_work_package(repo, handoff.anchor_package.id)
     assert current_lease.actor_display_name == lease.actor_display_name
-
-    assert {:ok, _paused} = ClaimLeaseService.pause(repo, current_lease.id, %{"actor_id" => "operator"}, reason: "operator pause")
-    blocked = http!(config, client_key, state_key, "paused-owner", "tools/call", write_params)
-    assert get_in(blocked.response, ["error", "data", "reason"]) == "claim_lease_lost"
-    still_blocked = http!(config, client_key, state_key, "paused-retry", "tools/call", write_params)
-    assert get_in(still_blocked.response, ["error", "data", "reason"]) == "claim_lease_paused"
 
     assert 1 == repo.aggregate(from(package in WorkPackage, where: package.work_request_id == ^work_request.id and package.id != ^handoff.anchor_package.id), :count)
   end

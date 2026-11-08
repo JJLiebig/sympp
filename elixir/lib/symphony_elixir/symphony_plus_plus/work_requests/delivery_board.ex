@@ -6,7 +6,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
   alias SymphonyElixir.SymphonyPlusPlus.FactoryRepos
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
-  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.ReviewObservation
@@ -348,7 +347,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
        activity_contexts: activity_contexts,
        metadata_contexts: preloaded_metadata_contexts,
        review_observations: ReviewObservation.cached(Map.values(work_packages)),
-       guidance_requests: guidance_context(repo, work_package_ids, opts),
        hidden_work_package_ids: hidden_work_package_ids
      }}
   rescue
@@ -501,8 +499,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
         work_package,
         Map.put(work_package_summary || %{}, :merge_eligibility, merge_eligibility(work_package, context)),
         operational_state,
-        Map.get(context.progress_events, work_package.id, []),
-        Map.get(context.guidance_requests, work_package.id, [])
+        Map.get(context.progress_events, work_package.id, [])
       )
 
     operational_state = Map.put(operational_state, :activity_signal, activity_signal)
@@ -518,33 +515,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
       full_slice(work_package, delivery, context, work_package_summary, successor, operational_state)
     end
-  end
-
-  defp guidance_context(repo, work_package_ids, opts) do
-    case Keyword.fetch(opts, :guidance_requests_by_work_package_id) do
-      {:ok, guidance} ->
-        missing = Enum.reject(work_package_ids, &Map.has_key?(guidance, &1))
-        Map.merge(guidance, guidance_requests_by_work_package_id(repo, missing))
-
-      :error ->
-        guidance_requests_by_work_package_id(repo, work_package_ids)
-    end
-  end
-
-  @spec guidance_requests_by_work_package_id(repo(), [String.t()]) :: map()
-  def guidance_requests_by_work_package_id(repo, work_package_ids) do
-    work_package_ids
-    |> context_lookup_chunks()
-    |> Enum.flat_map(fn ids ->
-      repo.all(
-        from(guidance in GuidanceRequest,
-          where: guidance.work_package_id in ^ids and guidance.status in ["open", "human_info_needed"],
-          order_by: [asc: guidance.inserted_at, asc: guidance.id]
-        )
-      )
-    end)
-    |> Enum.group_by(& &1.work_package_id)
-    |> then(&Map.merge(Map.new(work_package_ids, fn id -> {id, []} end), &1))
   end
 
   defp operational_slice(%WorkPackage{} = work_package, delivery, operational_state, context) do

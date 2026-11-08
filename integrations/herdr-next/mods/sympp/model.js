@@ -23,11 +23,10 @@ const STATUS_RULES = [
   [/review/, "review"],
   [/validat|ci_waiting/, "checks"],
 ];
-const ACTORS = { human: "You", architect: "Architect", worker: "Worker", prerequisite_owner: "Prerequisite owner" };
+const ACTORS = { architect: "Architect", worker: "Worker", prerequisite_owner: "Prerequisite owner" };
 const REASONS = {
   unmet_dependencies: "Waiting on prerequisite packages",
   active_blocker: "Blocked",
-  worker_paused: "Worker paused",
   runtime_stale: "Runtime observation is stale",
   review_in_progress: "Review in progress",
   awaiting_integration: "Waiting for the architect to integrate",
@@ -109,11 +108,10 @@ export function parseBoard(payload) {
     throw new Error("sympp answered with something other than a board.");
   }
   const now = ms(payload.generated_at) ?? Date.now();
-  const guidance = payload.guidance_requests?.guidance_requests ?? [];
   // The execution cards carry each package's active run; the request details do not.
   const runs = new Map((Array.isArray(payload.work_packages) ? payload.work_packages : [])
     .filter((card) => card?.id && card.active_agent_run).map((card) => [card.id, card.active_agent_run]));
-  const jobs = payload.work_request_details.filter((detail) => detail?.work_request?.id).map((detail) => buildJob(detail, now, guidance, runs));
+  const jobs = payload.work_request_details.filter((detail) => detail?.work_request?.id).map((detail) => buildJob(detail, now, runs));
   return { now, jobs, chiefs: chiefsOf(payload.chiefs), offline: typeof payload.runtime?.offline === "boolean" ? payload.runtime.offline : null,
     reposRoot: typeof payload.runtime?.repos_root === "string" && payload.runtime.repos_root ? payload.runtime.repos_root : null };
 }
@@ -140,7 +138,7 @@ function chiefOf(by) {
   return by?.kind === "chief" && typeof by.domain === "string" && by.domain.trim() ? by.domain.trim() : null;
 }
 
-function buildJob(detail, now, guidance, runs) {
+function buildJob(detail, now, runs) {
   const request = detail.work_request;
   const repo = request.repo_display || request.repo || "";
   const repoShort = shortRepo(repo);
@@ -171,19 +169,11 @@ function buildJob(detail, now, guidance, runs) {
     text: q.question, context: q.why_needed, prompt: q.decision_prompt ?? null, status: q.status,
     answer: q.answer, since: ms(q.inserted_at),
   }));
-  const guidanceQuestions = guidance.filter((g) => g.id && g.status === "human_info_needed" && titles.has(g.work_package_id)).map((g) => ({
-    key: `guidance:${g.id}`, id: g.id, kind: "guidance", jobId: request.id, pkgId: g.work_package_id,
-    label: "Guidance needs you", text: g.question || g.summary, context: g.context,
-    prompt: g.decision_prompt ?? null, status: g.status, since: ms(g.updated_at ?? g.inserted_at),
-  }));
 
   const report = reportOf(request.operator_report, now);
   const escalation = request.operator_report?.human_escalation;
   const ask = escalation?.question && !escalation.resolved_at ? { text: escalation.question, since: ms(escalation.raised_at) ?? now } : null;
-  const needs = [
-    ...(ask ? [{ key: `${request.id}:ask`, kind: "ask", label: "Architect asks", text: ask.text, since: ask.since, raisedAt: ms(escalation.raised_at), jobId: request.id, pkgId: null }] : []),
-    ...guidanceQuestions,
-  ];
+  const needs = ask ? [{ key: `${request.id}:ask`, kind: "ask", label: "Architect asks", text: ask.text, since: ask.since, raisedAt: ms(escalation.raised_at), jobId: request.id, pkgId: null }] : [];
 
   const live = packages.filter((pkg) => pkg.stage !== "queued" && pkg.stage !== "done");
   const done = packages.filter((pkg) => pkg.stage === "done");
@@ -191,7 +181,7 @@ function buildJob(detail, now, guidance, runs) {
   const createdAt = ms(request.inserted_at) ?? now;
   const closedAt = ms(request.completed_at);
   const recordedAsks = asksOf(detail.asks);
-  const attention = recordedAsks === null ? [...needs, ...questions.filter((q) => q.status === "open").map((q) => ({ ...q, label: "Needs you" }))] : recordedAsks.map((a) => ({ ...a, key: `ask:${a.id}`, label: "Needs you", since: [...questions, ...guidanceQuestions].find((q) => q.id === a.id)?.since ?? (a.kind === "architect" ? ms(escalation?.raised_at) : null), jobId: request.id }));
+  const attention = recordedAsks === null ? [...needs, ...questions.filter((q) => q.status === "open").map((q) => ({ ...q, label: "Needs you" }))] : recordedAsks.map((a) => ({ ...a, key: `ask:${a.id}`, label: "Needs you", since: questions.find((q) => q.id === a.id)?.since ?? (a.kind === "architect" ? ms(escalation?.raised_at) : null), jobId: request.id }));
   const settled = request.execution_status === "closed" || (closedAt !== null && closedAt <= now) || (packages.length > 0 && done.length === packages.length && attention.length === 0);
   const job = {
     id: request.id,
@@ -209,7 +199,6 @@ function buildJob(detail, now, guidance, runs) {
     report,
     ask,
     questions,
-    guidance: guidanceQuestions,
     needs: attention.filter((a) => a.text?.trim()),
     architect: placeOf(request.architect_session_location),
     dispatchedBy: chiefOf(request.dispatched_by),

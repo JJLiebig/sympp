@@ -79,9 +79,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Service do
                :progress,
                :finding,
                :review_evidence,
-               :blocker,
-               :comment,
-               :guidance_request
+               :blocker
              ] do
     with {:ok, %WorkPackage{} = work_package} <- WorkPackageRepository.get(repo, work_package_id) do
       opts = package_target_opts(repo, work_package)

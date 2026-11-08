@@ -16,7 +16,6 @@ test("the board's asks are answered through their own route, else through the ch
   const cross = task(variantPayload('busy'), 'wr-cross');
   assert.deepEqual(cross.asks.map((a) => [a.text, a.question?.route ?? null]), [
     ['Ship tokens before the API?', null],
-    ['Which theme tokens?', '/api/v1/sympp/herdr/work-packages/x-web/guidance/g-web/answer'],
   ]);
   const pr = task(variantPayload('busy'), 'wr-pr');
   assert.deepEqual(pr.asks.map((a) => a.text), ['Which order should the levels land in?'], 'an unrecorded wait is not repeated beside a real question');
@@ -25,15 +24,15 @@ test("the board's asks are answered through their own route, else through the ch
   assert.deepEqual(task(payload, 'wr-pr').asks.map((a) => [a.text, a.unrecorded, a.question]), []);
   payload.work_request_details[0].asks = [{ id: 'x', kind: 'clarification', text: 'Pick one?', work_package_id: null, answer_route: '//evil.example/answer' }];
   assert.deepEqual(task(payload, 'wr-pr').asks.map((a) => [a.text, a.question]), [['Pick one?', null]], 'an answer never goes anywhere but this factory');
-  payload.work_request_details[0].asks = ['a', 'b'].map((id) => ({ id, kind: 'guidance', text: 'Ship it?', work_package_id: null, answer_route: `/api/v1/sympp/herdr/work-packages/p/guidance/${id}/answer` }));
+  payload.work_request_details[0].asks = ['a', 'b'].map((id) => ({ id, kind: 'clarification', text: 'Ship it?', work_package_id: null, answer_route: `/api/v1/sympp/herdr/work-requests/wr-pr/questions/${id}/answer` }));
   assert.deepEqual(task(payload, 'wr-pr').asks.map((a) => a.question.route.split('/').at(-2)), ['a', 'b'], 'two asks that read alike are both answerable');
 });
 
-test('an older board still asks its open clarification questions, guidance and architect asks, each once', () => {
+test('an older board still asks its open clarification questions and architect asks, each once', () => {
   const pr = task(boardPayload(), 'wr-pr');
   assert.deepEqual(pr.asks.map((a) => a.text), ['Which order should the levels land in?'], 'the question replaces the generic wait');
   assert.equal(pr.asks[0].question.kind, 'question', 'and is answerable');
-  assert.deepEqual(task(boardPayload(), 'wr-cross').asks.map((a) => a.text), ['Ship tokens before the API?', 'Which theme tokens?']);
+  assert.deepEqual(task(boardPayload(), 'wr-cross').asks.map((a) => a.text), ['Ship tokens before the API?']);
 });
 
 test('what went wrong survives a question, and a quiet worker is named only when the board says so', () => {

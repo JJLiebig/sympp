@@ -16,7 +16,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.SoloSessions.Repository do
   @archivable_statuses ["active", "paused", "completed"]
   @solo_session_migrations [
     {20_260_515_150_000, SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CreateSymppSoloSessions, "20260515150000_create_sympp_solo_sessions.exs"},
-    {20_260_515_153_000, SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CreateSymppSoloSessionEntries, "20260515153000_create_sympp_solo_session_entries.exs"}
+    {20_260_515_153_000, SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CreateSymppSoloSessionEntries, "20260515153000_create_sympp_solo_session_entries.exs"},
+    {20_261_108_120_200, SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.DropSessionKeyFromSymppSoloSessions, "20261108120200_drop_session_key_from_sympp_solo_sessions.exs"}
   ]
 
   @type repo :: module()

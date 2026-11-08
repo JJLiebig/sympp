@@ -1370,7 +1370,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
     payload = [
       tool_call_request("private-batch-id", "sympp.health", %{"bearer" => "request-secret"}),
-      tool_call_notification("list_comments", %{"bearer" => "notification-secret"}),
+      tool_call_notification("read_work_request", %{"bearer" => "notification-secret"}),
       tools_list_request("ignored-protocol-item")
     ]
 
@@ -1382,7 +1382,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     assert Enum.all?(events, &(&1["failure_layer"] == "endpoint"))
     assert Enum.all?(events, &(&1["failure_reason"] == "batch_not_supported"))
     assert events |> Enum.map(& &1["diagnostic_id"]) |> Enum.uniq() |> length() == 2
-    assert events |> Enum.map(& &1["tool_name"]) |> Enum.sort() == ["list_comments", "sympp.health"]
+    assert events |> Enum.map(& &1["tool_name"]) |> Enum.sort() == ["read_work_request", "sympp.health"]
     refute log =~ "private-batch-id"
     refute log =~ "request-secret"
     refute log =~ "notification-secret"

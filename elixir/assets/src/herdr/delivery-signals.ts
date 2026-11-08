@@ -1,5 +1,5 @@
 export type WorkPackageWorkerSignal = {
-  status: "active" | "idle" | "paused" | "stale" | "unavailable";
+  status: "active" | "idle" | "stale" | "unavailable";
   active_since?: string | null;
   last_activity?: string | null;
   run_label?: string | null;
@@ -52,7 +52,7 @@ export type WorkPackageActivitySignal = {
   next_action?: string | null;
   last_update_at?: string | null;
   last_update?: string | null;
-  observation_state?: "current" | "paused" | "stale" | "unknown" | null;
+  observation_state?: "current" | "stale" | "unknown" | null;
   observed_at?: string | null;
 };
 

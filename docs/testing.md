@@ -54,9 +54,9 @@ operation on the disposable ledger. Diagnostic checks opt into failed-call
 capture through operator settings and inspect redacted responses, process output,
 and aggregates before disabling capture again.
 
-Grant expiry and lease pause cannot be configured through these public routes.
-Keep their precise lower-level security checks, along with inaccessible historical
-guidance, stored authority, and transaction qualifications. A repository-backed
+Grant expiry cannot be configured through these public routes. Keep its precise
+lower-level security checks, along with stored authority and transaction
+qualifications. A repository-backed
 failed-call journey does not qualify health calls that lack the selected ledger
 context. Report that diagnostic limitation separately.
 
@@ -73,9 +73,8 @@ their owning conversion.
 
 Keep mixed authority, historical storage, concurrency, and delivery suites when
 they prove distinct boundaries. Sequential authorized clients do not prove grant
-denial matrices, SQLite contention or historical migrations. A current architect
-escalation report does not replace stored-guidance authorization and transaction
-checks. Preserve those distinctions in the per-definition conversion evidence.
+denial matrices, SQLite contention or historical migrations. Preserve those
+distinctions in the per-definition conversion evidence.
 
 Retain `.e2e/report.json`, traces, process logs, checkout/head/base revisions,
 commands, and job timings as hosted artifacts. Distinguish literal definitions
@@ -115,9 +114,10 @@ Exact time boundaries, historical migrations and precise contention remain
 separate hosted storage checks.
 
 Worktree journeys use real disposable Git repositories. They prove preparation,
-replay, current remote bases, deliberate owned dirty cleanup, unsafe target
-refusal and explicit recovery after a queued removal failure and restart.
-The cockpit fixture does not start the background cleanup reconciler, so its
+replay, current remote bases, divergent local branch refusal and offline
+preservation of copied worktree paths. Cleanup runs only from the automatic
+queue when a package ends, and the cockpit fixture does not start its background
+reconciler, so owned dirty cleanup, unsafe target refusal, removal recovery,
 startup, scheduling and detached deletion obligations retain dedicated hosted
 checks. Historical ownership, preflight persistence failure, Cargo target safety
 and Windows partial removal remain separate qualifications.
