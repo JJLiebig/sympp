@@ -49,8 +49,30 @@ function tomlSyntax(source) {
 }
 
 function codexConfig(config, registration) {
-  const owned = /^# BEGIN (?:Symphony\+\+|sympp) Skills MCP\r?\n[\s\S]*?^# END (?:Symphony\+\+|sympp) Skills MCP\r?\n?/gm;
-  const matches = [...tomlSyntax(config).matchAll(owned)];
+  const syntaxConfig = tomlSyntax(config);
+  const starts = [...syntaxConfig.matchAll(/^# BEGIN (?:Symphony\+\+|sympp) Skills MCP\r?\n/gm)];
+  const matches = starts.map((start, i) => {
+    const from = start.index + start[0].length;
+    const limit = starts[i + 1]?.index ?? config.length;
+    const body = syntaxConfig.slice(from, limit);
+    const closing = /^# END (?:Symphony\+\+|sympp) Skills MCP\r?\n?/m.exec(body);
+    let length = closing ? closing.index + closing[0].length : 0;
+    if (!closing) {
+      // A lost END marker grants ownership only through the directly following sympp tables.
+      // Keep trailing comments/spacing with the user's next table, and ignore headers in strings.
+      let offset = 0, inTable = false;
+      for (const line of body.match(/[^\n]*\n|[^\n]+$/g) || []) {
+        if (/^[ \t]*\[/.test(line)) {
+          if (!/^[ \t]*\[[ \t]*(?:mcp_servers|"mcp_servers"|'mcp_servers')[ \t]*\.[ \t]*(?:sympp|"sympp"|'sympp')[ \t]*(?:\.|\])/.test(line)) break;
+          inTable = true;
+        } else if (!inTable && !/^[ \t]*(?:#.*)?\r?\n?$/.test(line)) break;
+        const original = config.slice(from + offset, from + offset + line.length);
+        offset += line.length;
+        if (original.trim() && !line.trimStart().startsWith("#")) length = offset;
+      }
+    }
+    return { index: start.index, 0: config.slice(start.index, from + length) };
+  });
   let remaining = config;
   for (const match of [...matches].reverse()) {
     remaining = remaining.slice(0, match.index) + remaining.slice(match.index + match[0].length);
