@@ -553,9 +553,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:ok, row, _how} ->
         %{"status" => "created", "work_request" => WorkRequestPayloads.work_request(work_request), "worked_on" => Ownership.public(row)}
 
-      {:error, _reason} ->
-        %{"status" => "created", "work_request" => WorkRequestPayloads.work_request(work_request)}
+      # The WorkRequest exists either way; say why this terminal doesn't own it yet.
+      {:error, {:owned_by_other_terminal, owner}} ->
+        not_owned_payload(work_request, "owned_by_other_terminal", owner["next_action"])
+
+      {:error, reason} ->
+        not_owned_payload(work_request, reason_text(reason), "retry an owner-gated write on #{work_request.id} to take ownership")
     end
+  end
+
+  defp not_owned_payload(%WorkRequest{} = work_request, reason, next_action) do
+    %{
+      "status" => "created",
+      "work_request" => WorkRequestPayloads.work_request(work_request),
+      "ownership_error" => reason,
+      "next_action" => next_action
+    }
   end
 
   defp create_work_request_payload(_repo, %WorkRequest{} = work_request, _terminal, false) do
