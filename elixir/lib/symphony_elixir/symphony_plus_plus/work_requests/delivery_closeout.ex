@@ -76,7 +76,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   def record_in_transaction(repo, work_request_id, work_package_id, attrs)
       when is_atom(repo) and is_binary(work_request_id) and is_binary(work_package_id) and
              is_map(attrs) do
-    with {:ok, work_package} <-
+    with {:ok, work_request} <- Repository.get(repo, work_request_id),
+         :ok <- Phase.require_writable(work_request),
+         {:ok, work_package} <-
            Repository.get_work_package(repo, work_request_id, work_package_id),
          {:ok, delivery} <- validate_delivery_input(work_request_id, work_package_id, attrs),
          :ok <-
@@ -86,8 +88,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
              delivery,
              delivery_closeout_opts(attrs)
            ),
-         {:ok, work_request} <- Repository.get(repo, work_request_id),
-         :ok <- Phase.require_writable(work_request),
          {:ok, delivery} <-
            Repository.record_work_package_delivery_in_transaction(
              repo,

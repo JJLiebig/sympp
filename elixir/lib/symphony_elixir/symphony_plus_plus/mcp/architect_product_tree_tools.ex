@@ -501,13 +501,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   defp mutate_product_tree_with_projection(repo, work_request_id, tool, created_by, mutation_fun) do
     run_architect_transaction(repo, fn ->
-      with {:ok, result} <- mutation_fun.(),
+      with :ok <- require_unarchived_in_transaction(repo, work_request_id),
+           {:ok, result} <- mutation_fun.(),
            {:ok, detail} <- Dashboard.work_request_detail(repo, work_request_id),
            {:ok, _revision} <- record_product_tree_revision(repo, work_request_id, tool, created_by, detail) do
         product_tree = ProductTree.project(repo, work_request_id, detail.work_packages)
         {:ok, {result, %{detail | product_tree: product_tree}}}
       end
     end)
+  end
+
+  # The authoring check before the transaction answers early; this one makes the
+  # refusal atomic with the write.
+  defp require_unarchived_in_transaction(repo, work_request_id) do
+    case repo.get(WorkRequest, work_request_id) do
+      %WorkRequest{archived_at: %DateTime{}} -> {:error, {:work_request_archived, nil}}
+      _work_request -> :ok
+    end
   end
 
   defp record_current_product_tree_revision(repo, work_request_id, tool, created_by) do
