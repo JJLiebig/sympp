@@ -6,11 +6,16 @@ const LOOPBACK = new Set(["localhost", "127.0.0.1", "::1"]);
 // Agents that take their first message another way than as the last argument, as in Change anything.
 const MESSAGE = { opencode: (m) => ["--prompt", m], gemini: (m) => ["-i", m], copilot: (m) => ["-i", m] };
 
-// What the chief is told; the person's own words follow.
+// What the chief is told; the person's own words follow. Its terminal's labels make it the topic's
+// chief for sympp (chiefLabelArgs); nothing needs registering.
 export function chiefBrief(name, extra = "") {
-  const brief = `You are the chief for the "${name}" topic. Use the sympp skill, and register as its chief with register_chief, using "${name}" as the domain.`;
+  const brief = `You are the chief for the "${name}" topic. Use the sympp skill.`;
   return extra.trim() ? `${brief}\n\n${extra.trim()}` : brief;
 }
+
+// hc arguments that label a chief's terminal: sympp reads sympp.role and sympp.domain from the terminal
+// through its bridge, to attribute the chief's requests and dispatches to the topic.
+export const chiefLabelArgs = (terminal, name) => ["label", terminal, "sympp.role=chief", `sympp.domain=${name}`];
 
 export const chiefArgv = (agent, brief) => [...agent.run, ...(MESSAGE[agent.key] ?? ((m) => [m]))(brief)];
 
@@ -42,14 +47,14 @@ export function chiefSession(term) {
 export const machineOf = (address) => (address.includes("/") ? address.slice(0, address.indexOf("/")) : null);
 
 // The topic's latest chief runs in its terminal: its agent runs there, or Start chief has just started
-// it. That is the topic's chief from its start, before it registers or after it lost its registration.
+// it. That is the topic's chief from its start, before its agent first reaches sympp.
 export const chiefRunning = (last, terminalList, now = Date.now()) => Boolean(last?.terminal) && terminalList.some((k) =>
   k.address === last.terminal && k.state === "live" && (k.program?.key === last.agent || (last.started > 0 && now - last.started < STARTING)));
 
 export const canResume = (last) => Boolean(last && RESUME[last.agent] && typeof last.session === "string" && last.session);
 
-// Resumes the recorded session with the agent's own command, told again to register: a resumed
-// session's sympp connection is new, and only register_chief ties it to the topic.
+// Resumes the recorded session with the agent's own command and its brief again, in a new terminal
+// that Start chief labels like the first.
 export const resumeArgv = (agent, last, name) => [...agent.run, ...RESUME[last.agent](last.session), chiefBrief(name)];
 
 // Where Start chief records the spaces it made: { [space id]: topic id }.
@@ -78,17 +83,10 @@ export async function factoryMachine(endpoint, list, resolve) {
   return undefined;
 }
 
-// A registration locates a terminal, independently of its MCP helper's process lifetime.
-// Core ids disambiguate equal terminal ids; names and hostnames cover registrations without one.
-export function chiefTerminal(chief, machineList, terminalList) {
-  const session = chief.session;
-  if (!session?.terminalId) return null;
-  const same = (a, b) => typeof a === "string" && Boolean(a) && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
-  const machine = machineList.find((m) => session.coreId ? m.id === session.coreId
-    : same(m.name, session.machineId) || same(m.host, session.machineId));
-  if (!machine) return null;
-  const address = machine.name ? `${machine.name}/${session.terminalId}` : session.terminalId;
-  return terminalList.find((t) => t.address === address && t.state === "live")?.address ?? null;
+// A labelled chief's terminal while it is live.
+export function chiefTerminal(chief, terminalList) {
+  if (!chief?.terminal) return null;
+  return terminalList.find((t) => t.address === chief.terminal && t.state === "live")?.address ?? null;
 }
 
 const trimmed = (path) => path.replace(/[\\/]+$/, "");
@@ -148,7 +146,7 @@ export function intoTopic(deskTopics, topic, space) {
 }
 
 // The topic mark's right-click menu, only what applies: a running chief's space (when it has a pane
-// there) and adding it to a composition, then starting a new chief, whose registration replaces it.
+// there) and adding it to a composition, then starting a new chief, whose labels make it the topic's chief.
 export function chiefMenu(terminal, terminalList, paneList) {
   const live = Boolean(terminal) && terminalList.some((k) => k.address === terminal && k.state === "live");
   return [

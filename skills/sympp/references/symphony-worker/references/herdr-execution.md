@@ -2,20 +2,20 @@
 
 Use this only when the user chose Herdr-core execution. Ordinary sympp
 orchestration, its web UI, and workers using another host remain unchanged.
-Small fixes need no WorkRequest or worker claim.
+Small fixes need no WorkRequest.
 
 The installed plugin or portable Skills bundle includes
 `scripts/sympp-herdr.js`. Run it with Node on the machine where the worker will
 execute. It uses the existing `hc connect` API and the selected provider's own
 configuration and login. It prepares workspace trust only; it never copies credentials,
-dispatches a package, claims a grant, or reconfigures a running agent.
+dispatches a package or reconfigures a running agent.
 
 ## Start and hand off
 
-The parent first uses its existing MCP authority to dispatch the package once.
+The parent first dispatches the package once from the terminal that owns its WorkRequest.
 Save only the redacted `worker_bootstrap`, or the redacted dispatch response,
 as a JSON file on the worker machine. Keep that file unchanged until the agent
-has read it. Do not save raw grants, secrets or private handoff material.
+has read it. Do not save secrets or private handoff material.
 
 For compact dispatch, first read `assignment_uri` with MCP `resources/read` and
 save the returned JSON bootstrap. Alternatively, use `detail: "full"` on the
@@ -58,8 +58,7 @@ Use `--provider-home <directory>` to select an existing provider profile:
 only named non-secret environment selectors, never the parent's credentials or
 complete environment. Provider authentication stays on the execution machine.
 Profile configuration and MCP availability are separate from process launch;
-ordinary workers need no MCP claim. An existing Codex/Claude MCP installation
-can still use the optional worker adapter when explicitly requested.
+workers make no sympp MCP calls.
 
 ## Workspace trust
 

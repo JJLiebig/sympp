@@ -16,11 +16,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Server
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.Repo.MigrationFileLock
-  alias SymphonyElixir.SymphonyPlusPlus.Ownership
-  alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Repository, as: SoloSessionRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -394,7 +394,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
   end
 
   defp terminal_call(headers, terminal, name, arguments) do
-    tool_call_request(Ecto.UUID.generate(), name, arguments) |> with_terminal(terminal) |> post_json(headers) |> json_response(200)
+    Ecto.UUID.generate()
+    |> tool_call_request(name, arguments)
+    |> with_terminal(terminal)
+    |> post_json(headers)
+    |> json_response(200)
   end
 
   defp terminal_meta(address), do: %{"core_id" => "endpoint-core", "core_name" => "testbox", "terminal_id" => address}

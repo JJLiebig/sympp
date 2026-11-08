@@ -3932,7 +3932,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   end
 
   defp start_running_agent_run!(repo, work_package_id) do
-    assert {:ok, run} = AgentRunRepository.start_run(repo, %{work_package_id: work_package_id, actor_id: "worker-started", status: "running"})
+    attrs = %{work_package_id: work_package_id, actor_id: "worker-started", status: "running"}
+    assert {:ok, run} = AgentRunRepository.start_run(repo, attrs)
     run
   end
 

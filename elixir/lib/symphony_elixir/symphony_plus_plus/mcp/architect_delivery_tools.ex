@@ -410,7 +410,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   end
 
   defp rollback_architect_transaction_result(_repo, {:ok, result}), do: result
-  defp rollback_architect_transaction_result(repo, {:tool_error, reason}), do: repo.rollback({:tool_error, reason})
   defp rollback_architect_transaction_result(repo, {:error, reason}), do: repo.rollback({:error, reason})
 
   defp mutate_product_tree(repo, work_request_id, tool, created_by, mutation_fun) do

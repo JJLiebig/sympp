@@ -8,6 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.SessionHelpers do
   alias SymphonyElixir.MCPHarness
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Config
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Server
+  alias SymphonyElixir.SymphonyPlusPlus.MCPCase.CommonHelpers
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
@@ -113,5 +114,5 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.SessionHelpers do
     end)
   end
 
-  defp test_repo_root, do: SymphonyElixir.SymphonyPlusPlus.MCPCase.CommonHelpers.test_repo_root()
+  defp test_repo_root, do: CommonHelpers.test_repo_root()
 end

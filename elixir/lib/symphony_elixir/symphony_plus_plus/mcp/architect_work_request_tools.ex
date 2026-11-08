@@ -87,7 +87,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
        )}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "list_work_requests", "reason" => reason}}
-      {:error, code, message, data} -> {:error, code, message, data}
       {:error, reason} -> architect_error(reason, "list_work_requests")
     end
   end
@@ -102,7 +101,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_work_request", "reason" => reason}}
       {:error, :not_found} -> not_found_error("read_work_request")
-      {:error, code, message, data} -> {:error, code, message, data}
       {:error, reason} -> architect_error(reason, "read_work_request")
     end
   end
@@ -116,7 +114,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_plan", "reason" => reason}}
       {:error, :not_found} -> not_found_error("read_plan")
-      {:error, code, message, data} -> {:error, code, message, data}
       {:error, reason} -> architect_error(reason, "read_plan")
     end
   end
@@ -138,7 +135,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_delivery_board", "reason" => reason}}
       {:error, :not_found} -> not_found_error("read_delivery_board")
-      {:error, code, message, data} -> {:error, code, message, data}
       {:error, reason} -> architect_error(reason, "read_delivery_board")
     end
   end

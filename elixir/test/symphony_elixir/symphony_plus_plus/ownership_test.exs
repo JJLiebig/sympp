@@ -77,7 +77,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
     assert %{"result" => _} = set_report(repo, "t2", work_request.id, "Mine now")
 
     rows = repo.all(from(row in WorkedOn, where: row.subject_id == ^work_request.id, order_by: row.started_at))
-    assert [%WorkedOn{display_address: "testbox/t1", state: "finished", finish_reason: "taken_over"}, %WorkedOn{display_address: "testbox/t2", state: "live"}] = rows
+    assert [%WorkedOn{display_address: "testbox/t1", state: "finished", finish_reason: "taken_over"}, second] = rows
+    assert %WorkedOn{display_address: "testbox/t2", state: "live"} = second
   end
 
   test "a terminal the factory's core sees live keeps ownership", %{repo: repo, work_request: work_request} do

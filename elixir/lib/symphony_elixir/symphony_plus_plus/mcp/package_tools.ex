@@ -272,7 +272,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PackageTools do
     case repo.transaction(fn -> rollback_worker_transaction_result(repo, fun.()) end) do
       {:ok, result} -> {:ok, result}
       {:error, {:tool_error, reason}} -> {:tool_error, reason}
-      {:error, {:mcp_error, code, message, data}} -> {:error, code, message, data}
       {:error, {:error, reason}} -> {:error, reason}
       {:error, reason} -> {:error, reason}
     end
@@ -280,7 +279,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PackageTools do
 
   defp rollback_worker_transaction_result(_repo, {:ok, result}), do: result
   defp rollback_worker_transaction_result(repo, {:tool_error, reason}), do: repo.rollback({:tool_error, reason})
-  defp rollback_worker_transaction_result(repo, {:error, code, message, data}), do: repo.rollback({:mcp_error, code, message, data})
   defp rollback_worker_transaction_result(repo, {:error, reason}), do: repo.rollback({:error, reason})
 
   defp worker_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)

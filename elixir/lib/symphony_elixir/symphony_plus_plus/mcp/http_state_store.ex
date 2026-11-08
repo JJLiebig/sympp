@@ -471,6 +471,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore do
   defp cleanup(%{entries: entries, ttl_ms: ttl_ms} = state) do
     cutoff = now_ms() - ttl_ms
     expired_keys = for {key, {_server, touched_at}} <- entries, touched_at < cutoff, do: key
+
     {state, orphan_alias_keys} =
       %{state | entries: Map.drop(entries, expired_keys)}
       |> prune_aliases()

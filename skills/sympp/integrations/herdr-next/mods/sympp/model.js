@@ -114,25 +114,20 @@ export function parseBoard(payload) {
   const runs = new Map((Array.isArray(payload.work_packages) ? payload.work_packages : [])
     .filter((card) => card?.id && card.active_agent_run).map((card) => [card.id, card.active_agent_run]));
   const jobs = payload.work_request_details.filter((detail) => detail?.work_request?.id).map((detail) => buildJob(detail, now, runs));
-  return { now, jobs, chiefs: chiefsOf(payload.chiefs), offline: typeof payload.runtime?.offline === "boolean" ? payload.runtime.offline : null,
+  return { now, jobs, offline: typeof payload.runtime?.offline === "boolean" ? payload.runtime.offline : null,
     reposRoot: typeof payload.runtime?.repos_root === "string" && payload.runtime.repos_root ? payload.runtime.repos_root : null };
 }
 
-// Current domain chiefs. A registration records a domain and where the session was, never authority
-// or liveness; the recorded session identity only picks which bound terminal to check.
-function chiefsOf(list) {
-  return (Array.isArray(list) ? list : []).filter((c) => typeof c?.domain === "string" && c.domain.trim()).map((c) => {
-    const herdr = c.session_location?.herdr ?? null;
-    return {
-      domain: c.domain.trim(),
-      key: c.domain.trim().toLowerCase(),
-      repos: (Array.isArray(c.repos) ? c.repos : []).filter((repo) => typeof repo === "string" && repo),
-      registeredAt: ms(c.registered_at),
-      location: placeOf(c.session_location),
-      session: herdr ? { clientId: herdr.client_id ?? null, coreId: herdr.core_id ?? null,
-        terminalId: herdr.terminal_id ?? null, machineId: c.session_location.machine_id ?? null } : null,
-    };
-  });
+// Current domain chiefs: live terminals labelled sympp.role=chief with a sympp.domain, as Start chief
+// labels them. Labels name a candidate, never authority or liveness; the terminal only picks which
+// bound session to check.
+export function chiefsOf(terminalList) {
+  return (terminalList ?? []).filter((t) => t?.state === "live" && typeof t.address === "string" && t.address &&
+    t.labels?.["sympp.role"] === "chief" && typeof t.labels["sympp.domain"] === "string" && t.labels["sympp.domain"].trim())
+    .map((t) => {
+      const domain = t.labels["sympp.domain"].trim();
+      return { domain, key: domain.toLowerCase(), repos: [], terminal: t.address, location: null };
+    });
 }
 
 // The chief domain a request or package was created or dispatched under, if any.
@@ -202,7 +197,7 @@ function buildJob(detail, now, runs) {
     ask,
     questions,
     needs: attention.filter((a) => a.text?.trim()),
-    architect: placeOf(request.architect_session_location),
+    architect: workedOnOf(request.worked_on),
     dispatchedBy: chiefOf(request.dispatched_by),
     packages,
     // Prerequisite → dependent package pairs from the effective execution graph.
@@ -339,6 +334,13 @@ function reportOf(report, now) {
     eta: note(report?.eta?.text, report?.eta?.written_at),
     parked: note(parking?.reason, parking?.parked_at),
   };
+}
+
+// The terminal sympp says works on a request and since when; shown, never navigated to or taken as
+// proof that it still runs.
+function workedOnOf(owner) {
+  if (typeof owner?.address !== "string" || !owner.address) return null;
+  return { where: owner.address, role: owner.role ?? null, seenAt: ms(owner.since) };
 }
 
 // A last known address, never proof that the session still runs; it is shown, not navigated to.
@@ -501,12 +503,11 @@ export function bindingsFor(bindings, jobId, pkgId) {
     .filter((b, index, matches) => matches.findIndex(other => other.address === b.address && other.role === b.role) === index);
 }
 
-// A chief has no job of its own: its bindings are the bound sessions with the identity sympp recorded
-// when it registered. They still need the helper check before anything says Live.
+// A chief has no job of its own: its bindings are the chief sessions bound in its own terminal. They
+// still need the helper check before anything says Live.
 export function chiefBindings(bindings, chief) {
-  const session = chief?.session;
-  if (!session?.clientId) return [];
-  return bindings.filter((b) => b.kind === "session" && b.launchId === session.clientId && (!session.coreId || b.coreId === session.coreId))
+  if (!chief?.terminal) return [];
+  return bindings.filter((b) => b.kind === "session" && b.role === "chief" && b.address === chief.terminal)
     .filter((b, index, matches) => matches.findIndex((other) => other.address === b.address) === index);
 }
 

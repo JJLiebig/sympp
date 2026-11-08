@@ -23,7 +23,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   alias SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard
 
-  @dangerous_local_operator_actions [:dangerous_override, :dangerous_rekey, :dangerous_delete]
+  @dangerous_local_operator_actions [:dangerous_override, :dangerous_delete]
 
   @spec local_operator_browser?(Conn.t()) :: boolean()
   def local_operator_browser?(%Conn{} = conn) do

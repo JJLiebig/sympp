@@ -2,11 +2,10 @@
 
 When the user selects Herdr-next execution, use the [optional execution helper](../symphony-worker/references/herdr-execution.md)
 for an existing dispatched assignment or ordinary untracked task. It does not
-dispatch, claim work, or replace standalone coordination.
+dispatch or replace standalone coordination.
 
 Use for ordinary coordination in a dedicated sympp MCP config. For WorkRequests, WorkPackages,
-ledger-backed claims, scoped grants, delivery boards, or MCP merge gates, use
-[symphony-architect](../symphony-architect/procedure.md).
+delivery boards, or MCP merge gates, use [symphony-architect](../symphony-architect/procedure.md).
 Small clear work stays in this direct worker loop; a chief, WorkRequest or
 feature-planning ceremony is optional. A chief delegates each substantial
 multi-slice feature to a distinct architect, who owns it end to end:
@@ -19,18 +18,17 @@ final delivery.
 
 ## Start
 
-When the human names this session a domain chief, call
-`register_chief({domain: "Kraken", repos?: ["owner/repo"], session_description?: "Terminal: Kraken chief"})`
-once through trusted local MCP. The bridge reports Herdr location automatically.
-Registration replaces the current chief for that domain, ignoring case, and
-attributes this session's new requests and dispatches; it grants no claim or
-dispatch authority. Ordinary work needs no registration. If this session registers
-several domains, attribution uses its most recent still-current registration.
+A domain chief runs in a terminal started from the board's chief launcher, which
+labels it `sympp.role=chief` and `sympp.domain=<topic>`. The bridge forwards those
+labels, so the chief's new WorkRequests and dispatches are attributed to the
+domain with no registration call. Ordinary work needs no chief.
 
-When creating a WorkRequest through MCP outside Herdr, optionally include
-`session_description` on `create_work_request`, such as
-`"Terminal window: widget coordination"`. The client bridge reports location
-automatically inside Herdr. Ordinary coordination requires no extra MCP call.
+Writes need a Herdr terminal; outside Herdr sympp is read-only
+(`read_only_outside_herdr`). When a chief creates a WorkRequest for an architect,
+pass `create_work_request(own: false)`; the architect's first plan write makes its
+terminal the owner. Recording decisions and asking or answering questions stay
+open to any Herdr terminal, and any chief or architect may end a package as
+`finished`; other writes belong to the owning terminal.
 
 - Optionally attach a coordinator-owned [symphony-solo-session](../symphony-solo-session/procedure.md)
   for parent planning through configured MCP tools. Do not share that session
@@ -57,7 +55,7 @@ WorkRequest and WorkPackage titles are their short names: 2–5 words, max 40 ch
   material scope growth or reviewability risk. Numerical budgets are optional.
 - For sympp WorkPackages, provide the full scoped assignment and local worktree
   scope, including relevant prior findings/decisions. The parent owns dispatch
-  authority; workers need no ledger claim or status calls.
+  authority; workers make no sympp calls.
 - Use explorers for reconnaissance only.
 
 ## Dispatch
@@ -73,11 +71,12 @@ Worker prompts should include:
 
 ## Supervise
 
-For an existing WorkRequest you coordinate, optionally publish a brief/ETA,
-parking reason, or explicit human question at meaningful delivery milestones or
-road bumps using the [architect report procedure](../symphony-architect/procedure.md#guidance).
+For a WorkRequest your terminal owns, optionally publish a brief/ETA or parking
+reason with `set_report`, and raise an explicit human question with `ask_question`,
+at meaningful delivery milestones or road bumps; see the
+[architect report procedure](../symphony-architect/procedure.md#guidance).
 Route decisions to the chief when present, otherwise the user; a conversational
-answer is enough to resolve the escalation. Do not create a WorkRequest solely
+answer is enough to close the question. Do not create a WorkRequest solely
 for reporting, require worker receipts, or turn ordinary waits into escalation.
 
 As chief, interpret and apply existing user decisions, resolve scope conflicts,
@@ -119,5 +118,5 @@ recommendation, and the concrete question.
 - Merge only when authorized.
 - Summarize PRs/no-PR evidence and follow-ups.
 
-Human attention is **Needs you**, raised only by the chief or architect with one sentence stating the action: a human question or product/policy approval, access only the human can grant, or recovery exhausted after the system tried. Use `human_escalation:{question}` in the architect report.
+Human attention is **Needs you**, raised only by the chief or architect with one sentence stating the action: a human question or product/policy approval, access only the human can grant, or recovery exhausted after the system tried. Raise it with `ask_question`.
 Read `read_delivery_board` for stale workers (`next_actor: architect`, `inspect_runtime`), blockers and validation evidence; handle silent workers, failing checks and quiet tasks before escalating exhausted recovery. Review rounds, running CI, dependencies, queues and worker-parent questions never need human attention by themselves.
