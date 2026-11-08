@@ -189,7 +189,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCall do
     _kind, _reason -> nil
   end
 
-  defp capture_enabled?(context) do
+  @doc "Whether the operator enabled failed-call capture; it is off by default."
+  @spec capture_enabled?(Config.t() | map()) :: boolean()
+  def capture_enabled?(context) do
     case OperatorSettingsRepository.get(config(context).repo) do
       {:ok, %{capture_failed_mcp_calls: true}} -> true
       _disabled_or_unavailable -> false

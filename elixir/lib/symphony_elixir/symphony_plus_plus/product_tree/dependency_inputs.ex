@@ -98,7 +98,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyInputs do
         work_package_id: id,
         eligible: ready and not terminal and reasons == [],
         reason_codes: if(ready or terminal, do: reasons, else: ["not_ready" | reasons]),
-        next_action: if(terminal, do: nil, else: next_action(reasons, ready))
+        next_action: if(terminal, do: nil, else: next_action(reasons, state.status))
       }
     end)
   end
@@ -237,10 +237,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyInputs do
   defp timestamp(_time), do: nil
   defp reason(reasons, true, reason), do: reasons ++ [reason]
   defp reason(reasons, false, _reason), do: reasons
-  defp next_action([], true), do: "verify_native_checks_and_review_then_merge"
-  defp next_action([], false), do: "finish_worker_qualification"
+  defp next_action([], "ready_for_merge"), do: "verify_native_checks_and_review_then_merge"
+  defp next_action([], "planned"), do: "dispatch_work_package"
+  defp next_action([], _status), do: "finish_worker_qualification"
 
-  defp next_action(reasons, _ready) do
+  defp next_action(reasons, _status) do
     cond do
       "delivery_order_violation" in reasons -> "resolve_delivery_order_violation"
       "candidate_pin_stale" in reasons or "dependency_inputs_stale" in reasons -> "select_current_candidate_and_requalify_affected_work"

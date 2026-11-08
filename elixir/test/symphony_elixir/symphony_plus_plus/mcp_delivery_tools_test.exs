@@ -103,7 +103,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     assert read.("read_work_request", %{"detail" => "full", "work_request_id" => work_request.id})["work_request"]["execution_status"] == "open"
     active = read.("read_delivery_board", %{"work_request_id" => work_request.id})["delivery_board"]["work_packages"] |> List.last()
-    assert active["merge_eligibility"]["next_action"] == "finish_worker_qualification"
+    assert active["merge_eligibility"]["next_action"] == "dispatch_work_package"
+    overview_packages = read.("read_work_request", %{"work_request_id" => work_request.id})["work_packages"]
+    assert %{"next_action" => "dispatch_work_package"} = Enum.find(overview_packages, &(&1["id"] == active["id"]))
 
     read.("skip_work_package", %{"work_request_id" => work_request.id, "work_package_id" => List.last(packages).id, "current_status" => "planned"})
 

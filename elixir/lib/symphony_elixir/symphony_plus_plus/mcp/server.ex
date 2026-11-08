@@ -50,6 +50,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     SessionBindingTools,
     SoloTools,
     Surface,
+    TaskPlanTools,
     ToolCatalog,
     ToolResult,
     WorkerTools,
@@ -68,12 +69,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   @solo_tools ToolCatalog.solo_tools()
   @assignment_release_tool ToolCatalog.assignment_release_tool()
   @local_operator_tools ToolCatalog.local_operator_tools()
-  @local_trusted_work_request_read_tools [
-    "list_work_requests",
-    "read_work_request",
-    "read_plan",
-    "read_delivery_board"
-  ]
+  @explicit_read_target_keys ["work_request_id", "work_package_id", "target_id"]
   @local_assignment_claim_tool ToolCatalog.local_assignment_claim_tool()
   @local_architect_assignment_claim_tool ToolCatalog.local_architect_assignment_claim_tool()
   @session_claim_tools ToolCatalog.session_claim_tools()
@@ -899,12 +895,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     worker_error(:worker_grant_required, name)
   end
 
-  defp require_architect_tool_binding(%__MODULE__{session: nil} = server, name) when name in @local_trusted_work_request_read_tools do
-    authorize_local_operator_tool_call(server, name)
-  end
-
   defp require_architect_tool_binding(%__MODULE__{session: nil}, name) do
-    {:error, -32_001, "Unauthorized", %{"resource" => name, "reason" => "claim_required", "action" => @local_architect_assignment_claim_tool}}
+    {:error, -32_001, "Unauthorized",
+     %{
+       "resource" => name,
+       "reason" => "claim_required",
+       "action" => @local_architect_assignment_claim_tool,
+       "message" => "#{name} needs this session to hold the WorkRequest's architect claim. Claim it with #{@local_architect_assignment_claim_tool} and its work_request_id, then retry.",
+       "recovery" => %{"next_action" => "claim_then_retry", "tool" => @local_architect_assignment_claim_tool}
+     }}
   end
 
   defp require_architect_tool_binding(%__MODULE__{session: %Session{assignment: %{grant_role: "architect"}}}, _name), do: :ok
@@ -1117,8 +1116,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp local_operator_tool("summarize_failed_mcp_calls", _arguments, %__MODULE__{}) do
-    {:ok, ToolResult.tool_result(LocalTrustedTools.failed_call_summary())}
+  defp local_operator_tool("summarize_failed_mcp_calls", _arguments, %__MODULE__{config: config}) do
+    {:ok, ToolResult.tool_result(LocalTrustedTools.failed_call_summary(config))}
   end
 
   defp local_operator_tool("record_work_request_operator_decision", arguments, %__MODULE__{config: config} = server) do
@@ -1585,7 +1584,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          %{"name" => name} = params
        )
        when profile in [:full, :architect] and role != "worker" and name in @architect_tools do
-    if architect_claim_call?(profile, role, name) and Surface.local_trusted_tools_enabled?(server) do
+    if architect_claim_call?(profile, role, name, params) and Surface.local_trusted_tools_enabled?(server) do
       with {:ok, arguments} <- architect_tool_arguments(params, name) do
         auto_claim_architect_scope(server, arguments)
       end
@@ -1596,8 +1595,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp auto_claim_architect(%__MODULE__{} = server, _method, _params), do: {:ok, server}
 
-  defp architect_claim_call?(profile, role, name) do
-    name not in ["list_comments" | @local_trusted_work_request_read_tools] and
+  defp architect_claim_call?(profile, role, name, params) do
+    arguments = Map.get(params, "arguments", %{})
+
+    is_map(arguments) and not ToolCatalog.read_call?(name, arguments) and
       (name not in @worker_tools or profile == :architect or role == "architect")
   end
 
@@ -1624,7 +1625,91 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   end
 
   defp dispatch_with_text_profile(method, params, %__MODULE__{} = server) do
-    build_tool_result(server, fn -> dispatch(method, params, server) end)
+    build_tool_result(server, fn -> dispatch_call(method, params, server) end)
+  end
+
+  defp dispatch_call("tools/call", %{"name" => name} = params, %__MODULE__{} = server) when is_binary(name) do
+    arguments = Map.get(params, "arguments", %{})
+
+    result =
+      if is_map(arguments) and local_trusted_read_call?(server, name, arguments),
+        do: local_trusted_read(name, params, arguments, %{server | session: nil}),
+        else: :not_local_trusted_read
+
+    if result == :not_local_trusted_read, do: dispatch("tools/call", params, server), else: result
+  end
+
+  defp dispatch_call(method, params, %__MODULE__{} = server), do: dispatch(method, params, server)
+
+  # A trusted local session reads any object it names, whatever it is bound to.
+  # Unbound sessions use this path for every read, and the handler refuses an
+  # untrusted connection. Architect sessions use it when the call names its
+  # target instead of relying on the bound WorkRequest.
+  defp local_trusted_read_call?(%__MODULE__{} = server, name, arguments) do
+    ToolCatalog.read_call?(name, arguments) and local_trusted_read_session?(server, arguments)
+  end
+
+  defp local_trusted_read_session?(%__MODULE__{session: nil}, _arguments), do: true
+
+  defp local_trusted_read_session?(%__MODULE__{session: %Session{assignment: %{grant_role: "architect"}}} = server, arguments),
+    do: explicit_read_target?(arguments) and Surface.local_trusted_tools_enabled?(server)
+
+  defp local_trusted_read_session?(%__MODULE__{}, _arguments), do: false
+
+  defp explicit_read_target?(arguments),
+    do: Enum.any?(@explicit_read_target_keys, &(is_binary(arguments[&1]) and String.trim(arguments[&1]) != ""))
+
+  defp local_trusted_read(name, params, _arguments, server)
+       when name in ["list_work_requests", "read_work_request", "read_plan", "read_delivery_board"] do
+    with :ok <- prepare_local_trusted_read(server, params, name),
+         {:ok, arguments} <- architect_tool_arguments(params, name) do
+      ArchitectWorkRequestTools.call(name, server.config, nil, arguments, server: server)
+    end
+  end
+
+  # These tools also serve bound sessions. Without trust or an explicit target
+  # they keep their claim-first refusal.
+  defp local_trusted_read(name, params, arguments, server)
+       when name in ["list_comments", "read_task_plan", "reconcile_work_request"] do
+    if explicit_read_target?(arguments) and Surface.local_trusted_tools_enabled?(server),
+      do: trusted_only_read(name, params, arguments, server),
+      else: :not_local_trusted_read
+  end
+
+  defp local_trusted_read(_name, _params, _arguments, _server), do: :not_local_trusted_read
+
+  defp trusted_only_read("list_comments", params, _arguments, server) do
+    case prepare_local_trusted_list_comments_tool_call(server, params) do
+      {:ok, arguments} -> local_trusted_list_comments_tool(arguments, server)
+      {:error, code, message, data} -> {:error, code, message, data}
+    end
+  end
+
+  defp trusted_only_read("read_task_plan", params, _arguments, server) do
+    with :ok <- prepare_local_trusted_read(server, params, "read_task_plan"),
+         {:ok, arguments} <- architect_tool_arguments(params, "read_task_plan"),
+         {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
+         {:ok, result} <- TaskPlanTools.local_trusted_read_task_plan(server.config.repo, work_package_id) do
+      {:ok, result}
+    else
+      {:error, _code, _message, _data} = error -> error
+      {:tool_error, reason} -> invalid_params_error("read_task_plan", reason)
+      {:error, :not_found} -> not_found_error("read_task_plan")
+      {:error, reason} -> architect_error(reason, "read_task_plan")
+    end
+  end
+
+  defp trusted_only_read("reconcile_work_request", params, arguments, server) do
+    with :ok <- prepare_local_trusted_read(server, params, "reconcile_work_request") do
+      ArchitectDeliveryTools.local_trusted_reconcile_dry_run(server.config, arguments)
+    end
+  end
+
+  defp prepare_local_trusted_read(%__MODULE__{} = server, params, name) do
+    with :ok <- require_tool_arguments_object(params, name),
+         :ok <- authorize_trusted_local_tool_call(server, name) do
+      prepare_mcp_repository_for_tool(server.config.repo, name)
+    end
   end
 
   defp build_tool_result(%__MODULE__{} = server, fun) when is_function(fun, 0) do

@@ -453,7 +453,7 @@ test('HTTP location metadata follows successful authority and cannot be refreshe
   const reader = await factory.client();
   const otherRead = await reader.raw(located('read_work_request', { detail: 'full', work_request_id: goal }, 'synthetic-other-client', 'synthetic-other-machine'));
   expect(otherRead.body.result.structuredContent.work_request.id).toBe(goal);
-  expect(JSON.parse(Buffer.from(otherRead.binding!, 'base64url').toString('utf8'))).toEqual({ role: 'coordinator', show_inspector: true, work_request_id: goal });
+  expect(otherRead.binding).toBeNull();
   expect((await detail(goal)).work_request.architect_session_location).toEqual(originalLocation);
   const ownRead = await coordinator.raw(located('read_work_request', { detail: 'full', work_request_id: goal }, 'synthetic-coordinator-client', 'synthetic-coordinator-machine'));
   expect(ownRead.body.error).toBeUndefined();
