@@ -139,8 +139,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubApiTest do
     test "one aliased document reads PRs and branches; a fork's branch with the same name is never taken" do
       graphql = fn query, variables, :background ->
         assert query =~ "e0: repository(owner: $o0, name: $r0) { pullRequest(number: $n0)"
-        assert query =~ "e1: repository(owner: $o1, name: $r1) { pullRequests(headRefName: $b1"
-        assert variables == %{"o0" => "nextide", "r0" => "repo", "n0" => 7, "o1" => "nextide", "r1" => "repo", "b1" => "agent/x", "o2" => "nextide", "r2" => "repo", "b2" => "agent/y"}
+        assert query =~ "e1: repository(owner: $o1, name: $r1) { pullRequests(headRefName: $b1, baseRefName: $t1"
+
+        assert variables == %{
+                 "o0" => "nextide",
+                 "r0" => "repo",
+                 "n0" => 7,
+                 "o1" => "nextide",
+                 "r1" => "repo",
+                 "b1" => "agent/x",
+                 "t1" => "main",
+                 "o2" => "nextide",
+                 "r2" => "repo",
+                 "b2" => "agent/y",
+                 "t2" => "main"
+               }
 
         {:ok,
          %{
@@ -150,13 +163,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubApiTest do
          }}
       end
 
-      results = Snapshot.fetch([{:pr, "nextide", "repo", 7}, {:branch, "nextide", "repo", "agent/x"}, {:branch, "nextide", "repo", "agent/y"}], graphql: graphql)
+      entries = [{:pr, "nextide", "repo", 7}, {:branch, "nextide", "repo", "agent/x", "main"}, {:branch, "nextide", "repo", "agent/y", "main"}]
+      results = Snapshot.fetch(entries, graphql: graphql)
 
       assert {:ok, %{"state" => "merged", "merged" => true, "merged_at" => "2026-11-09T10:00:00Z", "merge_commit_sha" => "m7", "repository" => "nextide/repo"}} =
                results[{:pr, "nextide", "repo", 7}]
 
-      assert {:ok, %{"number" => 10, "state" => "open"}} = results[{:branch, "nextide", "repo", "agent/x"}]
-      assert {:ok, nil} = results[{:branch, "nextide", "repo", "agent/y"}]
+      assert {:ok, %{"number" => 10, "state" => "open"}} = results[{:branch, "nextide", "repo", "agent/x", "main"}]
+      assert {:ok, nil} = results[{:branch, "nextide", "repo", "agent/y", "main"}]
     end
 
     test "check rollups, the Codex receipt and failed documents" do

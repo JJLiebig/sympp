@@ -4,9 +4,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
 
   Each document aliases up to 25 entries. An entry is either a known PR
   (`{:pr, owner, repo, number}`) or a branch whose PR isn't known yet
-  (`{:branch, owner, repo, branch}`); both kinds share a document. A branch
-  matches only a PR whose head lives in the same repository owner, so a fork
-  branch with the same name is never taken.
+  (`{:branch, owner, repo, branch, base}`); both kinds share a document. A
+  branch matches only a PR into `base` whose head lives in the same repository
+  owner, so a fork branch with the same name is never taken.
 
   Per PR it reads state, merge evidence, head, draft flag, the head commit's
   check rollup and the last reviews (for the Codex receipt).
@@ -30,7 +30,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
   }
   """
 
-  @type entry :: {:pr, String.t(), String.t(), pos_integer()} | {:branch, String.t(), String.t(), String.t()}
+  @type entry ::
+          {:pr, String.t(), String.t(), pos_integer()}
+          | {:branch, String.t(), String.t(), String.t(), String.t()}
   @type result :: {:ok, map() | nil} | {:error, Api.error()}
 
   @doc """
@@ -86,10 +88,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
      %{"o#{index}" => owner, "r#{index}" => repo, "n#{index}" => number}}
   end
 
-  defp entry_document({:branch, owner, repo, branch}, index) do
-    {["$o#{index}: String!", "$r#{index}: String!", "$b#{index}: String!"],
-     "e#{index}: repository(owner: $o#{index}, name: $r#{index}) { pullRequests(headRefName: $b#{index}, first: 5, " <>
-       "orderBy: {field: CREATED_AT, direction: DESC}) { nodes { ...pr } } }", %{"o#{index}" => owner, "r#{index}" => repo, "b#{index}" => branch}}
+  defp entry_document({:branch, owner, repo, branch, base}, index) do
+    selection =
+      "e#{index}: repository(owner: $o#{index}, name: $r#{index}) { pullRequests(headRefName: $b#{index}, " <>
+        "baseRefName: $t#{index}, first: 5, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { ...pr } } }"
+
+    {["$o#{index}: String!", "$r#{index}: String!", "$b#{index}: String!", "$t#{index}: String!"], selection, %{"o#{index}" => owner, "r#{index}" => repo, "b#{index}" => branch, "t#{index}" => base}}
   end
 
   @doc """
@@ -115,7 +119,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
   defp decode_entry({:pr, owner, repo, _number}, %{"pullRequest" => %{} = node}), do: {:ok, decode_pr(node, owner, repo)}
   defp decode_entry({:pr, _owner, _repo, _number}, %{"pullRequest" => nil}), do: {:ok, nil}
 
-  defp decode_entry({:branch, owner, repo, _branch}, %{"pullRequests" => %{"nodes" => nodes}}) when is_list(nodes) do
+  defp decode_entry({:branch, owner, repo, _branch, _base}, %{"pullRequests" => %{"nodes" => nodes}}) when is_list(nodes) do
     nodes
     |> Enum.filter(&(is_map(&1) and same_owner?(get_in(&1, ["headRepositoryOwner", "login"]), owner)))
     |> Enum.map(&decode_pr(&1, owner, repo))

@@ -91,7 +91,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
 
     test "a PR found on the package's branch is attached", %{repo: repo} do
       package = package!(repo, "WP-OBS-DISCOVER")
-      entry = {:branch, "nextide", "repo", "agent/example"}
+      entry = {:branch, "nextide", "repo", "agent/example", "main"}
 
       sweep(repo, %{entry => {:ok, nil}})
       assert {:error, :missing_attached_pr} = current_pr(repo, package.id)
@@ -105,8 +105,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
 
     test "a discovered PR on another base branch is not attached", %{repo: repo} do
       package = package!(repo, "WP-OBS-OTHER-BASE")
-      sweep(repo, %{{:branch, "nextide", "repo", "agent/example"} => {:ok, pr(78, "head-c", %{"base_branch" => "release"})}})
+      sweep(repo, %{{:branch, "nextide", "repo", "agent/example", "main"} => {:ok, pr(78, "head-c", %{"base_branch" => "release"})}})
       assert {:error, :missing_attached_pr} = current_pr(repo, package.id)
+    end
+
+    test "an attached PR retargeted to another base unqualifies its package", %{repo: repo} do
+      package = package!(repo, "WP-OBS-RETARGET", status: "ready")
+      attach!(repo, package, 79)
+
+      sweep(repo, %{{:pr, "nextide", "repo", 79} => {:ok, pr(79, "head-a", %{"base_branch" => "release"})}})
+
+      assert repo.get!(WorkPackage, package.id).status == "dispatched"
+      assert "pr_base_mismatch" in unqualified_event!(repo, package.id).payload["reasons"]
     end
 
     test "a PR replaced by sync_pr during a sweep is neither re-attached nor recorded as merged", %{repo: repo} do
@@ -125,6 +135,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       refute repo.get_by(WorkPackageDelivery, work_package_id: package.id)
       assert {:ok, %{ref: %{number: 922}}} = current_pr(repo, package.id)
       refute Enum.any?(events(repo, package.id), &(&1.status == "github_pr_merged"))
+      # The unapplied snapshot isn't stored, so the next sweep reads the package afresh.
+      assert repo.get!(Observation, package.id).pr == nil
     end
 
     test "CI changes are recorded once; an unchanged snapshot after a restart records nothing", %{repo: repo} do

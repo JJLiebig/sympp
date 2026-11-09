@@ -164,8 +164,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   defp github_entry(%{package: package}) do
     with {:ok, {owner, repo}} <- repository(package),
-         {:ok, branch} <- branch(package) do
-      {:branch, owner, repo, branch}
+         {:ok, branch} <- branch(package),
+         base when is_binary(base) <- BaseBranch.canonicalize(package.base_branch) do
+      {:branch, owner, repo, branch, base}
     else
       _unknown -> :skip
     end
@@ -235,9 +236,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
     # A stale GitHub read changes nothing; a stale review host only blocks qualifying.
     outcome = if "github" in stale, do: :ok, else: act(repo, item, pr, changed?, review, stale)
+    stored_pr = if outcome == :retry, do: previous_pr, else: pr
 
-    store(repo, package.id, observation, pr, review_payload(review, observation), stale)
-    outcome
+    store(repo, package.id, observation, stored_pr, review_payload(review, observation), stale)
   end
 
   defp current_pr(%{package: package, attached: attached}, {:ok, %{} = pr}, previous_pr, opts) do
@@ -284,43 +285,66 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   defp snapshot_changed?(nil, %{}), do: true
   defp snapshot_changed?(previous, pr), do: Map.take(previous, @snapshot_fields) != Map.take(pr, @snapshot_fields) or previous["number"] != pr["number"]
 
+  # Returns `:ok` once the snapshot's effects are applied, or `:retry` when they
+  # weren't: the previous snapshot is then kept, so the next sweep sees the
+  # change again and retries it.
   defp act(_repo, _item, nil, _changed?, _review, _stale), do: :ok
 
   defp act(repo, %{package: %WorkPackage{} = package, attached: attached}, %{} = pr, changed?, review, stale) do
     with :ok <- same_attachment(attached_pr(repo, package), attached),
-         {:ok, payload} <- payload(pr),
-         {:ok, candidate_head} <- Qualification.candidate_head(repo, package),
-         :ok <- if(changed?, do: record(repo, package, attached, payload), else: :ok) do
-      if pr["merged"] == true do
-        record_merge(repo, package, payload)
-      else
-        qualify(repo, package, pr, review, stale, candidate_head)
-      end
+         {:ok, payload} <- payload(pr) do
+      work = fn -> record_and_qualify(repo, package, attached, payload, changed?, pr, review, stale) end
+      merged? = pr["merged"] == true
+      if merged?, do: merge(repo, package, attached, payload, changed?), else: in_transaction(repo, package, work)
     else
-      {:error, reason} -> log_failure(package, reason)
+      {:error, reason} -> retry(package, reason)
+    end
+  end
+
+  # The merge itself goes through the delivery evidence path; a failed merge
+  # record is retried on every sweep while the PR stays watched.
+  defp merge(repo, package, attached, payload, true = _changed?) do
+    case in_transaction(repo, package, fn -> record(repo, package, attached, payload) end) do
+      :ok -> record_merge(repo, package, payload)
+      :retry -> :retry
+    end
+  end
+
+  defp merge(repo, package, _attached, payload, false = _changed?), do: record_merge(repo, package, payload)
+
+  # Recording a new head and the qualification it causes commit together: the
+  # candidate head is read before the new snapshot is recorded.
+  defp record_and_qualify(repo, package, attached, payload, changed?, pr, review, stale) do
+    with {:ok, current} <- fetch(repo, package),
+         {:ok, candidate_head} <- Qualification.candidate_head(repo, current),
+         :ok <- if(changed?, do: record(repo, current, attached, payload), else: :ok),
+         {:ok, decision} <- Qualification.decide(repo, current, facts(current, pr, review, stale), candidate_head),
+         {:ok, _updated} <- Qualification.apply_decision(repo, Actor.observer(), current, decision, pr["head_sha"]) do
+      :ok
     end
   end
 
   # The PR is recorded only if the package still has the PR the sweep read:
   # an architect may have attached another one with `sync_pr` meanwhile.
   defp record(repo, package, attached, payload) do
-    repo.transaction(fn ->
-      with :ok <- same_attachment(attached_pr(repo, package), attached),
-           :ok <- Qualification.record_pr(repo, Actor.observer(), package, payload) do
-        :ok
-      else
-        {:error, reason} -> repo.rollback(reason)
-      end
-    end)
-    |> case do
+    with :ok <- same_attachment(attached_pr(repo, package), attached),
+         do: Qualification.record_pr(repo, Actor.observer(), package, payload)
+  end
+
+  # `work` runs inside the transaction; an `{:error, _}` result rolls it back.
+  defp in_transaction(repo, package, work) do
+    case repo.transaction(fn -> rollback_on_error(repo, work.()) end) do
       {:ok, :ok} ->
         DashboardPubSub.broadcast_changed()
         :ok
 
       {:error, reason} ->
-        {:error, reason}
+        retry(package, reason)
     end
   end
+
+  defp rollback_on_error(repo, {:error, reason}), do: repo.rollback(reason)
+  defp rollback_on_error(_repo, result), do: result
 
   defp same_attachment(nil, nil), do: :ok
   defp same_attachment(%{repository: repository, number: number}, %{repository: repository, number: number}), do: :ok
@@ -334,23 +358,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     end
   end
 
-  defp qualify(repo, %WorkPackage{} = package, pr, review, stale, candidate_head) do
-    facts = %{
+  defp facts(%WorkPackage{} = package, pr, review, stale) do
+    %{
       pr_state: pr["state"],
       pr_draft?: pr["draft"] == true,
       ci_status: get_in(pr, ["ci", "status"]),
       review: if("review" in stale, do: :unknown, else: review_state(review, pr["head_sha"])),
-      head_sha: pr["head_sha"]
+      head_sha: pr["head_sha"],
+      base_matches?: base_matches?(package, pr)
     }
-
-    with {:ok, current} <- fetch(repo, package),
-         {:ok, decision} <- Qualification.decide(repo, current, facts, candidate_head),
-         {:ok, _updated} <- Qualification.apply_decision(repo, Actor.observer(), current, decision, pr["head_sha"]) do
-      :ok
-    else
-      {:error, reason} -> log_failure(package, reason)
-    end
   end
+
+  # A PR retargeted to another base no longer delivers this package.
+  defp base_matches?(_package, %{"base_branch" => nil}), do: true
+  defp base_matches?(package, %{"base_branch" => base}), do: BaseBranch.canonicalize(package.base_branch) == BaseBranch.canonicalize(base)
+  defp base_matches?(_package, _pr), do: true
 
   defp review_state(:none, _head), do: :none
   defp review_state(review, head), do: ReviewStatus.state(review, head)
@@ -437,5 +459,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   defp log_failure(%WorkPackage{id: id}, reason) do
     Logger.warning("sympp observer could not apply #{id}: #{inspect(reason)}")
     :ok
+  end
+
+  defp retry(%WorkPackage{id: id}, reason) do
+    Logger.warning("sympp observer will retry #{id}: #{inspect(reason)}")
+    :retry
   end
 end

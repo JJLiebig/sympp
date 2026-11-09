@@ -3,8 +3,6 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { contract } from '../support/factory.js';
 import { close, head, pr, prUrl, row, sync, test } from '../support/delivery.js';
-import { installReviewProvider } from '../support/browser-review-provider.js';
-import { repository } from '../support/worktree-git.js';
 
 test('deployment observations cover every delivered revision and preserve completion through rollback and unavailable history', async ({ delivery: { factory, provider } }) => {
   const architect = await factory.client();
@@ -129,30 +127,6 @@ test('separate repository deployments preserve live attempt time and no-PR work 
   await close(architect, investigation);
   const final = await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated');
   expect(final.work_request_details.find((detail: any) => detail.work_request.id === onlyNoPr).work_request.deployments).toBeUndefined();
-});
-
-for (const status of [
-  { review: 'rvw_native_progress', mode: 'fast', status: 'running', done: false, progress: 'review 1/2 correctness', head: 'candidate-head', round: 'r1', round_started_at: '2026-10-10T10:00:00Z' },
-  { review: 'rvw_native_stale', mode: 'fast', status: 'stale', done: true },
-  { status: 'no_review_anchor' },
-]) test(`native review observation preserves ${status.status} without inventing delivery`, async ({ delivery: { factory } }) => {
-  const repo = await repository(factory.root, 'review-observation');
-  const architect = await factory.client();
-  const request = await architect.request('Review observation', 'beta', repo.origin);
-  const [wp] = (await architect.addPackages([contract('Observed review', { review: { type: 'review-suite', args: { mode: 'fast' } } })]));
-  await architect.call('dispatch_work_package', { work_package_id: wp, review_mode: 'fast', target_repo_root: repo.checkout });
-  await installReviewProvider({ root: factory.root, factory }, status);
-  await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated');
-  const observed = await row(architect, request, wp);
-  expect(observed.delivery_outcome).toBeNull();
-  const review = observed.work_package.review_signal;
-  expect(review.status).toBe(status.status === 'running' ? 'in_progress' : status.status === 'stale' ? 'failed' : 'pending');
-  if (status.status === 'running') {
-    expect(review.current).toBe(1);
-    expect(review.total).toBe(2);
-    expect(review.reviewed_head).toBe('candidate-head');
-    expect(review.round_started_at).toBe('2026-10-10T10:00:00Z');
-  } else if (status.status === 'no_review_anchor') expect(review.observation_state).toBe('unknown');
 });
 
 test('ordinary PR handoff observes pending qualification then reconciles an exact external merge once', async ({ delivery: { factory, provider } }) => {

@@ -61,7 +61,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.RateGovernor do
 
   @doc "Records the budget headers of a successful or ordinary failed answer."
   @spec record(credential(), headers(), integer()) :: :ok
-  def record(credential, headers, now_ms \\ now_ms()) do
+  def record(credential, headers, now_ms \\ now_ms()), do: locked(credential, fn -> record_locked(credential, headers, now_ms) end)
+
+  defp record_locked(credential, headers, now_ms) do
     state = get(credential)
     state = if state.paused_until <= now_ms, do: %{state | backoff_ms: nil}, else: state
 
@@ -79,7 +81,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.RateGovernor do
   paused until.
   """
   @spec penalize(credential(), headers(), integer()) :: integer()
-  def penalize(credential, headers, now_ms \\ now_ms()) do
+  def penalize(credential, headers, now_ms \\ now_ms()), do: locked(credential, fn -> penalize_locked(credential, headers, now_ms) end)
+
+  defp penalize_locked(credential, headers, now_ms) do
     state = get(credential)
 
     state =
@@ -188,6 +192,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.RateGovernor do
       end
     end
   end
+
+  # Concurrent requests on one credential update its state one at a time, so a
+  # late success never overwrites a newer pause.
+  defp locked(credential, fun), do: :global.trans({__MODULE__, credential}, fun, [node()])
 
   defp put(credential, state) do
     create_table()

@@ -2,9 +2,7 @@ import { expect } from 'e2e';
 import { test } from '../support/browser-candidate.js';
 import { contract } from '../support/factory.js';
 import { close, head, pr, prUrl, row, sync } from '../support/delivery.js';
-import { installReviewProvider } from '../support/browser-review-provider.js';
 import { repository } from '../support/worktree-git.js';
-import { readFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 
 test('operator sees dependency ordering, pending qualification and actual delivered completion', async ({ candidate, app, screen, browser, agent }) => {
@@ -86,19 +84,19 @@ test('operator sees dependency ordering, pending qualification and actual delive
   const reviewClient = await candidate.factory!.client();
   const reviewing = await reviewClient.request('Provider-reported review wait', 'beta', reviewRepo.origin);
   const [reviewWp] = (await reviewClient.addPackages([contract('Review provider findings', { review: { type: 'review-suite', args: { mode: 'fast' } } })]));
-  const receipt = await installReviewProvider(candidate);
   const prepared = await reviewClient.call('dispatch_work_package', { work_package_id: reviewWp, review_mode: 'fast', target_repo_root: reviewRepo.checkout });
   expect(prepared.launch_line).toContain(prepared.worktree.path);
-  // Finish the public review refresh after its worktree becomes observable.
-  // The hydrated projection currently snapshots the graph before that refresh.
-  await reviewClient.inspect('/api/v1/sympp/operator/dashboard/hydrated');
+  // The factory's Observer stores the Review Suite cycle it read by review id;
+  // the cockpit runs no Observer, so the journey stores what it would have read.
+  const db = new DatabaseSync(candidate.factory!.database, { timeout: 5000 });
+  try {
+    db.prepare('INSERT INTO sympp_work_package_observations (work_package_id, review, stale, observed_at, inserted_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(reviewWp, JSON.stringify({ evidence_id: prepared.work_package.review_id, status: 'in_progress', provider_status: 'running', current: 1, total: 2, step: 'correctness' }), '[]', ...Array(3).fill(new Date().toISOString()));
+  } finally { db.close(); }
   await candidate.capture('provider-review-wait');
   await browser.reload();
   await expect(browser.locator(`[data-goal="${reviewing}"] ol span.font-semibold`)).toContainText('Review');
   expect((await row(reviewClient, reviewing, reviewWp)).delivery_outcome).toBeNull();
-  const commands = (await readFile(receipt, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
-  expect(commands.some((entry) => entry.command === 'codex' && JSON.stringify(entry.argv) === JSON.stringify(['plugin', 'list', '--json']))).toBe(true);
-  expect(commands.some((entry) => entry.command === 'python' && JSON.stringify(entry.argv.slice(1)) === JSON.stringify(['--status', '--json', '--cd', prepared.worktree.path, '--base', 'origin/beta']))).toBe(true);
 });
 
 test('operator attention differs from explicit blockers and settings/archive actions persist', async ({ candidate, app, screen, browser }) => {

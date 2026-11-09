@@ -8,7 +8,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
     * a dispatched package qualifies when every predicate holds for the
       current head, no readiness gate (active blocker, missing evidence or
       findings) is open and no input is unknown;
-    * a ready package unqualifies when a predicate is known to be false;
+    * a ready package unqualifies when a predicate is known to be false, or
+      its PR now targets another base branch;
     * an unknown input (CI that reports nothing to the poller, a review host
       that can't be read) blocks qualifying and never unqualifies.
   """
@@ -28,7 +29,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
           required(:ci_status) => String.t() | nil,
           required(:review) => review(),
           required(:head_sha) => String.t() | nil,
-          optional(:manual?) => boolean()
+          optional(:manual?) => boolean(),
+          optional(:base_matches?) => boolean()
         }
   @type decision :: :qualify | {:unqualify, [String.t()]} | {:hold, [String.t()]}
 
@@ -102,8 +104,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
 
   defp decision(%WorkPackage{} = package, facts, gates) do
     unknown = unknown_inputs(facts)
-    reasons = reasons(Lifecycle.qualification(facts))
-    definite = reasons(Lifecycle.qualification(assume_known(facts)))
+    scope = if Map.get(facts, :base_matches?) == false, do: ["pr_base_mismatch"], else: []
+    reasons = reasons(Lifecycle.qualification(facts)) ++ scope
+    definite = reasons(Lifecycle.qualification(assume_known(facts))) ++ scope
 
     cond do
       Lifecycle.dispatched?(package) and reasons == [] and gates == [] and unknown == [] -> :qualify
