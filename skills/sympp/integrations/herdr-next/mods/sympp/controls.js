@@ -32,7 +32,7 @@ const UNDELIVERED = {
 export function undeliveredNote(payload) {
   const delivery = payload?.delivery;
   if (!delivery || delivery.state !== "not_delivered") return null;
-  return `Answer saved, but ${UNDELIVERED[delivery.reason] ?? "it wasn't delivered"}. The agent can read it on the task.`;
+  return `Answer saved, but ${UNDELIVERED[delivery.reason] ?? "it wasn't delivered"}. The agent can still read it.`;
 }
 
 // A refusal in words: what the route said, then what to do about it when it names a next step.

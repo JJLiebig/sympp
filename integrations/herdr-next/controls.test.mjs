@@ -201,7 +201,7 @@ test('native actions send JSON-only requests and surface persisted success or ac
   await C.postAction(endpoint, question.route, C.answerBody(question, 'api_first', 'Include docs'));
   await assert.rejects(C.postAction(endpoint, question.route, { answer: 'stale' }), { message: 'This ask is already answered.' });
   await assert.rejects(C.postAction(endpoint, '/api/v1/sympp/herdr/work-requests/wr1/complete', {}), { message: 'WorkRequest is archived. Restore the task, then try again.' }, 'the next step in words, not its code');
-  assert.equal(C.undeliveredNote({ delivery: { state: 'not_delivered', reason: 'terminal_finished' } }), 'Answer saved, but the asking terminal has finished. The agent can read it on the task.');
+  assert.equal(C.undeliveredNote({ delivery: { state: 'not_delivered', reason: 'terminal_finished' } }), 'Answer saved, but the asking terminal has finished. The agent can still read it.');
   assert.equal(C.undeliveredNote({ delivery: { state: 'delivered' } }), null);
   assert.equal(received[0].body.title, 'New job');
   assert.equal(received[1].url, '/api/v1/sympp/herdr/asks/q%201/answer');
