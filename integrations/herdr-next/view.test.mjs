@@ -106,7 +106,7 @@ test('a task shows its phase and owner, its packages at work under their groups 
       'owner-pkg-r-4', 'fold-Landed:wr-restore', 'fold-Up next:wr-restore', 'pr-step-r-4', 'review-r-4'])
       assert.ok(view.has(id), `${id} at ${width}`);
     assert.equal(view.has('pkg-r-1') || view.has('pkg-r-9'), false, 'ended and planned packages are folded');
-    assert.ok(view.text('Build') && view.text('Review') && view.text('Merge') && view.text('deep r3 · 50m') && view.text('r2 · 35m'));
+    assert.ok(view.text('Build') && view.text('Review') && view.text('Merge') && view.text('deep r3 · 50m') && view.text('r2 · findings'));
     assert.equal(view.text('Checks'), width === 1400, 'narrow, a package shows only its current stage');
     assert.equal(view.has('finish-r-4') || view.has('restore-wr-restore') || view.has('archive-wr-restore'), false, 'no Finish for a PR into its own repository; no Archive or Restore while open');
     const at = (id) => view.out.indexOf(`:id[Str("${id}")]`);

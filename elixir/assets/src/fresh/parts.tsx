@@ -72,7 +72,8 @@ export function Lifecycle({ view }: { view: PkgView }) {
   );
 }
 
-// How long the package has been in its stage; under review, the round and how long it has run.
+// How long the package has been in its stage; under review, the round and how long it has run, or
+// once the round has ended, how it ended.
 // Right-aligned with tabular figures so the times line up.
 export function StageStatus({ at, view }: { at: number; view: PkgView }) {
   const { pkg } = view;
@@ -86,7 +87,7 @@ export function StageStatus({ at, view }: { at: number; view: PkgView }) {
     return (
       <span className={`${cell} ${words.tone}`} title={`Review: ${words.text}`}>
         {MODE_WORD[review.mode!] ?? ""}r{Math.max(1, review.round)}
-        {from === null ? "" : ` · ${span(at - from)}`}
+        {review.state !== "running" ? ` · ${review.state}` : from === null ? "" : ` · ${span(at - from)}`}
       </span>
     );
   }

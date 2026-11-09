@@ -56,11 +56,12 @@ export function lifecycleSlot(pkg) {
 const MODE_WORD = { deep: "deep ", fast: "fast " };
 
 // The status column: how long the package has been in its stage, or under review its round and how
-// long that round has run ("deep r6 · 26m").
+// long that round has run ("deep r6 · 26m"), or once the round has ended, how ("r2 · findings").
 export function lifecycleStatus(pkg, now) {
   if (lifecycleSlot(pkg) !== REVIEW_SLOT) return pkg.untimed || pkg.since === null ? "" : span(now - pkg.since);
   const from = pkg.review.roundStartedAt ?? pkg.review.startedAt ?? (pkg.untimed ? null : pkg.since);
   const round = `${MODE_WORD[pkg.review.mode] ?? ""}r${Math.max(1, pkg.review.round)}`;
+  if (pkg.review.state !== "running") return `${round} · ${pkg.review.state}`;
   return from === null ? round : `${round} · ${span(now - from)}`;
 }
 
