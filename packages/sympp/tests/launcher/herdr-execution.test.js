@@ -147,6 +147,24 @@ test("Claude waits for a cooperating writer and merges its latest config", async
   assert.equal(fs.existsSync(`${file}.lock`), false);
 }));
 
+test("Claude re-reads and retries one failed verification, then refuses persistent interference", async () => scenario(async ({ root, task, run, state }) => {
+  const hook = count => `(function(){const fs=require("node:fs");const rename=fs.renameSync;let writes=0;fs.renameSync=(from,to)=>{rename(from,to);if(to.endsWith(".claude.json")&&++writes<=${count}){const config=JSON.parse(fs.readFileSync(to,"utf8"));for(const item of Object.values(config.projects))item.hasTrustDialogAccepted=false;config.concurrent="preserved";fs.writeFileSync(to,JSON.stringify(config));}};})();`;
+  const args = ["launch", "--provider", "claude", "--task", task, "--cwd", root];
+  const result = await run(args, hook(1));
+  assert.equal(result.code, 0);
+  const file = path.join(process.env.CLAUDE_CONFIG_DIR, ".claude.json");
+  const after = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.equal(after.concurrent, "preserved");
+  assert.ok(Object.values(after.projects).some(project => project.hasTrustDialogAccepted === true));
+  for (const project of Object.values(after.projects)) project.hasTrustDialogAccepted = false;
+  fs.writeFileSync(file, JSON.stringify(after));
+  const denied = await run([...args, "--attempt", "contended"], hook(2));
+  assert.equal(denied.body.error, "workspace_trust_unverified");
+  assert.equal(state().runs, 1, "an unverified trust edit cannot start a worker");
+  assert.equal(fs.existsSync(`${file}.lock`), false);
+  assert.equal(fs.readdirSync(path.dirname(file)).some(name => name.endsWith(".tmp")), false);
+}));
+
 test("hand-started MCP bridges report native identity and require an authenticated live process", async () => scenario(async ({ root, task, state, save, run, connect }) => {
   const launched = await run(["launch", "--provider", "claude", "--task", task, "--cwd", root]);
   const original = { ...state().terminal.labels };
@@ -243,3 +261,18 @@ test("hand-started MCP bridges report native identity and require an authenticat
     await new Promise(resolve => server.close(resolve));
   }
 }));
+
+test("standalone and unavailable-core reporters preserve MCP calls without inventing bindings", async () => {
+  const request = JSON.stringify({ method: "tools/call", params: { name: "read_work_request", arguments: {}, _meta: { extra: true } } });
+  const standalone = createReporter({}, () => { throw new Error("must not contact a core"); });
+  assert.equal(JSON.parse(await standalone.attach(request)).params._meta.herdr, undefined);
+  assert.equal(standalone.terminal(), null);
+  const unavailable = createReporter({ HC_TERMINAL_ID: "t2", HC_TERMINAL_SOCKET: "private" }, () => ({
+    call: async () => { throw new Error("core unavailable"); }, close() {},
+  }));
+  const forwarded = JSON.parse(await unavailable.attach(request));
+  assert.equal(forwarded.params._meta.extra, true);
+  assert.deepEqual(forwarded.params.arguments, {});
+  assert.equal(forwarded.params._meta.herdr, undefined);
+  assert.equal(unavailable.terminal(), null);
+});

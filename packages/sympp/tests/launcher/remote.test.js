@@ -67,3 +67,27 @@ test("remote bridge authenticates, never repeats a mutation the factory may have
   assert.equal(denied.replies.length, 0);
   assert.equal(received.filter(r => r.url === "/mcp").length, postsBeforeDenial);
 });
+
+test("an unknown factory ownership capability stops the bridge before any MCP call", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sympp-unknown-owner-"));
+  let posts = 0;
+  const server = http.createServer((req, res) => {
+    if (req.method === "POST") posts++;
+    res.end(JSON.stringify({ status: "ok", ledger: { reachable: true }, source: { mcp_contract: { fingerprint: "a".repeat(64) } } }));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const env = { ...process.env, HOME: root, USERPROFILE: root, SYMPP_HOME: root,
+    SYMPP_SERVER_URL: `http://127.0.0.1:${server.address().port}`, HC_TERMINAL_ID: "", HC_TERMINAL_SOCKET: "" };
+  delete env.SYMPP_SERVER_TOKEN_FILE;
+  const child = spawn(process.execPath, [path.resolve(__dirname, "../../scripts/start-sympp-mcp-bridge.js")], { env, stdio: ["pipe", "pipe", "pipe"] });
+  let stderr = "";
+  child.stderr.on("data", chunk => { stderr += chunk; });
+  child.stdout.resume();
+  child.stdin.on("error", () => {});
+  child.stdin.end(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "create_work_request", arguments: {} } }) + "\n");
+  const exit = await new Promise((resolve, reject) => { child.once("exit", resolve); child.once("error", reject); });
+  assert.notEqual(exit, 0);
+  assert.match(stderr, /could not determine repository ownership/);
+  assert.equal(posts, 0);
+});
