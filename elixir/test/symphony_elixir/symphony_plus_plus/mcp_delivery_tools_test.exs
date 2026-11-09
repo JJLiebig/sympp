@@ -140,7 +140,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     # Several connections, as in production, so the closes' transactions overlap.
     [path] = for [_seq, "main", path] <- repo.query!("PRAGMA database_list").rows, do: path
-    pool = start_supervised!(Supervisor.child_spec({Repo, database: path, name: nil, pool_size: 4, log: false}, id: :race_pool))
+    pool_spec = Supervisor.child_spec({Repo, database: path, name: nil, pool_size: 4, log: false}, id: :race_pool)
+    pool = start_supervised!(pool_spec)
 
     endings =
       for address <- ["t4", "t5", "t6"] do

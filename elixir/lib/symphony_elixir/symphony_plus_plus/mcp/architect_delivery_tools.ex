@@ -109,25 +109,46 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   defp same_close?(_existing, _attrs), do: false
 
-  # A concurrent identical close that committed first is still this close.
-  defp record_close(repo, work_request_id, work_package_id, attrs, terminal) do
-    case mutate_product_tree(repo, work_request_id, "close_work_package", terminal_name(terminal), fn ->
-           DeliveryCloseout.record_in_transaction(repo, work_request_id, work_package_id, attrs)
-         end) do
+  # A concurrent identical close that committed first is still this close: the
+  # later one fails with a conflict, or with a busy ledger when its read went
+  # stale, and then finds the ending already recorded. A busy ledger with no
+  # ending yet is retried a few times before it is reported.
+  defp record_close(repo, work_request_id, work_package_id, attrs, terminal, attempts \\ 3) do
+    case closeout(repo, work_request_id, work_package_id, attrs, terminal) do
       {:ok, {delivery, cleanup_work_package, closeout_context}} ->
         DashboardPubSub.broadcast_changed()
         :ok = DeliveryCloseout.cleanup_after_commit(repo, cleanup_work_package, delivery, closeout_context)
         {:ok, delivery}
 
-      {:error, {:delivery_outcome_conflict, _outcome}} = conflict ->
+      {:error, reason} = error when reason == :database_busy or elem(reason, 0) == :delivery_outcome_conflict ->
         case recorded_same_close(repo, work_package_id, attrs) do
-          {:ok, existing} -> {:ok, existing}
-          :none -> conflict
+          {:ok, existing} ->
+            {:ok, existing}
+
+          :none when reason == :database_busy and attempts > 1 ->
+            Process.sleep(Enum.random(20..100))
+            record_close(repo, work_request_id, work_package_id, attrs, terminal, attempts - 1)
+
+          :none ->
+            error
         end
 
       error ->
         error
     end
+  end
+
+  defp closeout(repo, work_request_id, work_package_id, attrs, terminal) do
+    mutate_product_tree(repo, work_request_id, "close_work_package", terminal_name(terminal), fn ->
+      DeliveryCloseout.record_in_transaction(repo, work_request_id, work_package_id, attrs)
+    end)
+  rescue
+    error in Exqlite.Error -> if busy?(error), do: {:error, :database_busy}, else: reraise(error, __STACKTRACE__)
+  end
+
+  defp busy?(%Exqlite.Error{message: message}) do
+    message = String.downcase(message)
+    String.contains?(message, "busy") or String.contains?(message, "locked")
   end
 
   defp close_outcome(arguments) do
@@ -231,11 +252,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   defp terminal_name(%Terminal{display_address: address}), do: address
 
-  # Immediate: concurrent closes of one package take the write lock in turn, so
-  # the later one reads the ending the earlier one recorded.
   defp run_architect_transaction(repo, fun, notify?) do
     result =
-      case repo.transaction(fn -> rollback_architect_transaction_result(repo, fun.()) end, mode: :immediate) do
+      case repo.transaction(fn -> rollback_architect_transaction_result(repo, fun.()) end) do
         {:ok, result} -> {:ok, result}
         {:error, {:tool_error, reason}} -> {:tool_error, reason}
         {:error, {:error, reason}} -> {:error, reason}
