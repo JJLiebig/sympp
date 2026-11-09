@@ -384,9 +384,9 @@ card's terminal. The answer result names `card_id` instead of
 `work_request_id`. Ending a card withdraws its open asks. A dismissed, merged or
 done card opens again as `working` or `review_ci` when its live terminal starts
 work on another branch. `merged`, `done` and `dismissed` cards leave the list
-`card_retention_days` after they ended, and the ledger then too, unless their
-terminal is still live: that ended card stays recorded so its branch isn't
-taken for new work.
+`card_retention_days` after they ended. They leave the ledger then too, once the
+factory's herdr-core reports their terminal finished; until then the ended card
+stays recorded so its branch isn't taken for new work.
 
 ## Review descendants
 

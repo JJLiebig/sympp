@@ -2599,6 +2599,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   test "ended cards drop off the board and the ledger after the card retention window", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       assert {:ok, _settings} = OperatorSettingsRepository.update(repo, %{"card_retention_days" => 1})
+      # The factory's core reports these terminals finished.
+      Application.put_env(:symphony_elixir, :sympp_herdr_core, fn -> {:ok, %{core_id: "core", terminals: %{}}} end)
+      on_exit(fn -> Application.put_env(:symphony_elixir, :sympp_herdr_core, nil) end)
 
       now = DateTime.utc_now(:microsecond)
       long_ago = DateTime.add(now, -3 * 24 * 60 * 60, :second)

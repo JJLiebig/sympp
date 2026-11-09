@@ -376,8 +376,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
       end
 
     stale = if(match?({:error, _reason}, github), do: ["github"], else: []) ++ if(review == :unknown, do: ["review"], else: [])
-    Map.merge(live, %{stale: stale, review: review_payload(review, card && card.review)})
+    Map.merge(live, %{stale: stale, review: review_payload(review, previous_review(card, Map.get(live, :review_id, card && card.review_id)))})
   end
+
+  # Review evidence belongs to one cycle: a new review id starts with none.
+  defp previous_review(%Card{review_id: id, review: review}, id), do: review
+  defp previous_review(_card, _review_id), do: nil
 
   defp pr({:ok, %{} = pr}), do: Map.take(pr, ~w(repository number url state draft merged merged_at head_sha branch base_branch ci github_review))
   defp pr(_none_or_unknown), do: nil
@@ -518,9 +522,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
 
   @doc """
   Deletes cards that ended more than `retention_days` ago, with their asks and
-  worked-on rows. A card whose terminal the factory's core still sees live is
-  kept, so its ended branch isn't taken for new work; it has already left the
-  board (`list/3`).
+  worked-on rows. A card is deleted only once the factory's core reports its
+  terminal finished (or no longer knows its core); while the terminal is live
+  or its liveness is unknown the card is kept, so its ended branch isn't taken
+  for new work. It has already left the board (`list/3`).
   """
   @spec delete_expired(repo(), pos_integer(), DateTime.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def delete_expired(repo, retention_days, now \\ DateTime.utc_now(:microsecond)) when is_integer(retention_days) do
@@ -529,7 +534,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
     repo.transaction(fn ->
       ids =
         repo.all(from(card in Card, where: card.state in ^@ended and card.ended_at <= ^cutoff, select: {card.id, card.terminal_key}))
-        |> Enum.reject(fn {_id, key} -> terminal_live?(key) end)
+        |> Enum.filter(fn {_id, key} -> terminal_gone?(key) end)
         |> Enum.map(&elem(&1, 0))
 
       Asks.delete_for_cards(repo, ids)
@@ -544,10 +549,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
     end
   end
 
-  defp terminal_live?(key) do
+  defp terminal_gone?(key) do
     case Terminal.split_key(key) do
-      {core_id, address} -> match?({:live, _record}, HerdrCore.view(core_id, address))
-      :error -> false
+      {core_id, address} -> HerdrCore.view(core_id, address, confirm: true) in [:finished, :unseen]
+      :error -> true
     end
   end
 

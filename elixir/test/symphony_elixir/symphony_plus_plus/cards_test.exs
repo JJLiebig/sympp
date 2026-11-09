@@ -112,6 +112,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CardsTest do
     assert [%{"state" => "done", "stale" => []}] = list(repo)
   end
 
+  test "a new review id never shows the previous cycle's result", %{repo: repo} do
+    labelled = fn id -> [chief("t0"), child("t1", "t0", %{"sympp.review_id" => id})] end
+    passed = {:ok, %{"done" => true, "status" => "passed", "reviewed_head" => "h1"}}
+    sweep(repo, labelled.("rvw_one"), %{head("feature-1") => {:ok, pr(7, "open")}}, review: fn _id, _machine -> passed end)
+    assert [%{"review" => %{"id" => "rvw_one", "state" => "done"}}] = list(repo)
+
+    sweep(repo, labelled.("rvw_two"), %{{:pr, "acme", "app", 7} => {:ok, pr(7, "open")}}, review: fn _id, _machine -> :unknown end)
+    assert [%{"review" => %{"id" => "rvw_two", "state" => "unknown"} = review, "stale" => ["review"]}] = list(repo)
+    refute Map.has_key?(review, "status")
+  end
+
   test "a closed PR ends the card; a new branch in the same terminal opens it again", %{repo: repo} do
     terminals = [chief("t0"), child("t1", "t0")]
     sweep(repo, terminals, %{head("feature-1") => {:ok, pr(9, "open")}})
@@ -216,6 +227,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CardsTest do
 
     sweep(repo, terminals, %{head("feature-1") => {:ok, nil}})
     assert [%{"state" => "dismissed"}] = list(repo)
+
+    # Liveness unknown: the card is kept too.
+    Application.put_env(:symphony_elixir, :sympp_herdr_core, nil)
+    assert {:ok, 0} = Cards.delete_expired(repo, 30, later)
 
     Application.put_env(:symphony_elixir, :sympp_herdr_core, fn -> core([Map.put(child("t1", "t0"), "state", "finished")]) end)
     assert {:ok, 1} = Cards.delete_expired(repo, 30, later)
