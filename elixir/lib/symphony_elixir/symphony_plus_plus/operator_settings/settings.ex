@@ -42,7 +42,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings do
   @default_never_started_archive_after_days 30
   @default_card_retention_days 30
   @default_open_dashboard_on_boot true
-  @default_capture_failed_mcp_calls false
   @max_work_request_archive_after_days 3650
 
   @primary_key {:id, :string, autogenerate: false}
@@ -52,7 +51,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings do
           work_request_never_started_archive_after_days: pos_integer(),
           card_retention_days: pos_integer(),
           open_dashboard_on_boot: boolean(),
-          capture_failed_mcp_calls: boolean(),
           hidden_work_package_ids: [String.t()],
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
@@ -63,7 +61,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings do
     field(:work_request_never_started_archive_after_days, :integer, default: @default_never_started_archive_after_days)
     field(:card_retention_days, :integer, default: @default_card_retention_days)
     field(:open_dashboard_on_boot, :boolean, default: @default_open_dashboard_on_boot)
-    field(:capture_failed_mcp_calls, :boolean, default: @default_capture_failed_mcp_calls)
     field(:hidden_work_package_ids, HiddenWorkPackageIdList, default: [])
 
     timestamps(type: :utc_datetime_usec)
@@ -89,7 +86,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings do
       work_request_never_started_archive_after_days: @default_never_started_archive_after_days,
       card_retention_days: @default_card_retention_days,
       open_dashboard_on_boot: @default_open_dashboard_on_boot,
-      capture_failed_mcp_calls: @default_capture_failed_mcp_calls,
       hidden_work_package_ids: []
     }
   end
@@ -114,7 +110,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings do
       :work_request_never_started_archive_after_days,
       :card_retention_days,
       :open_dashboard_on_boot,
-      :capture_failed_mcp_calls,
       :hidden_work_package_ids
     ])
     |> validate_required([
@@ -122,8 +117,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings do
       :work_request_archive_after_days,
       :work_request_never_started_archive_after_days,
       :card_retention_days,
-      :open_dashboard_on_boot,
-      :capture_failed_mcp_calls
+      :open_dashboard_on_boot
     ])
     |> validate_number(:work_request_archive_after_days,
       greater_than_or_equal_to: 1,

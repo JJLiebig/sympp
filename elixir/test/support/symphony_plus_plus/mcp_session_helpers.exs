@@ -108,7 +108,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.SessionHelpers do
 
       %{
         id: Map.get(response, "id"),
-        error: get_in(response, ["error", "data", "reason"]) || get_in(response, ["error", "message"]),
+        error: get_in(response, ["error", "data", "code"]) || get_in(response, ["error", "data", "reason"]) || get_in(response, ["error", "message"]),
         result_keys: if(is_map(result), do: Map.keys(result), else: [])
       }
     end)

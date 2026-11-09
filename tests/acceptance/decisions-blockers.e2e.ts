@@ -92,7 +92,7 @@ test('an ask on a package is withdrawn when the package ends, and only the asker
   const stranger = await factory.client();
   await stranger.reject('resolve_ask', { ask_id: onRequest.id, to: 'withdrawn' }, 'not_asker_or_owner');
   expect((await architect.call('resolve_ask', { ask_id: onRequest.id, to: 'withdrawn' })).ask.state).toBe('withdrawn');
-  await architect.call('skip_work_package', { work_package_id: wp });
+  await architect.call('close_work_package', { work_package_id: wp, outcome: 'skipped' });
   const read = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
   expect(read.asks.find((entry: any) => entry.id === onPackage.id).state).toBe('withdrawn');
   await chief.reject('ask', { work_request_id: id, work_package_id: wp, question: 'Too late?' }, 'work_package_ended');

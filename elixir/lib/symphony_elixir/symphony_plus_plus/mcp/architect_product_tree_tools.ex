@@ -32,11 +32,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   @work_package_authoring_states ["planned", "dispatched"]
 
-  @tools [
-    "record_decision",
-    "edit_plan",
-    "skip_work_package"
-  ]
+  @tools ["record_decision", "edit_plan"]
 
   @spec tools() :: [String.t()]
   def tools, do: @tools
@@ -104,52 +100,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  def call("skip_work_package", %Config{} = config, terminal, arguments) do
-    tool = "skip_work_package"
-
-    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
-         {:ok, work_request, work_package, _filters, scope} <-
-           scoped_work_package(config.repo, work_request_id, work_package_id),
-         :ok <- require_work_package_authoring_status(work_request, work_package.contract_revision),
-         :ok <- require_mutable_work_package_contract(work_package),
-         {:ok, work_package} <-
-           mutate_product_tree(config.repo, work_request_id, tool, terminal_name(terminal), fn ->
-             WorkRequestService.skip_work_package(config.repo, work_request_id, work_package_id)
-           end) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_package_id" => work_package.id,
-         "scope" => scope,
-         "status" => %{"work_package_status" => work_package.status}
-       })}
-    else
-      {:tool_error, reason} -> invalid_params_error(tool, reason)
-      {:error, :not_found} -> not_found_error(tool)
-      {:error, reason} -> architect_error(reason, tool)
-    end
-  end
-
   defp flag_argument(arguments) do
     case Map.get(arguments, "flag", false) do
       flag when is_boolean(flag) -> {:ok, flag}
       _flag -> {:tool_error, "invalid_flag"}
-    end
-  end
-
-  defp require_work_package_authoring_status(%WorkRequest{archived_at: %DateTime{}}, revision),
-    do: {:error, {:work_request_archived, revision}}
-
-  defp require_work_package_authoring_status(%WorkRequest{operator_completed_at: %DateTime{}}, revision),
-    do: {:error, {:work_request_terminal, "done", revision}}
-
-  defp require_work_package_authoring_status(%WorkRequest{}, _revision), do: :ok
-
-  defp require_mutable_work_package_contract(%WorkPackage{status: status} = work_package) do
-    cond do
-      Lifecycle.ended?(work_package) -> {:error, {:work_package_terminal, status, work_package.contract_revision}}
-      Lifecycle.ready?(work_package) -> {:error, {:contract_frozen, status, work_package.contract_revision}}
-      true -> :ok
     end
   end
 
@@ -206,7 +160,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   defp op_error_details({:contract_frozen, revision}),
     do:
       {%{"state" => "ready", "current_revision" => revision},
-       "A ready package's contract is frozen. Add a successor with edit_plan add_package, then end this one with record_work_package_delivery outcome: superseded."}
+       "A ready package's contract is frozen. Add a successor with edit_plan add_package, then end this one with close_work_package outcome: superseded."}
 
   defp op_error_details({:work_package_ended, revision}),
     do: {%{"state" => "ended", "current_revision" => revision}, "An ended package cannot change. Add a successor with edit_plan add_package."}
@@ -313,7 +267,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   end
 
   defp product_tree_revision_reason("edit_plan"), do: "Plan edited through MCP."
-  defp product_tree_revision_reason("skip_work_package"), do: "WorkPackage skipped in product tree through MCP."
 
   defp run_architect_transaction(repo, fun) do
     case repo.transaction(fn -> rollback_architect_transaction_result(repo, fun.()) end) do
@@ -337,31 +290,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  defp scoped_work_package(repo, work_request_id, work_package_id) do
-    case WorkRequestScope.work_package_scope(repo, work_request_id, work_package_id) do
-      {:ok, work_request, work_package} ->
-        scope = WorkRequestPayloads.redacted_work_request_scope(work_request)
-        {:ok, work_request, work_package, %{}, scope}
-
-      error ->
-        error
-    end
-  end
-
   defp architect_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
   defp architect_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)
 
   defp architect_error({:work_request_archived, revision}, tool) do
-    ErrorDetails.lifecycle_error(tool, :work_request_archived, optional_put(%{"phase" => "archived"}, "current_contract_revision", revision))
+    ErrorDetails.lifecycle_error(tool, :work_request_archived, optional_put(%{"state" => "archived"}, "current_contract_revision", revision))
   end
 
   defp architect_error({:work_request_terminal, phase, revision}, tool) do
-    ErrorDetails.lifecycle_error(tool, :work_request_terminal, optional_put(%{"phase" => phase}, "current_contract_revision", revision))
+    ErrorDetails.lifecycle_error(tool, :work_request_terminal, optional_put(%{"state" => phase}, "current_contract_revision", revision))
   end
 
   defp architect_error({:contract_frozen, status, revision}, tool) do
     ErrorDetails.lifecycle_error(tool, :contract_frozen, %{
-      "actual_status" => reason_text(status),
+      "state" => reason_text(status),
       "allowed_authoring_states" => @work_package_authoring_states,
       "current_contract_revision" => revision
     })
@@ -370,8 +312,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   defp architect_error({reason, status, revision}, tool)
        when reason in [:contract_revision_conflict, :work_package_terminal] do
     ErrorDetails.lifecycle_error(tool, reason, %{
-      "actual_status" => reason_text(status),
-      "allowed_authoring_states" => if(tool == "skip_work_package", do: ["planned"], else: @work_package_authoring_states),
+      "state" => reason_text(status),
+      "allowed_authoring_states" => @work_package_authoring_states,
       "current_contract_revision" => revision
     })
   end
@@ -383,7 +325,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   defp architect_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
 
   defp architect_error(:work_request_archived, tool),
-    do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"phase" => "archived"})
+    do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"state" => "archived"})
 
   defp architect_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 

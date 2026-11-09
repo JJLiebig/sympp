@@ -45,7 +45,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.EditPlanTest do
       ])
 
     assert %{"code" => -32_602, "data" => data} = response["error"]
-    assert %{"op_index" => 2, "op" => "update_package", "reason" => "revision_conflict", "state" => "planned", "current_revision" => 1} = data
+    assert %{"op_index" => 2, "op" => "update_package", "code" => "revision_conflict", "state" => "planned", "current_revision" => 1} = data
     assert data["next_action"] =~ "expected_revision 1"
 
     assert [%WorkPackage{id: id, title: title}] = repo.all(from(package in WorkPackage, where: package.work_request_id == ^work_request.id))
@@ -59,10 +59,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.EditPlanTest do
 
     for patch <- [%{"goal" => "  "}, %{"acceptance_criteria" => ["  "]}, %{"validation_steps" => nil}] do
       response = edit_plan(repo, work_request.id, [update_op(package, patch)])
-      assert %{"op_index" => 0, "reason" => "incomplete_contract", "missing" => [_ | _]} = response["error"]["data"]
+      assert %{"op_index" => 0, "code" => "incomplete_contract", "missing" => [_ | _]} = response["error"]["data"]
     end
 
-    assert %{"error" => %{"data" => %{"reason" => "invalid_work_package", "validation_errors" => [%{"field" => "group"}]}}} =
+    assert %{"error" => %{"data" => %{"code" => "invalid_work_package", "validation_errors" => [%{"field" => "group"}]}}} =
              edit_plan(repo, work_request.id, [update_op(package, %{"group" => "Backend // Billing"})])
 
     response = edit_plan(repo, work_request.id, [update_op(package, %{"title" => "Renamed", "group" => nil})])
@@ -85,7 +85,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.EditPlanTest do
 
     response = edit_plan(repo, work_request.id, [update_op(package, %{"title" => "Changed"})])
 
-    assert %{"op_index" => 0, "reason" => "contract_frozen", "state" => "ready"} = response["error"]["data"]
+    assert %{"op_index" => 0, "code" => "contract_frozen", "state" => "ready"} = response["error"]["data"]
     assert response["error"]["data"]["next_action"] =~ "superseded"
   end
 
@@ -105,9 +105,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.EditPlanTest do
     edit_plan!(repo, work_request.id, [Map.put(pair, "op", "remove_dependency")])
     assert repo.all(DependencyEdge) == []
 
-    assert %{"op_index" => 0, "reason" => "dependency_not_found"} = edit_plan(repo, work_request.id, [Map.put(pair, "op", "remove_dependency")])["error"]["data"]
+    assert %{"op_index" => 0, "code" => "dependency_not_found"} = edit_plan(repo, work_request.id, [Map.put(pair, "op", "remove_dependency")])["error"]["data"]
 
-    assert %{"reason" => "unknown_work_package", "work_package_ref" => "nope"} =
+    assert %{"code" => "unknown_work_package", "work_package_ref" => "nope"} =
              edit_plan(repo, work_request.id, [%{"op" => "set_dependency", "from" => dependent.id, "to" => "nope"}])["error"]["data"]
   end
 
@@ -116,12 +116,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.EditPlanTest do
     package = add_package!(repo, work_request)
     edit_plan!(repo, work_request.id, [update_op(package, %{"title" => "Owned by t1"})])
 
-    assert %{"reason" => "owned_by_other_terminal"} = mcp_tool(repo, "t2", "edit_plan", plan_args(work_request.id, [add_op(title: "Intruder")]))["error"]["data"]
+    assert %{"code" => "owned_by_other_terminal"} = mcp_tool(repo, "t2", "edit_plan", plan_args(work_request.id, [add_op(title: "Intruder")]))["error"]["data"]
 
     repo.update_all(from(request in WorkRequest, where: request.id == ^work_request.id), set: [archived_at: DateTime.utc_now(:microsecond), archive_reason: "manual"])
 
     response = edit_plan(repo, work_request.id, [add_op(title: "Must not persist")])
-    assert %{"code" => -32_009, "data" => %{"reason" => "work_request_archived", "recovery" => %{"next_action" => "restore"}}} = response["error"]
+    assert %{"code" => -32_009, "data" => %{"code" => "work_request_archived", "state" => "archived", "next_action" => "restore"}} = response["error"]
     assert [_only] = repo.all(from(p in WorkPackage, where: p.work_request_id == ^work_request.id))
   end
 

@@ -411,7 +411,7 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
                stop_conditions: []
              })
 
-    assert {:ok, _skipped} = WorkRequestService.skip_work_package(Repo, request.id, slice.id)
+    assert {:ok, _skipped} = WorkRequestService.record_work_package_delivery(Repo, request.id, slice.id, %{"outcome" => "skipped", "idempotency_key" => "skip"})
 
     request
     |> Ecto.Changeset.change(operator_completed_at: utc_usec(completed_at))

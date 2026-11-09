@@ -4,14 +4,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{FailedCall, HTTPTransport}
-  alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
-  alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
 
   defmodule DiagnosticFailureRepo do
-    alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings
     alias SymphonyElixir.SymphonyPlusPlus.Repo
 
-    def get(Settings, id), do: Repo.get(Settings, id)
+    defdelegate insert_all(schema, rows, opts), to: Repo
 
     def get(_schema, _id) do
       case Process.get({__MODULE__, :failure}) do
@@ -21,303 +18,97 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
     end
   end
 
-  defmodule TelemetryFailureRepo do
-    alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings
-
-    def get(Settings, _id) do
-      case Process.get({__MODULE__, :failure}) do
-        :exit -> exit(:telemetry_secret_exit)
-        _raise -> raise "telemetry secret C:/private/provider-body"
-      end
-    end
+  defmodule CountingFailureRepo do
+    def insert_all(_schema, _rows, _opts), do: raise("ledger locked")
   end
 
   setup %{repo: repo} do
-    repo.delete_all(OperatorSettings)
-    FailedCall.reset()
+    repo.delete_all(FailedCall.Count)
     :ok
   end
 
-  test "failed tool diagnostics default off, redact values, and follow the setting immediately", %{repo: repo} do
-    secret = "Bearer argument-value-that-must-not-be-logged"
-    request = failed_health_request(secret)
+  test "every failed tool call is counted by day, tool, reason and layer, without its arguments", %{repo: repo} do
+    secret = "Bearer argument-value-that-must-not-be-stored"
 
-    {disabled_response, disabled_log} = capture_response(fn -> MCPHarness.request(request, repo: repo) end)
-    refute Map.has_key?(disabled_response["error"]["data"], "diagnostic_id")
-    refute disabled_log =~ "sympp_failed_mcp_call"
+    response = MCPHarness.request(failed_health_request(secret), repo: repo)
+    assert response["error"]["data"]["code"] == "invalid_tool_arguments"
+    assert MCPHarness.request(failed_health_request(secret), repo: repo)["error"]
 
-    assert {:ok, enabled_settings} = OperatorSettingsRepository.update(repo, %{"capture_failed_mcp_calls" => true})
-    changes_before = total_changes(repo)
+    unknown_tool = put_in(failed_health_request(secret), ["params", "name"], "tool-#{secret}")
+    assert MCPHarness.request(unknown_tool, repo: repo)["error"]["code"] == -32_601
 
-    {enabled_response, enabled_log} = capture_response(fn -> MCPHarness.request(request, repo: repo) end)
-    diagnostic_id = enabled_response["error"]["data"]["diagnostic_id"]
+    outside_herdr = tool_call("set_report", %{"work_request_id" => "WR-OUTSIDE-HERDR", "brief" => secret})
+    assert MCPHarness.request(outside_herdr, repo: repo)["error"]["data"]["code"] == "read_only_outside_herdr"
 
-    assert diagnostic_id =~ ~r/^mcpdiag_[0-9a-f]{16}$/
-    assert enabled_log =~ ~s("event":"sympp_failed_mcp_call")
-    assert enabled_log =~ ~s("diagnostic_id":"#{diagnostic_id}")
-    assert enabled_log =~ ~s("tool_name":"sympp.health")
-    assert enabled_log =~ ~s("argument_keys":["nested"])
-    assert enabled_log =~ ~s("unsafe_argument_name_count":1)
-    assert enabled_log =~ ~s("argument_keys_truncated":0)
-    assert enabled_log =~ ~s("error_classification":"invalid_params")
-    assert enabled_log =~ ~s("failure_layer":"tool")
-    assert enabled_log =~ ~s("failure_reason":"invalid_tool_arguments")
-    assert enabled_log =~ ~s("mcp_contract_fingerprint":)
-    assert enabled_log =~ ~s("source_revision":)
-    assert enabled_log =~ ~s("next_action":"fix_tool_arguments")
-    assert enabled_response["error"]["data"]["recovery"] == %{"next_action" => "fix_tool_arguments"}
-    refute enabled_log =~ secret
-    refute enabled_log =~ "bearer"
+    missing = tool_call("read_work_request", %{"work_request_id" => "missing-#{secret}"})
+    assert MCPHarness.request(missing, repo: repo)["error"]["code"] == -32_004
 
-    secret_tool_name = "tool-#{secret}"
-    unknown_tool_request = put_in(request, ["params", "name"], secret_tool_name)
+    protocol_error = %{"jsonrpc" => "2.0", "id" => "protocol", "method" => "unknown/method", "params" => %{}}
+    assert MCPHarness.request(protocol_error, repo: repo)["error"]["code"] == -32_601
 
-    {unknown_tool_response, unknown_tool_log} =
-      capture_response(fn -> MCPHarness.request(unknown_tool_request, repo: repo) end)
+    today = Date.utc_today() |> Date.to_iso8601()
 
-    assert is_binary(unknown_tool_response["error"]["data"]["diagnostic_id"])
-    assert unknown_tool_log =~ ~s("tool_name":"unknown")
-    refute unknown_tool_log =~ secret_tool_name
-    assert total_changes(repo) == changes_before
+    assert {:ok, %{"total" => 5, "failures" => failures}} = FailedCall.summary(repo, %{})
 
-    assert {:ok, disabled_settings} = OperatorSettingsRepository.update(repo, %{"capture_failed_mcp_calls" => false})
-    assert DateTime.compare(disabled_settings.updated_at, enabled_settings.updated_at) in [:eq, :gt]
+    assert Enum.map(failures, &Map.take(&1, ["day", "tool", "reason", "layer", "count"])) |> Enum.sort_by(&{-&1["count"], &1["tool"]}) == [
+             %{"day" => today, "tool" => "sympp.health", "reason" => "invalid_tool_arguments", "layer" => "tool", "count" => 2},
+             %{"day" => today, "tool" => "read_work_request", "reason" => "not_found", "layer" => "tool", "count" => 1},
+             %{"day" => today, "tool" => "set_report", "reason" => "read_only_outside_herdr", "layer" => "tool", "count" => 1},
+             %{"day" => today, "tool" => "unknown", "reason" => "method_not_found", "layer" => "tool", "count" => 1}
+           ]
 
-    {toggled_response, toggled_log} = capture_response(fn -> MCPHarness.request(request, repo: repo) end)
-    refute Map.has_key?(toggled_response["error"]["data"], "diagnostic_id")
-    refute toggled_log =~ "sympp_failed_mcp_call"
+    refute inspect(repo.all(FailedCall.Count)) =~ "argument-value"
+    assert {:ok, %{"total" => 1, "failures" => [%{"tool" => "unknown"}]}} = FailedCall.summary(repo, %{"tool" => "unknown"})
+    assert {:ok, %{"total" => 0}} = FailedCall.summary(repo, %{"since" => Date.utc_today() |> Date.add(1) |> Date.to_iso8601()})
+    assert {:tool_error, "invalid_since"} = FailedCall.summary(repo, %{"since" => "yesterday"})
   end
 
-  test "capture leaves protocol errors unchanged and observes failed tool notifications", %{repo: repo} do
-    assert {:ok, _settings} = OperatorSettingsRepository.update(repo, %{"capture_failed_mcp_calls" => true})
+  test "summarize_failed_mcp_calls reads the durable counts", %{repo: repo} do
+    assert MCPHarness.request(failed_health_request("x"), repo: repo)["error"]
 
-    protocol_request = %{
-      "jsonrpc" => "2.0",
-      "id" => "protocol-error",
-      "method" => "unknown/method",
-      "params" => %{"name" => "not-a-dispatched-tool"}
-    }
+    response = MCPHarness.request(tool_call("summarize_failed_mcp_calls", %{"tool" => "sympp.health"}), repo: repo)
+    assert %{"total" => 1, "failures" => [%{"reason" => "invalid_tool_arguments", "count" => 1}]} = response["result"]["structuredContent"]
 
-    {protocol_response, protocol_log} = capture_response(fn -> MCPHarness.request(protocol_request, repo: repo) end)
-    assert protocol_response["error"] == %{"code" => -32_601, "message" => "Method not found", "data" => %{}}
-    refute protocol_log =~ "sympp_failed_mcp_call"
-
-    notification = failed_health_request("notification-secret") |> Map.delete("id")
-    {notification_response, notification_log} = capture_response(fn -> MCPHarness.request(notification, repo: repo) end)
-    assert notification_response == nil
-    assert [notification_event] = diagnostic_events(notification_log)
-    assert notification_event["failure_reason"] == "invalid_tool_arguments"
-    assert notification_event["tool_name"] == "sympp.health"
-    refute diagnostic_event_line(notification_log) =~ "notification-secret"
-
-    unauthorized_request = %{
-      "jsonrpc" => "2.0",
-      "id" => "unauthorized",
-      "method" => "tools/call",
-      "params" => %{"name" => "set_report", "arguments" => %{"work_request_id" => "WR-OUTSIDE-HERDR", "brief" => "Read-only caller"}}
-    }
-
-    {unauthorized_response, unauthorized_log} =
-      capture_response(fn -> MCPHarness.request(unauthorized_request, repo: repo) end)
-
-    assert unauthorized_response["error"]["code"] == -32_001
-    assert unauthorized_log =~ ~s("error_classification":"unauthorized")
-    assert unauthorized_log =~ ~s("tool_name":"set_report")
-
-    missing_work_request_id = "secret-work-request-value"
-
-    not_found_request = %{
-      "jsonrpc" => "2.0",
-      "id" => "not-found",
-      "method" => "tools/call",
-      "params" => %{"name" => "read_work_request", "arguments" => %{"work_request_id" => missing_work_request_id}}
-    }
-
-    {not_found_response, not_found_log} = capture_response(fn -> MCPHarness.request(not_found_request, repo: repo) end)
-    assert not_found_response["error"]["code"] == -32_004
-    assert not_found_log =~ ~s("error_classification":"not_found")
-    assert not_found_log =~ ~s("tool_name":"read_work_request")
-    assert not_found_log =~ ~s("argument_keys":["work_request_id"])
-    refute diagnostic_event_line(not_found_log) =~ missing_work_request_id
+    refused = MCPHarness.request(tool_call("summarize_failed_mcp_calls", %{"since" => "soon"}), repo: repo)
+    assert %{"code" => "invalid_since", "state" => nil, "next_action" => "fix_arguments"} = refused["error"]["data"]
   end
 
-  test "batch failures emit once per tool item including notifications", %{repo: repo} do
-    assert {:ok, _settings} = OperatorSettingsRepository.update(repo, %{"capture_failed_mcp_calls" => true})
-
-    failed_request = failed_health_request("batch-request-secret")
-    failed_notification = failed_health_request("batch-notification-secret") |> Map.delete("id")
-
-    {response, log} =
-      capture_response(fn ->
-        MCPHarness.request([failed_request, failed_notification, %{"jsonrpc" => "2.0", "method" => "notifications/initialized"}],
-          repo: repo
-        )
-      end)
-
-    assert [%{"error" => %{"data" => %{"diagnostic_id" => diagnostic_id}}}] = response
-    assert diagnostic_id =~ ~r/^mcpdiag_[0-9a-f]{16}$/
-
-    assert events = diagnostic_events(log)
-    assert length(events) == 2
-    assert events |> Enum.map(& &1["diagnostic_id"]) |> Enum.uniq() |> length() == 2
-    assert Enum.all?(events, &(&1["tool_name"] == "sympp.health"))
-    refute diagnostic_event_line(log) =~ "batch-request-secret"
-    refute diagnostic_event_line(log) =~ "batch-notification-secret"
-  end
-
-  test "tool boundary observes exceptions and exits once without changing containment", %{repo: repo} do
-    assert {:ok, _settings} = OperatorSettingsRepository.update(repo, %{"capture_failed_mcp_calls" => true})
+  test "a raised or exited tool call is counted once and still raises", %{repo: repo} do
     on_exit(fn -> Process.delete({DiagnosticFailureRepo, :failure}) end)
-
-    config = %{
-      local_mcp_config(DiagnosticFailureRepo)
-      | database: "C:/trusted/ledger.db",
-        source_revision: String.duplicate("a", 40)
-    }
-
-    server = Server.new(config, initialized: true, state_key: "failure-test")
-
-    request =
-      tool_call("read_work_request", %{"work_request_id" => "private-session-value"})
+    server = Server.new(%{local_mcp_config(DiagnosticFailureRepo) | database: "C:/trusted/ledger.db"}, initialized: true, state_key: "failure-test")
+    request = tool_call("read_work_request", %{"work_request_id" => "private-value"})
 
     Process.put({DiagnosticFailureRepo, :failure}, :raise)
 
-    exception_log =
-      capture_log(fn ->
-        assert_raise RuntimeError, "repository secret exception C:/private/provider-body", fn -> Server.handle(request, server) end
-      end)
-
-    assert [exception_event] = diagnostic_events(exception_log)
-    assert exception_event["cause_kind"] == "exception"
-    assert exception_event["failure_layer"] == "tool"
-    assert exception_event["failure_reason"] == "unhandled_tool_failure"
-    refute diagnostic_event_line(exception_log) =~ "private-session-value"
-    refute diagnostic_event_line(exception_log) =~ "provider-body"
+    capture_log(fn ->
+      assert_raise RuntimeError, "repository secret exception C:/private/provider-body", fn -> Server.handle(request, server) end
+    end)
 
     Process.put({DiagnosticFailureRepo, :failure}, :exit)
-    exit_log = capture_log(fn -> assert catch_exit(Server.handle(request, server)) == :repository_secret_exit end)
+    capture_log(fn -> assert catch_exit(Server.handle(request, server)) == :repository_secret_exit end)
 
-    assert [exit_event] = diagnostic_events(exit_log)
-    assert exit_event["cause_kind"] == "exit"
-    refute diagnostic_event_line(exit_log) =~ "repository_secret_exit"
+    assert [%{tool: "read_work_request", reason: "unhandled_tool_failure", layer: "tool", count: 2}] = repo.all(FailedCall.Count)
   end
 
-  test "telemetry and summary failures do not change protocol behavior" do
-    on_exit(fn -> Process.delete({TelemetryFailureRepo, :failure}) end)
-    config = Config.default(repo: TelemetryFailureRepo)
-    server = Server.new(config, initialized: true)
-    request = failed_health_request("telemetry-value")
-
-    Process.put({TelemetryFailureRepo, :failure}, :raise)
-    response = Server.handle(request, server)
-    assert response["error"]["code"] == -32_602
-    refute Map.has_key?(response["error"]["data"], "diagnostic_id")
-    refute Map.has_key?(response["error"]["data"], "recovery")
-
-    Process.put({TelemetryFailureRepo, :failure}, :exit)
-    assert Server.handle(Map.delete(request, "id"), server) == nil
-
-    store = Module.concat(FailedCall, Store)
-    Agent.stop(Process.whereis(store))
-    blocker = spawn(fn -> receive do: ({:"$gen_call", _from, _request} -> :ok) end)
-    Process.register(blocker, store)
-    on_exit(fn -> Process.exit(blocker, :kill) end)
-
-    assert FailedCall.summary() == %{
-             "durability" => "process_local",
-             "groups" => [],
-             "last_reset_at" => nil,
-             "observation_started_at" => nil,
-             "source_identities" => [],
-             "status" => "unavailable",
-             "total_failures" => 0
-           }
-  end
-
-  test "trusted local summary exposes only process-local aggregate boundaries", %{repo: repo} do
-    assert {:ok, _settings} = OperatorSettingsRepository.update(repo, %{"capture_failed_mcp_calls" => true})
+  test "a failure crossing the bridge and tool layers counts once", %{repo: repo} do
     config = local_mcp_config(repo)
-    client_key = "failed-call-summary"
-
+    client_key = "failed-call-layers"
     assert {:ok, initialized} = HTTPTransport.handle(config, initialize_request(), client_key: client_key)
 
     assert {:ok, failed} =
-             Task.async(fn ->
-               HTTPTransport.handle(config, failed_health_request("summary-secret"),
-                 client_key: client_key,
-                 state_key: initialized.state_key
-               )
-             end)
+             Task.async(fn -> HTTPTransport.handle(config, failed_health_request("x"), client_key: client_key, state_key: initialized.state_key) end)
              |> Task.await()
 
-    assert is_binary(failed.response["error"]["data"]["diagnostic_id"])
-
-    assert {:ok, summary_response} =
-             HTTPTransport.handle(config, tool_call("summarize_failed_mcp_calls", %{}),
-               client_key: client_key,
-               state_key: initialized.state_key
-             )
-
-    summary = get_in(summary_response.response, ["result", "structuredContent"])
-    assert summary["status"] == "ok"
-    assert summary["durability"] == "process_local"
-    assert summary["total_failures"] == 1
-    assert is_binary(summary["observation_started_at"])
-    assert {:ok, observation_started_at, 0} = DateTime.from_iso8601(summary["observation_started_at"])
-    assert {:ok, last_reset_at, 0} = DateTime.from_iso8601(summary["last_reset_at"])
-    assert DateTime.compare(last_reset_at, observation_started_at) in [:eq, :gt]
-    assert [%{"source_revision" => revision, "mcp_contract_fingerprint" => fingerprint}] = summary["source_identities"]
-    assert revision =~ ~r/^[0-9a-f]{40}$/
-    assert fingerprint =~ ~r/^[0-9a-f]{64}$/
-    assert [group] = summary["groups"]
-    assert group["count"] == 1
-    assert group["first_observed_at"] == group["last_observed_at"]
-    refute inspect(summary) =~ "summary-secret"
-
-    :ok = FailedCall.reset()
-    reset_summary = FailedCall.summary()
-    assert reset_summary["total_failures"] == 0
-    assert reset_summary["groups"] == []
-    assert reset_summary["observation_started_at"] == summary["observation_started_at"]
-    assert is_binary(reset_summary["last_reset_at"])
+    assert failed.response["error"]["data"]["code"] == "invalid_tool_arguments"
+    assert [%{layer: "tool", count: 1}] = repo.all(FailedCall.Count)
   end
 
-  test "summary retains safe domain recovery and drops unsafe error data", %{repo: repo} do
-    assert {:ok, _settings} = OperatorSettingsRepository.update(repo, %{"capture_failed_mcp_calls" => true})
-    config = local_mcp_config(repo)
+  test "counting failures never change the protocol response" do
+    server = Server.new(Config.default(repo: CountingFailureRepo), initialized: true)
+    response = Server.handle(failed_health_request("x"), server)
 
-    :ok =
-      FailedCall.observe_error(
-        config,
-        tool_call("dispatch_work_package", %{"work_package_id" => "WP-SAFE-SUMMARY", "review_mode" => "fast"}),
-        -32_009,
-        "Precondition failed",
-        %{
-          "reason" => "worktree_cleanup_failed",
-          "recovery" => %{
-            "next_action" => "retry_cleanup_worktree",
-            "tool" => "dispatch_work_package",
-            "fresh_mcp_session_required" => false,
-            "message" => "Bearer summary-secret",
-            "path" => "C:/private/worktree",
-            "provider" => %{"token" => "summary-secret"}
-          }
-        },
-        :tool,
-        FailedCall.monotonic_now()
-      )
-
-    assert [group] = FailedCall.summary()["groups"]
-    assert group["failure_reason"] == "worktree_cleanup_failed"
-
-    assert group["recovery"] == %{
-             "fresh_mcp_session_required" => false,
-             "next_action" => "retry_cleanup_worktree",
-             "tool" => "dispatch_work_package"
-           }
-
-    refute inspect(group) =~ "summary-secret"
-    refute inspect(group) =~ "C:/private/worktree"
+    assert response["error"]["code"] == -32_602
+    assert response["error"]["data"]["code"] == "invalid_tool_arguments"
   end
 
   defp failed_health_request(secret) do
@@ -325,20 +116,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
       "jsonrpc" => "2.0",
       "id" => "failed-health",
       "method" => "tools/call",
-      "params" => %{
-        "name" => "sympp.health",
-        "arguments" => %{"bearer" => secret, "nested" => %{"token" => secret}}
-      }
+      "params" => %{"name" => "sympp.health", "arguments" => %{"bearer" => secret}}
     }
   end
 
   defp tool_call(name, arguments) do
-    %{
-      "jsonrpc" => "2.0",
-      "id" => "failed-call-test",
-      "method" => "tools/call",
-      "params" => %{"name" => name, "arguments" => arguments}
-    }
+    %{"jsonrpc" => "2.0", "id" => "failed-call-test", "method" => "tools/call", "params" => %{"name" => name, "arguments" => arguments}}
   end
 
   defp initialize_request do
@@ -346,35 +129,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
       "jsonrpc" => "2.0",
       "id" => "failed-call-init",
       "method" => "initialize",
-      "params" => %{
-        "protocolVersion" => "2025-03-26",
-        "clientInfo" => %{"name" => "failed-call-test", "version" => "1"},
-        "capabilities" => %{}
-      }
+      "params" => %{"protocolVersion" => "2025-03-26", "clientInfo" => %{"name" => "failed-call-test", "version" => "1"}, "capabilities" => %{}}
     }
-  end
-
-  defp capture_response(fun) do
-    parent = self()
-    ref = make_ref()
-    log = capture_log(fn -> send(parent, {ref, fun.()}) end)
-    assert_receive {^ref, response}
-    {response, log}
-  end
-
-  defp total_changes(repo), do: repo.query!("SELECT total_changes()").rows |> hd() |> hd()
-
-  defp diagnostic_event_line(log) do
-    Enum.find(String.split(log, "\n"), &String.contains?(&1, ~s("event":"sympp_failed_mcp_call")))
-  end
-
-  defp diagnostic_events(log) do
-    log
-    |> String.split("\n")
-    |> Enum.filter(&String.contains?(&1, ~s("event":"sympp_failed_mcp_call")))
-    |> Enum.map(fn line ->
-      {json_start, 1} = :binary.match(line, "{")
-      line |> binary_part(json_start, byte_size(line) - json_start) |> Jason.decode!()
-    end)
   end
 end

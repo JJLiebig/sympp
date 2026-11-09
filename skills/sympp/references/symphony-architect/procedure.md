@@ -254,10 +254,10 @@ native checks/review. Recheck when a relevant head or selection changes.
 
 A WorkPackage is `planned`, `dispatched`, `ready` or `ended`. A ready contract is
 frozen: supersede it with a successor instead of editing it. An ended package
-has exactly one ending record, written by `record_work_package_delivery`
-(`skip_work_package` writes `skipped`). For explicit `pr_merged`,
-`completed_no_pr`, `superseded`, `abandoned`, `finished` or `skipped` endings,
-read [terminal evidence](references/operations.md#terminal-evidence).
+has exactly one ending record. The factory records `pr_merged` from GitHub; end a
+package any other way with `close_work_package` (`skipped`, `completed_no_pr`,
+`superseded`, `abandoned` or `finished`), see
+[terminal evidence](references/operations.md#terminal-evidence).
 `finished` means the PR waits on someone else: the WorkRequest can complete but
 dependents stay blocked. Any chief or architect may record it.
 

@@ -5,7 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
   alias SymphonyElixir.MCPHarness
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.Config
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, ToolCatalog}
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
@@ -18,6 +18,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.WorkPackageFactory
 
   setup_all do
@@ -76,15 +77,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
             superseded_args(work_request, package, "close-#{index}", hd(packages).id, "Covered by the first package.")
 
           4 ->
-            pr_merged_args(work_request, package, "close-#{index}")
-            |> put_in(["evidence", "pr_merged", "pr_repository"], work_request.repo)
-            |> put_in(["evidence", "pr_merged", "pr_url"], "https://github.com/#{work_request.repo}/pull/24")
+            :merged
 
           _ ->
             no_pr_args(work_request, package, "close-#{index}", "Accepted investigation evidence.")
         end
 
-      read.("record_work_package_delivery", args)
+      if args == :merged,
+        do: record_merged!(repo, work_request, package, "close-#{index}"),
+        else: read.("close_work_package", args)
     end
 
     assert read.("read_work_request", %{"detail" => "full", "work_request_id" => work_request.id})["work_request"]["phase"] == "planned"
@@ -93,7 +94,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     overview_packages = read.("read_work_request", %{"work_request_id" => work_request.id})["work_packages"]
     assert %{"next_action" => "dispatch_work_package"} = Enum.find(overview_packages, &(&1["id"] == active["id"]))
 
-    read.("skip_work_package", %{"work_request_id" => work_request.id, "work_package_id" => List.last(packages).id})
+    read.("close_work_package", %{"work_package_id" => List.last(packages).id, "outcome" => "skipped"})
 
     for detail <- ["summary", "full"] do
       board = read.("read_work_request", %{"work_request_id" => work_request.id, "view" => "board", "detail" => detail})
@@ -121,32 +122,90 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     terminal = "t1"
 
     refused = record_delivery(repo, terminal, no_pr_args(other_request, other_slice, "finish-other-no-pr", "Not my request."))
-    assert get_in(refused, ["error", "data", "reason"]) == "owned_by_other_terminal"
+    assert get_in(refused, ["error", "data", "code"]) == "owned_by_other_terminal"
     assert repo.get!(WorkPackage, other_package.id).status == "ready"
 
     finished =
-      record_delivery(repo, terminal, %{
-        "work_request_id" => other_request.id,
-        "work_package_id" => other_slice.id,
-        "outcome" => "finished",
-        "idempotency_key" => "finish-other"
-      })
+      record_delivery(repo, terminal, %{"work_package_id" => other_slice.id, "outcome" => "finished"})
 
     assert get_in(finished, ["result", "structuredContent", "work_package_delivery", "outcome"]) == "finished"
     assert repo.get!(WorkPackage, other_package.id).status == "ended"
     assert {:ok, %{phase: "done"}} = SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase.load_one(repo, repo.get!(WorkRequest, other_request.id))
 
-    conflict =
-      record_delivery(repo, terminal, %{
-        "work_request_id" => other_request.id,
-        "work_package_id" => other_slice.id,
-        "outcome" => "finished",
-        "idempotency_key" => "finish-other-again"
-      })
+    # Another architect repeating the same finish gets the same ending back.
+    replay = record_delivery(repo, "t3", %{"work_package_id" => other_slice.id, "outcome" => "finished"})
+    assert get_in(replay, ["result", "structuredContent", "work_package_delivery"]) == get_in(finished, ["result", "structuredContent", "work_package_delivery"])
 
-    assert get_in(conflict, ["error", "data", "reason"]) == "delivery_outcome_conflict"
-    assert get_in(conflict, ["error", "data", "outcome"]) == "finished"
+    {_request, racing, _package} = linked_slice!(repo, work_request_id: "WR-MCP-FINISH-RACE", work_package_status: "ready")
+
+    # Several connections, as in production, so the closes' transactions overlap.
+    [path] = for [_seq, "main", path] <- repo.query!("PRAGMA database_list").rows, do: path
+    pool_spec = Supervisor.child_spec({Repo, database: path, name: nil, pool_size: 4, log: false}, id: :race_pool)
+    pool = start_supervised!(pool_spec)
+
+    endings =
+      for address <- ["t4", "t5", "t6"] do
+        Task.async(fn ->
+          Repo.put_dynamic_repo(pool)
+          record_delivery(repo, address, %{"work_package_id" => racing.id, "outcome" => "finished"})
+        end)
+      end
+      |> Task.await_many(30_000)
+      |> Enum.map(&(get_in(&1, ["result", "structuredContent", "work_package_delivery", "id"]) || &1))
+
+    assert [id, id, id] = endings
+    assert is_binary(id)
+
+    conflict = record_delivery(repo, "t2", %{"work_package_id" => other_slice.id, "outcome" => "abandoned", "rationale" => "Dropped."})
+
+    assert %{"code" => "delivery_outcome_conflict", "outcome" => "finished", "state" => "ended", "next_action" => "none"} =
+             get_in(conflict, ["error", "data"])
+
     assert Ownership.owner(repo, other_request.id).display_address == "testbox/t2"
+  end
+
+  test "close_work_package replays idempotently and refuses a different close with the actual outcome", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-MCP-CLOSE")
+    planned = create_work_package!(repo, work_request, id: "WP-MCP-CLOSE-PLANNED", status: "planned")
+    {_request, dispatched, _package} = linked_slice!(repo, work_request_id: "WR-MCP-CLOSE-DISPATCHED")
+    owner = "t1"
+
+    early = record_delivery(repo, owner, %{"work_package_id" => dispatched.id, "outcome" => "skipped"})
+
+    assert %{"code" => "ending_not_allowed", "state" => "dispatched", "allowed_outcomes" => allowed, "next_action" => next, "message" => _} =
+             early["error"]["data"]
+
+    assert "skipped" not in allowed and "abandoned" in allowed
+    assert next == "wait"
+
+    missing = record_delivery(repo, owner, %{"work_package_id" => dispatched.id, "outcome" => "abandoned"})
+    assert %{"code" => "missing_rationale", "state" => "dispatched", "next_action" => "fix_arguments", "message" => "rationale is required."} = missing["error"]["data"]
+
+    unused = record_delivery(repo, owner, %{"work_package_id" => planned.id, "outcome" => "skipped", "rationale" => "Not needed."})
+    assert %{"code" => "argument_not_used", "arguments" => ["rationale"], "state" => "planned"} = unused["error"]["data"]
+
+    skipped = record_delivery(repo, owner, %{"work_package_id" => planned.id, "outcome" => "skipped"})
+    assert %{"outcome" => "skipped", "id" => delivery_id} = skipped["result"]["structuredContent"]["work_package_delivery"]
+    assert skipped["result"]["structuredContent"]["work_package"]["status"] == "ended"
+
+    replay = record_delivery(repo, owner, %{"work_package_id" => planned.id, "outcome" => "skipped"})
+    assert replay["result"]["structuredContent"]["work_package_delivery"]["id"] == delivery_id
+
+    conflict = record_delivery(repo, owner, %{"work_package_id" => planned.id, "outcome" => "abandoned", "rationale" => "Changed my mind."})
+    assert conflict["error"]["code"] == -32_009
+    assert %{"code" => "delivery_outcome_conflict", "outcome" => "skipped", "state" => "ended", "next_action" => "none"} = conflict["error"]["data"]
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
+  end
+
+  test "every tool error carries code, message, state and next_action", %{repo: repo} do
+    for tool <- ToolCatalog.tools() do
+      data = mcp_tool(repo, "t1", tool, %{"not_an_argument" => true}) |> get_in(["error", "data"])
+      assert %{"code" => code, "message" => message, "state" => _state, "next_action" => next_action} = data, tool
+      assert is_binary(code) and is_binary(message) and is_binary(next_action), tool
+    end
+
+    missing = mcp_tool(repo, "t1", "close_work_package", %{"work_package_id" => "WP-NOWHERE", "outcome" => "skipped"})
+    assert %{"code" => "not_found", "state" => nil, "next_action" => "check_id"} = missing["error"]["data"]
   end
 
   test "architect reads the delivery board and records a redacted, replayable closeout", %{repo: repo} do
@@ -286,19 +345,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
                replacement_package.id
              )
 
-    replacement_response =
-      record_delivery(
-        repo,
-        terminal,
-        pr_merged_args(work_request, dispatched_replacement, "delivery-mcp-replacement-pr")
-      )
-
-    assert get_in(replacement_response, [
-             "result",
-             "structuredContent",
-             "work_package_delivery",
-             "outcome"
-           ]) == "pr_merged"
+    assert %{outcome: "pr_merged"} = record_merged!(repo, work_request, dispatched_replacement, "delivery-mcp-replacement-pr")
 
     assert repo.get!(WorkPackage, replacement_package.id).status == "ended"
 
@@ -392,57 +439,38 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     work_package
   end
 
-  defp no_pr_args(work_request, work_package, idempotency_key, evidence) do
-    %{
-      "work_request_id" => work_request.id,
-      "work_package_id" => work_package.id,
-      "outcome" => "completed_no_pr",
-      "idempotency_key" => idempotency_key,
-      "evidence" => %{"completed_no_pr" => %{"no_pr_evidence" => evidence}}
-    }
+  defp no_pr_args(_work_request, work_package, idempotency_key, evidence) do
+    %{"work_package_id" => work_package.id, "outcome" => "completed_no_pr", "idempotency_key" => idempotency_key, "evidence" => evidence}
   end
 
-  defp pr_merged_args(work_request, work_package, idempotency_key) do
-    %{
-      "work_request_id" => work_request.id,
-      "work_package_id" => work_package.id,
-      "outcome" => "pr_merged",
-      "idempotency_key" => idempotency_key,
-      "evidence" => %{
-        "pr_merged" => %{
-          "pr_url" => "https://github.com/nextide/symphony-plus-plus/pull/24",
-          "pr_number" => 24,
-          "pr_repository" => "nextide/symphony-plus-plus",
-          "pr_merged_at" => "2026-05-28T12:00:00Z",
-          "merge_commit_sha" => "abc24"
-        }
-      }
-    }
+  defp abandoned_args(_work_request, work_package, idempotency_key, rationale) do
+    %{"work_package_id" => work_package.id, "outcome" => "abandoned", "idempotency_key" => idempotency_key, "rationale" => rationale}
   end
 
-  defp abandoned_args(work_request, work_package, idempotency_key, rationale) do
+  defp superseded_args(_work_request, work_package, idempotency_key, successor_work_package_id, reason) do
     %{
-      "work_request_id" => work_request.id,
-      "work_package_id" => work_package.id,
-      "outcome" => "abandoned",
-      "idempotency_key" => idempotency_key,
-      "evidence" => %{"abandoned" => %{"abandoned_rationale" => rationale}}
-    }
-  end
-
-  defp superseded_args(work_request, work_package, idempotency_key, successor_work_package_id, reason) do
-    %{
-      "work_request_id" => work_request.id,
       "work_package_id" => work_package.id,
       "outcome" => "superseded",
       "idempotency_key" => idempotency_key,
-      "evidence" => %{
-        "superseded" => %{
-          "superseded_reason" => reason,
-          "successor_work_package_id" => successor_work_package_id
-        }
-      }
+      "successor_work_package_id" => successor_work_package_id,
+      "rationale" => reason
     }
+  end
+
+  # Merges are recorded from GitHub, never through close_work_package.
+  defp record_merged!(repo, work_request, work_package, idempotency_key) do
+    assert {:ok, delivery} =
+             WorkRequestService.record_work_package_delivery(repo, work_request.id, work_package.id, %{
+               "outcome" => "pr_merged",
+               "idempotency_key" => idempotency_key,
+               "pr_url" => "https://github.com/#{work_request.repo}/pull/24",
+               "pr_number" => 24,
+               "pr_repository" => work_request.repo,
+               "pr_merged_at" => "2026-05-28T12:00:00Z",
+               "merge_commit_sha" => "abc24"
+             })
+
+    delivery
   end
 
   defp work_request_attrs(overrides) do
@@ -486,7 +514,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
   end
 
   defp record_delivery(repo, terminal, arguments),
-    do: mcp_tool(repo, terminal, "record_work_package_delivery", arguments)
+    do: mcp_tool(repo, terminal, "close_work_package", arguments)
 
   defp terminal(address), do: Terminal.from_meta(MCPHarness.herdr_meta(address))
 

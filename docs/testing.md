@@ -50,9 +50,8 @@ Authority and recovery journeys use real candidate clients that assert distinct
 synthetic Herdr terminal identities for ownership contention, read-only access
 without an identity, operator Release, reconnects, terminal delivery, and an
 actual backend restart. They start no managed worker agents. Offline denial uses the supported snapshot
-operation on the disposable ledger. Diagnostic checks opt into failed-call
-capture through operator settings and inspect redacted responses, process output,
-and aggregates before disabling capture again.
+operation on the disposable ledger. The failed-call journey checks that refused
+calls are counted by tool and reason without their arguments.
 
 Keep precise lower-level checks for ownership races and herdr-core liveness,
 along with stored authority and transaction qualifications. A repository-backed

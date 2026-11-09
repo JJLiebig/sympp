@@ -419,7 +419,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   defp architect_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
 
   defp architect_error(:work_request_archived, tool),
-    do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"phase" => "archived"})
+    do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"state" => "archived"})
 
   defp architect_error(reason, tool) when reason in [:invalid_repo_root, :missing_repo_root] do
     invalid_params_error(tool, reason)

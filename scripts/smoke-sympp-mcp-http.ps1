@@ -437,12 +437,8 @@ function Get-JsonRpcErrorMessage($Payload) {
     return $null
   }
 
+  $reason = Get-JsonRpcErrorReason $Payload
   $errorObject = $Payload.error
-  $reason = $null
-  if ($errorObject.PSObject.Properties["data"] -and $errorObject.data.PSObject.Properties["reason"]) {
-    $reason = [string]$errorObject.data.reason
-  }
-
   if ($reason) {
     return "$($errorObject.message): $reason"
   }
@@ -455,7 +451,11 @@ function Get-JsonRpcErrorReason($Payload) {
     return $null
   }
 
+  # Tool errors name their reason in data.code; transport errors in data.reason.
   $errorObject = $Payload.error
+  if ($errorObject.PSObject.Properties["data"] -and $errorObject.data.PSObject.Properties["code"]) {
+    return [string]$errorObject.data.code
+  }
   if ($errorObject.PSObject.Properties["data"] -and $errorObject.data.PSObject.Properties["reason"]) {
     return [string]$errorObject.data.reason
   }

@@ -102,14 +102,12 @@ export async function row(client: Client, request: string, wp: string) {
   return result;
 }
 
-// Only superseded can end a planned package, so other outcomes dispatch it
-// first; dispatching an already dispatched package replays and leaves it as it is.
-export async function close(client: Client, wp: string, outcome = 'completed_no_pr', evidence: object = { no_pr_evidence: 'The architect accepted the investigation findings; no code change was needed.' }) {
+// Only superseded and skipped can end a planned package, so other outcomes
+// dispatch it first; dispatching an already dispatched package replays and
+// leaves it as it is.
+export async function close(client: Client, wp: string, outcome = 'completed_no_pr', args: object = { evidence: 'The architect accepted the investigation findings; no code change was needed.' }) {
   if (outcome !== 'superseded') await client.tool('dispatch_work_package', { work_package_id: wp });
-  return client.call('record_work_package_delivery', {
-    work_package_id: wp, outcome, idempotency_key: `close-${wp}`,
-    evidence: { [outcome]: evidence },
-  });
+  return client.call('close_work_package', { work_package_id: wp, outcome, ...args });
 }
 
 export async function sync(client: Client, wp: string, number: number, sha: string) {

@@ -6,17 +6,14 @@ Code.require_file("mcp_handoff_helpers.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog
   alias SymphonyElixir.SymphonyPlusPlus.Repo
 
   @architect_phase_id "phase-mcp-architect-test"
   @handoff_store_process_key :sympp_mcp_test_handoff_store_dir
-  @architect_tool_names ToolCatalog.architect_tools()
   @codex_forbidden_top_level_schema_keys ["oneOf", "anyOf", "allOf", "enum", "not"]
 
   def architect_phase_id, do: @architect_phase_id
   def handoff_store_process_key, do: @handoff_store_process_key
-  def architect_tool_names, do: @architect_tool_names
   def codex_forbidden_top_level_schema_keys, do: @codex_forbidden_top_level_schema_keys
 
   defmodule FailingAuthRepo do
@@ -87,7 +84,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
 
       @architect_phase_id SymphonyElixir.SymphonyPlusPlus.MCPCase.architect_phase_id()
       @handoff_store_process_key SymphonyElixir.SymphonyPlusPlus.MCPCase.handoff_store_process_key()
-      @architect_tool_names SymphonyElixir.SymphonyPlusPlus.MCPCase.architect_tool_names()
       @codex_forbidden_top_level_schema_keys MCPCase.codex_forbidden_top_level_schema_keys()
 
       import SymphonyElixir.SymphonyPlusPlus.MCPCase.CommonHelpers

@@ -26,7 +26,7 @@ test('all dependency endpoint combinations dispatch only after canonical deliver
     .toEqual([[direct, next], [a, consumer], [b, consumer], [next, c], [next, d], [c, e], [d, e]].sort());
   await architect.reject('dispatch_work_package', { work_package_id: next }, 'unmet_work_package_dependencies');
   await depend(architect, next, cancelled, { reason: 'Initially required scope.' });
-  await architect.call('skip_work_package', { work_package_id: cancelled });
+  await architect.call('close_work_package', { work_package_id: cancelled, outcome: 'skipped' });
   const refusal = await architect.reject('dispatch_work_package', { work_package_id: next }, 'unmet_work_package_dependencies');
   expect(refusal.prerequisite_work_package_ids.sort()).toEqual([direct, cancelled].sort());
   expect((await row(architect, request, cancelled)).raw_status).toBe('ended');
@@ -34,9 +34,9 @@ test('all dependency endpoint combinations dispatch only after canonical deliver
   await architect.call('edit_plan', { ops: [{ op: 'remove_dependency', from: next, to: cancelled }] });
   // Retiring scope is not completion; only the delivered end of the chain satisfies it.
   await architect.call('set_blocker', { work_package_id: direct, blocker_id: 'old-attempt', active: true, summary: 'This attempt is blocked.' });
-  await close(architect, direct, 'superseded', { successor_work_package_id: successor, superseded_reason: 'A replacement owns the same scope.' });
+  await close(architect, direct, 'superseded', { successor_work_package_id: successor, rationale: 'A replacement owns the same scope.' });
   expect((await row(architect, request, direct)).work_package.blocker_state['active?']).toBe(false);
-  await close(architect, successor, 'superseded', { successor_work_package_id: final, superseded_reason: 'The final attempt owns the same scope.' });
+  await close(architect, successor, 'superseded', { successor_work_package_id: final, rationale: 'The final attempt owns the same scope.' });
   await architect.reject('dispatch_work_package', { work_package_id: next }, 'unmet_work_package_dependencies');
   expect((await row(architect, request, direct)).successor.work_package_id).toBe(successor);
   expect((await row(architect, request, successor)).successor.work_package_id).toBe(final);
@@ -73,7 +73,7 @@ test('candidate pins allow dispatch but current pins and dependent inputs gate m
   expect((await architect.call('dispatch_work_package', { work_package_id: ui })).work_package.status).toBe('dispatched');
   const contextBefore = (await plan(architect, request)).dependencies.find((dependency: any) => dependency.id === pin);
   const invalidContext = await architect.rpc('tools/call', architect.toolParams('edit_plan', { ops: [{ op: 'set_dependency', from: ui, to: backend, reason: '' }] }));
-  expect(invalidContext.error?.data).toMatchObject({ reason: 'invalid_field', field: 'reason', op_index: 0 });
+  expect(invalidContext.error?.data).toMatchObject({ code: 'invalid_field', field: 'reason', op_index: 0 });
   const contextAfter = (await plan(architect, request)).dependencies.find((dependency: any) => dependency.id === pin);
   expect(contextAfter).toEqual(contextBefore);
   expect(contextAfter.reason).toBe('Require delivered scope.');
@@ -165,16 +165,13 @@ test('out-of-order automatic and manual closeout retain order violations through
     expect((await sync(architect, wp, number, head('d'))).pr_sync.readiness_reasons).toContain('dependencies_unavailable');
     expect((await row(architect, request, wp)).merge_eligibility.eligible).toBe(false);
     provider.set(number, pr(number, head('d'), { state: 'MERGED', mergedAt: mergeTime, mergeCommit: { oid: head('f') } }));
-    if (wp === ui) {
-      await architect.call('sync_pr', { work_package_id: wp, url: prUrl(number) });
-    } else {
-      const action = { work_package_id: wp, outcome: 'pr_merged', idempotency_key: 'external-manual-closeout', recorded_by: 'acceptance-architect', evidence: {
-        pr_merged: { pr_url: prUrl(number), pr_number: number, pr_repository: 'example/service', pr_merged_at: mergeTime, merge_commit_sha: head('f') },
-      } };
-      const recorded = (await architect.call('record_work_package_delivery', action)).work_package_delivery;
+    await architect.call('sync_pr', { work_package_id: wp, url: prUrl(number) });
+    if (wp === replay) {
+      // Syncing a merged PR again records nothing new.
+      const recorded = (await row(architect, request, wp)).delivery;
       expect(recorded.outcome).toBe('pr_merged');
-      expect(recorded.recorded_by).toBe('acceptance-architect');
-      expect((await architect.call('record_work_package_delivery', action)).work_package_delivery.id).toBe(recorded.id);
+      await architect.call('sync_pr', { work_package_id: wp, url: prUrl(number) });
+      expect((await row(architect, request, wp)).delivery).toEqual(recorded);
     }
   }
   expect((await row(architect, request, ui)).delivery_outcome).toBe('pr_merged');

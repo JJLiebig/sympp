@@ -17,7 +17,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
     mcp_tool(repo, terminal, "set_report", %{"work_request_id" => work_request_id, "brief" => brief})
   end
 
-  defp error_reason(response), do: get_in(response, ["error", "data", "reason"])
+  defp error_reason(response), do: get_in(response, ["error", "data", "code"])
 
   defp live_owner_rows(repo, work_request_id) do
     repo.all(from(row in WorkedOn, where: row.subject_id == ^work_request_id and row.state == "live"))

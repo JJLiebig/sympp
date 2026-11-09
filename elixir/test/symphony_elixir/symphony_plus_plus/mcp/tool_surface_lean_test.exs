@@ -10,7 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolSurfaceLeanTest do
 
     {caller, caller_ref} =
       spawn_monitor(fn ->
-        _tools = listed_tools(:architect)
+        _tools = listed_tools()
         send(parent, {:handle_state_started, self()})
 
         receive do
@@ -28,8 +28,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolSurfaceLeanTest do
     assert Process.alive?(agent_pid)
   end
 
-  defp listed_tools(profile) do
-    server = Server.new(Config.default(surface_profile: profile, source_revision: nil), initialized: true)
+  defp listed_tools do
+    server = Server.new(Config.default(source_revision: nil), initialized: true)
     response = Server.handle(%{"jsonrpc" => "2.0", "id" => "tools", "method" => "tools/list", "params" => %{}}, server)
     get_in(response, ["result", "tools"])
   end

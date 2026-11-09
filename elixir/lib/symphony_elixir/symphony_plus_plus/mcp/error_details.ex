@@ -3,7 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ErrorDetails do
 
   alias SymphonyElixir.SymphonyPlusPlus.BranchPattern
 
-  @lifecycle_detail_fields ["actual_status", "allowed_authoring_states", "phase", "current_contract_revision"]
+  @lifecycle_detail_fields ["state", "allowed_authoring_states", "current_contract_revision"]
 
   @spec lifecycle_error(String.t(), atom(), map()) :: {:error, integer(), String.t(), map()}
   def lifecycle_error(tool, reason, details \\ %{}) do
@@ -13,7 +13,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ErrorDetails do
       |> Map.merge(%{
         "tool" => tool,
         "reason" => Atom.to_string(reason),
-        "recovery" => %{"next_action" => lifecycle_next_action(reason)}
+        "next_action" => lifecycle_next_action(reason)
       })
 
     {:error, -32_009, "Precondition Failed", data}

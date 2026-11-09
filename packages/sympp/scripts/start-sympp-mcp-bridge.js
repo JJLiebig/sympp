@@ -855,12 +855,12 @@ async function mcpPost(url, body, sessionId, protocol, timeoutMs) {
   return { ok: response.status >= 200 && response.status < 300, status: response.status, headers: response.headers, lines: responseLines(response), error: response.status === 401 ? "Remote sympp authentication failed (HTTP 401). Run setup --server again to refresh the token." : response.body || `HTTP ${response.status}`, mayHaveReachedBackend: true };
 }
 
+// A close replays safely: the factory keys it by package and outcome unless the caller gave a key.
 function replayableDeliveryFailure(parsed, response) {
-  const key = parsed && parsed.method === "tools/call" && parsed.params && parsed.params.name === "record_work_package_delivery" && parsed.params.arguments && parsed.params.arguments.idempotency_key;
-  if (typeof key !== "string" || !key.trim()) return false;
+  if (!(parsed && parsed.method === "tools/call" && parsed.params && parsed.params.name === "close_work_package")) return false;
   if (response.status === 500 || response.status === 503) return true;
   return response.lines.some((line) => {
-    try { return JSON.parse(line).error?.data?.reason === "ledger_unavailable"; } catch (_) { return false; }
+    try { return JSON.parse(line).error?.data?.code === "ledger_unavailable"; } catch (_) { return false; }
   });
 }
 
@@ -1403,7 +1403,7 @@ async function bridge(identity, state, runtimeFile) {
               const name = parsed.params.name;
               const currentSchema = tools?.find(tool => tool.name === name)?.inputSchema;
               const fields = new Set([...Object.keys(JSON.parse(sessionTools.get(name)).properties || {}), ...Object.keys(currentSchema?.properties || {})]);
-              const reason = payload.error.data?.reason;
+              const reason = payload.error.data?.code;
               const invalidArguments = ["invalid_tool_arguments", "unexpected_argument"].includes(reason) || [...fields].some(field => reason === `missing_${field}` || reason === `invalid_${field}`) ||
                 payload.error.data?.validation_errors?.some(error => fields.has(error.field));
               if (tools && schemas(tools).get(name) !== sessionTools.get(name) && (payload.error.code === -32601 || invalidArguments)) {

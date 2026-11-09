@@ -135,7 +135,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
 
     for {label, tool, arguments} <- reads, label in ~w(overview plan package) do
       invalid = mcp_tool(repo, nil, tool, Map.put(arguments, "detail", "invalid"))
-      assert get_in(invalid, ["error", "data", "reason"]) == "invalid_detail"
+      assert get_in(invalid, ["error", "data", "code"]) == "invalid_detail"
     end
 
     # Existing delivery evidence must still drive the architect's next action.

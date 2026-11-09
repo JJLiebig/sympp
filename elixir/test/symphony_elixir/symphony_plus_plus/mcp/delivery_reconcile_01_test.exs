@@ -199,7 +199,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       handoff = %{"work_package_id" => approved_slice.id, "url" => "https://github.com/nextide/repo/pull/412", "head_sha" => head}
 
       mismatch = mcp_tool(repo, "t1", "sync_pr", Map.put(handoff, "head_sha", String.duplicate("b", 40)))
-      assert get_in(mismatch, ["error", "data", "reason"]) =~ "provider_head_mismatch"
+      assert get_in(mismatch, ["error", "data", "code"]) =~ "provider_head_mismatch"
       assert repo.get!(WorkPackage, approved_slice.id).status == "dispatched"
 
       url_only = Map.delete(handoff, "head_sha")
@@ -276,7 +276,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       )
 
       different_pr = mcp_tool(repo, "t1", "sync_pr", Map.put(url_only, "url", "https://github.com/nextide/repo/pull/413"))
-      assert get_in(different_pr, ["error", "data", "reason"]) == "pr_reference_mismatch"
+      assert get_in(different_pr, ["error", "data", "code"]) == "pr_reference_mismatch"
       assert repo.get!(WorkPackage, approved_slice.id).status == "ready"
 
       merged_head = String.duplicate("c", 40)
@@ -387,7 +387,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
 
     assert get_in(delivery_base_response, ["error", "code"]) == -32_602
 
-    assert get_in(delivery_base_response, ["error", "data", "reason"]) ==
+    assert get_in(delivery_base_response, ["error", "data", "code"]) ==
              "work_package_delivery_scope_out_of_scope"
 
     persisted_delivery_base = repo.get!(WorkPackage, approved_delivery_base_slice.id)

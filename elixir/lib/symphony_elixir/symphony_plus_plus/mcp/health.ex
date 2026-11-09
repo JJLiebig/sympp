@@ -139,8 +139,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
   end
 
   defp mcp_contract_material do
-    config = %Config{mode: :http, repo: Repo, version: "contract", source_revision: nil}
-
     %{
       "capabilities" => %{
         "resources" => %{},
@@ -151,11 +149,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
       "protocol_version" => @protocol_version,
       "resources" => resource_contract_material(),
       "schema_version" => @mcp_contract_schema_version,
-      "tool_sets" =>
-        Map.new([:full, :architect], fn profile ->
-          {Atom.to_string(profile), ToolCatalog.startup_tool_specs(profile, config)}
-        end),
-      "owner_gated_tools" => Enum.filter(ToolCatalog.known_tools(), &ToolCatalog.owner_gated_call?(&1, %{"apply" => true}))
+      "tools" => ToolCatalog.tool_specs(),
+      "owner_gated_tools" => Enum.filter(ToolCatalog.tools(), &ToolCatalog.owner_gated_call?(&1, %{}))
     }
   end
 

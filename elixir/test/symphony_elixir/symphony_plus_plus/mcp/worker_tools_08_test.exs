@@ -19,7 +19,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools08Test do
             repo: repo
           )
 
-        assert get_in(response, ["error", "data", "reason"]) == "invalid_tool_arguments"
+        assert get_in(response, ["error", "data", "code"]) == "invalid_tool_arguments"
       end)
 
     refute log =~ secret

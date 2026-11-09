@@ -8,8 +8,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   @type tool_name :: String.t()
   @type input_schema :: map()
 
-  @spec bootstrap_tool_input_schema(tool_name()) :: input_schema()
-  def bootstrap_tool_input_schema("create_work_request") do
+  @doc """
+  The published input schema of a tool. A tool that names its WorkRequest only
+  through `work_request_id` requires it; one that also takes a required
+  `work_package_id` may omit it, and so may `ask`, which then asks on the
+  caller's card.
+  """
+  @spec input_schema(tool_name()) :: input_schema()
+  def input_schema("sympp.health"), do: schema(%{}, [])
+  def input_schema("ask"), do: tool_schema("ask")
+  def input_schema(name), do: name |> tool_schema() |> require_work_request_target()
+
+  defp require_work_request_target(%{"properties" => %{"work_request_id" => _}, "required" => required} = schema) do
+    if "work_package_id" in required or "work_request_id" in required,
+      do: schema,
+      else: %{schema | "required" => ["work_request_id" | required]}
+  end
+
+  defp require_work_request_target(schema), do: schema
+
+  defp tool_schema("create_work_request") do
     schema(
       %{
         "repo" => described_string_schema("Git remote URL or owner/name. Remote clients can omit it to infer their checkout origin."),
@@ -32,28 +50,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  @spec local_operator_tool_input_schema(tool_name()) :: input_schema()
-  def local_operator_tool_input_schema("summarize_failed_mcp_calls"), do: schema(%{}, [])
-
-  @doc """
-  The published input schema of an architect tool. A tool that names its
-  WorkRequest only through `work_request_id` requires it; one that also takes
-  a required `work_package_id` may omit it, and so may `ask`, which then asks
-  on the caller's card.
-  """
-  @spec architect_tool_input_schema(tool_name()) :: input_schema()
-  def architect_tool_input_schema("ask"), do: architect_schema("ask")
-  def architect_tool_input_schema(name), do: name |> architect_schema() |> require_work_request_target()
-
-  defp require_work_request_target(%{"properties" => %{"work_request_id" => _}, "required" => required} = schema) do
-    if "work_package_id" in required or "work_request_id" in required,
-      do: schema,
-      else: %{schema | "required" => ["work_request_id" | required]}
+  defp tool_schema("summarize_failed_mcp_calls") do
+    schema(
+      %{
+        "since" => described_string_schema("First day to include, YYYY-MM-DD (UTC). Defaults to every recorded day."),
+        "tool" => described_string_schema("Only this tool's failures; \"unknown\" counts calls to tools that don't exist.")
+      },
+      []
+    )
   end
 
-  defp require_work_request_target(schema), do: schema
-
-  defp architect_schema("list_work_requests") do
+  defp tool_schema("list_work_requests") do
     schema(
       %{
         "phase" => string_enum_schema(Phase.phases()),
@@ -64,7 +71,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  defp architect_schema("read_work_request") do
+  defp tool_schema("read_work_request") do
     schema(
       %{
         "work_request_id" => string_schema(),
@@ -83,7 +90,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  defp architect_schema("sync_pr") do
+  defp tool_schema("sync_pr") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -99,27 +106,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     |> Map.put("additionalProperties", true)
   end
 
-  defp architect_schema("record_work_package_delivery") do
+  defp tool_schema("close_work_package") do
     schema(
       %{
-        "work_request_id" => current_work_request_id_schema(),
-        "work_package_id" => described_string_schema("WorkPackage id within the WorkRequest."),
-        "outcome" =>
-          WorkPackageDelivery.outcomes()
-          |> string_enum_schema()
-          |> Map.put(
-            "description",
-            "How the WorkPackage ended. finished ends a dispatched or ready package whose PR waits on someone else; it completes the WorkRequest but never satisfies dependents. skipped ends a planned package."
-          ),
-        "idempotency_key" => described_string_schema("Stable caller-provided key for replay. Reusing the same key and evidence returns the existing delivery; conflicting evidence is rejected."),
-        "recorded_by" => described_string_schema("Optional closeout actor. Defaults to the calling terminal."),
-        "evidence" => work_package_delivery_evidence_schema()
+        "work_package_id" => string_schema(),
+        "outcome" => string_enum_schema(WorkPackageDelivery.close_outcomes()),
+        "evidence" => markdown_string_schema("How the work was delivered without a PR. Required for completed_no_pr."),
+        "successor_work_package_id" => described_string_schema("The package that replaces this one. Required for superseded."),
+        "rationale" => markdown_string_schema("Why it was superseded or abandoned. Required for both."),
+        "idempotency_key" => described_string_schema("Optional key for a deliberate replay; defaults to the package and outcome.")
       },
-      ["work_package_id", "outcome", "idempotency_key"]
+      ["work_package_id", "outcome"]
     )
   end
 
-  defp architect_schema("set_report") do
+  defp tool_schema("set_report") do
     nullable_text = %{"type" => ["string", "null"], "description" => "New text; null clears it."}
 
     schema(
@@ -139,7 +140,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  defp architect_schema("set_blocker") do
+  defp tool_schema("set_blocker") do
     schema(
       %{
         "work_package_id" => string_schema(),
@@ -151,7 +152,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  defp architect_schema("ask") do
+  defp tool_schema("ask") do
     schema(
       %{
         "work_request_id" => described_string_schema("The WorkRequest the ask is about. Leave it out to ask on your own card."),
@@ -163,7 +164,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  defp architect_schema("resolve_ask") do
+  defp tool_schema("resolve_ask") do
     schema(
       %{
         "ask_id" => string_schema(),
@@ -186,7 +187,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  defp architect_schema("record_decision") do
+  defp tool_schema("record_decision") do
     schema(
       %{
         "work_request_id" => string_schema(),
@@ -207,7 +208,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  defp architect_schema("edit_plan") do
+  defp tool_schema("edit_plan") do
     schema(
       %{
         "work_request_id" => string_schema(),
@@ -231,17 +232,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  defp architect_schema("skip_work_package") do
-    schema(
-      %{
-        "work_request_id" => current_work_request_id_schema(),
-        "work_package_id" => string_schema()
-      },
-      ["work_package_id"]
-    )
-  end
-
-  defp architect_schema("dispatch_work_package") do
+  defp tool_schema("dispatch_work_package") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -258,37 +249,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
     |> Map.put("additionalProperties", true)
   end
-
-  defp work_package_delivery_evidence_schema do
-    %{
-      "type" => "object",
-      "description" => "Exactly one typed evidence object matching outcome.",
-      "oneOf" => Enum.map(WorkPackageDelivery.outcomes(), &work_package_delivery_outcome_evidence_schema/1)
-    }
-  end
-
-  defp work_package_delivery_outcome_evidence_schema(outcome) do
-    schema(%{outcome => work_package_delivery_typed_evidence_schema(outcome)}, [outcome])
-  end
-
-  defp work_package_delivery_typed_evidence_schema(outcome) do
-    field_specs = WorkPackageDelivery.evidence_field_specs(outcome)
-
-    properties =
-      Map.new(field_specs, fn field_spec ->
-        {field_spec.name, work_package_delivery_evidence_field_schema(field_spec)}
-      end)
-
-    required = for %{name: name, required: true} <- field_specs, do: name
-
-    schema(properties, required)
-  end
-
-  defp work_package_delivery_evidence_field_schema(%{type: :string, description: description}),
-    do: described_string_schema(description)
-
-  defp work_package_delivery_evidence_field_schema(%{type: :positive_integer, description: description}),
-    do: positive_integer_schema() |> Map.put("description", description)
 
   defp schema(properties, required) do
     %{"type" => "object", "additionalProperties" => false, "properties" => properties, "required" => required}

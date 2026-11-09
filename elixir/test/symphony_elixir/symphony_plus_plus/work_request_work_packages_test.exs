@@ -74,7 +74,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
     work_request = create_work_request!(repo)
     package = slice_one!(repo, work_request.id)
 
-    assert {:ok, _skipped} = WorkRequestService.skip_work_package(repo, work_request.id, package.id)
+    assert {:ok, _skipped} = WorkRequestService.record_work_package_delivery(repo, work_request.id, package.id, %{"outcome" => "skipped", "idempotency_key" => "skip"})
     assert {:error, :stale_status} = CreateWork.activate(repo, package)
   end
 

@@ -3,12 +3,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments,
     only: [
-      optional_object_argument: 2,
-      optional_positive_integer_argument: 2,
       optional_string_argument: 2,
       optional_string_argument: 3,
-      required_argument: 2,
-      required_object: 2
+      required_argument: 2
     ]
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.Payloads,
@@ -24,7 +21,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
     ArchitectPRSync,
     Config,
     ErrorDetails,
-    ToolArguments,
     ToolResult,
     WorkRequestPayloads,
     WorkRequestScope
@@ -43,15 +39,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   @typep mcp_tool_result :: {:ok, map()} | {:error, integer(), String.t(), map()}
 
-  @tools ["sync_pr", "record_work_package_delivery"]
+  @tools ["sync_pr", "close_work_package"]
 
   @spec tools() :: [String.t()]
   def tools, do: @tools
 
   @spec call(String.t(), Config.t(), Terminal.t() | nil, map()) :: mcp_tool_result()
   def call("sync_pr", %Config{} = config, %Terminal{} = terminal, arguments) do
-    with {:ok, arguments} <- validate_arguments(arguments, "sync_pr"),
-         {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
+    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
          {:ok, work_request, work_package} <- WorkRequestScope.work_package_scope(config.repo, work_request_id, work_package_id),
          scope = WorkRequestPayloads.redacted_work_request_scope(work_request),
@@ -66,132 +61,140 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
     end
   end
 
-  # Any chief or architect may end a package as finished (it waits on someone
-  # else); the server requires ownership of the WorkRequest for every other
-  # outcome before this runs.
-  def call("record_work_package_delivery", %Config{} = config, %Terminal{} = terminal, arguments) do
-    with {:ok, arguments} <- validate_arguments(arguments, "record_work_package_delivery"),
+  # Any chief or architect may close a package as finished (its PR waits on
+  # someone else); the server requires ownership of the WorkRequest for every
+  # other outcome before this runs.
+  def call("close_work_package", %Config{} = config, %Terminal{} = terminal, arguments) do
+    tool = "close_work_package"
+
+    with {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
+         {:ok, outcome} <- close_outcome(arguments),
+         {:ok, attrs} <- close_attrs(arguments, work_package_id, outcome, terminal),
          {:ok, work_request_id} <- work_request_id_argument(config.repo, arguments),
-         {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
-         {:ok, outcome} <- required_work_package_delivery_outcome(arguments),
-         {:ok, idempotency_key} <- required_argument(arguments, "idempotency_key"),
-         {:ok, recorded_by} <- optional_string_argument(arguments, "recorded_by", terminal_name(terminal)),
-         {:ok, attrs} <- work_package_delivery_attrs(arguments, outcome, idempotency_key, recorded_by),
          {:ok, work_request, _work_package} <- WorkRequestScope.work_package_scope(config.repo, work_request_id, work_package_id),
-         scope = WorkRequestPayloads.redacted_work_request_scope(work_request),
          :ok <- require_successor_in_work_request(config.repo, work_request, attrs),
-         {:ok, {delivery, cleanup_work_package, closeout_context}} <-
-           mutate_product_tree(
-             config.repo,
-             work_request_id,
-             "record_work_package_delivery",
-             recorded_by,
-             fn ->
-               DeliveryCloseout.record_in_transaction(
-                 config.repo,
-                 work_request_id,
-                 work_package_id,
-                 attrs
-               )
-             end
-           ),
-         _delivery_broadcast_result <- DashboardPubSub.broadcast_changed(),
-         :ok <-
-           DeliveryCloseout.cleanup_after_commit(
-             config.repo,
-             cleanup_work_package,
-             delivery,
-             closeout_context
-           ),
-         _cleanup_broadcast_result <- DashboardPubSub.broadcast_changed(),
-         {:ok, work_packages} <- WorkRequestService.list_work_packages(config.repo, work_request_id),
-         {:ok, delivery_board} <- WorkRequestScope.scoped_delivery_board(config.repo, work_request, work_packages) do
+         {:ok, delivery} <- close(config.repo, work_request_id, work_package_id, attrs, terminal),
+         {:ok, work_package} <- WorkPackageRepository.get(config.repo, work_package_id) do
       {:ok,
        ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
+         "work_package" => work_package_payload(work_package),
          "work_package_delivery" => WorkRequestPayloads.work_package_delivery(delivery),
-         "delivery_board" => WorkRequestPayloads.delivery_board(delivery_board),
-         "scope" => scope
+         "work_request" => WorkRequestPayloads.work_request_mutation(work_request)
        })}
     else
-      {:tool_error, reason} -> invalid_params_error("record_work_package_delivery", reason)
-      {:error, :not_found} -> not_found_error("record_work_package_delivery")
-      {:error, reason} -> record_work_package_delivery_error(reason)
+      {:tool_error, reason} -> invalid_params_error(tool, reason)
+      {:error, :not_found} -> not_found_error(tool)
+      {:error, reason} -> close_error(reason)
     end
   end
 
-  defp required_work_package_delivery_outcome(arguments) do
+  # The same close repeated by any terminal allowed to make it (the owner, or
+  # any chief or architect for finished) returns the ending it recorded; only
+  # the outcome and its evidence identify it. Ownership is checked first.
+  defp close(repo, work_request_id, work_package_id, attrs, terminal) do
+    case recorded_same_close(repo, work_package_id, attrs) do
+      {:ok, existing} -> {:ok, existing}
+      :none -> record_close(repo, work_request_id, work_package_id, attrs, terminal)
+    end
+  end
+
+  defp recorded_same_close(repo, work_package_id, attrs) do
+    existing = repo.get_by(WorkPackageDelivery, work_package_id: work_package_id)
+    if existing && same_close?(existing, attrs), do: {:ok, existing}, else: :none
+  end
+
+  defp same_close?(%WorkPackageDelivery{outcome: outcome} = existing, %{"outcome" => outcome} = attrs) do
+    outcome |> close_fields() |> Map.values() |> Enum.all?(&(Map.get(existing, String.to_existing_atom(&1)) == attrs[&1]))
+  end
+
+  defp same_close?(_existing, _attrs), do: false
+
+  # A concurrent identical close that committed first is still this close: the
+  # later one fails with a conflict, or with a busy ledger when its read went
+  # stale, and then finds the ending already recorded. A busy ledger with no
+  # ending yet is retried a few times before it is reported.
+  defp record_close(repo, work_request_id, work_package_id, attrs, terminal, attempts \\ 3) do
+    case closeout(repo, work_request_id, work_package_id, attrs, terminal) do
+      {:ok, {delivery, cleanup_work_package, closeout_context}} ->
+        DashboardPubSub.broadcast_changed()
+        :ok = DeliveryCloseout.cleanup_after_commit(repo, cleanup_work_package, delivery, closeout_context)
+        {:ok, delivery}
+
+      {:error, reason} = error when reason == :database_busy or elem(reason, 0) == :delivery_outcome_conflict ->
+        case recorded_same_close(repo, work_package_id, attrs) do
+          {:ok, existing} ->
+            {:ok, existing}
+
+          :none when reason == :database_busy and attempts > 1 ->
+            Process.sleep(Enum.random(20..100))
+            record_close(repo, work_request_id, work_package_id, attrs, terminal, attempts - 1)
+
+          :none ->
+            error
+        end
+
+      error ->
+        error
+    end
+  end
+
+  defp closeout(repo, work_request_id, work_package_id, attrs, terminal) do
+    mutate_product_tree(repo, work_request_id, "close_work_package", terminal_name(terminal), fn ->
+      DeliveryCloseout.record_in_transaction(repo, work_request_id, work_package_id, attrs)
+    end)
+  rescue
+    error in Exqlite.Error -> if busy?(error), do: {:error, :database_busy}, else: reraise(error, __STACKTRACE__)
+  end
+
+  defp busy?(%Exqlite.Error{message: message}) do
+    message = String.downcase(message)
+    String.contains?(message, "busy") or String.contains?(message, "locked")
+  end
+
+  defp close_outcome(arguments) do
     with {:ok, outcome} <- required_argument(arguments, "outcome") do
-      if outcome in WorkPackageDelivery.outcomes() do
-        {:ok, outcome}
-      else
-        {:tool_error, {:invalid_enum, "outcome", WorkPackageDelivery.outcomes()}}
+      if outcome in WorkPackageDelivery.close_outcomes(),
+        do: {:ok, outcome},
+        else: {:tool_error, {:invalid_enum, "outcome", WorkPackageDelivery.close_outcomes()}}
+    end
+  end
+
+  # The tool's arguments, and the ending-row fields each one fills, per outcome.
+  # Every listed argument is required for its outcome.
+  defp close_fields("completed_no_pr"), do: %{"evidence" => "no_pr_evidence"}
+  defp close_fields("superseded"), do: %{"successor_work_package_id" => "successor_work_package_id", "rationale" => "superseded_reason"}
+  defp close_fields("abandoned"), do: %{"rationale" => "abandoned_rationale"}
+  defp close_fields(_skipped_or_finished), do: %{}
+
+  defp close_attrs(arguments, work_package_id, outcome, %Terminal{} = terminal) do
+    with {:ok, supplied} <- close_evidence_arguments(arguments),
+         {:ok, key} <- optional_string_argument(arguments, "idempotency_key", "close_work_package:#{work_package_id}:#{outcome}") do
+      fields = close_fields(outcome)
+      missing = fields |> Map.keys() |> Enum.reject(&Map.has_key?(supplied, &1)) |> Enum.sort()
+      unused = supplied |> Map.keys() |> Enum.reject(&Map.has_key?(fields, &1)) |> Enum.sort()
+
+      cond do
+        missing != [] -> {:tool_error, {:close_argument, "missing_#{hd(missing)}", outcome, missing}}
+        unused != [] -> {:tool_error, {:close_argument, "argument_not_used", outcome, unused}}
+        true -> {:ok, close_row(supplied, fields, outcome, key, terminal)}
       end
     end
   end
 
-  defp work_package_delivery_attrs(arguments, outcome, idempotency_key, recorded_by) do
-    with {:ok, evidence} <- optional_object_argument(arguments, "evidence"),
-         {:ok, evidence_attrs} <- work_package_delivery_evidence_attrs(evidence || %{}, outcome) do
-      {:ok,
-       Map.merge(
-         %{
-           "outcome" => outcome,
-           "idempotency_key" => idempotency_key,
-           "recorded_by" => recorded_by
-         },
-         evidence_attrs
-       )}
-    end
-  end
-
-  defp work_package_delivery_evidence_attrs(evidence, outcome) do
-    case Map.keys(evidence) do
-      [^outcome] ->
-        with {:ok, typed_evidence} <- required_object(evidence, outcome) do
-          work_package_delivery_typed_evidence_attrs(outcome, typed_evidence)
-        end
-
-      [] ->
-        work_package_delivery_typed_evidence_attrs(outcome, %{})
-
-      _keys ->
-        {:tool_error, "conflicting_delivery_evidence"}
-    end
-  end
-
-  defp work_package_delivery_typed_evidence_attrs(outcome, evidence) do
-    case WorkPackageDelivery.validate_evidence(outcome, evidence) do
-      :ok ->
-        collect_work_package_delivery_evidence_attrs(
-          evidence,
-          WorkPackageDelivery.evidence_field_specs(outcome)
-        )
-
-      {:error, details} ->
-        {:tool_error, {:invalid_evidence, details}}
-    end
-  end
-
-  defp collect_work_package_delivery_evidence_attrs(evidence, field_specs) do
-    Enum.reduce_while(field_specs, {:ok, %{}}, fn %{name: field, type: type}, {:ok, attrs} ->
-      case work_package_delivery_evidence_field(evidence, field, type) do
-        {:ok, value} -> {:cont, {:ok, optional_put(attrs, field, value)}}
+  defp close_evidence_arguments(arguments) do
+    Enum.reduce_while(["evidence", "successor_work_package_id", "rationale"], {:ok, %{}}, fn name, {:ok, supplied} ->
+      case optional_string_argument(arguments, name) do
+        {:ok, nil} -> {:cont, {:ok, supplied}}
+        {:ok, value} -> {:cont, {:ok, Map.put(supplied, name, value)}}
         {:tool_error, reason} -> {:halt, {:tool_error, reason}}
       end
     end)
   end
 
-  defp work_package_delivery_evidence_field(evidence, field, :string), do: optional_string_argument(evidence, field)
-
-  defp work_package_delivery_evidence_field(evidence, field, :positive_integer),
-    do: optional_positive_integer_argument(evidence, field)
-
-  defp validate_arguments(arguments, tool) do
-    case ToolArguments.architect_tool_arguments(%{"arguments" => arguments}, tool) do
-      {:ok, arguments} -> {:ok, arguments}
-      {:error, _code, _message, %{"reason" => reason}} -> {:tool_error, reason}
-    end
+  defp close_row(supplied, fields, outcome, key, %Terminal{display_address: recorded_by}) do
+    Enum.reduce(supplied, %{"outcome" => outcome, "idempotency_key" => key, "recorded_by" => recorded_by}, fn {name, value}, row ->
+      Map.put(row, Map.fetch!(fields, name), value)
+    end)
   end
 
   defp architect_sync_pr_result(repo, work_package_id, %{status: status} = pr_sync, scope)
@@ -321,58 +324,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
     |> Map.delete("execution_graph")
   end
 
-  defp product_tree_revision_reason("record_work_package_delivery"),
-    do: "WorkPackage delivery recorded in product tree through MCP."
+  defp product_tree_revision_reason("close_work_package"), do: "WorkPackage closed through MCP."
 
-  defp record_work_package_delivery_error(%Ecto.Changeset{} = changeset),
-    do: changeset_invalid_params_error("record_work_package_delivery", "invalid_work_package_delivery", changeset)
+  defp close_error(%Ecto.Changeset{} = changeset),
+    do: changeset_invalid_params_error("close_work_package", "invalid_work_package_delivery", changeset)
 
-  defp record_work_package_delivery_error({:delivery_outcome_conflict, outcome}) do
-    {:error, -32_602, "Invalid params", %{"tool" => "record_work_package_delivery", "reason" => "delivery_outcome_conflict", "state" => "ended", "outcome" => outcome}}
+  defp close_error({:delivery_outcome_conflict, outcome}),
+    do: close_refused("delivery_outcome_conflict", "ended", outcome, "none")
+
+  defp close_error({:ending_not_allowed, status, outcome}),
+    do: close_refused("ending_not_allowed", status, outcome, nil)
+
+  defp close_error(:idempotency_key_conflict),
+    do: {:error, -32_602, "Invalid params", %{"tool" => "close_work_package", "reason" => "idempotency_key_conflict"}}
+
+  defp close_error(reason), do: architect_error(reason, "close_work_package")
+
+  defp close_refused(reason, state, outcome, next_action) do
+    data =
+      %{"tool" => "close_work_package", "reason" => reason, "state" => state, "outcome" => outcome}
+      |> optional_put("next_action", next_action)
+      |> optional_put("allowed_outcomes", allowed_close_outcomes(state))
+
+    {:error, -32_009, "Precondition Failed", data}
   end
 
-  defp record_work_package_delivery_error({:ending_not_allowed, status, outcome}) do
-    {:error, -32_009, "Precondition Failed",
-     %{
-       "tool" => "record_work_package_delivery",
-       "reason" => "ending_not_allowed",
-       "reason_code" => "ending_not_allowed",
-       "state" => status,
-       "outcome" => outcome,
-       "allowed_outcomes" => Enum.filter(WorkPackageDelivery.outcomes(), &(status in Lifecycle.ending_sources(&1)))
-     }}
-  end
-
-  defp record_work_package_delivery_error(reason)
-       when reason in [:missing_strong_pr_evidence, :idempotency_key_conflict] do
-    data = %{"tool" => "record_work_package_delivery", "reason" => Atom.to_string(reason)}
-    {:error, -32_602, "Invalid params", data}
-  end
-
-  defp record_work_package_delivery_error(:active_runtime),
-    do: delivery_closeout_precondition_error("record_work_package_delivery", :active_runtime)
-
-  defp record_work_package_delivery_error(reason), do: architect_error(reason, "record_work_package_delivery")
-
-  defp delivery_closeout_precondition_error(tool, reason) when is_atom(reason),
-    do: precondition_error(tool, Atom.to_string(reason))
-
-  defp precondition_error(tool, reason) do
-    {:error, -32_009, "Precondition Failed",
-     %{
-       "tool" => tool,
-       "reason" => reason,
-       "reason_code" => reason,
-       "decision_reason" => "precondition_denied",
-       "next_action" => precondition_next_action(tool, reason)
-     }}
-  end
-
-  defp precondition_next_action("record_work_package_delivery", "active_runtime"),
-    do: "release_worker_or_retry_after_stale"
-
-  defp precondition_next_action("record_work_package_delivery", _reason), do: "retry_record_work_package_delivery"
-  defp precondition_next_action(_tool, _reason), do: "retry_after_runtime_state_changes"
+  defp allowed_close_outcomes("ended"), do: nil
+  defp allowed_close_outcomes(status), do: Enum.filter(WorkPackageDelivery.close_outcomes(), &(status in Lifecycle.ending_sources(&1)))
 
   defp architect_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
   defp architect_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)
@@ -387,7 +365,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
     do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => "provider_head_mismatch", "expected_head_sha" => expected, "actual_head_sha" => actual}}
 
   defp architect_error(:work_request_archived, tool),
-    do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"phase" => "archived"})
+    do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"state" => "archived"})
 
   defp architect_error(reason, tool),
     do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
@@ -416,6 +394,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
      |> Map.put("tool", tool)
      |> Map.put("reason", "invalid_evidence")}
   end
+
+  defp invalid_params_error(tool, {:close_argument, reason, outcome, arguments}),
+    do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason, "outcome" => outcome, "arguments" => arguments}}
 
   defp invalid_params_error(tool, {:invalid_enum, _field, _allowed_values} = reason) do
     ErrorDetails.invalid_params_error(tool, reason)

@@ -1,8 +1,6 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
   use ExUnit.Case, async: false
 
-  import ExUnit.CaptureLog
-
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     Config,
     FailedCall,
@@ -12,7 +10,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
     Server
   }
 
-  alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
@@ -37,7 +34,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
 
     config.repo.delete_all(OperatorSettings)
     config.repo.delete_all(WorkPackage)
-    FailedCall.reset()
+    config.repo.delete_all(FailedCall.Count)
 
     :ok
   end
@@ -107,30 +104,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
     assert %Server{initialized: true} = HTTPStateStore.get(config, "client-a", init.state_key)
   end
 
-  test "batch transport observes each failed tool item once without retaining values", %{config: config} do
-    assert {:ok, _settings} = OperatorSettingsRepository.update(config.repo, %{"capture_failed_mcp_calls" => true})
+  test "batch transport counts each failed tool item once without retaining values", %{config: config} do
     {:ok, init} = HTTPTransport.handle(config, initialize_request("batch-failure-init"), client_key: "batch-failure-client")
 
     request = tool_call_request("private-request-id", "sympp.health", %{"bearer" => "request-secret"})
     notification = tool_call_request(nil, "sympp.health", %{"bearer" => "notification-secret"}) |> Map.delete("id")
 
-    {result, log} =
-      with_log(fn ->
-        HTTPTransport.handle(config, [request, notification],
-          client_key: "batch-failure-client",
-          state_key: init.state_key
-        )
-      end)
+    assert {:ok, %{response: [%{"error" => %{"data" => %{"code" => "invalid_tool_arguments"}}}]}} =
+             HTTPTransport.handle(config, [request, notification], client_key: "batch-failure-client", state_key: init.state_key)
 
-    assert {:ok, %{response: [%{"error" => %{"data" => %{"diagnostic_id" => diagnostic_id}}}]}} = result
-    assert diagnostic_id =~ ~r/^mcpdiag_[0-9a-f]{16}$/
-    assert events = diagnostic_events(log)
-    assert length(events) == 2
-    assert Enum.all?(events, &(&1["failure_layer"] == "tool"))
-    assert events |> Enum.map(& &1["diagnostic_id"]) |> Enum.uniq() |> length() == 2
-    refute log =~ "private-request-id"
-    refute log =~ "request-secret"
-    refute log =~ "notification-secret"
+    assert [%{tool: "sympp.health", reason: "invalid_tool_arguments", layer: "tool", count: 2} = row] = config.repo.all(FailedCall.Count)
+    refute inspect(row) =~ "secret"
   end
 
   test "batched initialize requests are rejected without creating HTTP state", %{config: config} do
@@ -219,16 +203,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
 
   defp tool_call_request(id, name, arguments) do
     %{"jsonrpc" => "2.0", "id" => id, "method" => "tools/call", "params" => %{"name" => name, "arguments" => arguments}}
-  end
-
-  defp diagnostic_events(log) do
-    log
-    |> String.split("\n")
-    |> Enum.filter(&String.contains?(&1, ~s("event":"sympp_failed_mcp_call")))
-    |> Enum.map(fn line ->
-      {json_start, 1} = :binary.match(line, "{")
-      line |> binary_part(json_start, byte_size(line) - json_start) |> Jason.decode!()
-    end)
   end
 
   defp reset_server_response_state do

@@ -12,13 +12,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments,
     only: [
-      architect_tool_arguments: 2,
-      bootstrap_tool_arguments: 2,
-      local_operator_tool_arguments: 2,
       optional_list_argument: 2,
       optional_object_argument: 2,
       optional_string_argument: 3,
-      required_argument: 2
+      required_argument: 2,
+      tool_arguments: 2
     ]
 
   alias SymphonyElixir.SymphonyPlusPlus.HerdrCore
@@ -39,6 +37,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     Response,
     Surface,
     ToolCatalog,
+    ToolError,
     ToolResult,
     WorkRequestPayloads
   }
@@ -53,8 +52,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   @protocol_version "2025-03-26"
   @health_tool ToolCatalog.health_tool()
-  @bootstrap_tools ToolCatalog.bootstrap_tools()
-  @local_operator_tools ToolCatalog.local_operator_tools()
   @work_request_tools ArchitectWorkRequestTools.tools()
   @product_tree_tools ArchitectProductTreeTools.tools()
   @delivery_tools ArchitectDeliveryTools.tools()
@@ -187,13 +184,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp handle_batch_item(_payload, _server), do: Response.error(nil, -32_600, "Invalid Request", %{"reason" => "request_must_be_object"})
 
   defp observe_tool_call(payload, %__MODULE__{} = server, fun) when is_function(fun, 0) do
-    started_at = FailedCall.monotonic_now()
-
-    FailedCall.protect(server, payload, :tool, started_at, fn ->
-      response = fun.()
-      {FailedCall.observe_response(server, payload, response, :tool, started_at), server}
-    end)
-    |> elem(0)
+    FailedCall.protect(server, payload, :tool, fn -> FailedCall.observe_response(server, payload, fun.(), :tool) end)
   end
 
   defp do_handle(%{"id" => id}, %__MODULE__{}) when invalid_request_id(id) do
@@ -290,8 +281,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     {:error, -32_602, "Invalid params", %{"reason" => "missing_protocol_version", "supported" => @protocol_version}}
   end
 
-  defp dispatch("tools/list", params, %__MODULE__{} = server) when is_map(params) do
-    {:ok, %{"tools" => Surface.tool_specs(server.config)}}
+  defp dispatch("tools/list", params, %__MODULE__{}) when is_map(params) do
+    {:ok, %{"tools" => ToolCatalog.tool_specs()}}
   end
 
   defp dispatch("tools/list", _params, _server), do: {:error, -32_602, "Invalid params", %{"reason" => "params_must_be_object"}}
@@ -299,13 +290,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp dispatch("tools/call", %{"name" => name} = params, %__MODULE__{} = server) when is_binary(name) do
     arguments = Map.get(params, "arguments", %{})
 
-    cond do
-      not is_map(arguments) -> {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "invalid_tool_arguments"}}
-      name not in Surface.tool_names(server.config) -> {:error, -32_601, "Method not found", %{"tool" => name}}
-      name == @health_tool and arguments != %{} -> {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "invalid_tool_arguments"}}
-      name == @health_tool -> {:ok, ToolResult.tool_result(Health.health(server, Terminal.from_params(params)))}
-      true -> call_tool(name, params, arguments, Terminal.from_params(params), server)
-    end
+    name
+    |> tool_call(params, arguments, server)
+    |> ToolError.contract(name, arguments, server.config.repo)
   end
 
   defp dispatch("tools/call", params, _server) when is_map(params), do: {:error, -32_602, "Invalid params", %{"reason" => "missing_tool_name"}}
@@ -333,11 +320,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp dispatch("resources/read", _params, _server), do: {:error, -32_602, "Invalid params", %{"reason" => "missing_resource_uri"}}
   defp dispatch(_method, _params, _server), do: {:error, -32_601, "Method not found", %{}}
 
+  defp tool_call(name, params, arguments, %__MODULE__{} = server) do
+    cond do
+      not is_map(arguments) -> early_arguments_error(name)
+      not ToolCatalog.known_tool?(name) -> {:error, -32_601, "Method not found", %{"tool" => name}}
+      name == @health_tool and arguments != %{} -> early_arguments_error(name)
+      name == @health_tool -> {:ok, ToolResult.tool_result(Health.health(server, Terminal.from_params(params)))}
+      true -> call_tool(name, params, arguments, Terminal.from_params(params), server)
+    end
+  end
+
+  # Refused before the caller's access is checked, so it reports no state.
+  defp early_arguments_error(name),
+    do: {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "invalid_tool_arguments", "state" => nil, "next_action" => "fix_arguments"}}
+
   defp call_tool(name, params, arguments, terminal, %__MODULE__{config: config} = server) do
     with :ok <- LocalTrustedTools.authorize(server, name),
          :ok <- require_write_identity(name, arguments, terminal),
          :ok <- prepare_repository(config.repo, name),
-         {:ok, arguments} <- tool_arguments(name, params) do
+         {:ok, arguments} <- tool_arguments(params, name) do
       if ToolCatalog.owner_gated_call?(name, arguments),
         do: owner_gated(name, arguments, terminal, server),
         else: run(name, arguments, terminal, server)
@@ -443,12 +444,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp run("summarize_failed_mcp_calls", _arguments, _terminal, %__MODULE__{config: config}),
-    do: {:ok, ToolResult.tool_result(LocalTrustedTools.failed_call_summary(config))}
-
-  defp tool_arguments(name, params) when name in @bootstrap_tools, do: bootstrap_tool_arguments(params, name)
-  defp tool_arguments(name, params) when name in @local_operator_tools, do: local_operator_tool_arguments(params, name)
-  defp tool_arguments(name, params), do: architect_tool_arguments(params, name)
+  defp run("summarize_failed_mcp_calls", arguments, _terminal, %__MODULE__{config: config}) do
+    case FailedCall.summary(config.repo, arguments) do
+      {:ok, summary} -> {:ok, ToolResult.tool_result(summary)}
+      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "summarize_failed_mcp_calls", "reason" => reason}}
+      {:error, _reason} -> service_error("summarize_failed_mcp_calls")
+    end
+  end
 
   # Reads are open to every trusted caller. Writes need a bridge-asserted Herdr
   # terminal; when the factory's own herdr-core can see that terminal, it must
@@ -561,7 +563,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp archived_error(tool), do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"phase" => "archived"})
+  defp archived_error(tool), do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"state" => "archived"})
 
   defp not_found_error(tool), do: {:error, -32_004, "Not found", %{"tool" => tool, "reason" => "not_found"}}
   defp service_error(resource), do: {:error, -32_000, "Server error", %{"resource" => resource, "reason" => "ledger_unavailable"}}
@@ -575,7 +577,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp request_params(%{"params" => _params}), do: {:error, -32_602, "Invalid params", %{"reason" => "params_must_be_object_or_array"}}
   defp request_params(_request), do: {:ok, %{}}
 
-  defp response_text_profile(%__MODULE__{config: %Config{mode: :stdio, surface_profile: :full}}), do: :full
+  defp response_text_profile(%__MODULE__{config: %Config{mode: :stdio}}), do: :full
   defp response_text_profile(%__MODULE__{}), do: :canonical
 
   defp initialize_request?(%{"jsonrpc" => "2.0", "method" => "initialize"}), do: true

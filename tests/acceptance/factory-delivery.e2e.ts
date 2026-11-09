@@ -239,7 +239,7 @@ test('provider errors and incomplete or wrong-head evidence cannot complete a di
   ] as const) {
     provider.replies.set(102, { stdout, exitCode });
     const response = await architect.rpc('tools/call', { name: 'sync_pr', arguments: handoff });
-    expect(response.error?.data?.reason).toBe(reason);
+    expect(response.error?.data?.code).toBe(reason);
     expect(provider.calls.at(-1)?.reply.exitCode).toBe(exitCode);
     expect(JSON.stringify(response)).not.toContain('private synthetic diagnostics');
     expect((await row(architect, request, wp)).delivery_outcome).toBeNull();
@@ -297,41 +297,24 @@ test('typed no-PR closeout resolves blockers once and terminal packages cannot r
     await architect.call('set_blocker', { work_package_id: id, blocker_id: 'prerequisite', active: true, summary: 'An explicit prerequisite is missing.' });
     expect((await row(architect, request, id)).work_package.blocker_state['active?']).toBe(true);
   }
-  for (const [outcome, evidence, reason] of [
-    ['merged', { merged: {} }, 'invalid_outcome'],
-    ['pr_merged', { completed_no_pr: { no_pr_evidence: 'Wrong type' } }, 'conflicting_delivery_evidence'],
-    ['completed_no_pr', { completed_no_pr: {} }, 'invalid_evidence'],
-    ['completed_no_pr', { completed_no_pr: { no_pr_evidence: '   ' } }, 'invalid_evidence'],
+  // Merges are recorded from GitHub; close_work_package ends a package without one.
+  for (const [args, reason] of [
+    [{ outcome: 'merged' }, 'invalid_outcome'],
+    [{ outcome: 'pr_merged' }, 'invalid_outcome'],
+    [{ outcome: 'completed_no_pr' }, 'missing_evidence'],
+    [{ outcome: 'completed_no_pr', evidence: '   ' }, 'missing_evidence'],
+    [{ outcome: 'superseded', rationale: 'Replaced.' }, 'missing_successor_work_package_id'],
+    [{ outcome: 'abandoned' }, 'missing_rationale'],
+    [{ outcome: 'completed_no_pr', evidence: 'Done.', rationale: 'Not used.' }, 'argument_not_used'],
+    [{ outcome: 'completed_no_pr', evidence: 'Done.', pr_url: prUrl(105) }, 'unexpected_argument'],
   ] as const) {
-    await architect.reject('record_work_package_delivery', { work_package_id: wp, outcome, evidence, idempotency_key: 'invalid-close' }, reason);
+    const refused = await architect.reject('close_work_package', { work_package_id: wp, ...args }, reason);
+    expect(refused).toMatchObject({ state: 'dispatched', next_action: 'fix_arguments' });
+    expect(typeof refused.message).toBe('string');
     expect((await row(architect, request, wp)).delivery_outcome).toBeNull();
     expect((await row(architect, request, wp)).work_package.blocker_state['active?']).toBe(true);
   }
-  for (const [outcome, required] of [
-    ['pr_merged', ['pr_url', 'pr_merged_at', 'merge_commit_sha']],
-    ['completed_no_pr', ['no_pr_evidence']], ['superseded', ['successor_work_package_id', 'superseded_reason']],
-    ['abandoned', ['abandoned_rationale']],
-  ] as const) {
-    const refused = await architect.reject('record_work_package_delivery', {
-      work_package_id: wp, outcome, evidence: { [outcome]: {} }, idempotency_key: 'missing-evidence',
-    }, 'invalid_evidence');
-    expect(refused.missing_fields).toEqual(required);
-  }
-  const invalid = await architect.reject('record_work_package_delivery', {
-    work_package_id: wp, outcome: 'pr_merged', idempotency_key: 'extra-evidence',
-    evidence: { pr_merged: { pr_url: prUrl(105), no_pr_evidence: 'Wrong outcome.' } },
-  }, 'invalid_evidence');
-  expect(invalid.missing_fields).toEqual(['pr_merged_at', 'merge_commit_sha']);
-  expect(invalid.unexpected_fields).toEqual(['no_pr_evidence']);
-  expect(invalid.allowed_fields).toEqual(['pr_url', 'pr_number', 'pr_repository', 'pr_merged_at', 'merge_commit_sha']);
   await architect.call('dispatch_work_package', { work_package_id: remaining });
-  const mergedEvidence = { pr_url: prUrl(105), pr_number: 105, pr_repository: 'example/other', pr_merged_at: new Date().toISOString(), merge_commit_sha: head('f') };
-  await architect.reject('record_work_package_delivery', {
-    work_package_id: remaining, outcome: 'pr_merged', idempotency_key: 'malformed-reference', evidence: { pr_merged: mergedEvidence },
-  }, 'malformed_pr_evidence');
-  await architect.reject('record_work_package_delivery', {
-    work_package_id: wp, outcome: 'pr_merged', idempotency_key: 'flat-evidence', pr_url: prUrl(105), evidence: { pr_merged: mergedEvidence },
-  }, 'unexpected_argument');
   expect((await row(architect, request, remaining)).delivery_outcome).toBeNull();
   const result = await close(architect, wp);
   const scoped = await row(architect, request, wp);
@@ -341,13 +324,10 @@ test('typed no-PR closeout resolves blockers once and terminal packages cannot r
   const revision = (await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision;
   expect((await close(architect, wp)).work_package_delivery.id).toBe(result.work_package_delivery.id);
   expect((await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision).toEqual(revision);
-  const conflict = await architect.rpc('tools/call', { name: 'record_work_package_delivery', arguments: {
-    work_package_id: wp, outcome: 'completed_no_pr', idempotency_key: `close-${wp}`,
-    evidence: { completed_no_pr: { no_pr_evidence: 'Replace original evidence' } },
-  } });
-  expect(conflict.error?.data?.reason).toBe('delivery_outcome_conflict');
+  const conflict = await architect.reject('close_work_package', { work_package_id: wp, outcome: 'completed_no_pr', evidence: 'Replace original evidence' }, 'delivery_outcome_conflict');
+  expect(conflict).toMatchObject({ outcome: 'completed_no_pr', state: 'ended', next_action: 'none' });
   expect((await row(architect, request, wp)).delivery).toEqual(scoped.delivery);
-  await close(architect, abandoned, 'abandoned', { abandoned_rationale: 'No implementation was started.' });
+  await close(architect, abandoned, 'abandoned', { rationale: 'No implementation was started.' });
   for (const [id, status] of [[wp, 'ended'], [abandoned, 'ended']]) {
     const before = await row(architect, request, id);
     expect(before.raw_status).toBe(status);
@@ -355,7 +335,7 @@ test('typed no-PR closeout resolves blockers once and terminal packages cannot r
     await architect.reject('set_blocker', { work_package_id: id, blocker_id: 'prerequisite', active: false, summary: 'Already resolved.' }, 'work_package_ended');
     expect((await row(architect, request, id)).raw_status).toBe(status);
     await architect.reject('edit_plan', { ops: [{ op: 'update_package', work_package_id: id, expected_revision: 1, patch: { title: 'Reactivate' } }] }, 'work_package_ended');
-    await architect.reject('skip_work_package', { work_package_id: id }, 'work_package_terminal');
+    await architect.reject('close_work_package', { work_package_id: id, outcome: 'skipped' }, 'delivery_outcome_conflict');
     expect((await row(architect, request, id)).delivery).toEqual(before.delivery);
   }
   await close(architect, remaining);

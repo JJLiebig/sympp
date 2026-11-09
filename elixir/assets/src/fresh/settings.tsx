@@ -14,7 +14,6 @@ const DAYS: Array<[Key, string]> = [
 ];
 const SWITCHES: Array<[Key, string]> = [
   ["open_dashboard_on_boot", "Open the board when the backend starts"],
-  ["capture_failed_mcp_calls", "Keep failed agent calls for diagnosis"],
 ];
 
 function isValid(value: number | boolean) {
