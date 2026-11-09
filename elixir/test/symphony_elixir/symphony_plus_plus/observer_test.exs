@@ -403,6 +403,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert repo.get!(Observation, package.id).stale == ["stacking"]
     end
 
+    test "a package whose branch lookup fails may hide an open PR, so others in its repository wait", %{repo: repo} do
+      package = package!(repo, "WP-STACK-HIDDEN-PR")
+      _unattached = package!(repo, "WP-STACK-NO-PR-YET")
+      sibling = package!(repo, "WP-STACK-OPEN")
+      attach!(repo, package, 83, "head-a")
+      attach!(repo, sibling, 84, "head-b")
+
+      sweep_with = fn branch_result ->
+        Observer.sweep(repo,
+          snapshot: fn entries ->
+            Map.new(entries, fn
+              {:pr, _owner, _name, 83} = entry -> {entry, {:ok, pr(83, "head-a")}}
+              {:pr, _owner, _name, 84} = entry -> {entry, {:ok, pr(84, "head-b")}}
+              {:branch, _owner, _name, _branch, _base} = entry -> {entry, branch_result}
+            end)
+          end,
+          review: &no_review/2,
+          failing_checks: fn _repository, _head -> {:ok, []} end,
+          commits: listed(%{{:pr, "nextide", "repo", 83} => {:ok, pr(83, "head-a")}, {:pr, "nextide", "repo", 84} => {:ok, pr(84, "head-b")}}, %{})
+        )
+      end
+
+      sweep_with.({:error, :request_failed})
+      assert repo.get!(WorkPackage, package.id).status == "dispatched"
+      assert repo.get!(Observation, package.id).stale == ["stacking"]
+
+      sweep_with.({:ok, nil})
+      assert repo.get!(WorkPackage, package.id).status == "ready"
+    end
+
     test "commit lists are read only where two PRs are open in one repository, and again only when a head or base moves", %{repo: repo} do
       first = package!(repo, "WP-COMMITS-FIRST")
       attach!(repo, first, 85, "head-a")

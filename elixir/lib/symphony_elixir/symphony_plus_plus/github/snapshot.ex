@@ -110,8 +110,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
 
   @doc """
   The commit lists of open PRs, as GitHub lists a PR's commits (commits
-  reachable from its base are left out; the first 100). One batched document
-  per 25 PRs. Each result carries the head and base it was read at.
+  reachable from its base are left out). One batched document per 25 PRs.
+  Each result carries the head and base it was read at. A PR with more than
+  100 commits can't be listed whole and is an error.
   """
   @spec commits([{String.t(), String.t(), pos_integer()}], keyword()) :: %{{String.t(), String.t(), pos_integer()} => {:ok, map()} | {:error, Api.error()}}
   def commits(prs, opts \\ []) when is_list(prs) do
@@ -133,7 +134,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
     selections =
       Enum.map(indexed, fn {_pr, index} ->
         "e#{index}: repository(owner: $o#{index}, name: $r#{index}) { pullRequest(number: $n#{index}) " <>
-          "{ headRefOid baseRefOid commits(first: 100) { nodes { commit { oid } } } } }"
+          "{ headRefOid baseRefOid commits(first: 100) { totalCount nodes { commit { oid } } } } }"
       end)
 
     query = "query(#{Enum.join(declarations, ", ")}) {\n#{Enum.join(selections, "\n")}\n}\n"
@@ -144,9 +145,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
     end
   end
 
-  defp decode_commits(%{"headRefOid" => head, "commits" => %{"nodes" => nodes}} = node) when is_binary(head) and is_list(nodes) do
+  defp decode_commits(%{"headRefOid" => head, "commits" => %{"nodes" => nodes, "totalCount" => total}} = node) when is_binary(head) and is_list(nodes) do
     oids = for %{"commit" => %{"oid" => oid}} when is_binary(oid) <- nodes, do: oid
-    {:ok, %{"head_sha" => head, "base_sha" => node["baseRefOid"], "commits" => oids}}
+    if length(oids) == total, do: {:ok, %{"head_sha" => head, "base_sha" => node["baseRefOid"], "commits" => oids}}, else: {:error, :request_failed}
   end
 
   defp decode_commits(_unusable), do: {:error, :request_failed}

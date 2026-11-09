@@ -140,6 +140,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     watched = Enum.map(watched, &Map.put(&1, :observation, Map.get(observations, &1.package.id)))
     cards = guarded(fn -> Cards.watch(repo, opts) end, [])
 
+    watched = Enum.map(watched, &Map.put(&1, :entry, github_entry(&1)))
     {github, results} = github_results(watched, Enum.map(cards, & &1.entry), opts)
     github = with_commits(watched, github, opts)
     reviews = review_results(Enum.map(watched, & &1.package), opts)
@@ -215,7 +216,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   # Package and card entries share one batched snapshot. Returns each
   # package's result and the results by entry.
   defp github_results(watched, card_entries, opts) do
-    entries = Map.new(watched, &{&1.package.id, github_entry(&1)})
+    entries = Map.new(watched, &{&1.package.id, &1.entry})
     wanted = (Map.values(entries) ++ card_entries) |> Enum.reject(&(&1 == :skip)) |> Enum.uniq()
 
     results =
@@ -289,6 +290,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   defp view(%{package: package, github: {:error, _reason}, attached: %{} = attached}),
     do: [%{work_package_id: package.id, repository: attached.repository, number: attached.number, state: nil, commits: nil, fresh?: true}]
+
+  # A branch whose PR lookup failed may hide an open PR.
+  defp view(%{package: package, github: {:error, _reason}, entry: {:branch, owner, repo, _branch, _base}}),
+    do: [%{work_package_id: package.id, repository: "#{owner}/#{repo}", number: nil, state: nil, commits: nil, fresh?: true}]
 
   defp view(_item), do: []
 

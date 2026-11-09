@@ -224,6 +224,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubApiTest do
       Snapshot.fetch(for(number <- 1..60, do: {:pr, "o", "r", number}), graphql: graphql)
       assert :counters.get(documents, 1) == 3
     end
+
+    test "commit lists carry the head and base they were read at; a list GitHub can't return whole is an error" do
+      commits = fn oids, total -> %{"totalCount" => total, "nodes" => Enum.map(oids, &%{"commit" => %{"oid" => &1}})} end
+
+      data = %{
+        "e0" => %{"pullRequest" => %{"headRefOid" => "h1", "baseRefOid" => "b1", "commits" => commits.(["c1", "h1"], 2)}},
+        "e1" => %{"pullRequest" => %{"headRefOid" => "h2", "baseRefOid" => "b1", "commits" => commits.(Enum.map(1..100, &"c#{&1}"), 140)}}
+      }
+
+      results = Snapshot.commits([{"o", "r", 1}, {"o", "r", 2}], graphql: fn _query, _variables, _priority -> {:ok, data} end)
+      assert results[{"o", "r", 1}] == {:ok, %{"head_sha" => "h1", "base_sha" => "b1", "commits" => ["c1", "h1"]}}
+      assert {:error, _incomplete} = results[{"o", "r", 2}]
+    end
   end
 
   defp request(fun), do: Application.put_env(:symphony_elixir, :sympp_github_request, fun)

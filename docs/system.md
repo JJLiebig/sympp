@@ -182,7 +182,8 @@ holding all of the other's commits and more is the stacked one; otherwise the
 later-opened PR is. Commit lists come from GitHub: the Observer reads them only
 for repositories with two or more open watched PRs and only when a PR's head or
 base moves, and `sync_pr` reads its own PR's with `gh`. When another PR's state
-or commits can't be read, qualification waits (`stale: stacking`) rather than
+or commits can't be read (including a PR with more than 100 commits),
+qualification waits (`stale: stacking`) rather than
 blocking. The check matches exact commits; a cherry-pick with new commit ids
 isn't detected.
 
