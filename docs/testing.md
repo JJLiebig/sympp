@@ -76,7 +76,7 @@ it, and checks that the worker terminal's server lists no tools. The task
 launcher journey uses the same `hc` and a test-only Codex config API. These
 qualify sympp's use of the host, Herdr and Git protocols, not live Codex, Herdr
 or a tailnet factory. Linux runs in native acceptance; macOS is a best-effort job
-outside the required gate.
+in its own non-blocking `macos-best-effort` workflow.
 
 Keep precise lower-level checks for ownership races and herdr-core liveness,
 along with stored authority and transaction qualifications. A repository-backed
