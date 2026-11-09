@@ -22,7 +22,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
 
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyInputs
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, DependencyInputs}
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, WorkPackage, WorkPackageActivity}
@@ -120,9 +120,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     selection = %{"type" => "dependency_inputs", "source_tool" => "sync_pr", "head_sha" => payload["head_sha"], "dependency_inputs" => selections}
 
     with :ok <- DependencyInputs.validate_selection(repo, package.id, selection),
-         {:ok, _event} <- append_event(repo, actor, package.id, selection, "dependency_inputs_selected") do
+         {:ok, _event} <- append_event(repo, actor, package.id, Map.put(selection, "selection_revisions", selection_revisions(repo, selections)), "dependency_inputs_selected") do
       :ok
     end
+  end
+
+  # When a dependency's selection changes, the dependent must attest again, even
+  # to the same input; the selections' revisions keep that attestation distinct
+  # from an earlier one with the same payload.
+  defp selection_revisions(repo, selections) do
+    ids = Enum.map(selections, & &1["dependency_id"])
+
+    repo.all(from(edge in DependencyEdge, where: edge.id in ^ids, select: {edge.id, edge.selection_updated_at}))
+    |> Map.new(fn {id, updated_at} -> {id, updated_at && DateTime.to_iso8601(updated_at)} end)
   end
 
   defp pr_facts(metadata, payload) do

@@ -115,6 +115,12 @@ test('candidate pins allow dispatch but all overlapping constraints and current 
     expect(rejected.error).toBeTruthy();
   }
   await architect.call('sync_pr', { work_package_id: ui, url: prUrl(202), head_sha: head('c'), dependency_inputs: inputs });
+  // Repinning away and back needs a fresh attestation, even of the same input.
+  await architect.call('upsert_dependency', { ...pinned, dependency_id: pin, candidate_head_sha: head('b') });
+  await architect.call('upsert_dependency', { ...pinned, dependency_id: pin });
+  expect((await row(architect, request, ui)).merge_eligibility.reason_codes).toContain('dependency_inputs_stale');
+  await architect.call('sync_pr', { work_package_id: ui, url: prUrl(202), head_sha: head('c'), dependency_inputs: inputs });
+  expect((await row(architect, request, ui)).merge_eligibility.reason_codes).not.toContain('dependency_inputs_stale');
   expect((await row(architect, request, ui)).merge_eligibility.reason_codes).toContain('dependency_not_delivered');
   provider.set(201, pr(201, head('a'), { state: 'MERGED', mergedAt: new Date().toISOString(), mergeCommit: { oid: head('e') } }));
   await architect.call('sync_pr', { work_package_id: backend });
