@@ -88,14 +88,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
            {:ok, updated} <- Qualification.apply_decision(repo, actor, current, decision, payload["head_sha"]) do
         result(updated, payload, decision, pr_facts)
       else
-        {:tool_error, reason} -> repo.rollback({:tool_error, reason})
         {:error, reason} -> repo.rollback(reason)
       end
     end)
-    |> case do
-      {:error, {:tool_error, reason}} -> {:tool_error, reason}
-      result -> result
-    end
     |> DashboardPubSub.broadcast_changed_on_success()
   end
 
