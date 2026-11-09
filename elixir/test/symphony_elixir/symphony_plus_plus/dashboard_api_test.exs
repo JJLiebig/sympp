@@ -2046,6 +2046,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert %{"ok" => true} = native_operator_conn() |> post(dismiss_route, "{}") |> json_response(200)
       assert to_review.() == %{}
       assert %DecisionLogEntry{feedback: "Use the cheaper plan.", undelivered_reason: nil} = repo.get!(DecisionLogEntry, "WRD-REVIEW-GONE")
+
+      # Feedback still being typed can't be dismissed; one whose send never finished reads as interrupted.
+      sending = fn id, seconds_ago ->
+        reviewed_at = DateTime.add(DateTime.utc_now(:microsecond), -seconds_ago, :second)
+        flag.(id, "t7")
+        changes = [review_state: "feedback", feedback: "Typed", undelivered_reason: "delivering", reviewed_at: reviewed_at]
+        repo.update!(Ecto.Changeset.change(repo.get!(DecisionLogEntry, id), changes))
+      end
+
+      sending.("WRD-REVIEW-SENDING", 1)
+      sending.("WRD-REVIEW-STUCK", 120)
+      assert %{"WRD-REVIEW-SENDING" => sending_entry, "WRD-REVIEW-STUCK" => %{"undelivered_reason" => "delivery_interrupted", "dismiss_route" => _route}} = to_review.()
+      assert %{"undelivered_reason" => "delivering", "next_action" => "wait: the feedback is being typed"} = sending_entry
+      refute Map.has_key?(sending_entry, "dismiss_route")
+      assert refuse.("WRD-REVIEW-SENDING/dismiss")["next_action"] == "wait: the feedback is being typed"
+      assert %{"ok" => true} = local_operator_conn() |> post("/api/v1/sympp/operator/decisions/WRD-REVIEW-STUCK/dismiss") |> json_response(200)
     end)
   end
 

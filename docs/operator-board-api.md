@@ -21,7 +21,7 @@ recorded_by, created_at, review_state, feedback, undelivered_reason,
 next_action}`. A `recorded` decision waits for an ack or feedback; a `feedback`
 decision is listed only while `undelivered_reason` is set, until the operator
 dismisses it. The native board adds `ack_route` and `feedback_route` to recorded
-decisions and `dismiss_route` to undelivered ones.
+decisions and `dismiss_route` to undelivered ones that are no longer being typed.
 
 Package `activity_signal.observation_state` distinguishes `queued` (planned,
 created or prepared, without a current worker observation), `current` (current
@@ -119,8 +119,11 @@ Flagged decisions move `recorded → acknowledged` (ack) or `recorded → feedba
 as `Decision feedback: <text>` without submitting it, through the same delivery
 as answers, with the same `delivery` result (`no_recording_terminal` replaces
 `no_asking_terminal`). Feedback that wasn't delivered stays on the decision with
-its reason in `undelivered_reason` (`delivery_interrupted` if the factory
-stopped mid-send); dismiss clears that marker and keeps the text. Any other transition returns HTTP 409
+its reason in `undelivered_reason`; dismiss clears that marker and keeps the
+text. While the factory is still typing it the reason is `delivering`, with
+`next_action` `wait: the feedback is being typed` and no dismiss; a send that
+never finished reads as `delivery_interrupted` after a minute and can be
+dismissed. Any other transition returns HTTP 409
 `{error:{code:"decision_transition_refused",message,state,next_action}}`, where
 `state` is the decision's review state (or `not_flagged`). Blank feedback returns
 HTTP 422 `missing_feedback`. Hydrated and detail reads also carry `flagged`,

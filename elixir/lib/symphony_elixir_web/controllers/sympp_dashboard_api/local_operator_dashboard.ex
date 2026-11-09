@@ -253,12 +253,13 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   def native_decisions_to_review(detail) do
     for decision <- detail.decisions_to_review do
       base = "/api/v1/sympp/herdr/decisions/#{URI.encode_www_form(decision.id)}"
-      Map.merge(decision, native_decision_routes(decision.review_state, base))
+      Map.merge(decision, native_decision_routes(decision.next_action, base))
     end
   end
 
-  defp native_decision_routes("recorded", base), do: %{ack_route: base <> "/ack", feedback_route: base <> "/feedback"}
-  defp native_decision_routes(_undelivered_feedback, base), do: %{dismiss_route: base <> "/dismiss"}
+  defp native_decision_routes("ack or feedback", base), do: %{ack_route: base <> "/ack", feedback_route: base <> "/feedback"}
+  defp native_decision_routes("dismiss", base), do: %{dismiss_route: base <> "/dismiss"}
+  defp native_decision_routes(_wait, _base), do: %{}
 
   defp native_product_tree(tree) do
     tree

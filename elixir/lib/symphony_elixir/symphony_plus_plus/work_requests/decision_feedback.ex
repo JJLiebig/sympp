@@ -9,11 +9,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
   | recorded | `ack` | `acknowledged` | operator (HTTP) |
   | recorded | `feedback(text)` | `feedback` | operator (HTTP); the factory types `Decision feedback: <text>` into the recording terminal |
 
-  Feedback that can't be typed into the recording terminal stays on the
-  decision with its reason in `undelivered_reason` (`delivery_interrupted` if
-  the factory stopped mid-send). The operator's `dismiss`
-  clears that marker; the feedback text stays. Every other event is refused
-  with the current state and the next action.
+  While the factory types the feedback, `undelivered_reason` is `delivering`;
+  a send that succeeds clears it. Feedback that can't be typed stays on the
+  decision with the reason. A `delivering` marker older than any send can take
+  means the factory stopped mid-send and reads as `delivery_interrupted`. The
+  operator's `dismiss` clears a settled marker (never `delivering`); the
+  feedback text stays. Every other event is refused with the current state and
+  the next action.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -25,6 +27,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
   @type repo :: module()
   @type delivery :: %{required(String.t()) => String.t()}
   @type refusal :: {:decision_transition_refused, String.t(), String.t()}
+
+  @delivering "delivering"
+  # Longer than a delivery can take: a confirmed herdr-core snapshot plus the send timeout.
+  @delivery_window_ms 60_000
 
   @doc "The review fields `record_decision` stores: a flagged decision starts `recorded`."
   @spec record_attrs(boolean()) :: map()
@@ -43,10 +49,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
   @spec feedback(repo(), String.t(), term()) :: {:ok, DecisionLogEntry.t(), delivery()} | {:error, refusal() | term()}
   def feedback(repo, decision_id, text) do
     with {:ok, text} <- feedback_text(text),
-         # Marked undelivered until the send succeeds, so an attempt interrupted
-         # mid-send stays on the board.
          {:ok, decision} <-
-           review_recorded(repo, decision_id, review_state: "feedback", feedback: text, undelivered_reason: "delivery_interrupted") do
+           review_recorded(repo, decision_id, review_state: "feedback", feedback: text, undelivered_reason: @delivering) do
       deliver(repo, decision)
     end
   end
@@ -64,11 +68,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
   def state(%DecisionLogEntry{flagged: true, review_state: state}) when is_binary(state), do: state
   def state(%DecisionLogEntry{}), do: "not_flagged"
 
+  @doc """
+  Why the feedback isn't delivered: `delivering` while the factory types it,
+  `delivery_interrupted` once that took longer than any send can, otherwise
+  the stored reason; `nil` when delivered or dismissed.
+  """
+  @spec undelivered_reason(DecisionLogEntry.t()) :: String.t() | nil
+  def undelivered_reason(%DecisionLogEntry{undelivered_reason: @delivering, reviewed_at: %DateTime{} = at}) do
+    if DateTime.diff(DateTime.utc_now(), at, :millisecond) > @delivery_window_ms, do: "delivery_interrupted", else: @delivering
+  end
+
+  def undelivered_reason(%DecisionLogEntry{undelivered_reason: reason}), do: reason
+
   @doc "What the operator can do next with this decision."
   @spec next_action(DecisionLogEntry.t()) :: String.t()
   def next_action(%DecisionLogEntry{} = decision) do
-    case {state(decision), decision.undelivered_reason} do
+    case {state(decision), undelivered_reason(decision)} do
       {"recorded", _reason} -> "ack or feedback"
+      {"feedback", @delivering} -> "wait: the feedback is being typed"
       {"feedback", reason} when is_binary(reason) -> "dismiss"
       {"not_flagged", _reason} -> "none: only flagged decisions are reviewed"
       _done -> "none"
@@ -112,7 +129,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
       created_at: iso(decision.created_at),
       review_state: decision.review_state,
       feedback: Redactor.redact_text(decision.feedback),
-      undelivered_reason: decision.undelivered_reason,
+      undelivered_reason: undelivered_reason(decision),
       next_action: next_action(decision)
     }
   end
@@ -149,7 +166,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
 
   defp clear_undelivered(repo, decision_id) do
     with {:ok, decision} <- fetch_reviewable(repo, decision_id) do
-      if is_binary(decision.undelivered_reason),
+      if next_action(decision) == "dismiss",
         do: {:ok, repo.update!(Ecto.Changeset.change(decision, undelivered_reason: nil, updated_at: now()))},
         else: refuse(decision)
     end

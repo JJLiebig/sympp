@@ -8,6 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport
@@ -387,7 +388,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
       "flagged" => true,
       "review_state" => decision.review_state,
       "feedback" => Redactor.redact_text(decision.feedback),
-      "undelivered_reason" => decision.undelivered_reason
+      "undelivered_reason" => DecisionFeedback.undelivered_reason(decision)
     }
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
