@@ -61,7 +61,8 @@ context. Report that diagnostic limitation separately.
 The `make-all` workflow requires native API acceptance, unchanged-cache browser
 replay, installed Windows runtime, offline copy, Windows launcher and offline snapshot and
 frontend builds, static checks, Dialyzer, and the complete retained ExUnit suite.
-Its final job rejects any missing, skipped, cancelled or failed required job.
+On PRs, Windows jobs run for their launcher, packaging, release, toolchain, frontend and workflow inputs; ordinary Elixir source or docs changes skip them.
+Main pushes and manual runs always include Windows; the final gate accepts only skips explicitly allowed by a successful path selection job.
 Retained ExUnit qualifications run once without partitions or coverage thresholds;
 live external qualification remains opt-in. Preserve unique storage, concurrency,
 authority, process, and live provider contracts. Define expected
