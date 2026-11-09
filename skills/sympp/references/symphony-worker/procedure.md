@@ -18,9 +18,15 @@ is a chief or architect, your branch or PR shows on the board as a card. Ask the
 operator with `ask` and no `work_request_id`; the answer is typed into your
 input without being submitted.
 
-Ask your parent when context is missing or product, architecture, dependency or
+Ask your parent when context is missing, or product intent, a dependency or
 scope is unclear, and keep working on what doesn't depend on the answer. Raise
 scope growth before you implement it.
+
+You own your PR end to end. Fix CI failures, lint, stale or broken tests, merge
+conflicts and in-scope review findings yourself, without asking. Go to your
+parent only for scope growth, a change in product behaviour, or a conflict with
+your assignment. When Review Suite stops at its round limit and the scope hasn't
+changed, hand off; don't ask for a replan.
 
 Message only your own parent, whatever its role: one final handoff, plus
 questions or blockers. Never message any other chief or architect. Keep
@@ -35,6 +41,10 @@ messages short; never send status or acknowledgements.
   Rerunning the same command resumes it; never start a second run while one is
   going. Fix findings in scope; return product or contract conflicts to your
   parent.
+- `main` moving never blocks work. Leave a ready branch alone until merge;
+  merge `main` in or rebase only to fix a conflict. If the PR's own diff is
+  unchanged after that, its review still counts. If it changed, review only
+  what changed. Never restart a whole review because `main` moved.
 
 ## UI work
 

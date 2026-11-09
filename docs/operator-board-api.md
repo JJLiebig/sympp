@@ -185,7 +185,8 @@ clone or call GitHub. Results (including unresolved checkouts) are cached per
 repository in a shared repos-root inventory for 30 seconds.
 
 Review progress remains in `review_signal.step`, `current`, `total`, `round`,
-`evidence_id`, `reviewed_head`, `started_at`, `round_started_at`, `observed_at` and
+`evidence_id`, `accepted_head`, `reviewed_head` (only when it differs from
+`accepted_head`), `started_at`, `round_started_at`, `observed_at` and
 `observation_state`. `pr_signal.checks.status` remains `passing`, `pending`,
 `failing`, or `unavailable`; missing checks never imply success.
 
@@ -407,22 +408,17 @@ work on another branch. `merged`, `done` and `dismissed` cards leave the list
 factory's herdr-core reports their terminal finished; until then the ended card
 stays recorded so its branch isn't taken for new work.
 
-## Review descendants
+## Review across head changes
 
-A Review Suite `head_changed_after_review` observation becomes
-`review_signal.status: "inspection_needed"`, with the original provider status
-and stale observation preserved. It means the reviewed head changed and the caller
-must inspect the delta; it is neither a failed review nor exact-head approval.
-The signal retains `reviewed_head`, `current_head` and the provider's validation
-summary when supplied. The web board and Herdr show the inspection needed state
-even when a qualified package is already awaiting integration.
+A review counts for a package only when Review Suite reports it done with
+`accepted_head` equal to the PR's current head. Review Suite carries a review
+to a new head when a merge from the base or a rebase leaves the PR's own patch
+unchanged, so `main` moving doesn't send a ready package back. The review
+signal shows `accepted_head`, plus `reviewed_head` when the head Review Suite
+actually reviewed differs. CI must still pass on the new head.
 
-For an eligible no-repeat descendant, the architect records acceptance of the
-reviewed/current head pair, inspected delta and validation evidence in the package
-handoff. Follow the installed Review Suite recovery procedure to decide whether
-a repeat is needed; file extensions alone do not establish eligibility. This
-acceptance does not rewrite the native verdict or fabricate a passed exact-head
-review: the board continues to show inspection needed while the provider reports
-it. Merge eligibility remains a separate canonical gate, including current input
-and qualification requirements. Behavioral changes retain their required review
-and validation.
+`review_signal.status` is `inspection_needed`, and the package doesn't qualify,
+when the PR's patch changed after review (`head_changed_after_review`), or when
+a carried review reports a base change that touched the PR's paths or changed
+files structurally (`base_interaction`). The caller reviews only what changed,
+on the same review id. The web board and Herdr show the inspection needed state.

@@ -187,7 +187,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       case Agent.get(reviewed, & &1) do
         :unreachable -> :error
         :not_started -> {:ok, {Jason.encode!(%{"error" => "unknown review cycle id: #{review_id}", "status" => "usage_error"}), 2}}
-        head -> {:ok, {Jason.encode!(%{"review" => review_id, "done" => true, "status" => "done", "head" => head}), 0}}
+        {reviewed, accepted} -> {:ok, {Jason.encode!(%{"review" => review_id, "done" => true, "status" => "done", "reviewed_head" => reviewed, "accepted_head" => accepted}), 0}}
       end
     end)
 
@@ -239,18 +239,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       assert get_in(not_started, ["result", "structuredContent", "work_package", "status"]) == "dispatched"
       assert "review_not_done" in get_in(not_started, ["result", "structuredContent", "pr_sync", "readiness_reasons"])
 
-      Agent.update(reviewed, fn _state -> head end)
+      Agent.update(reviewed, fn _state -> {head, head} end)
       accepted = mcp_tool(repo, "t1", "sync_pr", url_only)
       assert get_in(accepted, ["result", "structuredContent", "work_package", "status"]) == "ready"
 
-      # Each qualification predicate that stops holding unqualifies the ready package;
-      # a green sync of the current head qualifies it again.
+      # `main` merged in with the PR's own patch unchanged: Review Suite accepts
+      # the review for the new head, so the package stays ready.
       new_head = String.duplicate("d", 40)
       green = GitHubPullRequestFixtures.metadata(412, new_head, base_branch: anchor.base_branch)
-      Agent.update(reviewed, fn _state -> new_head end)
+      FakeGitHubClient.put_response("nextide/repo", 412, green)
+      Agent.update(reviewed, fn _state -> {head, new_head} end)
+      carried = mcp_tool(repo, "t1", "sync_pr", url_only)
+      assert get_in(carried, ["result", "structuredContent", "work_package", "status"]) == "ready"
 
+      # Each qualification predicate that stops holding unqualifies the ready package;
+      # a green sync of the current head qualifies it again.
       for {metadata, reason} <- [
-            {green, "head_changed"},
             {Map.put(green, "draft", true), "pr_draft"},
             {Map.put(green, "check_summary", %{"status" => "failure"}), "ci_not_green"},
             {Map.merge(green, %{"state" => "closed", "mergeable_state" => "unknown"}), "pr_not_open"}
@@ -266,7 +270,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       end
 
       assert {:ok, %{progress_events: events}} = PlanningRepository.get_state(repo, approved_slice.id)
-      assert Enum.count(events, &(&1.status == "unqualified")) == 4
+      assert Enum.count(events, &(&1.status == "unqualified")) == 3
 
       FakeGitHubClient.put_response(
         "nextide/repo",

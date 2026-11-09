@@ -93,15 +93,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
   defp parse(_output, _status), do: :unknown
 
   @doc """
-  The review state that qualification reads: `:done` only when the cycle is
-  done for `head_sha` and Review Suite doesn't report it failed, stale or
-  invalidated.
+  The review state that qualification reads: `:done` only when Review Suite
+  reports the cycle done and accepted for exactly `head_sha`, the PR's current
+  head. A merge or rebase that leaves the PR's own patch unchanged keeps the
+  review accepted; a changed patch, failed or stale review, or a base change
+  that still needs a targeted check is `:pending`. Required checks on the new
+  head are the CI predicate's job.
   """
   @spec state(result(), String.t() | nil) :: :done | :pending | :unknown
-  def state({:ok, %{"done" => true, "status" => "passed", "reviewed_head" => reviewed}}, head) when is_binary(reviewed) and is_binary(head) do
-    if String.starts_with?(head, reviewed) or String.starts_with?(reviewed, head), do: :done, else: :pending
-  end
-
+  def state({:ok, %{"done" => true, "status" => "passed", "accepted_head" => head}}, head) when is_binary(head), do: :done
   def state({:ok, _review}, _head), do: :pending
   def state(:not_started, _head), do: :pending
   def state(_unknown, _head), do: :unknown
@@ -113,7 +113,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
       "status" => observed_status(payload),
       "provider_status" => text(payload["status"]),
       "done" => payload["done"] == true,
-      "reviewed_head" => text(payload["head"]),
+      "accepted_head" => text(payload["accepted_head"]),
+      "reviewed_head" => text(payload["reviewed_head"]),
       "next_action" => text(payload["next_action"]),
       "round" => non_negative(payload["rounds"]),
       "step" => text(payload["current"]),
@@ -128,9 +129,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
 
+  # A review carried over a base change that touched the PR's paths, or
+  # changed files structurally, still needs a targeted check of that interaction.
   defp observed_status(payload) do
+    base_check? = match?(%{"base_interaction" => %{"check" => check}} when check != false, payload)
+
     case {payload["done"], payload["status"]} do
       {_done, "head_changed_after_review"} -> "inspection_needed"
+      {true, _status} when base_check? -> "inspection_needed"
       {_done, status} when status in ["stale", "fix-pending", "failed", "invalidated"] -> "failed"
       {_done, "done"} -> "passed"
       {true, _status} -> "passed"

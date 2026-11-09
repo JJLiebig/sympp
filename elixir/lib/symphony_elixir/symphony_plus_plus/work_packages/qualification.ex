@@ -16,7 +16,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
   """
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection
-  alias SymphonyElixir.SymphonyPlusPlus.GitHub.{PullRequestArtifact, PullRequestProgress}
+  alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestArtifact
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
@@ -48,25 +48,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
 
   def review(%WorkPackage{}, _head_sha), do: :none
 
-  @doc """
-  The head a ready package was qualified on (its recorded PR head); a
-  dispatched package has none. Read it before recording a new snapshot.
-  """
-  @spec candidate_head(module(), WorkPackage.t()) :: {:ok, String.t() | nil} | {:error, term()}
-  def candidate_head(repo, %WorkPackage{} = package) do
-    if Lifecycle.ready?(package), do: attached_head(repo, package), else: {:ok, nil}
-  end
-
-  defp attached_head(repo, %WorkPackage{} = package) do
-    with {:ok, state} <- PlanningRepository.get_state(repo, package.id) do
-      case PullRequestProgress.current_pr_state(state.progress_events) do
-        {:ok, current} -> {:ok, current.payload["head_sha"]}
-        {:error, :missing_attached_pr} -> {:ok, nil}
-        {:error, reason} -> {:error, reason}
-      end
-    end
-  end
-
   @doc "Records a PR snapshot: the branch, the attached PR and the synced snapshot."
   @spec record_pr(module(), Actor.t(), WorkPackage.t(), map()) :: :ok | {:error, term()}
   def record_pr(repo, %Actor{} = actor, %WorkPackage{} = package, payload) do
@@ -84,21 +65,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
   Evaluates the predicates and readiness gates for `package` and returns the
   decision with every reason that keeps it from qualifying.
   """
-  @spec decide(module(), WorkPackage.t(), pr_facts(), String.t() | nil) :: {:ok, decision()} | {:error, term()}
-  def decide(repo, %WorkPackage{} = package, pr_facts, candidate_head) do
+  @spec decide(module(), WorkPackage.t(), pr_facts()) :: {:ok, decision()} | {:error, term()}
+  def decide(repo, %WorkPackage{} = package, pr_facts) do
     with {:ok, state} <- PlanningRepository.get_state(repo, package.id),
          {:ok, graph} <- ExecutionGraph.evaluate(repo, package.work_request_id) do
-      facts = facts(package, graph, pr_facts, candidate_head)
+      facts = Map.put(pr_facts, :dependencies_delivered?, ExecutionGraph.require_ready(graph, package.id) == :ok)
       gates = state |> OperationalProjection.readiness_failure_reasons() |> Enum.map(& &1["gate"])
       {:ok, decision(package, facts, gates)}
     end
-  end
-
-  defp facts(%WorkPackage{} = package, graph, pr_facts, candidate_head) do
-    Map.merge(pr_facts, %{
-      head_changed?: is_binary(candidate_head) and candidate_head != pr_facts.head_sha,
-      dependencies_delivered?: ExecutionGraph.require_ready(graph, package.id) == :ok
-    })
   end
 
   defp decision(%WorkPackage{} = package, facts, gates) do

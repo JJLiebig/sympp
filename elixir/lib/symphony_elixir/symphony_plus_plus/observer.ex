@@ -417,13 +417,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   defp merge(repo, package, _attached, payload, false = _changed?), do: record_merge(repo, package, payload)
 
-  # Recording a new head and the qualification it causes commit together: the
-  # candidate head is read before the new snapshot is recorded.
+  # Recording a new head and the qualification it causes commit together.
   defp record_and_qualify(repo, package, attached, payload, changed?, pr, review, stacked_on) do
     with {:ok, current} <- fetch(repo, package),
-         {:ok, candidate_head} <- Qualification.candidate_head(repo, current),
          :ok <- if(changed?, do: record(repo, current, attached, payload), else: :ok),
-         {:ok, decision} <- Qualification.decide(repo, current, facts(current, pr, review, stacked_on), candidate_head),
+         {:ok, decision} <- Qualification.decide(repo, current, facts(current, pr, review, stacked_on)),
          {:ok, _updated} <- Qualification.apply_decision(repo, Actor.observer(), current, decision, pr["head_sha"]) do
       :ok
     end

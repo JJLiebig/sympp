@@ -112,8 +112,8 @@ another gate between merge and WR completion.
 5. A dedicated review owner runs technical UI review on the wired UI PR, which
    already contains the delivered backend through its base.
 6. The architect accepts the result, confirms combined checks, and merges. A
-   ready PR that waits is left alone and rebased once, right before merge, only
-   if it conflicts.
+   ready PR is left alone until merge; `main` is merged in or rebased only to
+   fix a conflict, and an unchanged PR diff keeps its review.
 
 “Frozen” means product intent is human-approved. Performance, correctness,
 authorization, accessibility, and wiring defects still need technical fixes.

@@ -82,9 +82,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
       with :ok <- lock_package(repo, work_package),
            {:ok, current} <- WorkPackageRepository.get(repo, work_package.id),
            :ok <- require_handoff(repo, current, payload),
-           {:ok, candidate_head} <- Qualification.candidate_head(repo, current),
            :ok <- Qualification.record_pr(repo, actor, current, payload),
-           {:ok, decision} <- decide(repo, current, pr_facts, candidate_head, payload),
+           {:ok, decision} <- decide(repo, current, pr_facts, payload),
            {:ok, updated} <- Qualification.apply_decision(repo, actor, current, decision, payload["head_sha"]) do
         result(updated, payload, decision, pr_facts)
       else
@@ -95,10 +94,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
   end
 
   # A merged PR is recorded by the merge path, not qualified.
-  defp decide(repo, current, pr_facts, candidate_head, payload) do
+  defp decide(repo, current, pr_facts, payload) do
     if PullRequestProgress.merged?(payload),
       do: {:ok, {:hold, []}},
-      else: Qualification.decide(repo, current, pr_facts, candidate_head)
+      else: Qualification.decide(repo, current, pr_facts)
   end
 
   defp result(updated, payload, decision, pr_facts) do

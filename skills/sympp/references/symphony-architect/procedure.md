@@ -65,14 +65,19 @@ upstream PR (`url`).
 
 Every branch starts from its package's base and its PR targets it. Never build
 on another unmerged branch: a PR carrying another open package's commits
-doesn't qualify. Leave a ready branch that's waiting alone; rebase it once,
-right before merge, only if it conflicts.
+doesn't qualify.
+
+`main` moving never blocks work. Leave a ready branch alone until merge; merge
+`main` in or rebase only to fix a conflict. If the PR's own diff is unchanged
+after that, its review still counts. If it changed, review only what changed.
+Never restart a whole review because `main` moved.
 
 Workers return the PR, head, checks, review and risks. Verify acceptance for
 that head; merge when authorized and the board says merge-eligible.
 
-Review findings a worker can't settle come to you. Have genuine in-scope
-defects fixed; decline unsupported requests.
+Workers own their PRs: never make them hold a branch or ask before fixing their
+own CI, tests or review findings. Review findings a worker can't settle come to
+you. Have genuine in-scope defects fixed; decline unsupported requests.
 
 ## Close
 

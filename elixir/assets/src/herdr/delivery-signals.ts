@@ -28,6 +28,7 @@ export type WorkPackageReviewSignal = {
   total?: number | null;
   step?: string | null;
   evidence_id?: string | null;
+  accepted_head?: string | null;
   reviewed_head?: string | null;
   current_head?: string | null;
   validation?: Record<string, string> | null;

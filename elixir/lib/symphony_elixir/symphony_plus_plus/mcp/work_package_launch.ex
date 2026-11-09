@@ -132,6 +132,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
     - Work only in `#{worktree.worktree_path}`, on branch `#{worktree.branch}`, targeting `#{worktree.base_branch}`.
     - Keep the PR small and within the contract. Branch from `#{worktree.base_branch}`; never merge or cherry-pick
       another unmerged branch. Once handed off, leave the branch alone unless your parent asks.
+    - `main` moving never blocks work. Leave a ready branch alone until merge; merge `main` in or rebase only to
+      fix a conflict. If the PR's own diff is unchanged after that, its review still counts. If it changed, review
+      only what changed. Never restart a whole review because `main` moved.
+    - You own your PR end to end. Fix CI failures, lint, stale or broken tests, merge conflicts and in-scope review
+      findings yourself, without asking. Go to your parent only for scope growth, a change in product behaviour, or
+      a conflict with your assignment. When Review Suite stops at its round limit and the scope hasn't changed,
+      hand off; don't ask for a replan.
     #{review_step(work_package, worktree.worktree_path)}
     - Make no sympp MCP calls. Message only your parent terminal: one final handoff with the PR URL, the
       exact head, check and review results, and remaining risks, plus questions or blockers. Never message

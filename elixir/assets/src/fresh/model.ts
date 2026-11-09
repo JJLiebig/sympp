@@ -80,7 +80,7 @@ export type GoalView = { goal: Goal; live: PkgView[]; queued: Pkg[]; done: Pkg[]
 // The hydrated board as the backend sends it, limited to what the board reads.
 export type Owned = { address?: string | null; role?: string | null; domain?: string | null; liveness?: string | null; since?: string | null };
 export type PrSignal = { status?: string | null; head_sha?: string | null; number?: number | null; url?: string | null; repository?: string | null; created_at?: string | null; head_changed_at?: string | null; checks?: { status?: string | null; changed_at?: string | null } | null };
-export type ReviewSignal = { status?: string | null; reviewed_head?: string | null; mode?: string | null; round?: number | null; started_at?: string | null; round_started_at?: string | null };
+export type ReviewSignal = { status?: string | null; accepted_head?: string | null; mode?: string | null; round?: number | null; started_at?: string | null; round_started_at?: string | null };
 export type Slice = {
   id: string;
   work_package_id?: string | null;
@@ -368,19 +368,17 @@ function ciOf(checks: string | null | undefined): Ci | null {
 }
 
 // A review host the factory could not read leaves the state unknown, whatever it said last.
-// A review that passed for an older head than the PR's has not reviewed what is there now.
+// A passed review counts only when Review Suite accepts it for the PR's current head.
 function reviewOf(signal: ReviewSignal | null | undefined, head: string | null, stale: Stale[]): Review | null {
   const mode = REVIEW_MODES[signal?.mode ?? ""];
   if (!signal || !mode) return null;
   if (stale.includes("review")) return { mode, state: "unknown", round: signal.round ?? 0 };
-  const moved = signal.status === "passed" && !sameHead(signal.reviewed_head, head);
-  return { mode, state: moved ? null : (REVIEW_STATES[signal.status ?? ""] ?? null), round: signal.round ?? 0 };
+  return { mode, state: reviewState(signal, head), round: signal.round ?? 0 };
 }
 
-// Heads may be reported in full or abbreviated. An unknown head on either side can't show the review is current.
-function sameHead(left: string | null | undefined, right: string | null | undefined) {
-  if (!left || !right) return false;
-  return left.startsWith(right) || right.startsWith(left);
+function reviewState(signal: ReviewSignal, head: string | null): Review["state"] {
+  if (signal.status === "passed" && (!head || signal.accepted_head !== head)) return null;
+  return REVIEW_STATES[signal.status ?? ""] ?? null;
 }
 
 function outcomeOf(slice: Slice): Outcome | null {

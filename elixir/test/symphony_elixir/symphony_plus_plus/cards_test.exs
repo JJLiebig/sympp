@@ -33,7 +33,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CardsTest do
     assert card_id == card["id"]
 
     reviewed = [chief("t0"), child("t1", "t0", %{"sympp.review_id" => "rvw_card"})]
-    review = {:ok, %{"done" => true, "status" => "passed", "reviewed_head" => "h1"}}
+    review = {:ok, %{"done" => true, "status" => "passed", "accepted_head" => "h1"}}
     sweep(repo, reviewed, %{head("feature-1") => {:ok, pr(7, "open")}}, review: fn "rvw_card", nil -> review end)
 
     assert [%{"state" => "review_ci", "pr" => %{"number" => 7, "ci" => %{"status" => "passing"}}, "review" => %{"id" => "rvw_card", "state" => "done"}, "asks" => [_open]}] =
@@ -114,7 +114,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CardsTest do
 
   test "a new review id never shows the previous cycle's result", %{repo: repo} do
     labelled = fn id -> [chief("t0"), child("t1", "t0", %{"sympp.review_id" => id})] end
-    passed = {:ok, %{"done" => true, "status" => "passed", "reviewed_head" => "h1"}}
+    passed = {:ok, %{"done" => true, "status" => "passed", "accepted_head" => "h1"}}
     sweep(repo, labelled.("rvw_one"), %{head("feature-1") => {:ok, pr(7, "open")}}, review: fn _id, _machine -> passed end)
     assert [%{"review" => %{"id" => "rvw_one", "state" => "done"}}] = list(repo)
 

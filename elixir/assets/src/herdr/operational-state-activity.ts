@@ -129,6 +129,7 @@ function reviewFacts(review?: WorkPackageReviewSignal | null) {
     { label: "Review status", value: review.status === "inspection_needed" ? "Head changed since review; caller inspection needed" : formatStatus(review.provider_status || review.status) },
     { label: "Review observation", value: formatStatus(review.observation_state || "unknown") },
     { label: "Review next", value: review.next_action ? formatStatus(review.next_action) : null },
+    { label: "Accepted head", value: review.accepted_head },
     { label: "Reviewed head", value: review.reviewed_head },
     { label: "Current head", value: review.current_head },
     { label: "Review observed", value: review.observed_at },

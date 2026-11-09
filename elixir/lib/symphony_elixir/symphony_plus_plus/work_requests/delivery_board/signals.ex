@@ -156,7 +156,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
       current: observation |> map_value("current") |> integer_value(),
       total: observation |> map_value("total") |> integer_value(),
       step: observation |> map_value("step") |> bounded_string(),
-      reviewed_head: observation |> map_value("reviewed_head") |> bounded_string(),
+      accepted_head: observation |> map_value("accepted_head") |> bounded_string(),
+      reviewed_head: reviewed_head(observation),
       validation: observation |> map_value("validation") |> Sanitizer.redacted_json(),
       provider_status: observation |> map_value("provider_status") |> bounded_string(),
       next_action: observation |> map_value("next_action") |> bounded_string(),
@@ -204,6 +205,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   end
 
   def review(%WorkPackage{}, _metadata, _observation), do: %{status: "unavailable"}
+
+  # The head Review Suite actually reviewed, shown only when the review was
+  # carried to another head (a merge or rebase with an unchanged patch).
+  defp reviewed_head(observation) do
+    reviewed = observation |> map_value("reviewed_head") |> bounded_string()
+    if reviewed == observation |> map_value("accepted_head") |> bounded_string(), do: nil, else: reviewed
+  end
 
   @spec board_state(WorkPackage.t(), map(), map() | nil) :: map()
   def board_state(work_package, summary, delivery) do
