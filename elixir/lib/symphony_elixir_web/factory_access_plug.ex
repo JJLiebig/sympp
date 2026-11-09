@@ -24,7 +24,25 @@ defmodule SymphonyElixirWeb.FactoryAccessPlug do
   @spec authenticated?(Conn.t()) :: boolean()
   def authenticated?(conn), do: conn.private[:sympp_remote_authenticated] == true
 
-  defp direct_tailnet?(conn), do: tailnet?(conn.remote_ip) and not forwarded?(conn)
+  defp direct_tailnet?(conn) do
+    tailnet?(conn.remote_ip) and not forwarded?(conn) and tailnet_host?(conn.host)
+  end
+
+  defp tailnet_host?(host) do
+    host = host |> String.downcase() |> String.trim_trailing(".")
+
+    case :inet.parse_address(host |> String.trim_leading("[") |> String.trim_trailing("]") |> String.to_charlist()) do
+      {:ok, address} -> tailnet?(address) or loopback?(address)
+      {:error, _reason} -> host == "localhost" or String.ends_with?(host, [".localhost", ".ts.net"]) or machine_hostname?(host)
+    end
+  end
+
+  defp machine_hostname?(host) do
+    case :inet.gethostname() do
+      {:ok, hostname} -> host == String.downcase(List.to_string(hostname))
+      {:error, _reason} -> false
+    end
+  end
 
   defp authorize_tailnet(conn) do
     if conn.method in ["GET", "HEAD", "OPTIONS"] or Conn.get_req_header(conn, "origin") == [] or cookie_origin?(conn) do

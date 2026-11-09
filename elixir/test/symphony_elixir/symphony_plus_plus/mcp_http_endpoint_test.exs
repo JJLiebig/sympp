@@ -180,6 +180,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       end
     end
 
+    test "tailnet authority requires a trusted Host even when Origin matches", %{remote: remote, headers: token_headers} do
+      tailnet = Keyword.put(remote, :remote_ip, {100, 64, 0, 2})
+      path = "/api/v1/sympp/operator/settings"
+      {:ok, hostname} = :inet.gethostname()
+
+      for host <- ["100.64.0.1", "fd7a:115c:a1e0::1", "factory.tailnet.ts.net", "localhost", "127.0.0.1", "::1", List.to_string(hostname)] do
+        opts = tailnet |> Keyword.put(:host, host) |> Keyword.put(:path, path)
+        origin = URI.to_string(%URI{scheme: "http", host: host, port: 4000})
+        response = post_json(%{"open_dashboard_on_boot" => false}, [{"origin", origin}], opts) |> json_response(200)
+        assert response["settings"]["open_dashboard_on_boot"] == false
+      end
+
+      for host <- ["rebound.example", "factory.ts.net.evil.example", "100.128.0.1"] do
+        opts = tailnet |> Keyword.put(:host, host) |> Keyword.put(:path, path)
+        origin_headers = [{"origin", "http://#{host}:4000"}]
+        assert post_json(%{"open_dashboard_on_boot" => true}, origin_headers, opts).status == 401
+        assert get_local("/api/v1/sympp/herdr/dashboard", [], opts).status == 401
+        assert post_json(%{"open_dashboard_on_boot" => false}, origin_headers ++ token_headers, opts).status == 200
+      end
+    end
+
     test "outside peers and forwarded tailnet requests retain credential requirements", %{remote: remote, headers: headers} do
       outside_ipv6 = {0xFD7A, 0x115C, 0xA1E1, 0, 0, 0, 0, 1}
 

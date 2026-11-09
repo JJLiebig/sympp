@@ -8,18 +8,22 @@ works on each request (`worked_on`, below).
 Unlike the browser board, it also lists archived requests in
 `work_request_details`, with `phase: "archived"`, `archived_at` and their
 packages, so the panel can show them and offer Restore.
+
 ## Access
 
 In factory service mode, direct Tailscale peers (`100.64.0.0/10` and
 `fd7a:115c:a1e0::/48`, including mapped IPv4) have full board, operator and
 native Herdr access without a login, code or token. This includes archived
 requests (`/dashboard?surface=archived`) and all human actions below.
+Credential-free tailnet authority requires a Host that is a tailnet IP literal,
+a `*.ts.net` name, a loopback address/name, or the factory machine's own hostname.
+Other Host values fall back to normal credential rules, even if Origin matches
+Host, preventing an arbitrary rebound hostname from gaining tailnet authority.
 Tailnet writes carrying an `Origin` header must match the request's scheme,
 host and port; foreign origins receive HTTP 403. Native clients and curl need
 no Origin header. Forwarded requests retain the existing credential and proxy
 restrictions. Other non-loopback peers still require a bearer token, board
 sign-in code or board cookie, within each credential's existing route scope.
-
 
 Each `work_request_details[]` includes `asks`, the request's open asks: the
 only thing that needs the operator ("Needs you"). Each ask has `{id, kind: "ask",
