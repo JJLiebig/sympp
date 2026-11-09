@@ -11,6 +11,10 @@ you. Small, clear work needs no WorkRequest: give it straight to a worker.
 Every branch starts from the base and targets it; nothing is built on another
 unmerged branch.
 
+Your scope is product intent across WorkRequests. Architects decide within
+theirs; step in only when a flagged call looks wrong or a question would change
+a WorkRequest's goal.
+
 ## Create a WorkRequest
 
 Call `create_work_request` with `title` (2–5 words, at most 40 characters),

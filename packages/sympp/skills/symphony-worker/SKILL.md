@@ -12,7 +12,8 @@ MCP calls: its terminal gets no sympp tools.
 ## Start
 
 A dispatched WorkPackage starts you in its worktree with one instruction: read
-the assignment file. It names the branch, base and review step, and carries the
+the assignment file. Your assignment opens with what the WorkRequest is
+building and how your package fits into it. It names the branch, base and review step, and carries the
 contract: goal, owned and forbidden paths, acceptance, validation, dependencies
 and stop conditions. Stay inside that worktree and scope, and keep the PR small.
 Branch from the base and target it; never merge or cherry-pick another unmerged
@@ -23,15 +24,24 @@ is a chief or architect, your branch or PR shows on the board as a card. Ask the
 operator with `ask` and no `work_request_id`; the answer is typed into your
 input without being submitted.
 
-Ask your parent when context is missing, or product intent, a dependency or
-scope is unclear, and keep working on what doesn't depend on the answer. Raise
-scope growth before you implement it.
+You own your package. Within its paths and constraints, decide and fix without
+asking: implementation, CI, lint, tests, merge conflicts, and review findings
+that point at real defects.
 
-You own your PR end to end. Fix CI failures, lint, stale or broken tests, merge
-conflicts and in-scope review findings yourself, without asking. Go to your
-parent only for scope growth, a change in product behaviour, or a conflict with
-your assignment. When Review Suite stops at its round limit and the scope hasn't
-changed, hand off; don't ask for a replan.
+Ask your parent once, with evidence and a recommendation, and keep working on
+the rest, when:
+
+- a reviewer asks for features, abstractions or cleanups beyond the acceptance;
+- the work needs files outside your paths, a new dependency, or access you
+  don't have;
+- the change would alter product behaviour beyond what the assignment
+  describes;
+- the acceptance itself looks wrong (propose the fix; don't quietly reinterpret
+  it).
+
+If a check fails for a reason your change didn't cause, such as a flaky test or
+a failure that's already on the base, send your parent the evidence; don't fix,
+skip or waive it yourself. Never weaken security or checks to get green.
 
 Message only your own parent, whatever its role: one final handoff, plus
 questions or blockers. Never message any other chief or architect. Keep

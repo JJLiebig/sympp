@@ -20,6 +20,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
 
   @agents ["codex", "claude"]
   @assignment_file "sympp-assignment.md"
+  @opening_words 80
   @shell_safe ~r/\A[A-Za-z0-9_@%+=:,.\/-]+\z/
 
   @type hand_off :: %{
@@ -126,6 +127,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
     """
     # WorkPackage #{work_package.id}: #{Redactor.redact_text(work_package.title)}
 
+    #{building(work_package, assignment["parent_work_request"])}
+
     You are the worker for this sympp WorkPackage. Use the installed `sympp` skill and follow
     `references/symphony-worker/procedure.md` in it.
 
@@ -135,15 +138,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
     - `main` moving never blocks work. Leave a ready branch alone until merge; merge `main` in or rebase only to
       fix a conflict. If the PR's own diff is unchanged after that, its review still counts. If it changed, review
       only what changed. Never restart a whole review because `main` moved.
-    - You own your PR end to end. Fix CI failures, lint, stale or broken tests, merge conflicts and in-scope review
-      findings yourself, without asking. Go to your parent only for scope growth, a change in product behaviour, or
-      a conflict with your assignment. When Review Suite stops at its round limit and the scope hasn't changed,
-      hand off; don't ask for a replan.
     #{review_step(work_package, worktree.worktree_path)}
     - Make no sympp MCP calls. Message only your parent terminal: one final handoff with the PR URL, the
       exact head, check and review results, and remaining risks, plus questions or blockers. Never message
       any other chief or architect, and never send status or acknowledgements. Keep messages short.
-    - Ask your parent when scope, product intent or a dependency is unclear. Never print or store secrets.
+    - Follow the worker procedure's decision and escalation rules. Never print or store secrets.
 
     ## Assignment
 
@@ -152,6 +151,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
     ```
     """
   end
+
+  # What the WorkRequest is building, in its title and the opening paragraph of
+  # its description, and where the package sits in its plan.
+  defp building(%WorkPackage{group: group}, parent) do
+    parent = parent || %{}
+    summary = [heading(parent["title"]), opening(parent["goal"])] |> Enum.reject(&(&1 == "")) |> Enum.join(" ")
+    placement = if is_binary(group), do: "This package is in #{group}.", else: ""
+
+    ["## What we're building", summary, placement]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n\n")
+  end
+
+  defp heading(title) when is_binary(title), do: if(String.trim(title) == "", do: "", else: "**#{String.trim(title)}.**")
+  defp heading(_title), do: ""
+
+  defp opening(text) when is_binary(text) do
+    paragraph = text |> String.trim() |> String.split(~r/\n\s*\n/, parts: 2) |> hd()
+    words = String.split(paragraph)
+    if length(words) > @opening_words, do: Enum.join(Enum.take(words, @opening_words), " ") <> "…", else: Enum.join(words, " ")
+  end
+
+  defp opening(_text), do: ""
 
   defp review_step(%WorkPackage{review_mode: "none"}, _worktree_path),
     do: "- No Review Suite review is required for this WorkPackage."
