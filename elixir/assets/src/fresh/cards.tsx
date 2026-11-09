@@ -2,7 +2,6 @@ import { X } from "lucide-react";
 import { useState } from "react";
 
 import { ActButton } from "./actions";
-import { readOnly } from "./api";
 import { span, type Card, type CardState } from "./model";
 import { useAct } from "./operator";
 import { Owner } from "./owner";
@@ -75,7 +74,6 @@ function CardRow({ at, card }: { at: number; card: Card & { state: Shown } }) {
 function Dismiss({ card }: { card: Card }) {
   const act = useAct();
   const [failure, setFailure] = useState<string | null>(null);
-  if (readOnly) return <span />;
   const dismiss = () => act({ kind: "dismiss", cardIds: [card.id] }).catch((caught: unknown) => setFailure(caught instanceof Error ? caught.message : "The backend refused this."));
   return (
     <button aria-label={`Dismiss ${card.task}`} className={`flex size-6 items-center justify-center rounded hover:bg-line hover:text-ink ${failure ? "text-fail" : "text-faint"}`} title={failure ?? "Dismiss"} type="button" onClick={() => void dismiss()}>

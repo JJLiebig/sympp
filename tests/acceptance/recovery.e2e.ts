@@ -2,6 +2,7 @@ import { expect } from 'e2e';
 import { realpath } from 'node:fs/promises';
 import { Client, contract, herdr, nextTerminal } from '../support/factory.js';
 import { initialize, packages, snapshot, test, tool } from '../support/authority.js';
+import { test as coreTest } from '../support/herdr-core.js';
 
 const description = 'Synthetic acceptance request; no external work is executed.';
 const decodeBinding = (value: string | null) => value && JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
@@ -36,6 +37,8 @@ test('competing terminals end with one owner, Release hands over and ownership s
   expect(decodeBinding(write.binding)).toEqual({ role: 'architect', work_request_id: request, show_inspector: true });
   const read = await loser.raw({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: loser.toolParams('read_work_request', { work_request_id: request }) });
   expect(read.binding).toBeNull();
+  const tools = Object.fromEntries((await loser.rpc('tools/list')).result.tools.map((entry: any) => [entry.name, entry.annotations]));
+  expect([tools.read_work_request, tools.edit_plan]).toEqual([{ readOnlyHint: true }, { readOnlyHint: false }]);
 
   const [wp] = (await winner.addPackages([contract('Owned work')], { work_request_id: request }));
   await winner.call('dispatch_work_package', { work_package_id: wp });
@@ -298,10 +301,65 @@ test('HTTP client leases preserve local request boundaries and a clean detach en
   const leaseFor = async (action: string) => (await client.raw({ client_id: 'owner-bridge', action, terminal }, {}, 'POST', '/mcp/client-lease')).status;
   expect(await leaseFor('attach')).toBe(200);
   expect(await leaseFor('heartbeat')).toBe(200);
+  // A second bridge in the same terminal (another agent session) keeps it attached.
+  const second = await client.raw({ client_id: 'owner-second-bridge', action: 'attach', terminal }, {}, 'POST', '/mcp/client-lease');
+  expect(second.status).toBe(200);
   const successor = await factory.client();
   await successor.reject('set_report', { work_request_id: request, brief: 'Too early' }, 'owned_by_other_terminal');
   expect(await leaseFor('detach')).toBe(200);
+  await successor.reject('set_report', { work_request_id: request, brief: 'Still too early' }, 'owned_by_other_terminal');
+  expect((await client.raw({ client_id: 'owner-second-bridge', action: 'detach', terminal }, {}, 'POST', '/mcp/client-lease')).status).toBe(200);
   await successor.call('set_report', { work_request_id: request, brief: 'Taken after a clean detach' });
   await owner.reject('set_report', { work_request_id: request, brief: 'Gone' }, 'owned_by_other_terminal');
 });
 
+
+coreTest('ownership follows the factory core: a live owner keeps its request and a successor takes over only once the core reports it finished', async ({ core }) => {
+  const owner = await core.client({}, { status: 'idle' });
+  const request = await owner.request('Liveness handover');
+  const successor = await core.client();
+  const early = await successor.reject('set_report', { work_request_id: request, brief: 'Too early' }, 'owned_by_other_terminal');
+  expect(early.owner).toMatchObject({ address: owner.address, status_state: 'idle' });
+  expect(early.next_action).toBe(`ask ${owner.address}, or wait until it finishes`);
+  // A clean bridge detach does not end ownership while the core still sees the terminal live.
+  const leases = new Client(await core.factory.endpoint, core.factory.receipt);
+  const lease = (action: string) => leases.raw({ client_id: 'owner-bridge', action, terminal: { core_id: core.host.id, terminal_id: owner.terminal } }, {}, 'POST', '/mcp/client-lease');
+  expect((await lease('attach')).status).toBe(200);
+  expect((await lease('detach')).status).toBe(200);
+  await successor.reject('set_report', { work_request_id: request, brief: 'Still too early' }, 'owned_by_other_terminal');
+  // A terminal the core reports finished cannot write as itself.
+  const ghost = await core.client({}, { state: 'finished' });
+  await ghost.reject('set_report', { work_request_id: request, brief: 'Ghost' }, 'terminal_not_live');
+  // The first owner-gated write takes ownership even when the write itself is invalid.
+  const handed = (await owner.call('create_work_request', {
+    repo: 'example/service', base_branch: 'beta', title: 'Handed off', description, work_type: 'feature', own: false,
+  }));
+  expect(handed.next_action).toContain('architect');
+  const taker = await core.client();
+  await taker.reject('set_report', { work_request_id: handed.work_request.id, parking: { reason: '  ' } }, 'invalid_operator_report_parking');
+  expect((await successor.reject('set_report', { work_request_id: handed.work_request.id, brief: 'Mine?' }, 'owned_by_other_terminal')).owner.address).toBe(taker.address);
+  expect((await taker.call('sympp.health')).caller).toMatchObject({ access: 'write', terminal: taker.address, owns: [{ work_request_id: handed.work_request.id }] });
+
+  // The owner's terminal finishes; after a restart the factory confirms it with its core and hands over.
+  core.host.terminals.get(owner.terminal!)!.state = 'finished';
+  await core.restart();
+  const resumed = await core.factory.client(successor.terminal);
+  await resumed.call('set_report', { work_request_id: request, brief: 'Taken over from a finished owner' });
+  expect((await resumed.call('sympp.health')).caller.owns.map((entry: any) => entry.work_request_id)).toEqual([request]);
+  // Both boards show who works on each request and whether its terminal is live.
+  const board = await resumed.inspect('/api/v1/sympp/operator/dashboard/hydrated');
+  const nativeBoard = (await resumed.raw(null, {}, 'GET', '/api/v1/sympp/herdr/dashboard')).body;
+  for (const owner of [
+    board.work_request_details.find((entry: any) => entry.work_request.id === request).work_request.worked_on,
+    board.work_requests.work_requests.find((entry: any) => entry.id === request).worked_on,
+    nativeBoard.work_request_details.find((entry: any) => entry.work_request.id === request).work_request.worked_on,
+  ]) {
+    expect(owner).toMatchObject({ address: successor.address, role: 'architect', liveness: 'live' });
+    expect(Number.isFinite(Date.parse(owner.since))).toBe(true);
+  }
+  const unowned = await resumed.call('create_work_request', { repo: 'example/service', base_branch: 'beta', title: 'Nobody yet', description, work_type: 'feature', own: false });
+  expect((await resumed.raw(null, {}, 'GET', '/api/v1/sympp/herdr/dashboard')).body.work_request_details
+    .find((entry: any) => entry.work_request.id === unowned.work_request.id).work_request.worked_on).toBeUndefined();
+  // The handed-off request's live owner keeps it across the restart.
+  await (await core.factory.client(successor.terminal)).reject('set_report', { work_request_id: handed.work_request.id, brief: 'Not after restart' }, 'owned_by_other_terminal');
+});

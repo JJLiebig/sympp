@@ -59,7 +59,10 @@ herdr-core.
 Authority and recovery journeys use real candidate clients that assert distinct
 synthetic Herdr terminal identities for ownership contention, read-only access
 without an identity, operator Release, reconnects, terminal delivery, and an
-actual backend restart. They start no managed worker agents. Offline denial uses the supported snapshot
+actual backend restart. They start no managed worker agents. Liveness takeover,
+answer and decision-feedback delivery, and product-call notices put a test-only
+`hc` on the candidate's PATH. It answers from a controlled loopback herdr-core and
+records what the factory types; it does not qualify a live Herdr. Offline denial uses the supported snapshot
 operation on the disposable ledger. The failed-call journey checks that refused
 calls are counted by tool and reason without their arguments.
 

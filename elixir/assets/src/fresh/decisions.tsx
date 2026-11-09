@@ -2,7 +2,6 @@ import { X } from "lucide-react";
 import { useId, useState, type MouseEvent } from "react";
 
 import { ActButton } from "./actions";
-import { readOnly } from "./api";
 import { span, type Board, type Decision, type Undelivered as Reason } from "./model";
 import { useAct } from "./operator";
 import { Owner } from "./owner";
@@ -45,13 +44,13 @@ function DecisionItem({ at, board, decision, onGoal }: { at: number; board: Boar
   const dismiss = () => act({ kind: "dismiss_feedback", decisionId: decision.id }).catch((caught: unknown) => setFailure(caught instanceof Error ? caught.message : "The backend refused this."));
   // The whole row answers a click: a decision opens its feedback form, undelivered feedback is dismissed.
   const onRow = (event: MouseEvent) => {
-    if (readOnly || !rowClick(event)) return;
+    if (!rowClick(event)) return;
     if (undelivered) {
       if (!typing) void dismiss();
     }
     else setWriting(true);
   };
-  const clickable = !readOnly && (undelivered ? !typing : !writing);
+  const clickable = undelivered ? !typing : !writing;
 
   return (
     <li className={`${ROW} ${clickable ? "cursor-pointer hover:bg-white/[0.025]" : ""}`} onClick={onRow}>
@@ -88,7 +87,6 @@ function Subject({ goal, onGoal }: { goal: Board["goals"][number] | undefined; o
 
 // Where a question has its answer form, a decision has its two reactions.
 function Reactions({ decision, onFeedback }: { decision: Decision; onFeedback: () => void }) {
-  if (readOnly) return null;
   return (
     <p className="col-span-2 flex items-center gap-2">
       <ActButton action={{ kind: "ack", decisionId: decision.id }} label="Ack" look="h-8 rounded border border-line px-3 text-sm font-medium" tone="text-ink" />
@@ -116,7 +114,7 @@ function Undelivered({ decision, failure, onDismiss }: { decision: Decision; fai
       <span className="shrink-0 rounded-full border border-checks/50 px-1.5 text-[11px] font-semibold text-checks" title={decision.undelivered ? REASON[decision.undelivered] : undefined}>{typing ? "Sending" : "Undelivered"}</span>
       <span className="min-w-0 flex-1 text-ink">“{decision.feedback}”</span>
       {failure ? <span className="shrink-0 text-xs text-fail">{failure}</span> : null}
-      {readOnly || typing ? null : (
+      {typing ? null : (
         <button aria-label="Dismiss undelivered feedback" className="flex size-6 shrink-0 items-center justify-center rounded text-faint hover:bg-line hover:text-ink" title="Dismiss" type="button" onClick={onDismiss}>
           <X className="size-3.5" />
         </button>

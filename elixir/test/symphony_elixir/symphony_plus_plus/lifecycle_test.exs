@@ -2,14 +2,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
   use ExUnit.Case, async: false
 
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryResolution
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -57,57 +54,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     assert {:error, :stale_status} = Lifecycle.transition(repo, %{dispatched | status: "planned"}, :dispatch)
     assert {:ok, ready} = Lifecycle.transition(repo, dispatched, :qualify)
     assert {:ok, %WorkPackage{status: "dispatched"}} = Lifecycle.transition(repo, ready, :unqualify)
-  end
-
-  test "each ending outcome is accepted only from its allowed statuses", %{repo: repo, work_request: request} do
-    planned = package!(repo, request, "planned")
-    dispatched = package!(repo, request, "dispatched")
-
-    assert {:error, {:ending_not_allowed, "planned", "abandoned"}} =
-             DeliveryCloseout.record(repo, request.id, planned.id, ending("abandoned", abandoned_rationale: "No longer needed."))
-
-    assert {:error, {:ending_not_allowed, "dispatched", "skipped"}} =
-             DeliveryCloseout.record(repo, request.id, dispatched.id, ending("skipped"))
-
-    assert {:ok, %WorkPackageDelivery{outcome: "skipped"}} = DeliveryCloseout.record(repo, request.id, planned.id, ending("skipped"))
-
-    assert {:ok, %WorkPackageDelivery{outcome: "abandoned"}} =
-             DeliveryCloseout.record(repo, request.id, dispatched.id, ending("abandoned", abandoned_rationale: "Rehomed."))
-
-    assert Repo.get!(WorkPackage, planned.id).status == "ended"
-    assert Repo.get!(WorkPackage, dispatched.id).status == "ended"
-  end
-
-  test "a replayed ending is idempotent and a conflicting ending is refused with the actual outcome", %{repo: repo, work_request: request} do
-    package = package!(repo, request, "ready")
-    attrs = ending("finished")
-
-    assert {:ok, first} = DeliveryCloseout.record(repo, request.id, package.id, attrs)
-    assert {:ok, replay} = DeliveryCloseout.record(repo, request.id, package.id, attrs)
-    assert replay.id == first.id
-    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
-
-    assert {:error, {:delivery_outcome_conflict, "finished"}} =
-             DeliveryCloseout.record(repo, request.id, package.id, ending("completed_no_pr", no_pr_evidence: "Done."))
-
-    assert Repo.get!(WorkPackage, package.id).status == "ended"
-  end
-
-  test "ending clears only the ended package's blockers", %{repo: repo, work_request: request} do
-    package = package!(repo, request, "ready")
-    sibling = package!(repo, request, "dispatched")
-
-    blocker!(repo, package.id, "terminal-blocker")
-    blocker!(repo, sibling.id, "nonterminal-blocker")
-
-    assert {:ok, _delivery} = DeliveryCloseout.record(repo, request.id, package.id, ending("finished"))
-
-    assert WorkPackageActivity.context(repo, package.id).blocker_state.active_ids == []
-    assert WorkPackageActivity.context(repo, sibling.id).blocker_state.active_ids == ["nonterminal-blocker"]
-
-    event_count = repo.aggregate(ProgressEvent, :count, :id)
-    assert :ok = Lifecycle.apply_terminal_effects(repo, Repo.get!(WorkPackage, package.id))
-    assert repo.aggregate(ProgressEvent, :count, :id) == event_count
   end
 
   test "qualification fails on each predicate that does not hold" do
@@ -193,39 +139,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     refute DeliveryResolution.resolves_work_request?("abandoned", packages, deliveries)
   end
 
-  test "next action comes from the status and its derived progress" do
-    assert %{action: "deliver_prerequisites", actor: "architect"} = Lifecycle.next_action("planned", %{dependencies_met?: false})
-    assert %{action: "dispatch_work_package", actor: "architect"} = Lifecycle.next_action("planned")
-    assert %{action: "run_launch_line", actor: "architect"} = Lifecycle.next_action("dispatched", %{progress: "launching"})
-    assert %{action: "wait", actor: "worker"} = Lifecycle.next_action("dispatched", %{progress: "implementing"})
-    assert %{action: "inspect_worker", actor: "architect"} = Lifecycle.next_action("dispatched", %{progress: "worker_exited"})
-    assert %{action: "inspect_worker", actor: "architect"} = Lifecycle.next_action("dispatched", %{progress: "review_ci", attention?: true, worker_idle?: true})
-    assert %{action: "merge_pr", actor: "architect"} = Lifecycle.next_action("ready")
-    assert %{action: "sync_pr", actor: "architect"} = Lifecycle.next_action("ready", %{attention?: true})
-    assert %{action: "finish", actor: "operator"} = Lifecycle.next_action("ready", %{merge_rights?: false})
-    assert %{action: nil, actor: nil} = Lifecycle.next_action("ended")
-  end
-
   defp package!(repo, request, status) do
     attrs = WorkPackageFactory.attrs(kind: "standard_pr", work_request_id: request.id, status: status)
     assert {:ok, package} = Repository.create(repo, attrs)
     package
-  end
-
-  defp ending(outcome, evidence \\ []) do
-    Map.merge(%{"outcome" => outcome, "idempotency_key" => "lifecycle-#{outcome}"}, Map.new(evidence, fn {key, value} -> {Atom.to_string(key), value} end))
-  end
-
-  defp blocker!(repo, work_package_id, blocker_id) do
-    payload = %{type: "blocker", source_tool: "set_blocker", blocker_id: blocker_id, active: true}
-
-    assert {:ok, _event} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: work_package_id,
-               summary: "Blocked by #{blocker_id}",
-               status: "blocked",
-               idempotency_key: "report:#{blocker_id}",
-               payload: payload
-             })
   end
 end

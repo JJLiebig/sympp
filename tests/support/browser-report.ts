@@ -15,10 +15,11 @@ if (mode === 'negative') {
 } else {
   assert.equal(run.status, 'passed');
   assert.equal(run.exitCode, 0);
-  assert.equal(run.summary.discovered, 3);
-  assert.equal(run.summary.selected, 3);
-  assert.equal(run.summary.executed, 3);
-  assert.equal(run.summary.passed, 3);
+  // Every discovered browser case ran once and passed.
+  assert.ok(run.summary.discovered > 0, 'No browser cases discovered');
+  assert.equal(run.summary.selected, run.summary.discovered);
+  assert.equal(run.summary.executed, run.summary.discovered);
+  assert.equal(run.summary.passed, run.summary.discovered);
   assert.equal(run.summary.skipped, 0);
   const acts = run.results.flatMap((result: any) => result.attempts.flatMap((attempt: any) => attempt.steps)).filter((step: any) => step.name === 'agent.act' || step.api === 'agent.act');
   // No agent step is recorded for the current board, so the journeys run mechanically; any recorded step must replay natively.

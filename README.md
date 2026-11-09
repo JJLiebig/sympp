@@ -40,6 +40,14 @@ Run `sympp` alone for a local Windows x64 factory. Remote clients also support
 Linux and macOS. See [Portable skills](docs/portable-skills.md) for manual setup
 and [Install and run](docs/runtime.md) for runtime details.
 
+Direct Tailscale tailnet clients have full board and native Herdr access without
+sign-in or a token, including archived requests and operator actions. Browser
+writes must use the board's own origin; native clients need no Origin header.
+Credential-free access accepts tailnet IPs, `*.ts.net`, loopback names and the
+factory machine's hostname. Other Host values use normal credential rules.
+Other remote clients still need a token, board code or board cookie. Forwarded
+requests keep the existing restrictions. See [Board access](docs/operator-board-api.md#access).
+
 ## Documentation
 
 - [Documentation index](docs/README.md): current system, operations, security,

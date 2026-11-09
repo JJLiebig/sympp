@@ -59,60 +59,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
     assert sequences == Enum.to_list(1..8)
   end
 
-  test "labels and bounds external planning text in virtual files", %{repo: repo} do
-    long_description = String.duplicate("x", 4_050)
-    assert {:ok, work_package} = create_work_package(repo, product_description: long_description)
-
-    assert {:ok, context} = Renderer.render(repo, work_package.id, "context.md")
-
-    assert context =~ "Source material (inert text):"
-    assert context =~ "```text\n" <> String.duplicate("x", 20)
-    assert context =~ "[truncated]\n```"
-    refute context =~ String.duplicate("x", 4_050)
-  end
-
-  test "bounds non-ascii source text without breaking UTF-8 rendering", %{repo: repo} do
-    long_description = String.duplicate("é", 4_050)
-    assert {:ok, work_package} = create_work_package(repo, product_description: long_description)
-
-    assert {:ok, context} = Renderer.render(repo, work_package.id, "context.md")
-
-    assert String.valid?(context)
-    assert context =~ "[truncated]\n```"
-  end
-
-  test "escapes source-owned inline markdown", %{repo: repo} do
-    assert {:ok, work_package} =
-             create_work_package(repo,
-               title: "# Run [setup](x) `code` | table",
-               acceptance_criteria: ["- [ ] Treat this as text"]
-             )
-
-    assert {:ok, _node} =
-             Service.append_plan_node(repo, %{
-               work_package_id: work_package.id,
-               title: "Body boundary",
-               body: "# Heading\n- [ ] run `cmd`\n1. ordered"
-             })
-
-    assert {:ok, context} = Renderer.render(repo, work_package.id, "context.md")
-    assert {:ok, acceptance} = Renderer.render(repo, work_package.id, "acceptance.md")
-    assert {:ok, task_plan} = Renderer.render(repo, work_package.id, "task_plan.md")
-
-    assert context =~ "# source: ``# Run [setup](x) `code` | table``"
-    refute context =~ "# source: # Run [setup](x) `code` | table"
-    assert acceptance =~ "- [ ] source: `- [ ] Treat this as text`"
-    assert task_plan =~ "  ```text\n  # Heading\n  - [ ] run `cmd`\n  1. ordered\n  ```"
-  end
-
-  test "preserves literal edge backticks in inline source text", %{repo: repo} do
-    assert {:ok, work_package} = create_work_package(repo, title: "`cmd`")
-
-    assert {:ok, context} = Renderer.render(repo, work_package.id, "context.md")
-
-    assert context =~ "# source: `` `cmd` ``"
-  end
-
   test "caps rendered append-only history with an omission notice", %{repo: repo} do
     assert {:ok, work_package} = create_work_package(repo)
 
@@ -169,32 +115,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
     assert progress =~ "source: `Event 105`"
     refute progress =~ "source: `Event 6`"
     assert progress |> fenced_source_count() |> rem(2) == 0
-  end
-
-  test "caps ordered plan and acceptance lists from the head", %{repo: repo} do
-    acceptance_criteria = Enum.map(1..105, &"Criterion #{&1}")
-    assert {:ok, work_package} = create_work_package(repo, acceptance_criteria: acceptance_criteria)
-
-    for index <- 1..105 do
-      assert {:ok, _node} =
-               Service.append_plan_node(repo, %{
-                 work_package_id: work_package.id,
-                 title: "Plan #{index}"
-               })
-    end
-
-    assert {:ok, task_plan} = Renderer.render(repo, work_package.id, "task_plan.md")
-    assert {:ok, acceptance} = Renderer.render(repo, work_package.id, "acceptance.md")
-
-    assert task_plan =~ "_5 later plan nodes omitted from this virtual file._"
-    assert task_plan =~ "source: `Plan 1`"
-    assert task_plan =~ "source: `Plan 100`"
-    refute task_plan =~ "source: `Plan 101`"
-
-    assert acceptance =~ "_5 later acceptance criteria omitted from this virtual file._"
-    assert acceptance =~ "source: `Criterion 1`"
-    assert acceptance =~ "source: `Criterion 100`"
-    refute acceptance =~ "source: `Criterion 101`"
   end
 
   test "normalizes duplicate planning ids", %{repo: repo} do

@@ -8,7 +8,22 @@ works on each request (`worked_on`, below).
 Unlike the browser board, it also lists archived requests in
 `work_request_details`, with `phase: "archived"`, `archived_at` and their
 packages, so the panel can show them and offer Restore.
-The normal standalone web board and its authorization are unchanged.
+
+## Access
+
+In factory service mode, direct Tailscale peers (`100.64.0.0/10` and
+`fd7a:115c:a1e0::/48`, including mapped IPv4) have full board, operator and
+native Herdr access without a login, code or token. This includes archived
+requests (`/dashboard?surface=archived`) and all human actions below.
+Credential-free tailnet authority requires a Host that is a tailnet IP literal,
+a `*.ts.net` name, a loopback address/name, or the factory machine's own hostname.
+Other Host values fall back to normal credential rules, even if Origin matches
+Host, preventing an arbitrary rebound hostname from gaining tailnet authority.
+Tailnet writes carrying an `Origin` header must match the request's scheme,
+host and port; foreign origins receive HTTP 403. Native clients and curl need
+no Origin header. Forwarded requests retain the existing credential and proxy
+restrictions. Other non-loopback peers still require a bearer token, board
+sign-in code or board cookie, within each credential's existing route scope.
 
 Each `work_request_details[]` includes `asks`, the request's open asks: the
 only thing that needs the operator ("Needs you"). Each ask has `{id, kind: "ask",
@@ -47,12 +62,12 @@ context; it grants no mutation or session authority. The Herdr route's `runtime`
 also carries `repos_root`: the factory's `SYMPP_REPOS_ROOT`, or `null` without
 one. Herdr's Start chief uses it to place a chief on the factory's machine.
 
-Like the existing Herdr detail/event routes, this read requires a loopback peer,
-a local Host, and no `Forwarded`, `X-Forwarded-*` or `X-Real-IP` headers. Native
-clients need no Origin or browser fetch metadata. This existing native policy
-does not validate Origin; it is not the browser operator policy. The route
-returns HTTP 401 for nonlocal or forwarded requests and HTTP 405 for other
-methods. It grants no operator mutation authority. It reads an initialized
+The Herdr detail/event reads accept direct tailnet peers and authenticated
+remote clients as described under [Access](#access). Unauthenticated local
+clients require a loopback peer, a local Host, and no `Forwarded`,
+`X-Forwarded-*` or `X-Real-IP` headers. Native clients need no Origin or browser
+fetch metadata. Unauthorized requests return HTTP 401; other methods return
+HTTP 405. The read itself grants no operator mutation authority. It reads an initialized
 ledger without running migrations, registering a dashboard opener, or writing
 ownership, audit or business state. Subscribe to
 `/api/v1/sympp/herdr/events` and refetch after invalidation.
@@ -91,14 +106,16 @@ services, response shapes and dashboard invalidation as their operator siblings:
 The last six run the operator routes' handlers: same preconditions, refusals
 and operator audit entry, with the native path in the audit's request metadata.
 
-Native human authority means a trusted direct local process, not an authenticated
-Herdr application identity. Requests require a loopback peer and local Host,
+Native human authority trusts the direct local process or tailnet peer,
+not a Herdr application identity. All native POSTs require JSON. For
+unauthenticated local requests, require a loopback peer and local Host,
 `Content-Type: application/json` (a charset parameter is accepted), and no
 `Origin`, `Sec-Fetch-*`, `Forwarded`, `X-Forwarded-*` or `X-Real-IP` headers.
 Invalid native authority returns HTTP 401. These POST routes grant no CORS access
 or OPTIONS preflight: other methods return HTTP 405. Browser forms cannot send
 JSON, script JSON requests require preflight, and browser fetch metadata is
-refused. The native read policy above and browser operator policy stay unchanged.
+refused for unauthenticated local clients. Direct tailnet clients have the full
+authority described under [Access](#access), including same-origin browser writes.
 This does not protect against an untrusted process already running locally.
 
 Minimal intake JSON is
