@@ -38,10 +38,8 @@ defmodule SymphonyElixirWeb.FactoryAccessPlug do
   end
 
   defp machine_hostname?(host) do
-    case :inet.gethostname() do
-      {:ok, hostname} -> host == String.downcase(List.to_string(hostname))
-      {:error, _reason} -> false
-    end
+    {:ok, hostname} = :inet.gethostname()
+    host == String.downcase(List.to_string(hostname))
   end
 
   defp authorize_tailnet(conn) do
