@@ -253,6 +253,11 @@ export async function close(client: Client, wp: string, outcome = 'completed_no_
   return client.call('close_work_package', { work_package_id: wp, outcome, ...args });
 }
 
+// A package's recorded progress, as the operator's package detail lists it.
+export async function progress(client: Client, wp: string) {
+  return (await client.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).progress;
+}
+
 export async function sync(client: Client, wp: string, number: number, sha: string) {
   return client.call('sync_pr', { work_package_id: wp, url: prUrl(number), head_sha: sha });
 }

@@ -2,7 +2,7 @@ import { expect } from 'e2e';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { contract } from '../support/factory.js';
-import { close, head, installReviewSuite, pr, prUrl, row, sync, test } from '../support/delivery.js';
+import { close, head, installReviewSuite, pr, prUrl, progress, row, sync, test } from '../support/delivery.js';
 import { githubCheckout } from '../support/worktree-git.js';
 
 test('deployment observations cover every delivered revision and preserve completion through rollback and unavailable history', async ({ delivery: { factory, provider } }) => {
@@ -214,11 +214,11 @@ test('ordinary PR handoff observes pending qualification then reconciles an exac
   expect(delivered.delivery.merge_commit_sha).toBe(head('f'));
   expect(Date.parse(delivered.delivery.pr_merged_at)).toBe(Date.parse(mergeTime));
   expect(await completion()).toBeTruthy();
-  const revision = (await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision;
+  const recorded = await progress(architect, wp);
   const replay = await architect.call('sync_pr', { work_package_id: wp });
   expect(replay.pr_sync.status).toBe('already_merged');
   expect((await row(architect, request, wp)).delivery).toEqual(delivered.delivery);
-  expect((await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision).toEqual(revision);
+  expect(await progress(architect, wp)).toEqual(recorded);
   const calls = provider.calls.filter(({ argv }) => argv[0] === 'pr');
   expect(calls.length).toBeGreaterThan(0);
   for (const { argv } of calls) {
@@ -323,9 +323,9 @@ test('typed no-PR closeout resolves blockers once and terminal packages cannot r
   expect(scoped.work_package.repo).toBe('example/client');
   expect(scoped.work_package.base_branch).toBe('integration');
   expect((await architect.call('read_work_request', { detail: 'full', work_request_id: request })).work_request.base_branch).toBe('beta');
-  const revision = (await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision;
+  const recorded = await progress(architect, wp);
   expect((await close(architect, wp)).work_package_delivery.id).toBe(result.work_package_delivery.id);
-  expect((await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision).toEqual(revision);
+  expect(await progress(architect, wp)).toEqual(recorded);
   const conflict = await architect.reject('close_work_package', { work_package_id: wp, outcome: 'completed_no_pr', evidence: 'Replace original evidence' }, 'delivery_outcome_conflict');
   expect(conflict).toMatchObject({ outcome: 'completed_no_pr', state: 'ended', next_action: 'none' });
   expect((await row(architect, request, wp)).delivery).toEqual(scoped.delivery);
@@ -439,7 +439,6 @@ test('the watcher carries a dispatched package through ready to a recorded merge
   const [wp] = await architect.addPackages([contract('Watched change', { branch_pattern: 'feature/delivery-901' })]);
   await architect.call('dispatch_work_package', { work_package_id: wp });
   const detail = () => architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`);
-  const revision = async () => (await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision;
   // A PR from the package branch into another base isn't this package's delivery.
   provider.set(900, pr(900, head('9'), { headRefName: 'feature/delivery-901', baseRefName: 'other' }));
   await factory.tick('sweep');
@@ -450,19 +449,21 @@ test('the watcher carries a dispatched package through ready to a recorded merge
   expect(waiting.metadata.pr.number).toBe(901);
   expect(waiting.metadata.pr.check_summary.status).toBe('pending');
   expect((await row(architect, request, wp)).raw_status).toBe('dispatched');
-  // A head turning failing reads which checks failed, once.
+  // A head turning failing is recorded, and reads which checks failed, once.
+  const pending = (await progress(architect, wp)).length;
   provider.set(901, pr(901, head('a'), { statusCheckRollup: [{ name: 'required', status: 'COMPLETED', conclusion: 'FAILURE' }] }));
   await factory.tick('sweep');
+  expect((await progress(architect, wp)).length).toBeGreaterThan(pending);
   expect((await row(architect, request, wp)).work_package.pr_signal.checks).toMatchObject({ status: 'failing', failing: ['required'] });
   // A new watcher process starts with no memory: the stored snapshot keeps it
   // from recording the same state, or reading the check details, again.
   const reads = provider.rest.length;
-  const recorded = await revision();
+  const recorded = await progress(architect, wp);
   factory = await restart();
   architect = await factory.client(architect.terminal);
   await factory.tick('sweep');
   expect(provider.rest).toHaveLength(reads);
-  expect(await revision()).toEqual(recorded);
+  expect(await progress(architect, wp)).toEqual(recorded);
   provider.set(901, pr(901, head('a')));
   await factory.tick('sweep');
   const ready = await row(architect, request, wp);
@@ -602,9 +603,9 @@ test('the watcher holds work on unknown GitHub or Review Suite input and follows
   provider.set(910, pr(910, head('e')));
   await factory.tick('sweep');
   expect(await status(wp)).toBe('dispatched');
-  const revision = (await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision;
+  const recorded = await progress(architect, wp);
   await factory.tick('sweep');
-  expect((await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision).toEqual(revision);
+  expect(await progress(architect, wp)).toEqual(recorded);
   // The repository reports checks, so a new head whose checks aren't reported yet stays unproven.
   await done('e', 'g');
   provider.set(910, pr(910, head('g'), { statusCheckRollup: [] }));
