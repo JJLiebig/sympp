@@ -79,12 +79,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.ReplaceSymppQuestionsW
   end
 
   # A blocker recorded on one package could describe another (`blocked_item`).
-  # Blockers are now package-local, so each such event moves to the package it
-  # describes, after that package's own history.
+  # Blockers are now package-local, so each such blocker's whole history (its
+  # resolution may not repeat the target) moves to the package it describes,
+  # after that package's own history. Its id is suffixed with the package it
+  # came from, so it can't merge with a blocker of the same id there.
   defp move_targeted_blockers do
-    %{rows: rows} =
+    %{rows: targets} =
       repo().query!("""
-      SELECT event.id, event.work_package_id, json_extract(event.payload, '$.blocked_item.id')
+      SELECT event.work_package_id, json_extract(event.payload, '$.blocker_id'), json_extract(event.payload, '$.blocked_item.id'), event.id
       FROM sympp_progress_events event
       JOIN sympp_work_packages target ON target.id = json_extract(event.payload, '$.blocked_item.id')
       WHERE json_extract(event.payload, '$.type') = 'blocker'
@@ -93,17 +95,46 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.ReplaceSymppQuestionsW
       ORDER BY event.work_package_id, event.sequence
       """)
 
-    for [id, owner_id, target_id] <- rows do
+    # The latest target named for a blocker wins; events without a blocker id stand alone.
+    targets
+    |> Enum.reduce(%{}, fn [owner_id, blocker_id, target_id, event_id], acc ->
+      Map.put(acc, {owner_id, blocker_id || {:event, event_id}}, target_id)
+    end)
+    |> Enum.sort()
+    |> Enum.each(fn {{owner_id, blocker}, target_id} -> move_blocker_history(owner_id, blocker, target_id) end)
+  end
+
+  defp move_blocker_history(owner_id, {:event, event_id}, target_id), do: move_events([event_id], owner_id, target_id, nil)
+
+  defp move_blocker_history(owner_id, blocker_id, target_id) do
+    %{rows: rows} =
+      repo().query!(
+        """
+        SELECT id FROM sympp_progress_events
+        WHERE work_package_id = ?1 AND json_extract(payload, '$.type') = 'blocker' AND json_extract(payload, '$.blocker_id') = ?2
+        ORDER BY sequence
+        """,
+        [owner_id, blocker_id]
+      )
+
+    move_events(Enum.map(rows, &hd/1), owner_id, target_id, blocker_id <> "@" <> owner_id)
+  end
+
+  defp move_events(event_ids, owner_id, target_id, blocker_id) do
+    for id <- event_ids do
       repo().query!(
         """
         UPDATE sympp_progress_events
         SET work_package_id = ?2,
             sequence = (SELECT coalesce(max(sequence), 0) + 1 FROM sympp_progress_events WHERE work_package_id = ?2),
             idempotency_key = CASE WHEN idempotency_key IS NULL THEN NULL ELSE idempotency_key || ':from:' || ?3 END,
-            payload = json_remove(payload, '$.blocked_item', '$.blocked_by')
+            payload = json_remove(
+              CASE WHEN ?4 IS NULL THEN payload ELSE json_set(payload, '$.blocker_id', ?4) END,
+              '$.blocked_item', '$.blocked_by'
+            )
         WHERE id = ?1
         """,
-        [id, target_id, owner_id]
+        [id, target_id, owner_id, blocker_id]
       )
     end
   end
