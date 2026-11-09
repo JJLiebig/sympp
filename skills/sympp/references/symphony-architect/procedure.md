@@ -60,8 +60,10 @@ rationale. Decisions explain choices; current status remains delivery truth.
   unclear.
 - A question only the human can answer goes through `ask`, never only in
   conversation prose: the ask is what puts it on the boards as **Needs you**,
-  and the operator's answer is typed into your terminal. Questions for the chief
-  stay in conversation.
+  and the operator's answer is typed into your terminal when it runs on the
+  factory's machine; otherwise read it from the ask in
+  `read_work_request(detail: "full")`. Questions for the chief stay in
+  conversation.
 - Record durable decisions with `record_decision`. Valid
   `source_type`: `human`, `architect`, `operator`, `ask_pro_advisory`.
 - Route product or scope questions that approved intent and available evidence

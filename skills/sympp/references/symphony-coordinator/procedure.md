@@ -74,7 +74,9 @@ For a WorkRequest your terminal owns, optionally publish a brief/ETA or parking
 reason with `set_report` at meaningful delivery milestones or road bumps; see the
 [architect report procedure](../symphony-architect/procedure.md#guidance).
 A question only the human can answer goes through `ask`, never only in
-conversation prose; the operator's answer is typed into your terminal. When the
+conversation prose. The operator's answer is typed into your terminal when it
+runs on the factory's machine; otherwise read it from the ask in
+`read_work_request(detail: "full")`. When the
 human answers in conversation instead, record it with
 `resolve_ask(to: "answered")`. Do not create a WorkRequest solely for reporting,
 require worker receipts, or turn ordinary waits into escalation.

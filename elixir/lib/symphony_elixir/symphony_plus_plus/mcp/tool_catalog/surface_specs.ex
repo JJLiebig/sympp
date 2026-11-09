@@ -110,7 +110,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
 
   defp architect_tool_description("ask"),
     do:
-      "Ask the operator a question: it shows as Needs you on the boards until it is answered or withdrawn. Optionally name a package and give a decision_prompt with options. The operator's answer is typed into your terminal without being submitted. Asks never block planning or dispatch, and an ask on a package is withdrawn when the package ends."
+      "Ask the operator a question: it shows as Needs you on the boards until it is answered or withdrawn. Optionally name a package and give a decision_prompt with options. The operator's answer is typed into your terminal without being submitted when it runs on the factory's machine; otherwise read it from the ask with read_work_request detail: full. Asks never block planning or dispatch, and an ask on a package is withdrawn when the package ends."
 
   defp architect_tool_description("resolve_ask"),
     do:

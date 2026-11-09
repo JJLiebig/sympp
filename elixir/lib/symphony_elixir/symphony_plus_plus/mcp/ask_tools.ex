@@ -21,7 +21,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AskTools do
         {:ok,
          ToolResult.tool_result(%{
            "ask" => Asks.public(ask),
-           "next_action" => "The operator answers on the board and the answer is typed into this terminal. Withdraw it with resolve_ask if it stops mattering."
+           "next_action" =>
+             "The operator answers on the board. The answer is typed into this terminal when it runs on the factory's machine; otherwise read it from the ask in read_work_request with detail: full. Withdraw it with resolve_ask if it stops mattering."
          })}
 
       {:error, reason} ->
