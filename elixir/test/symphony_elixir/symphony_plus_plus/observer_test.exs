@@ -119,6 +119,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert "pr_base_mismatch" in unqualified_event!(repo, package.id).payload["reasons"]
     end
 
+    test "a ready PR merged into another base unqualifies instead of ending", %{repo: repo} do
+      package = package!(repo, "WP-OBS-MERGED-ELSEWHERE", status: "ready")
+      attach!(repo, package, 81)
+
+      merged =
+        pr(81, "head-a", %{"base_branch" => "release", "state" => "merged", "merged" => true, "merged_at" => "2026-11-09T10:00:00Z", "merge_commit_sha" => "merge-81"})
+
+      sweep(repo, %{{:pr, "nextide", "repo", 81} => {:ok, merged}})
+
+      assert repo.get!(WorkPackage, package.id).status == "dispatched"
+      refute repo.get_by(WorkPackageDelivery, work_package_id: package.id)
+      assert "pr_base_mismatch" in unqualified_event!(repo, package.id).payload["reasons"]
+    end
+
     test "a PR replaced by sync_pr during a sweep is neither re-attached nor recorded as merged", %{repo: repo} do
       package = package!(repo, "WP-OBS-REPLACED")
       attach!(repo, package, 921)

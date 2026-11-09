@@ -195,7 +195,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.RateGovernor do
 
   # Concurrent requests on one credential update its state one at a time, so a
   # late success never overwrites a newer pause.
-  defp locked(credential, fun), do: :global.trans({__MODULE__, credential}, fun, [node()])
+  defp locked(credential, fun), do: :global.trans({{__MODULE__, credential}, self()}, fun, [node()])
 
   defp put(credential, state) do
     create_table()

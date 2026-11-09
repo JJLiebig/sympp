@@ -41,6 +41,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubApiTest do
       assert RateGovernor.penalize(credential, %{}, paused_until + 2) == paused_until + 2 + 30_000
     end
 
+    test "concurrent updates to one credential never lose a pause" do
+      credential = unique_credential()
+      budget = %{"x-ratelimit-remaining" => ["4000"], "x-ratelimit-limit" => ["5000"], "x-ratelimit-reset" => ["3600"]}
+
+      1..50
+      |> Enum.map(fn index ->
+        Task.async(fn -> if rem(index, 10) == 0, do: RateGovernor.penalize(credential, %{}, 0), else: RateGovernor.record(credential, budget, 0) end)
+      end)
+      |> Task.await_many()
+
+      # Five penalties in a row: 30 s doubling to 480 s, none overwritten by a success.
+      assert RateGovernor.state(credential).paused_until == 480_000
+    end
+
     test "retry-after, or the reset time when the budget is spent, sets the pause" do
       credential = unique_credential()
       assert RateGovernor.penalize(credential, %{"retry-after" => ["120"]}, 0) == 120_000

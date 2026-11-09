@@ -294,7 +294,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     with :ok <- same_attachment(attached_pr(repo, package), attached),
          {:ok, payload} <- payload(pr) do
       work = fn -> record_and_qualify(repo, package, attached, payload, changed?, pr, review, stale) end
-      merged? = pr["merged"] == true
+      # A PR merged into another base doesn't deliver this package: it unqualifies instead.
+      merged? = pr["merged"] == true and base_matches?(package, pr)
       if merged?, do: merge(repo, package, attached, payload, changed?), else: in_transaction(repo, package, work)
     else
       {:error, reason} -> retry(package, reason)
