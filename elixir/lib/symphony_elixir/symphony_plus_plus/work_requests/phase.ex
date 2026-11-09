@@ -14,7 +14,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase do
 
   Resolution follows the outcome matrix in `DeliveryResolution`. A skipped
   package without a successor is left out, unless every package is skipped.
-  Open clarification questions never change the phase.
+  Open asks never change the phase.
 
   Writes to an archived WorkRequest are refused with `next_action: restore`;
   nothing restores an archived WorkRequest implicitly.

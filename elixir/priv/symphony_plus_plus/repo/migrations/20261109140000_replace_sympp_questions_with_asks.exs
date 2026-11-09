@@ -6,7 +6,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.ReplaceSymppQuestionsW
   # Herdr terminal. Clarification questions become asks (open -> open,
   # answered -> answered, closed -> withdrawn) under their own ids, so decisions
   # that cite a question still cite the ask. An open escalation carried in
-  # report.pending_ask becomes an open ask and the key is removed.
+  # report.pending_ask becomes an open ask and the key is removed. Open asks on
+  # archived or operator-completed WorkRequests are withdrawn.
   #
   # Findings and free progress notes go away with their tools. Blockers keep
   # their progress events, now written only by set_blocker, so older blocker
@@ -50,6 +51,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.ReplaceSymppQuestionsW
     """)
 
     move_pending_asks()
+
+    # Archiving or completing a WorkRequest withdraws its open asks.
+    execute("""
+    UPDATE sympp_asks
+    SET state = 'withdrawn', answered_by = 'subject_ended', resolved_at = updated_at
+    WHERE state = 'open'
+      AND work_request_id IN (SELECT id FROM sympp_work_requests WHERE archived_at IS NOT NULL OR operator_completed_at IS NOT NULL)
+    """)
 
     drop(table(:sympp_work_request_clarification_questions))
     drop(table(:sympp_findings))

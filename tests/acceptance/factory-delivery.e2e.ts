@@ -427,7 +427,9 @@ test('architect integration holds gate a ready PR without reopening work or chan
   await outsider.request('Unrelated authority');
   expect((await outsider.rpc('tools/call', { name: 'set_blocker', arguments: hold })).error).toBeTruthy();
   expect((await row(architect, request, wp)).merge_eligibility.eligible).toBe(true);
-  for (const blocker_id of ['', '   ', 42]) await architect.reject('set_blocker', { ...hold, blocker_id }, 'invalid_blocker_id');
+  for (const [blocker_id, reason] of [['', 'missing_blocker_id'], ['   ', 'missing_blocker_id'], [42, 'invalid_blocker_id']] as const) {
+    await architect.reject('set_blocker', { ...hold, blocker_id }, reason);
+  }
   expect((await architect.call('set_blocker', hold)).changed).toBe(true);
   expect((await architect.call('set_blocker', hold)).changed).toBe(false);
   const held = await row(architect, request, wp);

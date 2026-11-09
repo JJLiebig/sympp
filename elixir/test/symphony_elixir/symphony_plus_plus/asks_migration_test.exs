@@ -43,6 +43,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AsksMigrationTest do
     assert Jason.decode!(report) == %{"brief" => %{"text" => "Brief", "written_at" => "2026-11-04T10:00:00Z"}, "updated_at" => "2026-11-04T10:00:00Z"}
   end
 
+  test "an open ask on an archived WorkRequest is withdrawn" do
+    assert [["withdrawn", "subject_ended"]] = rows!("SELECT state, answered_by FROM sympp_asks WHERE work_request_id = 'wr_archived'")
+  end
+
   test "older blocker events are relabelled to set_blocker and other events are untouched" do
     assert [
              ["evt_note", nil],
@@ -52,7 +56,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AsksMigrationTest do
   end
 
   defp seed! do
-    for id <- ["wr_one", "wr_two"] do
+    for id <- ["wr_one", "wr_two", "wr_archived"] do
       Repo.query!(
         "INSERT INTO sympp_work_requests (id, title, repo, base_branch, work_type, human_description, constraints, desired_dispatch_shape, inserted_at, updated_at) VALUES (?1, 'Title', 'nextide/demo', 'main', 'feature', 'x', '{}', 'single_package', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')",
         [id]
@@ -66,6 +70,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AsksMigrationTest do
     }
 
     Repo.query!("UPDATE sympp_work_requests SET report = ?1 WHERE id = 'wr_two'", [Jason.encode!(report)])
+    Repo.query!("UPDATE sympp_work_requests SET report = ?1, archived_at = '2026-11-05T00:00:00Z' WHERE id = 'wr_archived'", [Jason.encode!(report)])
 
     [
       {"wrq_open", 1, "Name the flag?", "", "open", nil, nil, nil, "2026-11-01T00:00:00Z", Jason.encode!(%{"tl_dr" => "Pick one"})},

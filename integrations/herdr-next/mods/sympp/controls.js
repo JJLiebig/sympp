@@ -19,6 +19,19 @@ export function answerBody(question, choice, text) {
   return { answer_choice: choice, ...(note ? { answer_note: note } : {}) };
 }
 
+// What to tell the operator when a saved answer could not be typed into the asking terminal; null
+// when it was delivered. The answer stays on the ask either way.
+const UNDELIVERED = {
+  terminal_finished: "the asking terminal has finished",
+  no_asking_terminal: "the ask has no asking terminal",
+  send_failed: "sympp couldn't reach the asking terminal",
+};
+export function undeliveredNote(payload) {
+  const delivery = payload?.delivery;
+  if (!delivery || delivery.state !== "not_delivered") return null;
+  return `Answer saved, but ${UNDELIVERED[delivery.reason] ?? "it wasn't delivered"}. The agent can read it on the WorkRequest.`;
+}
+
 export async function postAction(endpoint, path, body, fetcher = fetch) {
   const response = await fetcher(`${endpoint}${path}`, {
     method: "POST", headers: { accept: "application/json", "content-type": "application/json" }, body: JSON.stringify(body),

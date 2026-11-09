@@ -40,6 +40,8 @@ test('open asks need the operator and answer through their own route', () => {
   assert.equal(asking.asks[0].route, '/api/v1/sympp/herdr/asks/ask-1/answer');
   assert.equal(calm.needs.length, 0);
   assert.equal(L.needsQueue([asking, calm]).length, 1);
+  assert.equal(C.undeliveredNote({ ok: true, delivery: { state: 'delivered', to: 'jjdev/t7' } }), null);
+  assert.match(C.undeliveredNote({ ok: true, delivery: { state: 'not_delivered', reason: 'terminal_finished' } }), /asking terminal has finished/);
 });
 
 const host = { node: 'C:\\Program Files\\nodejs\\node.exe', helper: 'C:\\Herdr Home\\tools\\sympp-herdr.js', session: 'scratch' };
