@@ -110,7 +110,8 @@ export function decisionQueue(jobs) {
 }
 
 // One row per Herdr topic, then unsorted spaces and work without a space when either has anything,
-// cards included. A card's asks count where the card lives.
+// cards and settled tasks included, so an archived one can still be restored. A card's asks count
+// where the card lives.
 export function factoryRows(jobs, desk, place, cards = []) {
   const open = jobs.filter((job) => job.state !== "settled");
   const names = new Map(desk.map((t) => [t.id, t.name]));
@@ -128,11 +129,12 @@ export function factoryRows(jobs, desk, place, cards = []) {
       jobs: own,
       needs: own.reduce((n, job) => n + job.needs.length, 0) + held.reduce((n, card) => n + card.needs.length, 0),
       cards: held.length,
+      settled: jobs.filter((job) => job.state === "settled" && place.home(job) === topic.id).length,
       moving: own.reduce((n, job) => n + job.counts.live, 0),
       repos: [...new Set(own.flatMap((job) => job.repos.map(shortRepo)).filter(Boolean))],
       shared: [...shared].map(([name, count]) => ({ name, count })),
     };
-  }).filter((row) => row.kind === "topic" || row.jobs.length > 0 || row.cards > 0 || row.shared.length > 0 || (row.kind === "unsorted" && row.spaces.length > 0));
+  }).filter((row) => row.kind === "topic" || row.jobs.length > 0 || row.cards > 0 || row.settled > 0 || row.shared.length > 0 || (row.kind === "unsorted" && row.spaces.length > 0));
 }
 
 // ---------- Topic and space ----------

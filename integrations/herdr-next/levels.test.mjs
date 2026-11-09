@@ -35,6 +35,8 @@ test('the factory has one row per Herdr topic, keeps unsorted spaces and counts 
   const card = M.parseBoard({ ...boardPayload(), cards: [{ id: 'c-lost', title: 'Stray fix', repository: 'owner/elsewhere', branch: 'fix/x', state: 'working' }] }).cards;
   const cardRows = L.factoryRows([], desk, L.placeJobs(card, desk), card);
   assert.equal(byId(cardRows, L.NOWHERE)?.cards, 1, 'so does a card matching no space');
+  const shelved = M.parseBoard({ ...boardPayload(), work_request_details: [{ work_request: { id: 'old', title: 'Old', repo: 'owner/elsewhere', phase: 'archived', inserted_at: new Date(NOW).toISOString() } }] }).jobs;
+  assert.equal(byId(L.factoryRows(shelved, desk, L.placeJobs(shelved, desk)), L.NOWHERE)?.settled, 1, 'and an archived task, so it can be restored');
 });
 
 test('placement uses explicit repository mappings first and never matches ancestor folders', () => {

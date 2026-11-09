@@ -16,15 +16,15 @@ export const deskStage = (pkg) => (pkg.stage === "review_ci" && pkg.review.mode 
 // one carries its machine, `vps/t7`): the package's stage, its review round, and whether the person
 // is needed. The terminals the factory itself sees working (a task's owner, a package's worker) come
 // first; labelled launches and sessions fill in the rest.
-export function decorations(board, terminalList, endpoint, at) {
+export function decorations(board, terminalList, endpoint, at, here = (address) => address) {
   const out = {};
   const entry = (job, pkg) => {
     const stage = !pkg ? null : pkg.stage === "ended" ? (pkg.outcome === "dropped" ? null : "landed") : deskStage(pkg);
     return { stage, round: stage === "review" ? pkg.round : null, needs: pkg ? job.needs.some((n) => n.pkgId === pkg.id) : job.needs.length > 0, endpoint, at };
   };
   for (const job of board.jobs) {
-    if (job.owner && job.owner.liveness !== "finished") out[job.owner.address] = entry(job, null);
-    for (const pkg of job.packages) if (pkg.owner && pkg.owner.liveness !== "finished") out[pkg.owner.address] = entry(job, pkg);
+    if (job.owner && job.owner.liveness !== "finished") out[here(job.owner.address)] = entry(job, null);
+    for (const pkg of job.packages) if (pkg.owner && pkg.owner.liveness !== "finished") out[here(pkg.owner.address)] = entry(job, pkg);
   }
   for (const b of discoverBindings(null, terminalList)) {
     if (out[b.address]) continue;

@@ -52,3 +52,11 @@ test('the shared map changes only when an entry does, is gone, or needs a fresh 
   assert.equal(nextDecorations({ ...before, ...theirs }, { t1: entry('build', soon), t2: entry('checks', soon) }, A, soon), null);
 });
 
+
+test("the factory's addresses on this machine's named core become Herdr's local ones; other machines' stay", async () => {
+  const { localAddress } = await import('./mods/sympp/model.js');
+  assert.deepEqual(['box/t8', 'vps/t11', 't3', 'boxer/t1'].map((a) => localAddress(a, 'box')), ['t8', 'vps/t11', 't3', 'boxer/t1']);
+  assert.equal(localAddress('box/t8', null), 'box/t8', 'without a core name, nothing changes');
+  const map = decorations(parseBoard(boardPayload()), [], 'http://a', NOW, (a) => localAddress(a, 'box'));
+  assert.deepEqual(Object.keys(map).sort(), ['t0hd', 't4', 't6', 't8', 't9', 'vps/t11', 'vps/t2']);
+});

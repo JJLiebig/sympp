@@ -26,6 +26,12 @@ const LEGACY_ENDINGS = { merged: "pr_merged", closed: "completed_no_pr", abandon
 const endingOf = (delivery) => (delivery?.outcome === "legacy" ? LEGACY_ENDINGS[delivery.legacy_status] : OUTCOMES[delivery?.outcome ?? ""] ? delivery.outcome : null) ?? null;
 const LIVENESS = new Set(["live", "unknown", "finished"]);
 
+// The factory names a terminal on a named core as "<core>/t8"; Herdr lists the same terminal on its
+// own core as "t8". An address on any other machine stays as it is.
+export function localAddress(address, coreName) {
+  return coreName && typeof address === "string" && address.startsWith(`${coreName}/`) ? address.slice(coreName.length + 1) : address;
+}
+
 // Polling: modest, slower in the background and after failures. GPUI fetch has no streaming body.
 export const POLL = { live: 15e3, quiet: 60e3, background: 60e3, retry: [15e3, 30e3, 60e3] };
 

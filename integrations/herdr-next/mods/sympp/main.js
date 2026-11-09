@@ -162,6 +162,12 @@ export default class Lens extends View {
     this.answers = {};
     this.feedback = {};
     this.ops = {};
+    // This machine's core name, so the factory's "<core>/t8" addresses find their local terminals.
+    this.coreName = null;
+    hc(["server", "status", "--json"]).then((result) => {
+      const name = JSON.parse(result.stdout)?.core?.name;
+      if (typeof name === "string" && name) this.coreName = name;
+    }).catch(() => {});
     this.leaseId = `herdr-app-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     this.leasedAt = 0;
     cx.timer.every(TICK, (cx) => this.tick(cx));
@@ -240,7 +246,7 @@ export default class Lens extends View {
         this.holdLease(outcome.board, now, cx);
         if (this.ownConnection) this.shareConnection();
         this.announce(outcome.board);
-        const agents = Chrome.nextDecorations(shared(Chrome.AGENTS), Chrome.decorations(outcome.board, terminals(), this.endpoint, now), this.endpoint, now);
+        const agents = Chrome.nextDecorations(shared(Chrome.AGENTS), Chrome.decorations(outcome.board, terminals(), this.endpoint, now, (a) => this.here(a)), this.endpoint, now);
         if (agents) setShared(Chrome.AGENTS, agents);
         const live = outcome.board.jobs.filter((j) => j.state === "live").map((j) => {
           const moving = j.packages.map(Chrome.deskStage).filter(Boolean);
@@ -991,14 +997,21 @@ export default class Lens extends View {
 
   // Whether a terminal runs where Herdr reaches it.
   running(address) {
-    return terminals().some((k) => k.address === address && k.state === "live");
+    const here = this.here(address);
+    return terminals().some((k) => k.address === here && k.state === "live");
+  }
+
+  // A factory address as Herdr names it here.
+  here(address) {
+    return M.localAddress(address, this.coreName);
   }
 
   // Focuses a running terminal: its pane when one shows it, else beside the shown space on its
   // machine. Only for the connected factory while it is online: a copied ledger's addresses may name
   // other terminals now.
-  focusTerminal(address, cx) {
-    const key = `focus:${address}`;
+  focusTerminal(given, cx) {
+    const key = `focus:${given}`;
+    const address = this.here(given);
     if (this.ops[key]?.pending) return;
     const op = this.ops[key] = { pending: true, error: null };
     cx.spawn(async (cx) => {
