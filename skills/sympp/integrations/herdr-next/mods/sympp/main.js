@@ -1024,11 +1024,14 @@ export default class Lens extends View {
     return drawn;
   }
 
+  // The moment ages, time in step and staleness are drawn at; the preview draws at its sample's.
+  now() { return Date.now(); }
+
   draw(cx) {
     if (this.chief) return this.chief.render();
     this.compact = this.role === "panel" || this.companion || this.viewportWidth() < 1000;
     const t = theme();
-    const now = Date.now();
+    const now = this.now();
     this.shown = null;
     this.agentWatch = null;
     this.currentJob = null;
@@ -1040,7 +1043,7 @@ export default class Lens extends View {
     const board = this.net.data;
     if (!board) {
       if (!this.net.error) return this.root(t, [message(t, "Reading sympp…", null)]);
-      if (!this.given.remote && (this.starting || now - (shared(STARTING) || 0) < START_WAIT)) return this.root(t, [message(t, "Starting sympp…", null)]);
+      if (!this.given.remote && (this.starting || Date.now() - (shared(STARTING) || 0) < START_WAIT)) return this.root(t, [message(t, "Starting sympp…", null)]);
       return this.root(t, [message(t, this.startFailed ? "Couldn't start sympp" : "Couldn't read sympp", this.startFailed ? null : this.net.error, [
         button(t, "retry-first", this.reading ? "Reading…" : "Retry", (cx) => this.retry(cx), { strong: true }),
         ...(this.dashboard ? [button(t, "dashboard-first", "Open dashboard", (cx) => this.openDashboard(cx))] : []),
