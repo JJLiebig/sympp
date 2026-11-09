@@ -64,13 +64,12 @@ const NEXT: Record<string, string> = {
   none: "Nothing is left to do here. It was already handled.",
 };
 
-type Refusal = { error?: string | { message?: string; next_action?: string } | null; message?: string };
+type Refusal = { error?: { message?: string; next_action?: string } | null };
 
 // A refusal in plain words: what to do next where the backend says, else its message.
 export function refusalText(payload: Refusal | null) {
-  const error = typeof payload?.error === "object" ? payload.error : null;
-  const next = error?.next_action ?? "";
-  return NEXT[next] ?? NEXT[next.split(":")[0]] ?? error?.message ?? payload?.message ?? "The backend refused this.";
+  const next = payload?.error?.next_action ?? "";
+  return NEXT[next] ?? NEXT[next.split(":")[0]] ?? payload?.error?.message ?? "The backend refused this.";
 }
 
 export async function send(action: OperatorAction) {

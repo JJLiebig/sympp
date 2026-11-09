@@ -62,6 +62,5 @@ describe("a refused action", () => {
     expect(refusalText({ error: { message: "WorkRequest is archived; restore it first", next_action: "restore" } })).toBe("This goal is archived. Restore it first.");
     expect(refusalText({ error: { message: "This decision is acknowledged", next_action: "none: only flagged decisions are reviewed" } })).toBe("Nothing is left to do here. It was already handled.");
     expect(refusalText({ error: { message: "This ask is already answered" } })).toBe("This ask is already answered");
-    expect(refusalText({ error: "not_owned", message: "No terminal works on this WorkRequest." })).toBe("No terminal works on this WorkRequest.");
   });
 });
