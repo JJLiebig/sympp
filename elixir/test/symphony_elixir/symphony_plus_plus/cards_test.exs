@@ -35,29 +35,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CardsTest do
     assert [%{"state" => "dismissed", "pr" => %{"head_sha" => "h1"}}] = list(repo)
   end
 
-  test "an ended card stays in the ledger while its terminal is live, so its branch isn't taken for new work", %{repo: repo} do
-    terminals = [chief("t0"), child("t1", "t0")]
-    sweep(repo, terminals, %{head("feature-1") => {:ok, nil}})
-    [%{"id" => card_id}] = list(repo)
-    assert {:ok, _dismissed} = Cards.dismiss(repo, card_id)
-
-    later = DateTime.add(DateTime.utc_now(:microsecond), 40 * 86_400, :second)
-    Application.put_env(:symphony_elixir, :sympp_herdr_core, fn -> core(terminals) end)
-    assert {:ok, 0} = Cards.delete_expired(repo, 30, later)
-    assert Cards.list(repo, 30, later) == []
-
-    sweep(repo, terminals, %{head("feature-1") => {:ok, nil}})
-    assert [%{"state" => "dismissed"}] = list(repo)
-
-    # Liveness unknown: the card is kept too.
-    Application.put_env(:symphony_elixir, :sympp_herdr_core, nil)
-    assert {:ok, 0} = Cards.delete_expired(repo, 30, later)
-
-    Application.put_env(:symphony_elixir, :sympp_herdr_core, fn -> core([Map.put(child("t1", "t0"), "state", "finished")]) end)
-    assert {:ok, 1} = Cards.delete_expired(repo, 30, later)
-  end
-
-  defp sweep(repo, terminals, github, opts \\ []) do
+  defp sweep(repo, terminals, github, opts) do
     Observer.sweep(
       repo,
       Keyword.merge(

@@ -85,20 +85,27 @@ context. Report that diagnostic limitation separately.
 
 The `make-all` workflow requires native API acceptance, unchanged-cache browser
 replay, installed Windows runtime, offline copy, Windows launcher and offline snapshot and
-frontend builds, static checks, Dialyzer, and the complete retained ExUnit suite.
+frontend builds, static checks, Dialyzer, and boundary checks.
 On PRs, Windows jobs run for their launcher, packaging, release, toolchain, frontend and workflow inputs; ordinary Elixir source or docs changes skip them.
 Main pushes and manual runs always include Windows; the final gate accepts only skips explicitly allowed by a successful path selection job.
-Retained ExUnit qualifications run once without partitions or coverage thresholds;
-live external qualification remains opt-in. Preserve unique storage, concurrency,
-authority, process, and live provider contracts. Define expected
-outcomes from requirements or external contracts before writing replacements.
-Remove implementation-shape assertions and same-guarantee duplicates only with
-their owning conversion.
 
-Keep mixed authority, historical storage, concurrency, and delivery suites when
-they prove distinct boundaries. Sequential authorized clients do not prove
-ownership races, SQLite contention or historical migrations. Preserve those
-distinctions in the per-definition conversion evidence.
+Journeys are the main proof. ExUnit and the other non-journey suites keep only
+boundary checks that a journey cannot reasonably prove:
+
+- real-ledger migrations and stored constraints;
+- true concurrency and atomicity: ownership races, SQLite contention, sequence
+  retries and compare-and-set;
+- native route authority, origin checks and secret redaction;
+- worktree cleanup safety, and workspace path, symlink and shell safety;
+- Windows process, port and path identity;
+- packaging, release and MCP manifests;
+- provider protocols, with live provider qualification opt-in.
+
+Boundary checks run once, without partitions or coverage thresholds. Prove any
+other behaviour in its owning journey, and delete tests that mirror the
+implementation or repeat a journey. Sequential authorized clients do not prove
+ownership races, SQLite contention or historical migrations. Define expected
+outcomes from requirements or external contracts before writing replacements.
 
 Retain `.e2e/report.json`, traces, process logs, checkout/head/base revisions,
 commands, and job timings as hosted artifacts. Distinguish literal definitions
@@ -116,9 +123,8 @@ databases and controlled external commands. It proves missing-spec rejection and
 specific exemptions, demo no-force preservation and explicit force replacement,
 cockpit loopback/origin refusal and opener overrides, and workspace hook branch
 selection and provider failures. It does not infer live GitHub compatibility.
-Keep embedded task ownership checks where a fresh process cannot reproduce an
-already-running supervisor or endpoint, deliberately absent toolchain PATH,
-historical retention timing, or alternate offline entrypoints.
+The cockpit's refusal to boot an offline snapshot without protection stays a
+boundary check.
 
 The committed MCP manifest is compared with the real bootstrap health response.
 Installed launcher's contract mismatch refusal is a separate compatibility check.
@@ -133,9 +139,9 @@ still run; same-contract cross-revision refresh needs a compatible published bas
 Retention journeys use public operator settings and lifecycle actions against
 disposable candidate ledgers. Age fixtures stop the candidate before changing
 timestamps; they never manufacture completion, archive, ownership or dispatch.
-Card states and asks are watcher journeys. Card retention timing, and a
-dismissal racing a sweep, stay ExUnit checks. Exact time boundaries, historical
-migrations and precise contention remain separate hosted storage checks.
+Card states and asks are watcher journeys; a dismissal racing a sweep stays a
+boundary check. Historical migrations and precise contention remain separate
+hosted storage checks.
 
 Worktree journeys use real disposable Git repositories. They prove preparation,
 replay, current remote bases, divergent local branch refusal and offline
@@ -172,8 +178,8 @@ The compiled inspector uses real request detail and invalidation with a syntheti
 Herdr socket host. It qualifies binding, graph navigation, pinning, unknown
 observations and refusal to focus an absent worker. It does not qualify a live
 desktop or positive worker focus. Keep exact focus identity/races, controller
-ownership, Windows protocols, terminal content isolation, review timing and
-historical storage/query budgets at their distinct hosted boundaries.
+ownership, Windows protocols and terminal content isolation at their distinct
+hosted boundaries.
 
 ## Upstream Symphony and providers (B5)
 

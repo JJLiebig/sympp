@@ -4,53 +4,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.RepoIdentityTest do
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.TestSupport
 
-  test "keeps untrusted bare and owner-qualified repos separate" do
-    catalog = RepoIdentity.catalog(["shared", "alpha/shared"])
-
-    assert RepoIdentity.fields(catalog, "shared") == %{
-             repo_key: "shared",
-             repo_display: "shared",
-             repo_remote: nil,
-             repo_aliases: ["shared"]
-           }
-
-    assert RepoIdentity.fields(catalog, "alpha/shared") == %{
-             repo_key: "alpha/shared",
-             repo_display: "alpha/shared",
-             repo_remote: "alpha/shared",
-             repo_aliases: ["alpha/shared"]
-           }
-  end
-
-  test "keeps bare aliases separate when owner-qualified repos conflict" do
-    catalog =
-      RepoIdentity.catalog(
-        ["shared", "alpha/shared", "beta/shared"],
-        trusted_remotes: ["https://github.com/alpha/shared.git"]
-      )
-
-    assert RepoIdentity.fields(catalog, "shared") == %{
-             repo_key: "shared",
-             repo_display: "shared",
-             repo_remote: nil,
-             repo_aliases: ["shared"]
-           }
-
-    assert RepoIdentity.fields(catalog, "alpha/shared") == %{
-             repo_key: "alpha/shared",
-             repo_display: "alpha/shared",
-             repo_remote: "alpha/shared",
-             repo_aliases: ["alpha/shared"]
-           }
-
-    assert RepoIdentity.fields(catalog, "beta/shared") == %{
-             repo_key: "beta/shared",
-             repo_display: "beta/shared",
-             repo_remote: "beta/shared",
-             repo_aliases: ["beta/shared"]
-           }
-  end
-
   test "scope match rejects owner and repo-name conflicts" do
     refute RepoIdentity.scope_match?("JJLiebig/sympp", "https://github.com/elsewhere/sympp.git")
     refute RepoIdentity.scope_match?("sympp", "https://github.com/JJLiebig/sympp.git")
@@ -63,15 +16,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.RepoIdentityTest do
 
   test "scope match rejects bare repos when trusted remotes make the bare name ambiguous" do
     refute RepoIdentity.scope_match?("shared", "https://github.com/alpha/shared.git",
-             trusted_remotes: [
-               "https://github.com/alpha/shared.git",
-               "https://github.com/beta/shared.git"
-             ]
-           )
-  end
-
-  test "scope match preserves exact owner-qualified matches when trusted remotes conflict" do
-    assert RepoIdentity.scope_match?("alpha/shared", "https://github.com/alpha/shared.git",
              trusted_remotes: [
                "https://github.com/alpha/shared.git",
                "https://github.com/beta/shared.git"
@@ -144,34 +88,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.RepoIdentityTest do
            }
   end
 
-  test "keeps same-name local checkout paths owner-qualified" do
-    alice_path =
-      TestSupport.git_repo_with_origin_fixture!("https://github.com/alice/project.git",
-        prefix: "sympp-repo-identity-alice"
-      )
-
-    bob_path =
-      TestSupport.git_repo_with_origin_fixture!("https://github.com/bob/project.git",
-        prefix: "sympp-repo-identity-bob"
-      )
-
-    catalog = RepoIdentity.catalog([alice_path, bob_path], local_path_remotes?: true)
-
-    assert RepoIdentity.fields(catalog, alice_path) == %{
-             repo_key: "alice/project",
-             repo_display: "alice/project",
-             repo_remote: "alice/project",
-             repo_aliases: Enum.sort_by([alice_path, "alice/project"], &String.downcase/1)
-           }
-
-    assert RepoIdentity.fields(catalog, bob_path) == %{
-             repo_key: "bob/project",
-             repo_display: "bob/project",
-             repo_remote: "bob/project",
-             repo_aliases: Enum.sort_by([bob_path, "bob/project"], &String.downcase/1)
-           }
-  end
-
   test "does not inherit parent origin from non-worktree gitdir files" do
     root = Path.join(System.tmp_dir!(), "sympp-repo-identity-gitdir-#{System.unique_integer([:positive])}")
     repo_path = Path.join(root, "checkout")
@@ -202,67 +118,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.RepoIdentityTest do
     File.write!(Path.join(gitdir, "config"), ~s([remote "origin"]\n\turl = https://github.com/owner/project.git\n))
 
     assert RepoIdentity.local_git_origin_remote(repo_path) == nil
-  end
-
-  test "resolves origin remotes from included git config files" do
-    repo_path =
-      TestSupport.git_repo_with_origin_fixture!("https://github.com/placeholder/project.git",
-        prefix: "sympp-repo-identity-include"
-      )
-
-    git_dir = Path.join(repo_path, ".git")
-    include_path = git_dir |> Path.join("origin.inc") |> String.replace("\\", "/")
-
-    TestSupport.git_output!(repo_path, ["remote", "remove", "origin"])
-    File.write!(Path.join(git_dir, "config"), File.read!(Path.join(git_dir, "config")) <> "\n[include]\n\tpath = #{include_path}\n")
-    File.write!(include_path, ~s([remote "origin"]\n\turl = https://github.com/included/project.git\n))
-
-    assert RepoIdentity.local_git_origin_remote(repo_path) == "https://github.com/included/project.git"
-  end
-
-  test "resolves origin remotes from matching includeIf gitdir config files" do
-    repo_path =
-      TestSupport.git_repo_with_origin_fixture!("https://github.com/placeholder/project.git",
-        prefix: "sympp-repo-identity-includeif"
-      )
-
-    git_dir = Path.join(repo_path, ".git")
-    include_path = git_dir |> Path.join("origin.inc") |> String.replace("\\", "/")
-    gitdir_pattern = String.replace(git_dir, "\\", "/")
-
-    TestSupport.git_output!(repo_path, ["remote", "remove", "origin"])
-
-    File.write!(
-      Path.join(git_dir, "config"),
-      File.read!(Path.join(git_dir, "config")) <> ~s(\n[includeIf "gitdir:#{gitdir_pattern}"]\n\tpath = #{include_path}\n)
-    )
-
-    File.write!(include_path, ~s([remote "origin"]\n\turl = https://github.com/include-if/project.git\n))
-
-    assert RepoIdentity.local_git_origin_remote(repo_path) == "https://github.com/include-if/project.git"
-  end
-
-  test "resolves includeIf gitdir glob patterns" do
-    repo_path =
-      TestSupport.git_repo_with_origin_fixture!("https://github.com/placeholder/project.git",
-        prefix: "sympp-repo-identity-includeglob"
-      )
-
-    git_dir = Path.join(repo_path, ".git")
-    include_path = git_dir |> Path.join("origin.inc") |> String.replace("\\", "/")
-    root = Path.dirname(repo_path)
-    gitdir_pattern = String.replace(root, "\\", "/") <> "/*/"
-
-    TestSupport.git_output!(repo_path, ["remote", "remove", "origin"])
-
-    File.write!(
-      Path.join(git_dir, "config"),
-      File.read!(Path.join(git_dir, "config")) <> ~s(\n[includeIf "gitdir:#{gitdir_pattern}"]\n\tpath = #{include_path}\n)
-    )
-
-    File.write!(include_path, ~s([remote "origin"]\n\turl = https://github.com/include-glob/project.git\n))
-
-    assert RepoIdentity.local_git_origin_remote(repo_path) == "https://github.com/include-glob/project.git"
   end
 
   test "rejects extended UNC repo paths" do

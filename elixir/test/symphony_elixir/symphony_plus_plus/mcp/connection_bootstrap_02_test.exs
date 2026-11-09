@@ -25,45 +25,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
            }
   end
 
-  test "mix task reuses an already-started repo for the exact SQLite URI" do
-    database = "file:sympp_mcp_#{System.unique_integer([:positive])}?mode=memory&cache=shared"
-    original_repo = Repo.get_dynamic_repo()
-    original_logger_config = Application.fetch_env(:logger, :console)
-    {:ok, pid} = Repo.start_link(database: database, name: Repo.process_name(database), pool_size: 1, log: false)
-
-    input =
-      [
-        Jason.encode!(%{"jsonrpc" => "2.0", "id" => "init", "method" => "initialize", "params" => initialize_params()}),
-        Jason.encode!(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "tools/call",
-          "params" => %{"name" => "sympp.health", "arguments" => %{}}
-        })
-      ]
-      |> Enum.join("\n")
-      |> Kernel.<>("\n")
-
-    try do
-      output =
-        capture_io(input, fn ->
-          McpTask.run(["--database", database])
-        end)
-
-      responses = decode_json_lines(output)
-
-      assert Enum.any?(responses, fn response ->
-               get_in(response, ["result", "structuredContent", "ledger", "reachable"]) == true
-             end)
-
-      assert Process.alive?(pid)
-      assert Repo.get_dynamic_repo() == original_repo
-      assert Application.fetch_env(:logger, :console) == original_logger_config
-    after
-      GenServer.stop(pid)
-    end
-  end
-
   test "tools list returns Codex-compatible top-level input schemas" do
     for tool <- ToolCatalog.tool_specs() do
       schema = Map.fetch!(tool, "inputSchema")

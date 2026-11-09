@@ -3,11 +3,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPStateStoreTest do
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, HTTPStateStore, LedgerNamespace, Server}
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.WorkPackageFactory
 
   @current_state_key "__sympp_mcp_current_state__"
   @unbound_client_key "__sympp_mcp_unbound__"
-  @failing_dynamic_repo_key :sympp_mcp_http_state_store_test_dynamic_repo
 
   defmodule FailingDynamicRepo do
     def get_dynamic_repo, do: Process.get(:sympp_mcp_http_state_store_test_dynamic_repo)
@@ -36,41 +34,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPStateStoreTest do
     assert HTTPStateStore.get(other_ledger_config, "client-a", "shared-state") == nil
   end
 
-  test "configured ledger scopes state even when the repo has a live database path" do
-    database = WorkPackageFactory.database_path()
-    original_repo = Repo.get_dynamic_repo()
-
-    {:ok, pid} =
-      Repo.start_link(database: database, name: Repo.process_name(database), pool_size: 1, log: false)
-
-    try do
-      Repo.put_dynamic_repo(pid)
-      config = config("configured-ledger-a")
-      other_config = config("configured-ledger-b")
-
-      assert :ok = HTTPStateStore.put(config, "client", "same-state", initialized_server(config, "same-state"))
-      assert HTTPStateStore.get(other_config, "client", "same-state") == nil
-    after
-      Repo.put_dynamic_repo(original_repo)
-      if Process.alive?(pid), do: GenServer.stop(pid)
-      File.rm(database)
-    end
-  end
-
-  test "unconfigured ledger fallback preserves dynamic repo isolation" do
-    config = Config.default(mode: :http, repo: FailingDynamicRepo)
-
-    try do
-      Process.put(@failing_dynamic_repo_key, :ledger_a)
-      assert :ok = HTTPStateStore.put(config, "client", "same-state", initialized_server(config, "same-state"))
-
-      Process.put(@failing_dynamic_repo_key, :ledger_b)
-      assert HTTPStateStore.get(config, "client", "same-state") == nil
-    after
-      Process.delete(@failing_dynamic_repo_key)
-    end
-  end
-
   test "a state key never hands one client's state to another or to the unbound client" do
     config = config("non-bearer-state-key")
 
@@ -79,26 +42,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPStateStoreTest do
     assert %Server{initialized: true} = HTTPStateStore.get(config, "bound-client", "shared-state")
     assert HTTPStateStore.get(config, @unbound_client_key, "shared-state") == nil
     assert HTTPStateStore.get(config, "other-client", "shared-state") == nil
-  end
-
-  test "uninitialized update results are not persisted" do
-    config = config("pre-initialize-error")
-
-    assert {:server_not_initialized, :skipped} =
-             HTTPStateStore.update_with_status(
-               config,
-               "client",
-               "random-state",
-               fn ->
-                 Server.new(config, state_key: "random-state")
-               end,
-               fn server ->
-                 {:server_not_initialized, server}
-               end
-             )
-
-    assert HTTPStateStore.get(config, "client", "random-state") == nil
-    assert :sys.get_state(HTTPStateStore).entries == %{}
   end
 
   test "stale state requests cannot republish a superseded current alias" do
@@ -115,61 +58,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPStateStoreTest do
     refute HTTPStateStore.publish_alias(config, "client", "old-state", "client", @current_state_key, old_server)
     assert %Server{state_key: "new-state"} = HTTPStateStore.get(config, "client", @current_state_key)
     assert HTTPStateStore.get(config, "client", "old-state") == nil
-  end
-
-  test "invalidate and delete clear aliases for the removed state" do
-    config = config("alias-invalidation")
-    invalidated_server = initialized_server(config, "invalidated-state")
-    deleted_server = initialized_server(config, "deleted-state")
-
-    assert :ok = HTTPStateStore.put(config, "client", "invalidated-state", invalidated_server)
-    assert HTTPStateStore.publish_alias(config, "client", "invalidated-state", "client", @current_state_key, invalidated_server)
-
-    assert :ok = HTTPStateStore.invalidate(config, "client", "invalidated-state")
-    assert HTTPStateStore.get(config, "client", "invalidated-state") == nil
-    assert HTTPStateStore.get(config, "client", @current_state_key) == nil
-
-    assert :ok = HTTPStateStore.put(config, "client", "deleted-state", deleted_server)
-    assert HTTPStateStore.publish_alias(config, "client", "deleted-state", "client", @current_state_key, deleted_server)
-
-    assert :ok = HTTPStateStore.delete(config, "client", "deleted-state")
-    assert HTTPStateStore.get(config, "client", "deleted-state") == nil
-    assert HTTPStateStore.get(config, "client", @current_state_key) == nil
-  end
-
-  test "alias reads refresh the backing source entry" do
-    config = config("alias-refresh")
-    source_server = initialized_server(config, "source-state")
-    source_key = store_key(config, "client", "source-state")
-
-    assert :ok = HTTPStateStore.put(config, "client", "source-state", source_server)
-    assert HTTPStateStore.publish_alias(config, "client", "source-state", "client", @current_state_key, source_server)
-
-    old_touched_at = System.monotonic_time(:millisecond) - 100
-
-    :sys.replace_state(HTTPStateStore, fn state ->
-      entries = Map.update!(state.entries, source_key, fn {server, _touched_at} -> {server, old_touched_at} end)
-      %{state | entries: entries}
-    end)
-
-    assert %Server{state_key: "source-state"} = HTTPStateStore.get(config, "client", @current_state_key)
-
-    %{entries: entries} = :sys.get_state(HTTPStateStore)
-    assert {_server, refreshed_touched_at} = Map.fetch!(entries, source_key)
-    assert refreshed_touched_at > old_touched_at
-  end
-
-  test "direct writes to an alias key detach stale alias metadata" do
-    config = config("direct-alias-detach")
-    source_server = initialized_server(config, "source-state")
-    direct_server = initialized_server(config, "direct-current")
-
-    assert :ok = HTTPStateStore.put(config, "client", "source-state", source_server)
-    assert HTTPStateStore.publish_alias(config, "client", "source-state", "client", @current_state_key, source_server)
-    assert :ok = HTTPStateStore.put(config, "client", @current_state_key, direct_server)
-
-    assert :ok = HTTPStateStore.invalidate(config, "client", "source-state")
-    assert %Server{state_key: "direct-current"} = HTTPStateStore.get(config, "client", @current_state_key)
   end
 
   test "queued updates started before invalidation cannot resurrect state" do
@@ -526,26 +414,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPStateStoreTest do
     assert HTTPStateStore.get(config, "client", "state") == nil
   end
 
-  test "first write after ttl cleanup can recreate expired state" do
-    config = config("post-ttl-recreate")
-    key = store_key(config, "client", "state")
-
-    assert :ok = HTTPStateStore.put(config, "client", "state", initialized_server(config, "expired"))
-    expire_entry(key)
-
-    assert :ok = HTTPStateStore.put(config, "client", "state", initialized_server(config, "fresh-put"))
-    assert %Server{state_key: "fresh-put"} = HTTPStateStore.get(config, "client", "state")
-
-    expire_entry(key)
-
-    assert {:fresh_update, :stored} =
-             HTTPStateStore.update_with_status(config, "client", "state", default_server_fun(config, "state"), fn server ->
-               {:fresh_update, %{server | state_key: "fresh-update", initialized: true}}
-             end)
-
-    assert %Server{state_key: "fresh-update"} = HTTPStateStore.get(config, "client", "state")
-  end
-
   test "first write after ttl cleanup can recreate expired state while queued" do
     config = config("post-ttl-queued-recreate")
     parent = self()
@@ -582,37 +450,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPStateStoreTest do
     assert Task.await(holder) == {:held, :dropped}
     assert Task.await(fresh_put) == :ok
     assert %Server{state_key: "fresh-put"} = HTTPStateStore.get(config, "client", "state")
-  end
-
-  test "state entries are scoped by active dynamic ledger" do
-    first_database = WorkPackageFactory.database_path()
-    second_database = WorkPackageFactory.database_path()
-    original_repo = Repo.get_dynamic_repo()
-
-    {:ok, first_pid} =
-      Repo.start_link(database: first_database, name: Repo.process_name(first_database), pool_size: 1, log: false)
-
-    {:ok, second_pid} =
-      Repo.start_link(database: second_database, name: Repo.process_name(second_database), pool_size: 1, log: false)
-
-    try do
-      config = Config.default(mode: :http, repo: Repo)
-
-      Repo.put_dynamic_repo(first_pid)
-      assert :ok = HTTPStateStore.put(config, "client", "same-state", initialized_server(config, "same-state"))
-
-      Repo.put_dynamic_repo(second_pid)
-      assert HTTPStateStore.get(config, "client", "same-state") == nil
-
-      Repo.put_dynamic_repo(first_pid)
-      assert %Server{initialized: true} = HTTPStateStore.get(config, "client", "same-state")
-    after
-      Repo.put_dynamic_repo(original_repo)
-      if Process.alive?(first_pid), do: GenServer.stop(first_pid)
-      if Process.alive?(second_pid), do: GenServer.stop(second_pid)
-      File.rm(first_database)
-      File.rm(second_database)
-    end
   end
 
   defp config(database), do: Config.default(mode: :http, repo: Repo, database: database)

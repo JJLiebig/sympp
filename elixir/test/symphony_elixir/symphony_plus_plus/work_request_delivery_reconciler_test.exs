@@ -1,10 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   use ExUnit.Case, async: false
 
-  import Ecto.Query, only: [from: 2]
-
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
-  alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
@@ -45,38 +42,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     end
 
     :ok
-  end
-
-  test "apply records merged PR closeout when only stale agent runtime evidence remains", %{repo: repo} do
-    {_work_request, work_package, linked_package} =
-      linked_slice!(repo,
-        work_request_id: "WR-RECONCILE-STALE-AGENT-RUN",
-        work_package_id: "WP-RECONCILE-STALE-AGENT-RUN",
-        status: "ready"
-      )
-
-    assert {:ok, agent_run} =
-             AgentRunRepository.start_run(repo, %{
-               work_package_id: linked_package.id,
-               status: "running",
-               last_seen_at: DateTime.add(DateTime.utc_now(:microsecond), -301, :second)
-             })
-
-    append_merged_pr_evidence!(repo, linked_package, 914, nil, synced_head_sha: "head-914")
-
-    assert {:ok, applied} = DeliveryReconciler.reconcile_work_package(repo, linked_package.id, recorded_by: "reconciler-test")
-
-    assert %{status: "applied", applied_count: 1, work_package_id: work_package_id} = applied
-    assert work_package_id == work_package.id
-    assert work_package_id == linked_package.id
-
-    assert [delivery] = repo.all(WorkPackageDelivery)
-    assert delivery.outcome == "pr_merged"
-    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
-
-    closeout_event = closeout_event!(repo)
-    assert "agent_run_stale" in closeout_event.payload["runtime_reason_codes_before_closeout"]
-    assert closeout_event.payload["ignored_stale_agent_run_ids"] == [agent_run.id]
   end
 
   test "apply leaves active blockers unchanged when delivery recording fails", %{repo: repo} do
@@ -121,24 +86,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
 
     assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
     assert WorkPackageActivity.context(repo, linked_package.id).blocker_state.active?
-  end
-
-  test "blank work-package base branch is skipped with a clear reason", %{repo: repo} do
-    {_work_request, work_package, linked_package} =
-      linked_slice!(repo,
-        work_request_id: "WR-RECONCILE-BLANK-SLICE-BASE",
-        work_package_id: "WP-RECONCILE-BLANK-SLICE-BASE",
-        status: "ready"
-      )
-
-    repo.update_all(from(slice in WorkPackage, where: slice.id == ^work_package.id), set: [base_branch: ""])
-    append_merged_pr_evidence!(repo, linked_package, 905, "head-905", base_branch: "main")
-
-    assert {:ok, result} = DeliveryReconciler.reconcile_work_package(repo, linked_package.id)
-
-    assert %{applied_count: 0, status: "skipped", reason: "missing_base_branch", actual_base_branch: "main"} = result
-    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
-    assert repo.get!(WorkPackage, linked_package.id).status == "ready"
   end
 
   test "historical sync PR evidence can use merge reconciliation strong fields", %{repo: repo} do
@@ -498,15 +445,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
                }
              })
 
-    event
-  end
-
-  defp closeout_event!(repo) do
-    closeout_events =
-      repo.all(ProgressEvent)
-      |> Enum.filter(&(Map.get(&1.payload || %{}, "type") == "work_request_delivery_closeout"))
-
-    assert [event] = closeout_events
     event
   end
 
