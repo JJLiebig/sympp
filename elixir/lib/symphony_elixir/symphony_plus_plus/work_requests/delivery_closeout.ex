@@ -292,8 +292,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   end
 
   defp perform_closeout(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, %WorkPackageDelivery{} = delivery) do
-    with closeout_context = linked_closeout_context(repo, work_package),
-         {:ok, closeout} <- close_work_package(repo, work_request, work_package, delivery),
+    closeout_context = linked_closeout_context(repo, work_package)
+
+    with {:ok, closeout} <- close_work_package(repo, work_request, work_package, delivery),
          {:ok, _event} <-
            append_closeout_progress(
              repo,

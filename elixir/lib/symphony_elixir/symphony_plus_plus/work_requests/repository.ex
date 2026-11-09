@@ -4,12 +4,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   alias Ecto.Changeset
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
+  alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
-  alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @redacted_decision_fields ["decision", "rationale", "scope_impact", "created_by", "source_id"]
