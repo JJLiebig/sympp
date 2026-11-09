@@ -88,8 +88,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
     end
   end
 
-  # The same close repeated, by any terminal, returns the ending it recorded;
-  # only the outcome and its evidence identify it.
+  # The same close repeated by any terminal allowed to make it (the owner, or
+  # any chief or architect for finished) returns the ending it recorded; only
+  # the outcome and its evidence identify it. Ownership is checked first.
   defp close(repo, work_request_id, work_package_id, attrs, terminal) do
     existing = repo.get_by(WorkPackageDelivery, work_package_id: work_package_id)
 
