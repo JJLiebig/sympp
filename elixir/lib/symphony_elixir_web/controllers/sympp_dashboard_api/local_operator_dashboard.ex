@@ -143,8 +143,10 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     end
   end
 
+  # Archived WorkRequests are included (phase `archived`) so the panel can
+  # show them and offer Restore.
   defp native_dashboard_payload(repo, operator_config) do
-    with {:ok, work_requests} <- WorkRequestRepository.list(repo),
+    with {:ok, work_requests} <- WorkRequestRepository.list(repo, %{include_archived: true}),
          {:ok, context} <- operator_execution_context(repo, work_requests),
          context = Map.put(context, :operator_config, operator_config),
          {:ok, projection_context} <- operator_projection_context(repo, work_requests, context),
@@ -188,6 +190,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
         :default_branch,
         :inserted_at,
         :completed_at,
+        :archived_at,
         :operator_report,
         :worked_on,
         :dispatched_by,
@@ -219,7 +222,10 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
           :activity_signal,
           :operational_state,
           :dependency_signal,
-          :session_location
+          :session_location,
+          :worker_terminal,
+          :observation_stale,
+          :progress
         ])
       )
     end)

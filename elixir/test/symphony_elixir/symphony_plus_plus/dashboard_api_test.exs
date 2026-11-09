@@ -25,6 +25,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.RetentionThrottle
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
@@ -2152,7 +2153,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
               "/api/v1/sympp/herdr/work-requests",
               "/api/v1/sympp/herdr/asks/missing/answer",
               "/api/v1/sympp/herdr/decisions/missing/feedback",
-              "/api/v1/sympp/herdr/cards/missing/dismiss"
+              "/api/v1/sympp/herdr/cards/missing/dismiss",
+              "/api/v1/sympp/herdr/work-packages/missing/finish",
+              "/api/v1/sympp/herdr/work-requests/missing/release",
+              "/api/v1/sympp/herdr/work-requests/missing/complete",
+              "/api/v1/sympp/herdr/work-requests/missing/archive",
+              "/api/v1/sympp/herdr/work-requests/missing/restore",
+              "/api/v1/sympp/herdr/work-requests/missing/delete"
             ] do
           mutation =
             native_operator_conn()
@@ -2170,7 +2177,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
               "/api/v1/sympp/herdr/work-requests",
               "/api/v1/sympp/herdr/asks/missing/answer",
               "/api/v1/sympp/herdr/decisions/missing/feedback",
-              "/api/v1/sympp/herdr/cards/missing/dismiss"
+              "/api/v1/sympp/herdr/cards/missing/dismiss",
+              "/api/v1/sympp/herdr/work-packages/missing/finish",
+              "/api/v1/sympp/herdr/work-requests/missing/release",
+              "/api/v1/sympp/herdr/work-requests/missing/complete",
+              "/api/v1/sympp/herdr/work-requests/missing/archive",
+              "/api/v1/sympp/herdr/work-requests/missing/restore",
+              "/api/v1/sympp/herdr/work-requests/missing/delete"
             ] do
           request =
             native_operator_conn()
@@ -2590,6 +2603,172 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       assert [%{"id" => ^card_id, "state" => "dismissed"}] = local_operator_dashboard_payload()["cards"]
       assert %{"error" => %{"code" => "not_found"}} = local_operator_conn() |> post("/api/v1/sympp/operator/cards/missing/dismiss") |> json_response(404)
+    end)
+  end
+
+  describe "native Herdr operator actions" do
+    test "Finish ends a dispatched WorkPackage and refuses a planned one", %{repo: repo} do
+      with_local_operator_endpoint(fn ->
+        work_request = create_work_request!(repo, id: "WR-NATIVE-FINISH")
+        dispatched = create_work_package!(repo, id: "WP-NATIVE-FINISH", work_request_id: work_request.id, status: "dispatched")
+        planned = create_work_package!(repo, id: "WP-NATIVE-FINISH-PLANNED", work_request_id: work_request.id, status: "planned")
+        path = "/api/v1/sympp/herdr/work-packages/#{dispatched.id}/finish"
+
+        assert %{"ok" => true, "work_package_id" => "WP-NATIVE-FINISH", "status" => "ended"} = native_action(path) |> json_response(200)
+        assert [%WorkPackageDelivery{outcome: "finished", recorded_by: "local-operator"}] = repo.all(WorkPackageDelivery)
+        assert_native_audit!(repo, path, "dangerous_override", "operator_finish_work_package")
+
+        refused = native_action("/api/v1/sympp/herdr/work-packages/#{planned.id}/finish") |> json_response(422)
+        assert refused["error"]["code"] == "ending_not_allowed"
+        assert repo.get!(WorkPackage, planned.id).status == "planned"
+      end)
+    end
+
+    test "Release ends ownership and refuses a WorkRequest nobody owns", %{repo: repo} do
+      with_local_operator_endpoint(fn ->
+        work_request = create_work_request!(repo, id: "WR-NATIVE-RELEASE")
+        assert {:ok, _row, :acquired} = Ownership.acquire(repo, work_request.id, asking_terminal("t8"))
+        path = "/api/v1/sympp/herdr/work-requests/#{work_request.id}/release"
+
+        released = native_action(path) |> json_response(200)
+        assert released["work_request_id"] == work_request.id
+        assert released["released"]["address"] == "jjdev/t8"
+        assert Ownership.owner(repo, work_request.id) == nil
+        assert_native_audit!(repo, path, "dangerous_override", "operator_release_work_request")
+
+        assert %{"error" => %{"code" => "not_owned"}} = native_action(path) |> json_response(409)
+      end)
+    end
+
+    test "Complete sets the operator completion and refuses an archived WorkRequest", %{repo: repo} do
+      with_local_operator_endpoint(fn ->
+        work_request = create_work_request!(repo, id: "WR-NATIVE-COMPLETE")
+        path = "/api/v1/sympp/herdr/work-requests/#{work_request.id}/complete"
+
+        completed = native_action(path) |> json_response(200)
+        assert get_in(completed, ["work_request", "phase"]) == "done"
+        assert completed["refresh"] == %{"dashboard" => false, "work_request_id" => work_request.id}
+        assert %DateTime{} = repo.get!(WorkRequest, work_request.id).operator_completed_at
+        assert_native_audit!(repo, path, "dangerous_override", "operator_complete_work_request")
+
+        assert {:ok, _archived} = WorkRequestService.archive(repo, work_request.id)
+        refused = native_action(path) |> json_response(409)
+        assert refused["error"]["code"] == "work_request_archived"
+        assert refused["error"]["next_action"] == "restore"
+      end)
+    end
+
+    test "Archive hides a done WorkRequest and refuses one still in intake", %{repo: repo} do
+      with_local_operator_endpoint(fn ->
+        work_request = create_work_request!(repo, id: "WR-NATIVE-ARCHIVE")
+        in_intake = create_work_request!(repo, id: "WR-NATIVE-ARCHIVE-INTAKE")
+        path = "/api/v1/sympp/herdr/work-requests/#{work_request.id}/archive"
+
+        assert %{"error" => %{"code" => "not_completed"}} = native_action("/api/v1/sympp/herdr/work-requests/#{in_intake.id}/archive") |> json_response(422)
+        assert repo.get!(WorkRequest, in_intake.id).archived_at == nil
+
+        assert {:ok, _completed} = WorkRequestService.complete(repo, work_request.id)
+        archived = native_action(path) |> json_response(200)
+        assert get_in(archived, ["work_request", "phase"]) == "archived"
+        assert %DateTime{} = repo.get!(WorkRequest, work_request.id).archived_at
+        assert_native_audit!(repo, path, "dangerous_delete", "operator_archive_work_request")
+      end)
+    end
+
+    test "Restore clears an archive and refuses an unknown WorkRequest", %{repo: repo} do
+      with_local_operator_endpoint(fn ->
+        work_request = create_work_request!(repo, id: "WR-NATIVE-RESTORE")
+        assert {:ok, _completed} = WorkRequestService.complete(repo, work_request.id)
+        assert {:ok, _archived} = WorkRequestService.archive(repo, work_request.id)
+        path = "/api/v1/sympp/herdr/work-requests/#{work_request.id}/restore"
+
+        restored = native_action(path) |> json_response(200)
+        assert get_in(restored, ["work_request", "archived_at"]) == nil
+        assert %DateTime{} = repo.get!(WorkRequest, work_request.id).restored_at
+        assert_native_audit!(repo, path, "dangerous_override", "operator_restore_work_request")
+
+        assert %{"error" => %{"code" => "not_found"}} = native_action("/api/v1/sympp/herdr/work-requests/WR-MISSING/restore") |> json_response(404)
+      end)
+    end
+
+    test "Delete removes a WorkRequest and refuses an unknown one", %{repo: repo} do
+      with_local_operator_endpoint(fn ->
+        work_request = create_work_request!(repo, id: "WR-NATIVE-DELETE")
+        path = "/api/v1/sympp/herdr/work-requests/#{work_request.id}/delete"
+
+        assert %{"ok" => true, "work_request" => %{"id" => "WR-NATIVE-DELETE"}} = native_action(path) |> json_response(200)
+        assert {:error, :not_found} = WorkRequestService.get(repo, work_request.id)
+        assert_native_audit!(repo, path, "dangerous_delete", "operator_delete_work_request")
+
+        assert %{"error" => %{"code" => "not_found"}} = native_action("/api/v1/sympp/herdr/work-requests/WR-MISSING/delete") |> json_response(404)
+      end)
+    end
+  end
+
+  test "both boards show each package's worker terminal, stale observations and progress", %{repo: repo} do
+    with_local_operator_endpoint(fn ->
+      request = create_work_request!(repo, id: "WR-WORKER-SIGNALS")
+      working = create_work_package!(repo, id: "WP-SIGNALS-WORKING", work_request_id: request.id, status: "dispatched")
+      exited = create_work_package!(repo, id: "WP-SIGNALS-EXITED", work_request_id: request.id, status: "dispatched")
+      planned = create_work_package!(repo, id: "WP-SIGNALS-PLANNED", work_request_id: request.id, status: "planned")
+      now = DateTime.utc_now(:microsecond)
+
+      for {package, address, state} <- [{working, "t5", "live"}, {exited, "t6", "finished"}] do
+        repo.insert!(%WorkedOn{
+          id: "wo-" <> package.id,
+          subject_kind: "work_package",
+          subject_id: package.id,
+          terminal_key: "core-test/" <> address,
+          display_address: "jjdev/" <> address,
+          role: "worker",
+          state: state,
+          started_at: now
+        })
+      end
+
+      repo.insert!(%Observation{work_package_id: working.id, stale: ["github"], observed_at: now})
+      # The factory's core sees the live worker busy.
+      core_view = {:ok, %{core_id: "core-test", terminals: %{"t5" => %{"state" => "live", "status" => "working"}}}}
+      Application.put_env(:symphony_elixir, :sympp_herdr_core, fn -> core_view end)
+      on_exit(fn -> Application.put_env(:symphony_elixir, :sympp_herdr_core, nil) end)
+
+      expected = %{
+        working.id => %{
+          "worker_terminal" => %{"address" => "jjdev/t5", "state" => "live", "status" => "working"},
+          "observation_stale" => ["github"],
+          "progress" => "implementing"
+        },
+        exited.id => %{
+          "worker_terminal" => %{"address" => "jjdev/t6", "state" => "finished", "status" => "finished"},
+          "observation_stale" => [],
+          "progress" => "worker_exited"
+        },
+        planned.id => %{"worker_terminal" => nil, "observation_stale" => [], "progress" => nil}
+      }
+
+      for path <- ["/api/v1/sympp/herdr/dashboard", "/api/v1/sympp/operator/dashboard/hydrated"] do
+        conn = if String.contains?(path, "/herdr/"), do: native_operator_conn(), else: local_operator_conn()
+        detail = conn |> get(path) |> json_response(200) |> work_request_detail(request.id)
+        observed = Map.new(detail["work_packages"], &{&1["id"], Map.take(&1, ["worker_terminal", "observation_stale", "progress"])})
+        assert observed == expected, path
+      end
+    end)
+  end
+
+  test "the Herdr board lists archived WorkRequests so the panel can restore them", %{repo: repo} do
+    with_local_operator_endpoint(fn ->
+      active = create_work_request!(repo, id: "WR-NATIVE-SHELF-ACTIVE")
+      archived = create_work_request!(repo, id: "WR-NATIVE-SHELF-ARCHIVED")
+      shelved_package = create_work_package!(repo, id: "WP-NATIVE-SHELF", work_request_id: archived.id, status: "ended")
+      assert {:ok, _completed} = WorkRequestService.complete(repo, archived.id)
+      assert {:ok, _archived} = WorkRequestService.archive(repo, archived.id)
+
+      board = native_operator_conn() |> get("/api/v1/sympp/herdr/dashboard") |> json_response(200)
+      assert work_request_detail(board, active.id)["work_request"]["phase"] == "intake"
+      shelved = work_request_detail(board, archived.id)
+      assert shelved["work_request"]["phase"] == "archived"
+      assert is_binary(shelved["work_request"]["archived_at"])
+      assert Enum.map(shelved["work_packages"], & &1["id"]) == [shelved_package.id]
     end)
   end
 
@@ -3816,6 +3995,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     dashboard
     |> Map.get("work_packages", [])
     |> Enum.map(& &1["id"])
+  end
+
+  defp native_action(path), do: native_operator_conn() |> post(path, "{}")
+
+  # The native route writes the same audit entry as its operator sibling, under its own path.
+  defp assert_native_audit!(repo, path, action, tool) do
+    assert [%OperatorAudit{} = audit] = Enum.filter(repo.all(OperatorAudit), &(&1.request_metadata["path"] == path))
+    assert {audit.action, audit.tool_metadata["name"], audit.actor_source} == {action, tool, "local_operator"}
   end
 
   defp native_operator_conn do

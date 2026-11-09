@@ -80,6 +80,9 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
     '/api/v1/sympp/herdr/work-requests',
     '/api/v1/sympp/herdr/asks/missing/answer',
     '/api/v1/sympp/herdr/decisions/missing/feedback',
+    '/api/v1/sympp/herdr/cards/missing/dismiss',
+    '/api/v1/sympp/herdr/work-packages/missing/finish',
+    ...['release', 'complete', 'archive', 'restore', 'delete'].map((action) => `/api/v1/sympp/herdr/work-requests/missing/${action}`),
   ];
   for (const action of nativeActions) {
     for (const headers of [
