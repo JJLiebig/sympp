@@ -7,26 +7,32 @@ export const AGENTS = "sympp.agents";
 // last known one (it dims entries older than two minutes).
 export const RESTAMP = 45e3;
 
-const STAGES = { build: "build", checks: "checks", review: "review", merge: "merge" };
+// v2 steps under the stage names desk mods read (README contract): launching and implementing are
+// build, Review/CI is review once a review runs and checks before that, ready is merge.
+const STAGES = { launching: "build", implementing: "build", review_ci: "checks", ready: "merge" };
+export const deskStage = (pkg) => (pkg.stage === "review_ci" && pkg.review.mode && pkg.review.mode !== "none" && pkg.review.state ? "review" : STAGES[pkg.stage] ?? null);
 
 // One entry per sympp terminal on this endpoint's board, keyed by its Herdr terminal address (a remote
 // one carries its machine, `vps/t7`): the package's stage, its review round, and whether the person
-// is needed.
-export function decorations(board, terminalList, endpoint, at) {
+// is needed. The terminals the factory itself sees working (a task's owner, a package's worker) come
+// first; labelled launches and sessions fill in the rest.
+export function decorations(board, terminalList, endpoint, at, here = (address) => address) {
   const out = {};
+  const entry = (job, pkg) => {
+    const stage = !pkg ? null : pkg.stage === "ended" ? (pkg.outcome === "dropped" ? null : "landed") : deskStage(pkg);
+    return { stage, round: stage === "review" ? pkg.round : null, needs: pkg ? job.needs.some((n) => n.pkgId === pkg.id) : job.needs.length > 0, endpoint, at };
+  };
+  for (const job of board.jobs) {
+    if (job.owner && job.owner.liveness !== "finished") out[here(job.owner.address)] = entry(job, null);
+    for (const pkg of job.packages) if (pkg.owner && pkg.owner.liveness !== "finished") out[here(pkg.owner.address)] = entry(job, pkg);
+  }
   for (const b of discoverBindings(null, terminalList)) {
+    if (out[b.address]) continue;
     const job = board.jobs.find((j) => j.id === b.jobId || (b.pkgId && j.packages.some((p) => p.id === b.pkgId)));
     if (!job) continue;
     const pkg = b.pkgId ? job.packages.find((p) => p.id === b.pkgId) : null;
     if (b.pkgId && !pkg) continue;
-    const stage = !pkg ? null : pkg.stage === "done" ? (pkg.outcome === "dropped" ? null : "landed") : STAGES[pkg.stage] ?? null;
-    out[b.address] = {
-      stage,
-      round: stage === "review" ? pkg.round : null,
-      needs: pkg ? job.needs.some((n) => n.pkgId === pkg.id) : job.needs.length > 0,
-      endpoint,
-      at,
-    };
+    out[b.address] = entry(job, pkg);
   }
   return out;
 }
