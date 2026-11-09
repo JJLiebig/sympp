@@ -104,8 +104,9 @@ test('invalid batches are atomic and secondary delivery preserves repository and
   const invalid = { ...secondary };
   delete invalid.base_branch;
   const add = (...contracts: object[]) => ({ ops: contracts.map((item) => ({ op: 'add_package', ...item })) });
-  const scope = await architect.reject('edit_plan', add(contract('Valid prefix'), invalid), 'work_package_delivery_scope_out_of_scope');
+  const scope = await architect.reject('edit_plan', add(contract('Valid prefix'), invalid), 'invalid_work_package');
   expect(scope.op_index).toBe(1);
+  expect(JSON.stringify(scope)).toContain('base_branch');
   for (const required of ['title', 'goal', 'acceptance_criteria']) {
     const incomplete: Record<string, unknown> = contract('One omitted requirement');
     delete incomplete[required];

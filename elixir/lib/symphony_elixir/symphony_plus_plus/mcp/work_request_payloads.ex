@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
   @moduledoc false
 
+  alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext
   alias SymphonyElixir.SymphonyPlusPlus.Asks
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
@@ -410,7 +411,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
       "forbidden_file_globs" => Enum.map(work_package.forbidden_file_globs || [], &Redactor.redact_text/1),
       "acceptance_criteria" => Enum.map(work_package.acceptance_criteria || [], &Redactor.redact_text/1),
       "validation_steps" => Enum.map(work_package.validation_steps || [], &Redactor.redact_text/1),
-      "review" => Redactor.redact_output(work_package.review_requirement),
+      "review" => WorkerContext.agent_safe(work_package.review_requirement),
       "stop_conditions" => Enum.map(work_package.stop_conditions || [], &Redactor.redact_text/1),
       "status" => work_package.status,
       "contract_revision" => work_package.contract_revision,

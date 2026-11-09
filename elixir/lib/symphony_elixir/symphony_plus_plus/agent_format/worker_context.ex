@@ -225,7 +225,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
   defp payload_overview(value) when is_binary(value), do: %{"type" => "string"}
   defp payload_overview(_value), do: %{"type" => "other"}
 
-  defp agent_safe(value) do
+  @doc """
+  Redacts a value for any agent that can read it: secret-shaped keys and text
+  under the ledger's rules, plus keys such as `credential`, `access_key` and
+  `*_verifier` that agent payloads also hide.
+  """
+  @spec agent_safe(term()) :: term()
+  def agent_safe(value) do
     value
     |> Redactor.redact_output()
     |> redact_agent_sensitive_values()
