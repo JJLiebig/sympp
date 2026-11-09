@@ -20,6 +20,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
   @batch_size 25
   @max_concurrency 4
   @codex_login "chatgpt-codex-connector"
+  @commit_page "totalCount pageInfo { hasNextPage endCursor } nodes { commit { oid } }"
   @failing_conclusions ~w(failure cancelled timed_out startup_failure action_required stale)
 
   @fragment """
@@ -112,7 +113,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
   The commit lists of open PRs, as GitHub lists a PR's commits (commits
   reachable from its base are left out). One batched document per 25 PRs.
   Each result carries the head and base it was read at. A PR with more than
-  100 commits can't be listed whole and is an error.
+  100 commits is read on in further pages; one whose list GitHub won't return
+  whole (it lists at most 250) is an error.
   """
   @spec commits([{String.t(), String.t(), pos_integer()}], keyword()) :: %{{String.t(), String.t(), pos_integer()} => {:ok, map()} | {:error, Api.error()}}
   def commits(prs, opts \\ []) when is_list(prs) do
@@ -134,23 +136,55 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
     selections =
       Enum.map(indexed, fn {_pr, index} ->
         "e#{index}: repository(owner: $o#{index}, name: $r#{index}) { pullRequest(number: $n#{index}) " <>
-          "{ headRefOid baseRefOid commits(first: 100) { totalCount nodes { commit { oid } } } } }"
+          "{ headRefOid baseRefOid commits(first: 100) { #{@commit_page} } } }"
       end)
 
     query = "query(#{Enum.join(declarations, ", ")}) {\n#{Enum.join(selections, "\n")}\n}\n"
 
     case graphql.(query, variables, priority) do
-      {:ok, data} -> Enum.map(indexed, fn {pr, index} -> {pr, decode_commits(get_in(data, ["e#{index}", "pullRequest"]))} end)
-      {:error, reason} -> Enum.map(batch, &{&1, {:error, reason}})
+      {:ok, data} ->
+        Enum.map(indexed, fn {pr, index} ->
+          {pr, pr |> read_on(get_in(data, ["e#{index}", "pullRequest"]), [], graphql, priority) |> complete()}
+        end)
+
+      {:error, reason} ->
+        Enum.map(batch, &{&1, {:error, reason}})
     end
   end
 
-  defp decode_commits(%{"headRefOid" => head, "commits" => %{"nodes" => nodes, "totalCount" => total}} = node) when is_binary(head) and is_list(nodes) do
-    oids = for %{"commit" => %{"oid" => oid}} when is_binary(oid) <- nodes, do: oid
-    if length(oids) == total, do: {:ok, %{"head_sha" => head, "base_sha" => node["baseRefOid"], "commits" => oids}}, else: {:error, :request_failed}
+  # Follows a PR's commit pages while the head stays the one first read.
+  defp read_on(pr, %{"headRefOid" => head, "commits" => %{"nodes" => nodes} = page} = node, earlier, graphql, priority) when is_binary(head) and is_list(nodes) do
+    oids = earlier ++ for(%{"commit" => %{"oid" => oid}} when is_binary(oid) <- nodes, do: oid)
+    read = %{"head_sha" => head, "base_sha" => node["baseRefOid"], "commits" => oids, "total" => page["totalCount"]}
+
+    case page do
+      %{"pageInfo" => %{"hasNextPage" => true, "endCursor" => cursor}} when is_binary(cursor) ->
+        case next_page(pr, cursor, graphql, priority) do
+          {:ok, %{"headRefOid" => ^head} = next} -> read_on(pr, Map.put(next, "baseRefOid", node["baseRefOid"]), oids, graphql, priority)
+          _moved_or_unreadable -> {:error, :request_failed}
+        end
+
+      _last_page ->
+        {:ok, read}
+    end
   end
 
-  defp decode_commits(_unusable), do: {:error, :request_failed}
+  defp read_on(_pr, _unusable, _earlier, _graphql, _priority), do: {:error, :request_failed}
+
+  defp next_page({owner, repo, number}, cursor, graphql, priority) do
+    query =
+      "query($o: String!, $r: String!, $n: Int!, $c: String!) { repository(owner: $o, name: $r) { pullRequest(number: $n) " <>
+        "{ headRefOid commits(first: 100, after: $c) { #{@commit_page} } } } }"
+
+    case graphql.(query, %{"o" => owner, "r" => repo, "n" => number, "c" => cursor}, priority) do
+      {:ok, data} -> {:ok, get_in(data, ["repository", "pullRequest"])}
+      error -> error
+    end
+  end
+
+  defp complete({:ok, %{"commits" => oids, "total" => total} = read}) when length(oids) == total, do: {:ok, Map.delete(read, "total")}
+  defp complete({:ok, _incomplete}), do: {:error, :request_failed}
+  defp complete(error), do: error
 
   @doc """
   The names of the failing checks on a head: a detail read (ETag-cached REST),

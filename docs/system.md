@@ -181,10 +181,11 @@ package's own earlier PRs are left out. When two PRs share commits, the one
 holding all of the other's commits and more is the stacked one; otherwise the
 later-opened PR is. Commit lists come from GitHub: the Observer reads them only
 for repositories with two or more open watched PRs and only when a PR's head or
-base moves, and `sync_pr` reads its own PR's with `gh`. When another PR's state
-or commits can't be read (including a PR with more than 100 commits),
-qualification waits (`stale: stacking`) rather than
-blocking. The check matches exact commits; a cherry-pick with new commit ids
+base moves; `sync_pr` reads its own PR and the other active packages' attached
+PRs in the repository with `gh`. When another PR's state or commits can't be
+read (GitHub lists at most 250 commits), qualification waits (`stale:
+stacking`) rather than blocking. A sibling PR the Observer hasn't attached yet
+is checked on its next sweep. The check matches exact commits; a cherry-pick with new commit ids
 isn't detected.
 
 A ready-for-merge package can acquire a new integration blocker without changing

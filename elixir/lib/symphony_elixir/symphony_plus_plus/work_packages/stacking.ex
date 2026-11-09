@@ -17,17 +17,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Stacking do
 
     * `work_package_id`, `repository`, `number`;
     * `state` (`open`, `merged`, `closed`) and `commits` (oids), when read;
-    * `fresh?` - read in this pass rather than taken from a stored snapshot.
+    * `fresh?` - read in this pass; other views name only the attached PR.
 
-  A merged or closed PR never counts. A view without a state or commit list
-  is unknown; so is a stored view that would block. Those are refreshed
-  first (`refresh`), and anything still unknown defers qualification.
+  A merged or closed PR never counts. A view that wasn't read in this pass is
+  read first (`refresh`); one without a state or commit list after that is
+  unknown and defers qualification.
   """
 
   import Ecto.Query, only: [from: 2]
 
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{Client, DefaultClient, PullRequest, PullRequestProgress}
-  alias SymphonyElixir.SymphonyPlusPlus.Observer.Observation
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, WorkPackage}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -53,14 +52,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Stacking do
     cond do
       candidates == [] -> {:ok, []}
       not is_list(Map.get(own, :commits)) -> :unknown
-      true -> candidates |> refreshed(own, refresh) |> verdict(own)
+      true -> candidates |> refreshed(refresh) |> verdict(own)
     end
   end
 
-  # A view that is unknown, or stored and would block, is read again first.
-  defp refreshed(candidates, own, refresh) do
-    {stale, settled} = Enum.split_with(candidates, &(unknown?(&1) or (not Map.get(&1, :fresh?, false) and stacked_on?(own, &1))))
-    if stale == [], do: settled, else: settled ++ refresh.(stale)
+  defp refreshed(candidates, refresh) do
+    {unread, read} = Enum.split_with(candidates, &(not Map.get(&1, :fresh?, false)))
+    if unread == [], do: read, else: read ++ refresh.(unread)
   end
 
   defp verdict(candidates, own) do
@@ -105,13 +103,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Stacking do
   end
 
   @doc """
-  The stored views of every other active package's current PR: in-flight
-  packages of WorkRequests that aren't archived, with the PR they have
-  attached and the Observer's last snapshot of it when it is still that PR's
-  current head.
+  The current PR of every other active package: in-flight packages of
+  WorkRequests that aren't archived, with the PR they have attached. These
+  views are unread; `check/3` reads them through `refresh`.
   """
-  @spec stored_views(module(), String.t()) :: [view()]
-  def stored_views(repo, work_package_id) do
+  @spec attached_views(module(), String.t()) :: [view()]
+  def attached_views(repo, work_package_id) do
     packages =
       repo.all(
         from(package in WorkPackage,
@@ -122,49 +119,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Stacking do
         )
       )
 
-    observations = observations(repo, packages)
-
     case PlanningRepository.list_progress_events(repo, packages) do
       {:ok, events} ->
         events
         |> Enum.group_by(& &1.work_package_id)
-        |> Enum.flat_map(fn {id, events} -> stored_view(id, events, Map.get(observations, id)) end)
+        |> Enum.flat_map(fn {id, events} -> attached_view(id, events) end)
 
       {:error, _reason} ->
         []
     end
   end
 
-  defp observations(_repo, []), do: %{}
-
-  defp observations(repo, ids) do
-    ids
-    |> Enum.chunk_every(500)
-    |> Enum.flat_map(&repo.all(from(observation in Observation, where: observation.work_package_id in ^&1)))
-    |> Map.new(&{&1.work_package_id, &1})
-  end
-
-  defp stored_view(id, events, observation) do
+  defp attached_view(id, events) do
     case PullRequestProgress.current_pr_state(events) do
-      {:ok, current} ->
-        view = %{work_package_id: id, repository: current.ref.repository, number: current.ref.number, head_sha: current.payload["head_sha"]}
-        [Map.merge(view, observed(observation, view))]
-
-      _no_pr ->
-        []
+      {:ok, current} -> [%{work_package_id: id, repository: current.ref.repository, number: current.ref.number}]
+      _no_pr -> []
     end
   end
-
-  # The Observer's snapshot counts only for the same PR at the same head.
-  defp observed(%Observation{pr: %{} = pr}, view) do
-    same_pr? = pr["number"] == view.number and is_binary(pr["repository"]) and String.downcase(pr["repository"]) == String.downcase(view.repository)
-
-    if same_pr? and (pr["state"] in ["merged", "closed"] or pr["head_sha"] == view.head_sha),
-      do: %{state: pr["state"], commits: pr["commits"]},
-      else: %{}
-  end
-
-  defp observed(_observation, _view), do: %{}
 
   @doc """
   Re-reads views through the architect's GitHub client (`gh pr view`), as
