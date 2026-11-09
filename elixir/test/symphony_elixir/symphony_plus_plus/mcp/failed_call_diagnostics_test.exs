@@ -289,14 +289,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
     :ok =
       FailedCall.observe_error(
         config,
-        tool_call("prepare_work_package_worktree", %{"work_package_id" => "WP-SAFE-SUMMARY"}),
+        tool_call("dispatch_work_package", %{"work_package_id" => "WP-SAFE-SUMMARY", "review_mode" => "fast"}),
         -32_009,
         "Precondition failed",
         %{
           "reason" => "worktree_cleanup_failed",
           "recovery" => %{
             "next_action" => "retry_cleanup_worktree",
-            "tool" => "prepare_work_package_worktree",
+            "tool" => "dispatch_work_package",
             "fresh_mcp_session_required" => false,
             "message" => "Bearer summary-secret",
             "path" => "C:/private/worktree",
@@ -313,7 +313,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
     assert group["recovery"] == %{
              "fresh_mcp_session_required" => false,
              "next_action" => "retry_cleanup_worktree",
-             "tool" => "prepare_work_package_worktree"
+             "tool" => "dispatch_work_package"
            }
 
     refute inspect(group) =~ "summary-secret"

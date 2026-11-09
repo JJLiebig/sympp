@@ -140,8 +140,7 @@ for (const status of [
   const architect = await factory.client();
   const request = await architect.request('Review observation', 'beta', repo.origin);
   const [wp] = (await architect.call('slice_work_request', { work_packages: [contract('Observed review', { review: { type: 'review-suite', args: { mode: 'fast' } } })] })).work_package_ids;
-  await architect.call('dispatch_work_package', { work_package_id: wp });
-  await architect.call('prepare_work_package_worktree', { work_package_id: wp, target_repo_root: repo.checkout });
+  await architect.call('dispatch_work_package', { work_package_id: wp, review_mode: 'fast', target_repo_root: repo.checkout });
   await installReviewProvider({ root: factory.root, factory }, status);
   await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated');
   const observed = await row(architect, request, wp);
@@ -160,8 +159,8 @@ test('ordinary PR handoff observes pending qualification then reconciles an exac
   const architect = await factory.client();
   const request = await architect.request('Qualified delivery');
   const [wp] = (await architect.call('slice_work_request', { work_packages: [contract('Service change')] })).work_package_ids;
-  const dispatch = await architect.call('dispatch_work_package', { detail: 'full', work_package_id: wp, future_field: 'ignored' });
-  expect(dispatch.worker_bootstrap.type).toBe('assignment');
+  const dispatch = await architect.call('dispatch_work_package', { work_package_id: wp, future_field: 'ignored' });
+  expect(dispatch.work_package.status).toBe('dispatched');
   const detail = () => architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`);
   const completion = async () => (await architect.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.completed_at;
   expect(await completion()).toBeNull();
@@ -439,9 +438,6 @@ test('architect integration holds gate a ready PR without reopening work or chan
   for (const blocker_id of ['', '   ', 42]) {
     await architect.reject('append_progress', { ...hold, payload: { ...hold.payload, blocker_id } }, 'invalid_blocker_id');
   }
-  await architect.reject('append_progress', {
-    ...hold, payload: { ...hold.payload, head_sha: head('a'), dependency_inputs: [] },
-  }, 'already_ready');
   const declared = await architect.call('append_progress', hold);
   expect((await architect.call('append_progress', hold)).progress_event.id).toBe(declared.progress_event.id);
   const held = await row(architect, request, wp);
@@ -453,7 +449,6 @@ test('architect integration holds gate a ready PR without reopening work or chan
   expect((await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).metadata).toEqual(metadata);
   await architect.reject('append_progress', { work_package_id: wp, summary: 'Ordinary evidence stays frozen.', idempotency_key: 'late-progress' }, 'already_ready');
   const resolution = { work_package_id: wp, blocker_id: 'integration-authority', resolution: 'Decision received.', summary: 'Integration authorized.', idempotency_key: 'integration-resolved' };
-  await architect.reject('resolve_blocker', { ...resolution, payload: { head_sha: head('a'), dependency_inputs: [] } }, 'already_ready');
   expect((await row(architect, request, wp)).merge_eligibility.eligible).toBe(false);
   const resolved = await architect.call('resolve_blocker', resolution);
   expect((await architect.call('resolve_blocker', resolution)).progress_event.id).toBe(resolved.progress_event.id);

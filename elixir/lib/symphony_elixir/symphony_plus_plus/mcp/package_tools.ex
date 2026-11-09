@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PackageTools do
   @moduledoc """
   Owner-gated writes and reads on one WorkPackage, named by `work_package_id`:
-  task plan, findings and progress. The server
+  task plan reads, findings and progress. The server
   checks that the caller owns the package's WorkRequest before these run.
   """
 
@@ -15,7 +15,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PackageTools do
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     Config,
-    ErrorDetails,
     ProgressEvents,
     TaskPlanTools,
     ToolResult,
@@ -27,7 +26,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PackageTools do
 
   @tools [
     "read_task_plan",
-    "update_task_plan",
     "append_finding",
     "append_progress"
   ]
@@ -54,10 +52,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PackageTools do
       {:ok, work_package_id} -> write(name, config.repo, Writer.new(terminal, work_package_id), arguments)
       {:tool_error, reason} -> invalid_params_error(name, reason)
     end
-  end
-
-  defp write("update_task_plan", repo, %Writer{} = writer, arguments) do
-    normalize_update_task_plan_result(TaskPlanTools.update_task_plan(repo, writer.work_package_id, arguments))
   end
 
   defp write("append_finding", repo, %Writer{} = writer, arguments), do: append_finding_for_package(repo, writer, arguments)
@@ -100,12 +94,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PackageTools do
       {:error, reason} -> worker_error(reason, "append_finding")
     end
   end
-
-  defp normalize_update_task_plan_result({:tool_error, reason}),
-    do: invalid_params_error("update_task_plan", reason)
-
-  defp normalize_update_task_plan_result({:error, reason}), do: worker_error(reason, "update_task_plan")
-  defp normalize_update_task_plan_result(result), do: result
 
   defp append_authenticated_idempotent_finding(repo, %Writer{} = writer, finding_id, attrs) do
     work_package_id = writer.work_package_id
@@ -292,20 +280,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PackageTools do
   defp worker_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp worker_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp worker_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
-
-  defp invalid_params_error(tool, {:blocker_closeout_required, blockers}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "blocker_closeout_required",
-       "reason_code" => "blocker_closeout_required",
-       "message" => "Active blockers must be resolved by the architect or trusted local operator before this finish transition.",
-       "active_blockers" => blockers
-     }}
-  end
-
-  defp invalid_params_error(tool, {:invalid_enum, _field, _allowed_values} = reason),
-    do: ErrorDetails.invalid_params_error(tool, reason)
 
   defp invalid_params_error(tool, reason), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 

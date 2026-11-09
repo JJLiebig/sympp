@@ -80,11 +80,7 @@ test('candidate pins allow dispatch but all overlapping constraints and current 
   await architect.call('upsert_dependency', { dependency_id: ordinary, dependent: endpoint(ui), prerequisite: endpoint(backend), candidate_head_sha: head('b'), reason: 'Conflicting candidate qualification.' });
   await architect.reject('dispatch_work_package', { work_package_id: ui }, 'unmet_work_package_dependencies');
   await architect.call('delete_dependency', { dependency_id: ordinary });
-  const dispatch = await architect.call('dispatch_work_package', { detail: 'full', work_package_id: ui });
-  const selection = dispatch.worker_bootstrap.assignment.dependency_selections[0].constraints[0];
-  expect(selection.candidate_head_sha).toBe(head('a'));
-  expect(selection.candidate_state).toBe('current');
-  expect(selection.selection_updated_at).toBeTruthy();
+  expect((await architect.call('dispatch_work_package', { work_package_id: ui })).work_package.status).toBe('dispatched');
   const contextBefore = (await architect.call('read_plan', { detail: 'full', work_request_id: request })).product_tree.dependency_intents.find((edge: any) => edge.id === pin);
   const invalidContext = await architect.rpc('tools/call', { name: 'upsert_dependency', arguments: { ...pinned, dependency_id: pin, reason: '', decision_ref: {} } });
   expect(invalidContext.error).toBeTruthy();
@@ -94,11 +90,13 @@ test('candidate pins allow dispatch but all overlapping constraints and current 
   expect((await graph(architect, request)).effective_edges.find((edge: any) => edge.dependent_work_package_id === ui).constraints[0].candidate_head_sha).toBe(head('a'));
   await architect.reject('upsert_dependency', { dependent: endpoint(ui), prerequisite: endpoint(group, 'group'), candidate_head_sha: head('a'), reason: 'A group cannot identify one candidate head.' }, 'invalid_dependency');
 
-  // A branch repair is a real current-head change; old candidate evidence cannot win.
-  await architect.call('attach_branch', { work_package_id: backend, branch: 'feature/delivery-201', head_sha: head('b') });
+  // A new PR head is a real current-head change; old candidate evidence cannot win.
+  provider.set(201, pr(201, head('b')));
+  await sync(architect, backend, 201, head('b'));
   await architect.reject('dispatch_work_package', { work_package_id: peer }, 'unmet_work_package_dependencies');
   expect((await graph(architect, request)).effective_edges[0].constraints[0].candidate_state).toBe('stale_head');
-  await architect.call('attach_branch', { work_package_id: backend, branch: 'feature/delivery-201', head_sha: head('a') });
+  provider.set(201, pr(201, head('a')));
+  await sync(architect, backend, 201, head('a'));
   provider.set(201, pr(201, head('b')));
   const observation = await architect.operator('/api/v1/sympp/operator/github/sync-prs', { mode: 'auto' });
   expect(observation.status).toBe(200);
@@ -111,19 +109,12 @@ test('candidate pins allow dispatch but all overlapping constraints and current 
   provider.set(202, pr(202, head('c')));
   const staleInputs = await sync(architect, ui, 202, head('c'));
   expect(staleInputs.pr_sync.readiness_reasons).toContain('dependency_inputs_stale');
-  const qualify = (sha: string, inputs: object[], key: string) => architect.call('append_progress', {
-    work_package_id: ui, summary: 'Architect accepted the controlled candidate qualification.', idempotency_key: key,
-    payload: { head_sha: sha, dependency_inputs: inputs },
-  });
   const inputs = [{ dependency_id: pin, prerequisite_work_package_id: backend, candidate_head_sha: head('a') }];
   for (const [sha, selections] of [[head('d'), inputs], [head('c'), [{ ...inputs[0], candidate_head_sha: head('b') }]]] as const) {
-    const rejected = await architect.rpc('tools/call', { name: 'append_progress', arguments: {
-      work_package_id: ui, summary: 'Invalid qualification', idempotency_key: 'invalid-selection', payload: { head_sha: sha, dependency_inputs: selections },
-    } });
+    const rejected = await architect.tool('sync_pr', { work_package_id: ui, url: prUrl(202), head_sha: sha, dependency_inputs: selections });
     expect(rejected.error).toBeTruthy();
   }
-  await qualify(head('c'), inputs, 'consume-a');
-  await sync(architect, ui, 202, head('c'));
+  await architect.call('sync_pr', { work_package_id: ui, url: prUrl(202), head_sha: head('c'), dependency_inputs: inputs });
   expect((await row(architect, request, ui)).merge_eligibility.reason_codes).toContain('dependency_not_delivered');
   provider.set(201, pr(201, head('a'), { state: 'MERGED', mergedAt: new Date().toISOString(), mergeCommit: { oid: head('e') } }));
   await architect.call('sync_pr', { work_package_id: backend });
@@ -133,11 +124,14 @@ test('candidate pins allow dispatch but all overlapping constraints and current 
   await architect.reject('dispatch_work_package', { work_package_id: late }, 'unmet_work_package_dependencies');
   await architect.call('upsert_dependency', { ...deliveredPin, dependency_id: wrongPin, candidate_head_sha: head('a') });
   expect((await architect.call('dispatch_work_package', { work_package_id: late })).work_package.id).toBe(late);
-  await architect.call('attach_branch', { work_package_id: ui, branch: 'feature/delivery-202', head_sha: head('d') });
-  expect((await row(architect, request, ui)).merge_eligibility.reason_codes).toContain('dependency_inputs_stale');
   // A ready contract is frozen: an edit is refused and the package stays ready.
   await architect.reject('update_work_package', { work_package_id: ui, expected_contract_revision: 1, patch: { title: 'Revised consumer contract' } }, 'contract_frozen');
   expect((await row(architect, request, ui)).raw_status).toBe('ready');
+  // A new dependent head consumed nothing yet: its inputs are stale and it is no longer ready.
+  provider.set(202, pr(202, head('d')));
+  await sync(architect, ui, 202, head('d'));
+  expect((await row(architect, request, ui)).merge_eligibility.reason_codes).toContain('dependency_inputs_stale');
+  expect((await row(architect, request, ui)).raw_status).toBe('dispatched');
   expect((await row(architect, request, ui)).merge_eligibility.eligible).toBe(false);
 });
 
@@ -160,9 +154,9 @@ test('clearing a candidate and expanding to a group requires fresh qualification
   await sync(architect, ui, 203, head('c'));
   expect((await row(architect, request, ui)).merge_eligibility.eligible).toBe(false);
   for (const prerequisite of [a, b]) {
-    await architect.call('append_progress', {
-      work_package_id: ui, summary: 'Accept qualification of the delivered prerequisite.', idempotency_key: `qualify-${prerequisite}`,
-      payload: { head_sha: head('c'), dependency_inputs: [{ dependency_id: dependency, prerequisite_work_package_id: prerequisite, candidate_head_sha: null }] },
+    await architect.call('sync_pr', {
+      work_package_id: ui, url: prUrl(203), head_sha: head('c'),
+      dependency_inputs: [{ dependency_id: dependency, prerequisite_work_package_id: prerequisite, candidate_head_sha: null }],
     });
     if (prerequisite === a) expect((await row(architect, request, ui)).merge_eligibility.reason_codes).toContain('dependency_inputs_stale');
   }

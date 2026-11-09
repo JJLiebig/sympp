@@ -15,7 +15,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixirWeb.Endpoint
   alias SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions
@@ -563,33 +562,9 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     end
   end
 
-  @spec operator_dispatch_work_package(Conn.t(), map()) :: Conn.t()
-  def operator_dispatch_work_package(conn, %{"work_request_id" => work_request_id, "work_package_id" => work_package_id}) do
-    send_local_operator_response(
-      conn,
-      :work_package_dispatch,
-      work_package_target(work_request_id, work_package_id),
-      :operator_dispatch_work_package,
-      fn repo ->
-        with {:ok, dispatch} <-
-               WorkPackageDispatch.dispatch(
-                 repo,
-                 work_request_id,
-                 work_package_id
-               ) do
-          refresh = %{work_request_id: work_request_id, work_package_id: work_package_id}
-          payload = %{dispatch: WorkPackageDispatch.response_payload(dispatch)}
-
-          json(conn, mutation_success_payload(payload, refresh))
-        end
-      end
-    )
-  end
-
   defp send_local_operator_response(conn, action, %Target{} = target, tool, fun)
        when is_atom(action) and is_atom(tool) and is_function(fun, 1) do
-    if OfflineSandbox.enabled?() and
-         tool in [:operator_sync_github_prs, :operator_dispatch_work_package] do
+    if OfflineSandbox.enabled?() and tool == :operator_sync_github_prs do
       conn |> put_status(403) |> json(%{error: "This action is unavailable in the offline beta sandbox."})
     else
       send_online_or_local_response(conn, action, target, tool, fun)
@@ -732,8 +707,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp work_request_target(work_request_id), do: Target.work_request(work_request_id)
 
   defp work_package_target(work_package_id), do: Target.work_package(work_package_id)
-
-  defp work_package_target(work_request_id, work_package_id), do: Target.work_package(work_package_id, work_request_id)
 
   defp operator_runtime_config(conn) do
     %{

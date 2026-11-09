@@ -350,7 +350,7 @@ test('package evidence tools keep plans atomic, findings idempotent and progress
   for (const work_package_id of [wp, sibling]) await architect.call('dispatch_work_package', { work_package_id });
   const own = (args: object) => ({ work_package_id: wp, ...args });
   const other = (args: object) => ({ work_package_id: sibling, ...args });
-  const initial = await architect.call('read_task_plan', own({}));
+  expect((await architect.call('read_task_plan', own({}))).text).toContain('Implement requested scope');
   const progressBefore = (await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).progress;
   for (const [args, reason] of [
     [{ summary: 'Invalid key', idempotency_key: 123 }, 'invalid_idempotency_key'],
@@ -358,31 +358,6 @@ test('package evidence tools keep plans atomic, findings idempotent and progress
     [{ summary: 'Invalid payload', idempotency_key: 'invalid-payload', payload: false }, 'invalid_payload'],
   ] as const) await architect.reject('append_progress', own(args), reason);
   expect((await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).progress).toEqual(progressBefore);
-  const plan = await architect.call('update_task_plan', own({ expected_version: initial.version, nodes: [{ title: 'Own node' }] }));
-  const ownNode = plan.plan_nodes[0].id;
-  const siblingPlan = await architect.call('read_task_plan', other({}));
-  const foreignNode = (await architect.call('update_task_plan', other({ expected_version: siblingPlan.version, nodes: [{ title: 'Sibling node' }] }))).plan_nodes[0].id;
-  const before = await architect.call('read_task_plan', own({}));
-  for (const invalid of [foreignNode, 'plan_missing']) {
-    await architect.reject('update_task_plan', own({ expected_version: before.version, nodes: [{ id: ownNode, status: 'done' }, { id: invalid, title: 'Do not insert' }] }), 'unknown_plan_node');
-    expect(await architect.call('read_task_plan', own({}))).toEqual(before);
-  }
-  await architect.reject('update_task_plan', own({ expected_version: before.version, nodes: [{ id: ownNode, status: 'invalid' }] }), 'invalid_status');
-  expect(await architect.call('read_task_plan', own({}))).toEqual(before);
-  const changed = await architect.call('update_task_plan', own({ expected_version: before.version, nodes: [{ id: ownNode, body: 'Working', status: 'in_progress' }, { title: 'Additional task', status: 'done' }] }));
-  expect(changed.plan_nodes.map((node: any) => node.status)).toEqual(['in_progress', 'done']);
-  expect((await architect.call('read_task_plan', own({}))).text).toContain('Working');
-  await architect.reject('update_task_plan', own({ expected_version: before.version, nodes: [{ id: ownNode, status: 'done' }] }), 'stale_plan_version');
-  expect((await architect.call('read_task_plan', other({}))).text).toContain('Sibling node');
-  const siblingVersion = (await architect.call('read_task_plan', other({}))).version;
-  await architect.call('update_task_plan', other({ expected_version: siblingVersion, nodes: Array.from({ length: 100 }, (_, index) => ({ title: `Bounded node ${index + 1}` })) }));
-  const bounded = await architect.tool('read_task_plan', other({}));
-  expect(bounded.result.structuredContent.plan_nodes).toHaveLength(100);
-  expect(bounded.result.structuredContent.omitted.plan_nodes).toBe(2);
-  expect(bounded.result.content[0].text).not.toContain('Bounded node 100');
-  expect(bounded.result.structuredContent.text).toContain('2 later plan nodes omitted');
-  await architect.call('update_task_plan', other({ expected_version: bounded.result.structuredContent.version, nodes: [{ id: foreignNode, status: 'done' }] }));
-  expect((await architect.call('read_task_plan', other({}))).plan_nodes.find((node: any) => node.id === foreignNode).status).toBe('done');
   const first = await architect.call('append_finding', own({ id: 'synthetic-finding', title: 'Finding', body: 'Evidence', idempotency_key: ' finding-once ' }));
   expect((await architect.call('append_finding', own({ id: 'synthetic-finding', title: 'Finding', body: 'Evidence', idempotency_key: 'finding-once' }))).finding.id).toBe(first.finding.id);
   await architect.reject('append_finding', own({ id: 'different-finding', title: 'Finding', body: 'Evidence', idempotency_key: 'finding-once' }), 'idempotency_conflict');
@@ -437,7 +412,6 @@ deliveryTest('architect CI observations reach the native dashboard with stable p
     kind: 'mcp', branch_pattern: 'feature/authority',
   })] })).work_package_ids;
   await architect.call('dispatch_work_package', { work_package_id: wp });
-  await architect.call('attach_branch', { work_package_id: wp, branch: 'feature/authority', head_sha: head('a') });
   const signal = async () => {
     const dashboard = await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated');
     const detail = dashboard.work_request_details.find((item: any) => item.work_request.id === request);
@@ -462,7 +436,6 @@ deliveryTest('architect CI observations reach the native dashboard with stable p
     previous = current;
   }
   // A review push starts a new CI run even when its status stays passing.
-  await architect.call('attach_branch', { work_package_id: wp, branch: 'feature/authority', head_sha: head('b') });
   provider.set(303, pr(303, head('b'), { headRefName: 'feature/authority' }));
   await architect.call('sync_pr', { work_package_id: wp, url: prUrl(303) });
   const pushed = await signal();
@@ -618,16 +591,13 @@ test('architect descendant planning stays owned through terminal closeout and re
   const architect = await factory.client();
   const request = await architect.request('Architect descendant evidence');
   const [wp] = (await architect.call('slice_work_request', { work_packages: [contract('Secondary planning', { repo: 'example/client', base_branch: 'integration' })] })).work_package_ids;
-  const initial = await architect.call('read_task_plan', { work_package_id: wp });
-  const updated = await architect.call('update_task_plan', { work_package_id: wp, expected_version: initial.version, nodes: [{ title: 'Inspect descendant', status: 'in_progress' }] });
-  expect(updated.plan_nodes[0].title).toBe('Inspect descendant');
   const finding = (await architect.call('append_finding', { work_package_id: wp, title: 'Scoped evidence', body: 'Owned descendant', idempotency_key: 'architect-finding' })).finding;
   const progress = (await architect.call('append_progress', { work_package_id: wp, summary: 'Owned descendant progress', idempotency_key: 'architect-progress' })).progress_event;
   const detail = await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`);
   expect(detail.findings[0].id).toBe(finding.id);
   expect(detail.progress[0].id).toBe(progress.id);
-  const uri = `sympp://work-packages/${wp}/task_plan.md`;
-  expect((await architect.rpc('resources/read', { uri })).result.contents[0].text).toContain('Inspect descendant');
+  const uri = `sympp://work-packages/${wp}/findings.md`;
+  expect((await architect.rpc('resources/read', { uri })).result.contents[0].text).toContain('Scoped evidence');
   const foreign = await factory.client();
   await foreign.request('Other planning owner');
   const [otherWp] = await packages(foreign, ['Private foreign plan']);
@@ -636,15 +606,14 @@ test('architect descendant planning stays owned through terminal closeout and re
   await architect.reject('append_progress', { work_package_id: otherWp, summary: 'Foreign', idempotency_key: 'foreign' }, 'owned_by_other_terminal');
   await close(architect, wp);
   for (const [name, args] of [
-    ['update_task_plan', { expected_version: updated.version, nodes: [{ id: updated.plan_nodes[0].id, status: 'done' }] }],
     ['append_finding', { title: 'Late finding', body: 'Must not persist', idempotency_key: 'late-architect-finding' }],
     ['append_progress', { summary: 'Late progress', idempotency_key: 'late-architect-progress' }],
   ] as const) await architect.reject(name, { work_package_id: wp, ...args }, 'work_package_terminal');
   expect((await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).findings).toHaveLength(1);
   expect((await architect.operator(`/api/v1/sympp/operator/work-requests/${request}/archive`, {})).status).toBe(200);
-  // Archiving ends ownership; the archived request's plan stays readable by id and refuses writes.
+  // Archiving ends ownership; the archived request's evidence stays readable by id and refuses writes.
   expect((await architect.call('sympp.health')).caller.owns).toEqual([]);
-  expect((await architect.call('read_task_plan', { work_package_id: wp })).text).toContain('Inspect descendant');
+  expect((await architect.rpc('resources/read', { uri })).result.contents[0].text).toContain('Scoped evidence');
   await architect.reject('slice_work_request', { work_packages: [contract('Archived scope')] }, 'work_request_archived');
 });
 

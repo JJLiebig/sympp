@@ -27,11 +27,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "read_plan",
     "read_delivery_board",
     "read_task_plan",
-    "update_task_plan",
     "append_finding",
     "append_progress",
     "resolve_blocker",
-    "attach_branch",
     "sync_pr",
     "reconcile_work_request",
     "record_work_package_delivery",
@@ -48,8 +46,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "upsert_dependency",
     "delete_dependency",
     "skip_work_package",
-    "dispatch_work_package",
-    "prepare_work_package_worktree"
+    "dispatch_work_package"
   ]
   @known_tools Enum.uniq([@health_tool] ++ @solo_tools ++ @bootstrap_tools ++ @local_operator_tools ++ @architect_tools)
   @work_request_product_tree_views ["groups_only", "groups_with_work_package_refs", "groups_with_work_packages"]
@@ -69,11 +66,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   # Writes that take or confirm ownership of the target WorkRequest. Decisions,
   # questions, WorkRequest creation and Solo stay open to any Herdr terminal.
   @owner_gated_tools [
-    "update_task_plan",
     "append_finding",
     "append_progress",
     "resolve_blocker",
-    "attach_branch",
     "sync_pr",
     "reconcile_work_request",
     "record_work_package_delivery",
@@ -85,8 +80,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "upsert_dependency",
     "delete_dependency",
     "skip_work_package",
-    "dispatch_work_package",
-    "prepare_work_package_worktree"
+    "dispatch_work_package"
   ]
   @type tool_name :: String.t()
   @type input_schema :: map()
@@ -157,7 +151,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   @spec architect_tool_input_schema(tool_name()) :: input_schema()
   defdelegate architect_tool_input_schema(name), to: InputSchemas
 
-  @spec startup_tool_specs(:full | :worker | :architect | :coordinator | :solo, Config.t()) :: [tool_spec()]
+  @spec startup_tool_specs(:full | :architect | :coordinator | :solo, Config.t()) :: [tool_spec()]
   defdelegate startup_tool_specs(profile, config), to: SurfaceSpecs
 
   @spec lean_tool_specs([tool_spec()]) :: [tool_spec()]

@@ -59,8 +59,7 @@ For a connection failure, keep healthy sessions running. Check the recorded
 endpoint and host error, then reconnect the affected host. Ownership stays with
 the same Herdr terminal across reconnects; read the canonical history before
 retrying an uncertain write. The
-[connection procedure](../packages/sympp/skills/symphony-work-package/references/mcp_wiring.md)
-covers that recovery.
+[connection guide](../skills/sympp/connection.md#recovery) covers that recovery.
 
 For inspection, [Copy and View](portable-skills.md#copy-convert-and-view-an-offline-ledger)
 uses SQLite online backup, a durable offline marker and a separate home and port.

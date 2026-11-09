@@ -103,9 +103,9 @@ export async function row(client: Client, request: string, wp: string) {
 }
 
 // Only superseded can end a planned package, so other outcomes dispatch it
-// first; a package that is already dispatched refuses and stays as it is.
+// first; dispatching an already dispatched package replays and leaves it as it is.
 export async function close(client: Client, wp: string, outcome = 'completed_no_pr', evidence: object = { no_pr_evidence: 'The architect accepted the investigation findings; no code change was needed.' }) {
-  if (outcome !== 'superseded') await client.rpc('tools/call', { name: 'dispatch_work_package', arguments: { work_package_id: wp } });
+  if (outcome !== 'superseded') await client.tool('dispatch_work_package', { work_package_id: wp });
   return client.call('record_work_package_delivery', {
     work_package_id: wp, outcome, idempotency_key: `close-${wp}`,
     evidence: { [outcome]: evidence },

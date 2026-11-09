@@ -12,7 +12,7 @@ backend when no ledger state is requested.
 
 Do not use this as authority for assigned WorkPackages, WorkRequests,
 architect orchestration, or merge gates. Use
-`symphony-plus-plus-mcp:symphony-work-package` for WorkPackages and
+`symphony-plus-plus-mcp:symphony-worker` for assigned WorkPackages and
 `symphony-plus-plus-mcp:symphony-architect` for WorkRequest orchestration.
 
 ## Source Of Truth

@@ -16,14 +16,14 @@ const TRANSPORT_ENV = [...FORWARD_ENV, "PATHEXT", "SystemRoot", "WINDIR", "COMSP
 const FLAGS = {
   start: ["runtime", "json", "help"],
   list: ["cwd", "fields", "json", "help"],
-  launch: ["provider", "assignment", "ledger", "task", "cwd", "model", "provider-home", "space", "tab", "parent", "attempt", "name", "session", "json", "help"],
+  launch: ["provider", "task", "cwd", "model", "provider-home", "space", "tab", "parent", "attempt", "name", "session", "json", "help"],
   check: ["receipt", "session", "json", "help"],
   send: ["receipt", "message", "session", "json", "help"],
 };
 const HELP = {
   start: "start --runtime <factory/runtime/codex-plugin.json> [--json]\nStarts the local factory if stopped; returns JSON when its backend is ready.",
   list: "list [--cwd <folder>] [--fields <comma-separated receipt fields>] [--json]\nLists last-known launches for this folder; check a receipt for current state.",
-  launch: "launch --provider codex|claude|opencode --cwd <folder> (--assignment <bootstrap.json> --ledger <identity> | --task <task.txt>)\n  [--model <model>] [--provider-home <folder>] [--space <id>] [--tab <id>] [--parent <terminal>]\n  [--name <text>] [--attempt <name>] [--session <core-session>] [--json]\nDefaults: title/task-derived name with provider suffix; provider's configured model/home; current core; attempt=first. No dispatch or claim.\nExamples:\n  launch --provider claude --model opus --assignment worker.json --ledger local-main --cwd .\n  launch --provider opencode --task fix.txt --cwd . --name review\n  launch --provider codex --task fix.txt --cwd . --attempt retry-after-inspection",
+  launch: "launch --provider codex|claude|opencode --cwd <folder> --task <task.txt>\n  [--model <model>] [--provider-home <folder>] [--space <id>] [--tab <id>] [--parent <terminal>]\n  [--name <text>] [--attempt <name>] [--session <core-session>] [--json]\nDefaults: title/task-derived name with provider suffix; provider's configured model/home; current core; attempt=first. No ledger work.\nExamples:\n  launch --provider claude --model opus --task fix.txt --cwd .\n  launch --provider opencode --task fix.txt --cwd . --name review\n  launch --provider codex --task fix.txt --cwd . --attempt retry-after-inspection",
   check: "check --receipt <receipt.json> [--session <core-session>] [--json]\nVerifies the core, terminal, process and launch labels. Does not focus or send.\nExamples:\n  check --receipt ./launch.json\n  check --receipt ./launch.json --json",
   send: "send --receipt <receipt.json> --message <text-file> [--session <core-session>] [--json]\nSends to the verified idle/working agent; refuses unknown status, blocked agents and recovered shells.\nExamples:\n  send --receipt ./launch.json --message followup.txt\n  send --receipt ./launch.json --message handoff.txt --json",
 };
@@ -54,9 +54,7 @@ function parse(argv) {
   if (options.help) return { command, options };
   if (command === "start" && !options.runtime) fail("runtime_required", HELP.start, 2);
   if (command === "launch") {
-    if (!PROVIDERS.includes(options.provider) || !options.cwd || Boolean(options.assignment) === Boolean(options.task)) fail("invalid_launch", HELP.launch, 2);
-    if (options.assignment && !options.ledger) fail("ledger_required", "Pass --ledger with the assigning session's verified ledger identity.", 2);
-    if (options.task && options.ledger) fail("untracked_ledger", "Use --assignment for tracked work, or omit --ledger for an ordinary task.", 2);
+    if (!PROVIDERS.includes(options.provider) || !options.cwd || !options.task) fail("invalid_launch", HELP.launch, 2);
     if (options.tab && !options.space) fail("space_required", "--tab also needs --space; use machine-local IDs.", 2);
   }
   if (["check", "send"].includes(command) && !options.receipt) fail("receipt_required", HELP[command], 2);
@@ -68,21 +66,7 @@ function read(file, json = false) {
   try {
     const body = fs.readFileSync(file, "utf8");
     return json ? JSON.parse(body) : body;
-  } catch (_) { fail("input_unreadable", "Use an existing UTF-8 file; assignment and receipt files must contain JSON.", 2); }
-}
-
-function assignment(file) {
-  const input = read(file, true);
-  const bootstrap = input?.worker_bootstrap || input?.dispatch?.worker_bootstrap || input;
-  const wp = bootstrap?.coordinates?.primary_execution;
-  const wr = bootstrap?.coordinates?.product_parent;
-  if (bootstrap?.type !== "assignment" || wp?.kind !== "work_package" || wr?.kind !== "work_request" ||
-      !text(wp.work_package_id) || !text(wr.work_request_id) || !text(bootstrap.launch_prompt)) {
-    fail("invalid_assignment", "Save the full redacted bootstrap; read assignment_uri with MCP resources/read if dispatch was compact. Do not dispatch again.", 2);
-  }
-  const title = [bootstrap.assignment?.title, bootstrap.assignment?.work_package?.title, bootstrap.work_package?.title, input.work_package?.title,
-    bootstrap.launch_prompt.match(/^You own WorkPackage \S+:\s*([^\r\n]+)/)?.[1]?.replace(/\s+\(parent WorkRequest [^)]+\)\.?$/, "")].find(text);
-  return { work_package_id: wp.work_package_id, work_request_id: wr.work_request_id, role: "worker", title, digest: hash(JSON.stringify(bootstrap)) };
+  } catch (_) { fail("input_unreadable", "Use an existing UTF-8 file; receipt files must contain JSON.", 2); }
 }
 
 function terminalName(title, provider, disambiguator = "") {
@@ -322,11 +306,11 @@ async function publishPid(core, receipt) {
 
 async function launch(core, info, options) {
   const cwd = path.resolve(options.cwd);
-  const input = path.resolve(options.assignment || options.task);
-  const task = options.task ? read(input) : null;
-  const source = options.assignment ? assignment(input) : { role: null, work_request_id: null, work_package_id: null, title: task.split(/\r?\n/, 1)[0], digest: hash(task) };
-  const ledger = options.assignment ? hash(options.ledger) : null;
-  const launchId = hash(JSON.stringify([info.id, ledger, source.work_package_id || input, options.attempt || "first"]));
+  const input = path.resolve(options.task);
+  const task = read(input);
+  const source = { title: task.split(/\r?\n/, 1)[0], digest: hash(task) };
+  // The null was the ledger of tracked launches; keeping it keeps existing task receipts reusable.
+  const launchId = hash(JSON.stringify([info.id, null, input, options.attempt || "first"]));
   const file = receiptPath(launchId);
   const requestHash = hash(JSON.stringify([source.digest, cwd, options.provider, options.executable, options.model || null, options["provider-home"] || null, options.parent || null, options.space || null, options.tab || null]));
   fs.mkdirSync(storeRoot(), { recursive: true });
@@ -344,19 +328,15 @@ async function launch(core, info, options) {
     }
     const receipt = {
       schema_version: 1, launch_id: launchId, core_id: info.id, terminal_id: null, pid: null,
-      provider: options.provider, model: options.model || null, role: source.role,
-      work_request_id: source.work_request_id, work_package_id: source.work_package_id, ledger_id: ledger,
+      provider: options.provider, model: options.model || null,
       cwd, created_at: new Date().toISOString(), receipt: file, request_hash: requestHash,
       state: "stale", status: "unknown", reason: "launch_uncertain",
     };
     const labels = { "sympp.launch_id": launchId, "sympp.provider": options.provider, "sympp.core_id": info.id, "sympp.receipt": file };
-    for (const key of ["role", "work_request_id", "work_package_id", "ledger_id"]) if (receipt[key]) labels[`sympp.${key}`] = receipt[key];
     if (options.space) labels["herdr.space"] = options.space;
     if (options.tab) labels["herdr.tab"] = options.tab;
     const parent = options.parent || (!options.session && process.env.HC_TERMINAL_SOCKET ? process.env.HC_TERMINAL_ID : null);
-    const prompt = options.assignment
-      ? `Read the redacted sympp assignment JSON at ${JSON.stringify(input)}. Follow worker_bootstrap.launch_prompt (possibly under dispatch), or launch_prompt when the file is the bootstrap itself. The parent owns dispatch and ledger reconciliation; do not dispatch or claim again.`
-      : `Read your task from ${JSON.stringify(input)} and carry it out. This is ordinary work; no sympp tracking is required.`;
+    const prompt = `Read your task from ${JSON.stringify(input)} and carry it out. This is ordinary work; no sympp tracking is required.`;
     const returnTo = parent ? ` Report results or questions to your parent with hc send ${JSON.stringify(parent)}; include the evidence and paths they need.` : "";
     const env = Object.fromEntries(FORWARD_ENV.filter((key) => process.env[key]).map((key) => [key, process.env[key]]));
     if (options["provider-home"]) env[PROFILE_ENV[options.provider]] = path.resolve(options["provider-home"]);
@@ -392,9 +372,9 @@ function list(options) {
   const fields = options.fields?.split(",") || ["provider", "terminal_id", "state", "receipt"];
   const names = fs.existsSync(storeRoot()) ? fs.readdirSync(storeRoot()).filter((name) => name.endsWith(".json")) : [];
   const rows = names.map((name) => loadReceipt(path.join(storeRoot(), name))).filter((item) => item.cwd === cwd);
-  const allowed = ["launch_id", "core_id", "terminal_id", "pid", "provider", "model", "role", "work_request_id", "work_package_id", "ledger_id", "created_at", "receipt", "state", "status", "reason", "cwd"];
+  const allowed = ["launch_id", "core_id", "terminal_id", "pid", "provider", "model", "created_at", "receipt", "state", "status", "reason", "cwd"];
   if (fields.some((field) => !allowed.includes(field))) fail("unknown_field", `Fields: ${allowed.join(", ")}.`, 2);
-  return { bin: __filename.replace(os.homedir(), "~"), description: "Launch and inspect optional Herdr agents without changing ledger authority.", count: rows.length, observation: "last_known", launches: rows.map((row) => Object.fromEntries(fields.map((key) => [key, row[key] ?? null]))), help: rows.length ? "check --receipt <receipt.json> for current state" : "launch --help to start an ordinary task or an assigned worker" };
+  return { bin: __filename.replace(os.homedir(), "~"), description: "Launch and inspect optional Herdr agents without changing ledger authority.", count: rows.length, observation: "last_known", launches: rows.map((row) => Object.fromEntries(fields.map((key) => [key, row[key] ?? null]))), help: rows.length ? "check --receipt <receipt.json> for current state" : "launch --help to start an ordinary task" };
 }
 
 async function start(options) {
@@ -486,7 +466,7 @@ async function main(argv = process.argv.slice(2), connect = connectCore) {
       const receipt = command !== "launch" ? loadReceipt(options.receipt) : null;
       const message = command === "send" ? read(options.message) : null;
       if (command === "launch") {
-        options.assignment ? assignment(options.assignment) : read(options.task);
+        read(options.task);
         try { if (!fs.statSync(path.resolve(options.cwd)).isDirectory()) throw new Error(); }
         catch (_) { fail("folder_unavailable", "--cwd must be an existing directory on the execution machine.", 2); }
         options.executable = executable(options.provider);

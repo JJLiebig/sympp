@@ -19,34 +19,20 @@ test('dispatch and delivery board payload measurements for a 25-package request'
   const ids = (await architect.call('slice_work_request', {
     work_packages: Array.from({ length: 25 }, (_, index) => contract(`Rollout package ${index + 1}`)),
   })).work_package_ids;
-  await architect.reject('dispatch_work_package', { work_package_id: ids[0], detail: 'invalid' }, 'invalid_detail');
-  const dispatch = (await architect.rpc('tools/call', {
-    name: 'dispatch_work_package', arguments: { work_package_id: ids[0] },
-  })).result;
+  await architect.reject('dispatch_work_package', { work_package_id: ids[0], review_mode: 'thorough' }, 'invalid_review_mode');
+  await architect.reject('dispatch_work_package', { work_package_id: ids[0], review_mode: undefined }, 'missing_review_mode');
+  const dispatch = (await architect.rpc('tools/call', architect.toolParams('dispatch_work_package', { work_package_id: ids[0], review_mode: 'fast' }))).result;
   const board = (await architect.rpc('tools/call', {
     name: 'read_delivery_board', arguments: { work_request_id: request },
   })).result;
-  expect(dispatch.structuredContent.work_package.id).toBe(ids[0]);
+  expect(dispatch.structuredContent.work_package).toMatchObject({ id: ids[0], status: 'dispatched', review_mode: 'fast' });
+  expect(dispatch.structuredContent.work_package.review_id).toMatch(/^rvw_[0-9a-f]{16}$/);
   expect(board.structuredContent.delivery_board.work_packages.length).toBe(25);
-  expect(dispatch.structuredContent.worker_bootstrap).toBeUndefined();
-  expect(dispatch.content[0].text).toContain(dispatch.structuredContent.assignment_uri);
-  const resource = await architect.rpc('resources/read', { uri: dispatch.structuredContent.assignment_uri });
-  expect(resource.error).toBeUndefined();
-  const bootstrap = JSON.parse(resource.result.contents[0].text);
-  const assignment = bootstrap.assignment;
-  expect(assignment.work_package.id).toBe(ids[0]);
-  expect(assignment.work_package.allowed_file_globs).toEqual(['src/**']);
-  expect(assignment.work_package.acceptance_criteria).toEqual(['The agreed behavior is available.']);
-  expect(assignment.work_package.validation_steps).toEqual(['Run relevant hosted checks.']);
-  expect(assignment.work_package.stop_conditions).toEqual(['Return material scope changes to the architect.']);
-  expect(assignment.parent_work_request.goal).toBe(description);
-  expect(assignment.work_package.product_description_ref).toBe('#/parent_work_request/goal');
-  expect(assignment.work_package.engineering_scope_ref).toBe('#/work_package/goal');
-  expect(JSON.stringify(bootstrap).split(description).length - 1).toBe(1);
-  expect(bootstrap.launch_prompt).not.toContain(description);
-  expect(bootstrap.launch_prompt).toContain('sibling `assignment`');
-  const repeated = await architect.rpc('resources/read', { uri: dispatch.structuredContent.assignment_uri });
-  expect(JSON.parse(repeated.result.contents[0].text)).toEqual(bootstrap);
+  // This fixture repository has no checkout: the package stays dispatched and the hand-off says what to fix.
+  expect(dispatch.structuredContent.error.reason).toBe('target_repo_root_required');
+  expect(dispatch.structuredContent.error.expected_repo).toBe('example/service');
+  expect(dispatch.structuredContent.next_action).toContain('dispatch_work_package again with review_mode fast');
+  expect(dispatch.structuredContent.launch_line).toBeUndefined();
   await architect.reject('read_delivery_board', { work_request_id: request, detail: true }, 'invalid_detail');
   const fullBoard = (await architect.rpc('tools/call', {
     name: 'read_delivery_board', arguments: { work_request_id: request, detail: 'full' },
@@ -62,25 +48,14 @@ test('dispatch and delivery board payload measurements for a 25-package request'
     expect(row.work_package).toBeUndefined();
     expect(board.content[0].text).toContain(row.id);
   }
-  const fullDispatch = (await architect.rpc('tools/call', {
-    name: 'dispatch_work_package', arguments: { work_package_id: ids[1], detail: 'full' },
-  })).result;
-  expect(fullDispatch.structuredContent.worker_bootstrap.assignment.work_package.product_description).toBe(description);
-  expect(fullDispatch.structuredContent.worker_bootstrap.assignment.work_package.engineering_scope).toBe('Deliver Rollout package 2');
-  // Every trusted caller may read; the assignment resource is the same for another terminal.
-  const reader = await factory.client(null);
-  expect(JSON.parse((await reader.rpc('resources/read', { uri: dispatch.structuredContent.assignment_uri })).result.contents[0].text)).toEqual(bootstrap);
   const chars = (value: unknown) => JSON.stringify(value).length;
-  expect(chars(dispatch)).toBeLessThan(chars(fullDispatch) / 2);
   expect(chars(board)).toBeLessThan(chars(fullBoard) / 2);
   // Actual baseline at fc486cee (hosted combined tree f65790a9), using this fixture.
   expect(chars(dispatch)).toBeLessThan(23_384 / 2);
   expect(chars(board)).toBeLessThan(46_312 / 2);
-  expect(chars(bootstrap)).toBeLessThan(10_560 / 2);
   const sizes = {
     checkout: process.env.ACCEPTANCE_CHECKOUT_SHA, packages: 25,
-    dispatch: chars(dispatch), bootstrap: chars(bootstrap), assignment: chars(assignment), board: chars(board),
-    fullDispatch: chars(fullDispatch), fullBoard: chars(fullBoard),
+    dispatch: chars(dispatch), board: chars(board), fullBoard: chars(fullBoard),
   };
   await writeFile('.e2e/payload-sizes.json', JSON.stringify(sizes, null, 2));
   console.log(`Payload character counts: ${JSON.stringify(sizes)}`);
@@ -98,7 +73,7 @@ test('skipping every planned package leaves the goal unfinished in persisted and
   expect(hydrated.work_request_details.find((detail: any) => detail.work_request.id === request).work_request.completed_at).toBeNull();
 });
 
-test('a clarified request becomes a revised plan and ordinary worker assignment', async ({ factory }) => {
+test('a clarified request becomes a revised plan and a dispatched package', async ({ factory }) => {
   const architect = await factory.client();
   const id = await architect.request('Clarified planning');
   const question = await architect.call('ask_question', {
@@ -130,50 +105,9 @@ test('a clarified request becomes a revised plan and ordinary worker assignment'
   expect(stale.current_contract_revision).toBe(revision + 1);
   expect((await architect.call('read_work_request', { detail: 'full', work_request_id: id })).work_packages[0].title).toBe('Refined agreed scope');
 
-  const plan = await architect.call('read_task_plan', { work_package_id: wp });
-  const task = await architect.call('update_task_plan', {
-    work_package_id: wp, expected_version: plan.version,
-    nodes: [{ title: 'Implement agreed behavior', status: 'pending' }, { title: 'Deferred detail', status: 'skipped' }],
-  });
-  expect(task.plan_nodes).toHaveLength(2);
-  expect((await architect.call('read_task_plan', { work_package_id: wp })).text).toContain('Implement agreed behavior');
-  const completed = await architect.call('update_task_plan', {
-    work_package_id: wp, expected_version: task.version,
-    nodes: [{ id: task.plan_nodes[0].id, status: 'done' }],
-  });
-  await architect.reject('update_task_plan', {
-    work_package_id: wp, expected_version: task.version,
-    nodes: [{ id: task.plan_nodes[0].id, status: 'pending' }],
-  }, 'stale_plan_version');
-  const reread = await architect.call('read_task_plan', { work_package_id: wp });
-  expect(reread.version).toBe(completed.version);
-  expect(reread.text).toContain('[x]');
-  expect(reread.text).toContain('Deferred detail');
-
-  // Dispatch must preserve evidence beyond the virtual document's 100-row cap.
-  for (let index = 1; index <= 101; index++) await architect.call('append_finding', {
-    work_package_id: wp, title: `Prior finding ${index}`, body: `Prior evidence ${index}`,
-    idempotency_key: `prior-${index}`,
-  });
-  const dispatched = await architect.call('dispatch_work_package', { detail: 'full', work_package_id: wp });
-  const prior = dispatched.worker_bootstrap.assignment.prior_findings.findings;
-  expect(prior).toHaveLength(101);
-  expect(prior[0].body).toBe('Prior evidence 1');
-  expect(prior.at(-1).body).toBe('Prior evidence 101');
-  expect(dispatched.work_package.id).toBe(wp);
-  expect(dispatched.work_package.dispatched_at).toBeTruthy();
-  const bootstrap = dispatched.worker_bootstrap;
-  expect(bootstrap.type).toBe('assignment');
-  const assignment = bootstrap.assignment.work_package;
-  expect(assignment.repo).toBe('example/service');
-  expect(assignment.base_branch).toBe('beta');
-  expect(assignment.goal).toBe('Deliver Agreed scope');
-  expect(assignment.allowed_file_globs).toEqual(['src/**']);
-  expect(assignment.acceptance_criteria).toEqual(['The agreed behavior is available.']);
-  expect(assignment.validation_steps).toEqual(['Run relevant hosted checks.']);
-  expect(assignment.stop_conditions).toEqual(['Return material scope changes to the architect.']);
-  // No worker client/claim is created. The actual dispatch contract is complete.
-  expect(bootstrap.launch_prompt).toContain('No worker MCP calls');
+  const dispatched = await architect.call('dispatch_work_package', { work_package_id: wp });
+  expect(dispatched.work_package).toMatchObject({ id: wp, status: 'dispatched', review_mode: 'none', review_id: null });
+  expect((await architect.call('read_task_plan', { work_package_id: wp })).text).toContain('Implement requested scope');
 });
 
 test('invalid batches are atomic and secondary delivery preserves repository and branch boundaries', async ({ factory }) => {
@@ -204,14 +138,10 @@ test('invalid batches are atomic and secondary delivery preserves repository and
   const read = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
   expect(read.work_packages[0].repo).toBe('example/client');
   expect(read.work_packages[0].base_branch).toBe('integration');
-  const dispatch = await architect.call('dispatch_work_package', { detail: 'full', work_package_id: wp });
-  expect(dispatch.worker_bootstrap.assignment.work_package.repo).toBe('example/client');
-  expect(dispatch.worker_bootstrap.assignment.work_package.base_branch).toBe('integration');
+  // Each package's worktree comes from its own repository.
+  expect((await architect.call('dispatch_work_package', { work_package_id: wp })).error.expected_repo).toBe('example/client');
   expect(read.work_packages.find((wp: any) => wp.id === primary).base_branch).toBe('main');
-  const primaryDispatch = await architect.call('dispatch_work_package', { detail: 'full', work_package_id: primary });
-  expect(primaryDispatch.worker_bootstrap.assignment.work_package.base_branch).toBe('main');
-  expect(primaryDispatch.worker_bootstrap.assignment.work_package.goal).toBe('Deliver Canonical primary scope');
-  expect(primaryDispatch.worker_bootstrap.assignment.work_package.engineering_scope).toBe('Deliver Canonical primary scope');
+  expect((await architect.call('dispatch_work_package', { work_package_id: primary })).error.expected_repo).toBe('example/service');
 });
 
 test('groups organize scope while the effective dependency graph prevents premature or cyclic dispatch', async ({ factory }) => {

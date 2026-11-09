@@ -70,12 +70,6 @@ defmodule SymphonyElixirWeb.Router do
       SymppDashboardApiController,
       :operator_answer_question
     )
-
-    post(
-      "/api/v1/sympp/operator/work-requests/:work_request_id/work-packages/:work_package_id/dispatch",
-      SymppDashboardApiController,
-      :operator_dispatch_work_package
-    )
   end
 
   scope "/", SymphonyElixirWeb do

@@ -7,7 +7,7 @@ import { basename, delimiter, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { test as base } from 'e2e';
 
-export type CandidateOptions = { database?: string; offline?: boolean; surface?: 'worker' | 'architect' };
+export type CandidateOptions = { database?: string; offline?: boolean };
 
 // A real candidate process, not the installed plugin or an in-process test harness.
 export class Candidate {
@@ -36,7 +36,6 @@ export class Candidate {
         PATH: provider ? `${provider.bin}${delimiter}${process.env.PATH}` : process.env.PATH,
         ...(provider ? { ACCEPTANCE_PROVIDER: provider.endpoint } : {}),
         ...(options.offline ? { SYMPP_OFFLINE_SANDBOX: '1' } : {}),
-        ...(options.surface ? { SYMPP_MCP_SURFACE_PROFILE: options.surface } : {}),
         HOME: this.home,
         USERPROFILE: this.home,
         TMPDIR: root,

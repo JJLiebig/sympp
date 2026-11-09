@@ -8,7 +8,7 @@ description: Coordinate sympp WorkRequests, execute assigned WorkPackages, or us
 Read the procedure matching the assignment, then follow its contract:
 
 - WorkRequest or product planning/delivery owner: [architect](references/symphony-architect/procedure.md).
-- Assigned WorkPackage: [worker](references/symphony-worker/procedure.md) and [WorkPackage](references/symphony-work-package/procedure.md).
+- Assigned WorkPackage: [worker](references/symphony-worker/procedure.md).
 - Parent coordinating ordinary repository work: [coordinator](references/symphony-coordinator/procedure.md).
 - Bounded implementation without a WorkPackage: [worker](references/symphony-worker/procedure.md).
 - Optional durable planning for ordinary work: [Solo Session](references/symphony-solo-session/procedure.md).
@@ -34,6 +34,6 @@ agent session after setup. See [MCP connection](connection.md) for recovery.
 
 Invoke this skill as `$sympp` in Codex or `/sympp` in
 Claude Code. Procedure names in linked instructions refer to local files,
-not additional skills to install. The wiring reference covers the shared Windows bridge for both hosts. Use your
+not additional skills to install. The connection reference covers the shared bridge for both hosts. Use your
 host's delegation tools when available; otherwise report a required worker
 dispatch as unavailable instead of taking over an architect's implementation.

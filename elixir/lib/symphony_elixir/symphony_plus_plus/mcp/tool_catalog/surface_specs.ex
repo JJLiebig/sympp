@@ -7,15 +7,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
 
   @doc """
   Tools listed for a surface profile. `:full` lists everything; `:architect`
-  the WorkRequest tools; `:coordinator` and `:solo` health and Solo; `:worker`
-  only health, because workers make no sympp calls.
+  the WorkRequest tools; `:coordinator` and `:solo` health and Solo. Workers
+  get no tools: the bridge serves none in a `sympp.role=worker` terminal.
   """
-  @spec startup_tool_specs(:full | :worker | :architect | :coordinator | :solo, Config.t()) :: [ToolCatalog.tool_spec()]
+  @spec startup_tool_specs(:full | :architect | :coordinator | :solo, Config.t()) :: [ToolCatalog.tool_spec()]
   def startup_tool_specs(profile, %Config{}) do
     full = fn -> [health_tool_spec() | solo_tool_specs()] ++ [bootstrap_tool_spec("create_work_request") | architect_tool_specs()] end
 
     case profile do
-      :worker -> [health_tool_spec()]
       :architect -> [health_tool_spec(), bootstrap_tool_spec("create_work_request")] ++ architect_tool_specs()
       profile when profile in [:coordinator, :solo] -> [health_tool_spec() | solo_tool_specs()]
       :full -> full.() ++ local_operator_tool_specs()
@@ -97,9 +96,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp architect_tool_description("read_task_plan"),
     do: "Read the task plan for an explicit descendant WorkPackage."
 
-  defp architect_tool_description("update_task_plan"),
-    do: "Update the task plan for an explicit descendant WorkPackage with optimistic version checking."
-
   defp architect_tool_description("append_finding"),
     do: "Append idempotent finding evidence to an explicit descendant WorkPackage."
 
@@ -109,10 +105,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp architect_tool_description("resolve_blocker"), do: "Resolve a blocker on a WorkPackage of a WorkRequest you own."
 
   defp architect_tool_description("read_delivery_board"), do: "Read a compact scoped WorkRequest delivery board; detail: full includes complete package and closeout evidence."
-  defp architect_tool_description("attach_branch"), do: "Update canonical branch metadata for an explicit descendant WorkPackage."
 
   defp architect_tool_description("sync_pr"),
-    do: "Fetch GitHub evidence for an explicit descendant WorkPackage; accept a normal PR handoff with url and head_sha, or reconcile an attached terminal PR."
+    do:
+      "Fetch GitHub evidence for an explicit descendant WorkPackage; accept a normal PR handoff with url and head_sha, or reconcile an attached terminal PR. dependency_inputs records which prerequisite inputs the current PR head consumed."
 
   defp architect_tool_description("reconcile_work_request"), do: "Dry-run or apply deterministic WorkRequest delivery closeout repairs from structured PR/GitHub evidence."
 
@@ -148,7 +144,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp architect_tool_description("skip_work_package"), do: "End a planned WorkPackage of a WorkRequest you own as skipped."
 
   defp architect_tool_description("dispatch_work_package"),
-    do: "Activate one planned WorkPackage and return ids, status, workspace and assignment_uri. Read that resource for the worker bootstrap, or request detail: full inline."
-
-  defp architect_tool_description("prepare_work_package_worktree"), do: "Prepare a scoped WorkPackage git worktree and record only its worktree_path."
+    do:
+      "Dispatch a planned WorkPackage with a review mode: prepares its factory worktree, writes the worker's assignment file and returns launch_line, the hc run command that starts the worker. Calling it again for a dispatched package reuses the same worktree and review id."
 end

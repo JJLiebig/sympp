@@ -1,8 +1,8 @@
 # Optional Herdr-next execution
 
-Use this only when the user chose Herdr-core execution. Ordinary sympp
-orchestration, its web UI, and workers using another host remain unchanged.
-Small fixes need no WorkRequest.
+Use this only when the user chose Herdr-core execution for an ordinary task.
+A dispatched WorkPackage launches from the `launch_line` its dispatch returns,
+not from this helper. Small fixes need no WorkRequest.
 
 The installed plugin or portable Skills bundle includes
 `scripts/sympp-herdr.js`. Run it with Node on the machine where the worker will
@@ -10,34 +10,20 @@ execute. It uses the existing `hc connect` API and the selected provider's own
 configuration and login. It prepares workspace trust only; it never copies credentials,
 dispatches a package or reconfigures a running agent.
 
-## Start and hand off
-
-The parent first dispatches the package once from the terminal that owns its WorkRequest.
-Save only the redacted `worker_bootstrap`, or the redacted dispatch response,
-as a JSON file on the worker machine. Keep that file unchanged until the agent
-has read it. Do not save secrets or private handoff material.
-
-For compact dispatch, first read `assignment_uri` with MCP `resources/read` and
-save the returned JSON bootstrap. Alternatively, use `detail: "full"` on the
-initial dispatch for the inline bootstrap. Keep the sibling `assignment` with
-`launch_prompt`; the prompt references it. Never redispatch to fetch details.
+## Launch
 
 ```text
-node <bundle>/scripts/sympp-herdr.js launch --provider claude --model opus --assignment worker.json --ledger <verified-ledger-identity> --cwd <worktree>
-node <bundle>/scripts/sympp-herdr.js launch --provider codex --assignment worker.json --ledger <verified-ledger-identity> --cwd <worktree>
+node <bundle>/scripts/sympp-herdr.js launch --provider claude --model opus --task fix.txt --cwd <repo>
+node <bundle>/scripts/sympp-herdr.js launch --provider codex --task fix.txt --cwd <repo>
 node <bundle>/scripts/sympp-herdr.js launch --provider opencode --task fix.txt --cwd <repo>
 ```
 
-`--task` is an ordinary UTF-8 task file and creates no ledger work. `--ledger`
-names the already verified dispatch ledger; its hash separates bindings from
-other ledgers. A launch receipt is an observation, never authorization. The
-helper cannot verify ledger authority and does not contact the ledger.
+`--task` is an ordinary UTF-8 task file and creates no ledger work. A launch
+receipt is an observation, never authorization; the helper does not contact
+the ledger.
 
 Terminals use readable names such as `review-drill-down-claude`, derived from
-the package title (`assignment.title`, `assignment.work_package.title` or
-`work_package.title`), then a leading
-`You own WorkPackage <id>: <title>` prompt line. Ordinary tasks use the first
-line of their task file, falling back to `task-<provider>`. Use `--name <text>`
+the first line of the task file, falling back to `task-<provider>`. Use `--name <text>`
 to override that text. Names become lowercase slugs, shortened at word boundaries
 where possible to the core's 32-character limit, always preserving the provider
 suffix. Path-bearing or recognizable credential text is discarded. Supply only
@@ -47,7 +33,7 @@ Display names confer no identity: labels and receipts keep the launch identity.
 Changing only `--name` reuses the same receipt and leaves its existing name intact.
 
 All providers receive a short prompt pointing at the input file. This keeps
-large assignments out of OS command-line limits and process listings. The helper
+large tasks out of OS command-line limits and process listings. The helper
 adds no permission-bypass flags; provider configuration determines prompts.
 Codex uses `--no-daemon` so its work
 stays in the core terminal. Claude accepts `--model opus`; OpenCode models use
@@ -101,8 +87,8 @@ identify lock contention, refused edits or verification failures.
 `--parent <terminal>` gives the worker its return address. Inside the same
 core, the current terminal is the default parent. A selected `--session`
 requires an explicit parent if one is wanted. For a cross-provider handoff,
-the parent saves the first worker's evidence and decisions in a bounded task
-or assignment, then launches the next provider with that input. Read the new
+the parent saves the first worker's evidence and decisions in a bounded task,
+then launches the next provider with that input. Read the new
 worker's actual result and reconcile it through the parent's MCP session.
 Provider conversation history and credentials are not transferred. A fresh
 launch does not depend on the first provider accepting another turn.
@@ -143,16 +129,13 @@ that one lock. There is no automatic takeover or model relaunch after recovery.
 
 Use `--json` for native clients; agent-facing output defaults to compact TOON.
 `launch` and `check` return a v1 receipt with `launch_id`, `core_id`,
-`terminal_id`, `pid`, `provider`, `model`, `role`, `work_request_id`,
-`work_package_id`, hashed `ledger_id`, `cwd`, `created_at`, absolute `receipt`
+`terminal_id`, `pid`, `provider`, `model`, `cwd`, `created_at`, absolute `receipt`
 path, `state`, `status`, `reason`, and `workspace_trust`. Successful launch also reports `reused`.
 `check` reports `state: stale` when identity has changed. A UI may focus only a
 fresh `state: live` receipt, using its own machine-qualified terminal address.
 
 The terminal labels are `sympp.launch_id`, `sympp.provider`, `sympp.pid`,
-`sympp.core_id`, the target-local `sympp.receipt` path and,
-for tracked work, `sympp.role`, `sympp.work_request_id`,
-`sympp.work_package_id`, `sympp.ledger_id`. Compare the live PID with
+`sympp.core_id` and the target-local `sympp.receipt` path. Compare the live PID with
 `sympp.pid`; labels survive recovery to a shell. Labels never confer authority.
 
 UI workers follow the [UI collaboration procedure](../procedure.md#ui-collaboration)
@@ -175,7 +158,7 @@ its configured MCP transport; this helper adds no remote ledger authentication.
 ## Qualification
 
 The owning Node subprocess suite proves adapter argument/environment behavior,
-bounded assignment binding, replay/conflict handling, unknown spawn outcomes,
+bounded task binding, replay/conflict handling, unknown spawn outcomes,
 workspace trust edits, concurrent interference, stale-shell refusal and status-conditional sends with a controlled JSON-RPC
 peer. It starts no models and is not live Herdr or provider qualification.
 

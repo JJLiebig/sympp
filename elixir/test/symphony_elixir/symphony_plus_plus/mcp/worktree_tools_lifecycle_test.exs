@@ -288,100 +288,82 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeToolsLifecycleTest do
     assert {:ok, _} = WorktreeLifecycle.cleanup(repo, package.id, target_repo_root: checkout)
   end
 
-  test "prepared worktrees record their target root and redact stored audit paths", %{repo: repo} do
+  test "dispatch hands off a prepared worktree, assignment file and launch line, and a replay reuses them", %{repo: repo} do
     fixture = TestSupport.git_repo_fixture!("symphony-plus-plus/beta", prefix: "sympp-mcp-worktree")
-    codex_home = Path.join(fixture.root, "codex-home")
     config = Config.default(repo: repo, repo_root: test_repo_root())
+    work_request = create_work_request!(repo, id: "WR-MCP-DISPATCH-HANDOFF", repo: fixture.origin, base_branch: "symphony-plus-plus/beta")
 
-    anchor = %{repo: fixture.origin, base_branch: "symphony-plus-plus/beta"}
+    [reviewed, unreviewed] =
+      for {id, branch} <- [{"WRS-MCP-DISPATCH-REVIEWED", "feat/reviewed"}, {"WRS-MCP-DISPATCH-UNREVIEWED", "feat/unreviewed"}] do
+        assert {:ok, package} =
+                 CanonicalWorkPackageFixtures.add_work_package(
+                   repo,
+                   work_request.id,
+                   work_request_work_package_attrs(id: id, title: "Hand off #{branch}", base_branch: "symphony-plus-plus/beta", branch_pattern: branch)
+                 )
 
-    work_request =
-      create_work_request!(repo,
-        id: "WR-MCP-WORKTREE-LIFECYCLE",
-        repo: anchor.repo,
-        base_branch: anchor.base_branch
-      )
+        package
+      end
 
-    assert {:ok, work_package} =
-             CanonicalWorkPackageFixtures.add_work_package(
-               repo,
-               work_request.id,
-               work_request_work_package_attrs(
-                 id: "WRS-MCP-WORKTREE-LIFECYCLE",
-                 title: "Prepare package worktree",
-                 base_branch: anchor.base_branch,
-                 branch_pattern: "feat/worktree-lifecycle",
-                 allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/work_packages/**"],
-                 acceptance_criteria: ["Prepare and clean worktrees."]
-               )
-             )
-
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-WORKTREE-LIFECYCLE",
-                 kind: work_package.kind,
-                 title: work_package.title,
-                 repo: work_request.repo,
-                 base_branch: work_package.base_branch,
-                 branch_pattern: work_package.branch_pattern,
-                 product_description: work_request.human_description,
-                 allowed_file_globs: work_package.allowed_file_globs,
-                 acceptance_criteria: work_package.acceptance_criteria,
-                 status: "dispatched"
-               )
-             )
-
-    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
-    assert {:ok, _linked_slice} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", package.id)
-
-    previous_codex_home = System.get_env("CODEX_HOME")
-
-    try do
-      System.put_env("CODEX_HOME", codex_home)
-
-      prepare_response =
-        mcp_tool(
-          repo,
-          "t1",
-          "prepare_work_package_worktree",
-          %{
-            "work_package_id" => package.id,
-            "target_repo_root" => fixture.repo_root
-          },
-          config: config
-        )
-
-      prepare_payload = get_in(prepare_response, ["result", "structuredContent"])
-      assert prepare_payload["worktree"]["status"] == "prepared"
-      assert prepare_payload["work_package"]["worktree_path"] == prepare_payload["worktree"]["path"]
-      assert comparable_path(prepare_payload["worktree"]["target_repo_root"]) == comparable_path(fixture.repo_root)
-      assert prepare_payload["worker_launch"]["workspace_path"] == prepare_payload["worktree"]["path"]
-      assert prepare_payload["worker_launch"]["instruction"] =~ "Use this worktree only"
-      assert is_binary(prepare_payload["audit_event"]["id"])
-      refute Map.has_key?(prepare_payload["audit_event"], "payload")
-      assert File.dir?(prepare_payload["worktree"]["path"])
-    after
-      restore_env("CODEX_HOME", previous_codex_home)
+    dispatch = fn package, arguments ->
+      mcp_tool(repo, "t1", "dispatch_work_package", Map.merge(%{"work_request_id" => work_request.id, "work_package_id" => package.id}, arguments), config: config)
+      |> get_in(["result", "structuredContent"])
     end
 
-    events =
-      repo.all(
-        from(progress_event in ProgressEvent,
-          where: progress_event.work_package_id == ^package.id,
-          order_by: [asc: progress_event.sequence]
-        )
-      )
+    # A hand-off that can't prepare the worktree leaves the package dispatched and says what to do.
+    failed = dispatch.(reviewed, %{"review_mode" => "fast", "target_repo_root" => Path.join(fixture.root, "missing")})
+    assert failed["work_package"]["status"] == "dispatched"
+    assert failed["error"]["reason"] == "invalid_target_repo_root"
+    assert failed["next_action"] =~ "dispatch_work_package again with review_mode fast"
+    refute Map.has_key?(failed, "launch_line")
+    review_id = failed["work_package"]["review_id"]
+    assert review_id =~ ~r/\Arvw_[0-9a-f]{16}\z/
 
-    audit_event = Enum.find(events, &(&1.payload["source_tool"] == "prepare_work_package_worktree"))
+    launched = dispatch.(reviewed, %{"review_mode" => "fast", "target_repo_root" => fixture.repo_root, "machine" => "factory"})
+    assert launched["replay"]
+    assert launched["work_package"]["review_id"] == review_id
+    worktree = launched["worktree"]["path"]
+    assert File.dir?(worktree)
+    assert git!(worktree, ["branch", "--show-current"]) == "feat/reviewed"
 
-    assert %{
-             "source_tool" => "prepare_work_package_worktree",
-             "worktree_path" => "[REDACTED]",
-             "target_repo_root" => "[REDACTED]"
-           } = audit_event.payload
+    # The assignment lives under the worktree's git dir, outside the worker's diff.
+    file = launched["assignment_file"]
+    assert Path.dirname(file) == git!(worktree, ["rev-parse", "--absolute-git-dir"])
+    assert git!(worktree, ["status", "--porcelain"]) == ""
+    assignment = File.read!(file)
+    assert assignment =~ "--id #{review_id} --mode fast --cd #{worktree}"
+    assert assignment =~ "start it again while it runs"
+    assert assignment =~ "Hand off feat/reviewed"
 
+    assert launched["launch_line"] ==
+             "hc run --bg --on factory --cwd #{worktree} --name #{String.downcase(reviewed.id)} --label sympp.role=worker " <>
+               "--label sympp.work_package_id=#{reviewed.id} --label sympp.review_id=#{review_id} -- codex \"Read #{file}\""
+
+    replay = dispatch.(reviewed, %{"review_mode" => "fast", "target_repo_root" => fixture.repo_root, "machine" => "factory"})
+    assert replay["replay"]
+    assert {replay["worktree"]["path"], replay["work_package"]["review_id"]} == {worktree, review_id}
+    assert replay["launch_line"] == launched["launch_line"]
+    assert repo.get!(WorkPackage, reviewed.id).launch_machine == "factory"
+
+    # Mode none mints no id and gives the worker no review step.
+    none = dispatch.(unreviewed, %{"review_mode" => "none", "agent" => "claude", "target_repo_root" => fixture.repo_root})
+    assert none["work_package"]["review_id"] == nil
+    refute none["launch_line"] =~ "sympp.review_id"
+    assert none["launch_line"] =~ "-- claude \"Read "
+    assert none["next_action"] =~ "trust prompt"
+    assert File.read!(none["assignment_file"]) =~ "No Review Suite review is required"
+    refute File.read!(none["assignment_file"]) =~ "review.py"
+
+    audit_event =
+      repo.all(from(event in ProgressEvent, where: event.work_package_id == ^reviewed.id, order_by: [asc: event.sequence]))
+      |> Enum.find(&(&1.payload["type"] == "worktree_lifecycle"))
+
+    assert %{"source_tool" => "dispatch_work_package", "worktree_path" => "[REDACTED]", "target_repo_root" => "[REDACTED]", "status" => "prepared"} = audit_event.payload
     assert {audit_event.actor_id, audit_event.actor_type} == {"testbox/t1", "architect"}
+  end
+
+  defp git!(path, args) do
+    {output, 0} = System.cmd("git", ["-C", path | args])
+    String.trim(output)
   end
 end

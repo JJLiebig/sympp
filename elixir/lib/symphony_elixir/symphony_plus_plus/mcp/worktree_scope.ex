@@ -156,16 +156,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope do
   def require_live_review_head(%WorkPackage{}, %Config{}, _branch, _head_sha),
     do: {:tool_error, "worktree_scope_required"}
 
-  @spec prepare_branch(WorkPackage.t(), String.t() | nil) :: {:ok, String.t()} | tool_error()
-  def prepare_branch(%WorkPackage{} = work_package, branch) when is_binary(branch) do
-    case require_local_branch_pattern_scope(work_package, branch, prepared_worktree?: true) do
-      :ok -> {:ok, branch}
-      {:error, :branch_scope_mismatch} -> {:tool_error, "branch_scope_mismatch"}
-      {:tool_error, reason} -> {:tool_error, reason}
-    end
-  end
-
-  def prepare_branch(%WorkPackage{branch_pattern: branch_pattern} = work_package, nil) do
+  @doc "The branch a package's worktree uses: its exact branch_pattern, the pattern's template filled in, or a package-unique branch."
+  @spec prepare_branch(WorkPackage.t()) :: {:ok, String.t()} | tool_error()
+  def prepare_branch(%WorkPackage{branch_pattern: branch_pattern} = work_package) do
     case normalize_optional_value(branch_pattern) do
       nil ->
         package_branch_segment(work_package.id)
@@ -354,7 +347,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope do
   end
 
   defp recorded_flat_worktree_matches_target_repo_root?(target_repo_root, %WorkPackage{} = work_package, worktree_path) do
-    case prepare_branch(work_package, nil) do
+    case prepare_branch(work_package) do
       {:ok, branch} -> WorktreePath.current_worktree_path?(target_repo_root, work_package.id, branch, worktree_path)
       _result -> false
     end

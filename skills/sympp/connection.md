@@ -57,11 +57,37 @@ viewing use the selected published artifact without a checkout or Elixir.
 The copy has no MCP/agent access or external worktree/PR actions. Keep its
 offline marker, never promote it to live, and keep copied private data local.
 
-The [connection procedure](references/symphony-work-package/references/mcp_wiring.md)
-covers developer connections and recovery. Writes need the Herdr terminal identity
-the bridge sends; agents outside Herdr are read-only. `sympp.health` shows the
-caller's terminal and the WorkRequests it owns. Keep credentials out of
-skills, prompts and shared config; ordinary reviewers need no backend.
+Keep credentials out of skills, prompts and shared config; ordinary reviewers
+need no backend.
+
+## Herdr terminal identity
+
+Writes need the Herdr terminal identity that the sympp bridge verifies against
+its local herdr-core and sends with each call: core id plus terminal address,
+and the `sympp.role`/`sympp.domain` labels. Agents outside Herdr are read-only;
+their writes fail `read_only_outside_herdr`. The identity excludes the process
+id, so restarting, compacting or clearing an agent in the same terminal keeps
+the WorkRequests it owns. The bridge heartbeats every 60 seconds and detaches on
+a clean exit; a lapsed heartbeat leaves ownership in place. `sympp.health` shows
+the caller's terminal and the WorkRequests it owns.
+
+A dispatched worker's terminal carries `sympp.role=worker`. There the bridge
+serves no sympp tools: it lists none and refuses every call.
+
+## Recovery
+
+The first client starts the packaged runtime and dashboard; clients with
+matching settings attach, and the backend stops after the last one closes.
+Verify `sympp` tools in the actual model session before ledger work. After a
+reconnect, read canonical history before retrying an uncertain write; ownership
+stays with the same terminal. Keep healthy sessions running when only one client
+fails: capture its exact startup error and check its chosen paths before repair.
+Changed skill generations need fresh host sessions.
+
+For source experiments, run `mix sympp.cockpit --port 19998 --database <isolated-ledger-path>`
+from `elixir/` and point the host at the printed `/mcp` endpoint before it
+starts. A URL-only connection has no bridge, so it has no terminal identity and
+is read-only.
 
 ## Linux factory server
 

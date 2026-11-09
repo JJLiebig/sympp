@@ -194,27 +194,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
          "results"
        ])}
 
-  defp compact_tool_entry("worker_bootstrap", key, value) when is_map(value),
-    do:
-      {key,
-       compact_status_payload(value, [
-         "type",
-         "assignment",
-         "launch_prompt",
-         "mode",
-         "work_package_id",
-         "branch",
-         "worktree_path",
-         "coordinates",
-         "claim",
-         "ledger",
-         "required_runtime_arguments",
-         "arguments",
-         "preferred_skill_set",
-         "supported_skill_sets",
-         "required_skills"
-       ])}
-
   defp compact_tool_entry(_name, key, value), do: {key, compact_tool_value(value)}
 
   defp compact_tool_value(%{} = value), do: compact_tool_payload_entries(value)

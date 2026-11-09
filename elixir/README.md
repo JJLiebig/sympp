@@ -96,10 +96,12 @@ there is no business CLI or private-file fallback.
 
 ## WorkRequest Planned-Slice Dispatch
 
-Dispatching a planned WorkPackage returns an assignment bootstrap
-(`worker_bootstrap`, or the `assignment_uri` resource) with the worker contract,
-required skills and launch prompt. Workers make no sympp MCP calls; no worker
-secret, grant or private handoff path is issued.
+Dispatching a planned WorkPackage with a review mode prepares its factory
+worktree, writes the worker's assignment file under the worktree's git dir,
+mints its Review Suite id and returns the `hc run` line that launches the
+worker. Workers make no sympp MCP calls; in a `sympp.role=worker` terminal the
+bridge serves no tools, and no worker secret, grant or private handoff path is
+issued.
 
 ## Ownership And Local Operator Decisions
 

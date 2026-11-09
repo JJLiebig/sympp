@@ -416,7 +416,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
             existing_revision: branch_revision,
             base_revision: base_revision,
             base_ref: base_ref,
-            remediation: "Retry without branch if this branch was explicit; otherwise choose another unused branch."
+            remediation:
+              "The package branch already exists in the factory checkout with commits that are not on the base. Remove or rename that branch, or change the package branch_pattern, then dispatch again."
           }}}
       end
     else

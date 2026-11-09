@@ -23,7 +23,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerTools do
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @typep mcp_tool_result :: {:ok, map()} | {:error, integer(), String.t(), map()}
@@ -102,9 +101,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerTools do
   end
 
   defp append_architect_blocker_resolution(repo, %Actor{} = actor, work_package_id, attrs) do
-    with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
-         :ok <- reject_ready_blocker_provenance(work_package, attrs),
-         {:ok, event} <-
+    with {:ok, event} <-
            PlanningRepository.append_audit_progress_event_for_work_package(
              repo,
              actor,
@@ -114,12 +111,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerTools do
       {:ok, ToolResult.tool_result(%{"progress_event" => ProgressEvents.payload(event)})}
     end
   end
-
-  defp reject_ready_blocker_provenance(%WorkPackage{status: "ready"}, %{"payload" => payload})
-       when is_map_key(payload, "dependency_inputs"),
-       do: {:tool_error, "already_ready"}
-
-  defp reject_ready_blocker_provenance(_work_package, _attrs), do: :ok
 
   defp run_architect_transaction(repo, fun) do
     case repo.transaction(fn -> rollback_architect_transaction_result(repo, fun.()) end) do

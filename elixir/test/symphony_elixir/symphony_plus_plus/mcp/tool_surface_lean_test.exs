@@ -10,7 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolSurfaceLeanTest do
 
     {caller, caller_ref} =
       spawn_monitor(fn ->
-        _tools = listed_tools(:worker)
+        _tools = listed_tools(:architect)
         send(parent, {:handle_state_started, self()})
 
         receive do

@@ -5,7 +5,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.CommonHelpers do
 
   import ExUnit.Assertions
   alias Ecto.Adapters.SQL
-  alias SymphonyElixir.MCPHarness
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Config
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Server
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
@@ -119,18 +118,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.CommonHelpers do
       _pid ->
         :ok
     end
-  end
-
-  def attach_tool(repo, terminal, name, arguments) do
-    response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => name, "method" => "tools/call", "params" => %{"name" => name, "arguments" => arguments}},
-        repo: repo,
-        terminal: terminal
-      )
-
-    assert get_in(response, ["result", "structuredContent", "progress_event", "id"])
-    response
   end
 
   def response_progress_payload(repo, response) do

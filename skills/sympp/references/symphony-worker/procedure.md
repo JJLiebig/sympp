@@ -1,34 +1,33 @@
 # sympp Worker
 
-Implement the assignment, run its required native checks and review, and return
-a normal PR or evidence handoff. Make no sympp MCP calls: no progress ledger,
-question record, or duplicate review receipt.
+Implement the assignment, run its native checks and review, and report the PR or
+evidence to your parent. Make no sympp MCP calls: in a dispatched worker terminal
+the sympp bridge serves no tools, and the parent owns every ledger record.
 
-Read the bootstrap's `assignment` alongside `launch_prompt`; the prompt does
-not repeat the assignment. Within `assignment`, a `*_ref` JSON pointer supplies
-the same field from elsewhere in that object (for example, an inherited product
-description points to `#/parent_work_request/goal`). Use that complete text.
+## Start
+
+A dispatched WorkPackage starts you in its prepared worktree with one instruction:
+read the assignment file. It names the WorkPackage, the worktree, branch and base,
+the review step, and carries the contract: goal, owned and forbidden paths,
+acceptance, validation, dependencies, prior findings and decisions, and stopping
+conditions. Read it before coding and stay inside that worktree and scope.
+
+Without a WorkPackage, the parent's task message is the assignment.
 
 ## Scope
 
-- Understand the goal, owned/forbidden paths, acceptance, repo/base/branch/worktree,
-  validation, review requirement, dependencies, prior findings/decisions, and
-  stopping conditions supplied by the parent before coding.
-- Stay inside that scope. Ask the parent in the conversation when context is
-  missing or material product, architecture, dependency, or review ambiguity
-  appears. Message the parent only for actionable issues or blockers, questions,
-  or genuinely unclear review or scope guidance; send progress or status only
-  when asked. Questions and ordinary waits are not blockers. Continue independent
+- Ask the parent when context is missing or material product, architecture,
+  dependency or review ambiguity appears. Message the parent only for actionable
+  issues, blockers, questions or unclear review or scope guidance; send status
+  only when asked. Questions and waits are not blockers. Continue independent
   work while a decision is pending.
-- The architect or coordinating parent owns dispatch authority, dependency
-  decisions, explicit blocker declaration/resolution, and delivery reconciliation.
-  Do not infer takeover authority from missing or stale observations.
+- The parent owns dispatch, dependency decisions, blockers and delivery.
 - Honor assigned budgets; otherwise keep one cohesive outcome. Escalate material
   scope growth before implementing it. Do not invent product behavior for a review.
 
 ## UI Collaboration
 
-For UI work, collaborate directly with the human in the worker's terminal:
+For UI work, collaborate directly with the human in your terminal:
 
 - In Herdr, publish the running dev-server URL on your own terminal with
   `hc label $HC_TERMINAL_ID sympp.preview_url=<url>`; clear it with
@@ -39,44 +38,45 @@ For UI work, collaborate directly with the human in the worker's terminal:
 - Treat direct human input as product direction and record the decisions in
   the handoff. Return scope or authority conflicts to the parent.
 
-Keep ownership of checks, required review and the PR. Non-UI work continues
-autonomously without these collaboration pauses.
+Keep ownership of checks, review and the PR. Non-UI work continues autonomously
+without these pauses.
 
 ## Checks and Review
 
-- Use the repository's native required tests, static checks, CI, and declared
-  review provider. Preserve required commands and ordering; honor execution bans.
+- Run the repository's native required tests and static checks, and get CI green.
+  Preserve required commands and ordering; honor execution bans.
 - Reuse still-valid evidence with its tested revision. Rerun when relevant inputs
   change, results fail, or policy requires it. Report exact failures and unrun
   requirements; never infer passing checks or review.
-- Keep review evidence with its provider. For Review Suite, use the installed
-  procedure and a concise brief from the assignment, including the relevant goal,
-  owned scope, acceptance, and stopping conditions. No sympp brief or
-  completion receipt is required.
-- Resolve findings inside scope; return product/contract conflicts to the parent.
-  Complete the provider's convergence process on the current head.
+- When the assignment gives a Review Suite id and mode, run the installed Review
+  Suite once with exactly that `--id`, `--mode` and `--cd`, then wait for it.
+  Repeating the same command resumes the same review, but two starts at once can
+  both launch reviewers, so never start it again while it runs. Brief it from the
+  assignment's goal, owned scope, acceptance and stopping conditions. When the
+  assignment says no review is required, skip this step.
+- Resolve findings inside scope; return product or contract conflicts to the
+  parent. Finish the review on the current head.
 
 ## Delivery
 
-Return the PR URL and exact head, changed behavior, acceptance evidence, required
-checks and review results (with native links/identifiers and tested heads), and
-remaining risks. For candidate dependencies, name the consumed backend/package
-heads and the final dependent head. No-PR work returns direct evidence for the
-parent's acceptance. Always send this handoff, once per independently delivered
-PR; it is what lets the parent integrate.
+Send your parent one handoff per independently delivered PR. In Herdr, your
+parent is the `parent` of `hc get $HC_TERMINAL_ID`; send it with `hc send`.
 
-The parent reconciles readiness and delivery from that handoff and authoritative
-GitHub/review evidence. Optional Herdr/OSC observations augment last-known state;
-absence means unknown and does not block work or authorize takeover.
+```markdown
+WorkPackage: <id, or not assigned>
+PR: <url, or no PR>
+Head: <exact head SHA>
+What changed: <behavior and files, or direct evidence for no-PR work>
+Acceptance: <evidence for each criterion>
+Consumed inputs: <prerequisite package and exact head per dependency, when candidate dependencies apply>
+Checks and CI: <commands, results, tested head, unrun requirements>
+Review: <Review Suite id and result for the head, or none required>
+Risks: <remaining risks and unresolved findings, or none>
+```
 
-Ledger writes belong to the terminal that owns the WorkRequest; see
-[the WorkPackage contract](../symphony-work-package/procedure.md). Never substitute
-business CLI commands or private state files for parent ledger operations.
-
-When Herdr-next execution is explicitly chosen, the parent can launch Codex,
-Claude or OpenCode with the [optional execution helper](references/herdr-execution.md).
-It accepts an existing redacted assignment or an ordinary untracked task;
-it never dispatches ledger work.
+No-PR work returns direct evidence and says it should close as
+`completed_no_pr`. The parent verifies the handoff against GitHub and the review
+record; never substitute business CLI commands or private state files for it.
 
 ## Safety
 

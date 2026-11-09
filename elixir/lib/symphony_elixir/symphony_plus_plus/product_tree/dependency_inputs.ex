@@ -104,18 +104,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyInputs do
     end)
   end
 
-  @spec validate_progress(module(), String.t(), map()) :: :ok | {:tool_error, String.t()} | {:error, term()}
-  def validate_progress(repo, work_package_id, attrs) do
-    payload = value(attrs, :payload) || %{}
-
-    if Map.has_key?(payload, "dependency_inputs") do
-      validate_selection(repo, work_package_id, payload)
-    else
-      :ok
-    end
-  end
-
-  defp validate_selection(repo, id, payload) do
+  @doc """
+  Validates a consumed-input selection for a package's current PR head: every
+  selection names an available dependency of the package with its pinned
+  candidate head, and `head_sha` is the package's current head.
+  """
+  @spec validate_selection(module(), String.t(), map()) :: :ok | {:tool_error, String.t()} | {:error, term()}
+  def validate_selection(repo, id, payload) do
     with {:ok, package} <- WorkPackageRepository.get(repo, id),
          work_request_id when is_binary(work_request_id) <- package.work_request_id,
          {:ok, graph} <- ExecutionGraph.evaluate(repo, work_request_id),
@@ -153,11 +148,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyInputs do
     events |> Enum.flat_map(&consumed_event_inputs(&1, head)) |> Map.new()
   end
 
+  # Only sync_pr records consumed inputs (`type: dependency_inputs`).
   defp consumed_event_inputs(event, head) do
     payload = value(event, :payload) || %{}
     selections = value(payload, :dependency_inputs)
 
-    if is_binary(head) and value(payload, :head_sha) == head and is_list(selections) do
+    if value(payload, :type) == "dependency_inputs" and value(payload, :source_tool) == "sync_pr" and is_binary(head) and
+         value(payload, :head_sha) == head and is_list(selections) do
       selections
       |> Enum.filter(&is_map/1)
       |> Enum.map(&{{value(&1, :dependency_id), value(&1, :prerequisite_work_package_id)}, Map.put(&1, :consumed_at, value(event, :created_at))})

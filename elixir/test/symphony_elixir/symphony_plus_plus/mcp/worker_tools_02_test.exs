@@ -22,15 +22,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
                )
              )
 
-    assert {:ok, existing} =
+    assert {:ok, _node} =
              PlanningRepository.append_plan_node(repo, %{
                "work_package_id" => package.id,
                "title" => "Inspect descendant"
              })
 
     read_response = mcp_tool(repo, nil, "read_task_plan", %{"work_package_id" => package.id})
-    version = get_in(read_response, ["result", "structuredContent", "version"])
-    assert is_integer(version)
+    assert [%{"title" => "Inspect descendant"}] = get_in(read_response, ["result", "structuredContent", "plan_nodes"])
 
     finding_response =
       mcp_tool(repo, "t1", "append_finding", %{
@@ -61,10 +60,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
     |> repo.update!()
 
     archived =
-      mcp_tool(repo, "t1", "update_task_plan", %{
+      mcp_tool(repo, "t1", "append_progress", %{
         "work_package_id" => package.id,
-        "expected_version" => version,
-        "nodes" => [%{"id" => existing.id, "status" => "done"}]
+        "summary" => "Late progress",
+        "idempotency_key" => "architect-archived-progress"
       })
 
     assert get_in(archived, ["error", "data", "reason"]) == "work_request_archived"

@@ -9,7 +9,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyInputs
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
@@ -19,7 +18,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
   @ready_evidence_tools [
     "append_finding",
     "append_progress",
-    "attach_branch",
     "sync_pr"
   ]
 
@@ -59,45 +57,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
     existing_work_package_progress_event(repo, work_package_id, idempotency_key)
   end
 
-  @spec metadata_attrs(Writer.t(), map(), String.t(), String.t(), map()) ::
-          {:ok, String.t(), map()} | {:tool_error, term()}
-  def metadata_attrs(%Writer{} = writer, arguments, tool, status, payload) do
-    payload = Map.put(payload, "source_tool", tool)
-
-    arguments =
-      Map.put_new(arguments, "summary", status)
-      |> Map.put_new("status", status)
-      |> Map.put_new("idempotency_key", metadata_idempotency_key(payload))
-      |> canonical_metadata_event_status(tool, status)
-
-    with {:ok, summary} <- required_argument(arguments, "summary"),
-         {:ok, idempotency_key} <- required_argument(arguments, "idempotency_key"),
-         {:ok, caller_payload} <- optional_payload(arguments),
-         :ok <- validate_metadata_caller_payload(tool, caller_payload) do
-      idempotency_key = scoped_idempotency_key(tool, String.trim(idempotency_key), writer)
-
-      {:ok, idempotency_key,
-       %{
-         "summary" => summary,
-         "body" => optional_argument(arguments, "body", nil),
-         "status" => optional_argument(arguments, "status", "recorded"),
-         "idempotency_key" => idempotency_key,
-         "payload" => merge_payload(tool, caller_payload, payload)
-       }}
-    end
-  end
-
   @spec scoped_idempotency_key(String.t(), String.t(), Writer.t()) :: String.t()
-  def scoped_idempotency_key(tool, idempotency_key, %Writer{} = writer) when tool in ["attach_branch", "sync_pr"] do
-    [tool, writer.work_package_id, idempotency_key] |> Enum.join(":")
-  end
-
   def scoped_idempotency_key(tool, idempotency_key, %Writer{}), do: tool <> ":" <> idempotency_key
-
-  @spec metadata_idempotency_key(map()) :: String.t()
-  def metadata_idempotency_key(payload) do
-    "mcp:" <> Map.get(payload, "type", "metadata") <> ":" <> Base.url_encode64(:erlang.term_to_binary(payload), padding: false)
-  end
 
   @spec merge_payload(String.t(), map(), map()) :: map()
   def merge_payload("append_progress", caller_payload, tool_payload) do
@@ -127,8 +88,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
 
   defp append_new_or_replay(repo, %Writer{} = writer, work_package_id, attrs, idempotency_key, tool) do
     transaction_fun = fn ->
-      with :ok <- reject_ready_evidence_mutation(repo, writer, work_package_id, tool, attrs),
-           :ok <- DependencyInputs.validate_progress(repo, work_package_id, attrs) do
+      with :ok <- reject_ready_evidence_mutation(repo, writer, work_package_id, tool, attrs) do
         PlanningRepository.append_audit_progress_event_for_work_package(repo, writer.actor, work_package_id, attrs)
       end
     end
@@ -191,7 +151,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
     blocker_id = Map.get(payload, "blocker_id")
 
     cond do
-      Map.has_key?(payload, "dependency_inputs") -> {:tool_error, "already_ready"}
       is_nil(blocker_id) -> :ok
       is_binary(blocker_id) and String.trim(blocker_id) != "" -> :ok
       true -> {:tool_error, "invalid_blocker_id"}
@@ -290,40 +249,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
     |> Map.get(:payload)
   end
 
-  defp canonical_metadata_event_status(arguments, _tool, _status), do: arguments
-
-  defp validate_metadata_caller_payload(_tool, _caller_payload), do: :ok
-
   defp drop_protected_append_progress_payload(caller_payload) do
     Map.delete(caller_payload, "source_tool")
-  end
-
-  defp required_argument(arguments, key) do
-    case Map.get(arguments, key) do
-      value when is_binary(value) ->
-        case String.trim(value) do
-          "" -> {:tool_error, "missing_#{key}"}
-          trimmed -> {:ok, trimmed}
-        end
-
-      _value ->
-        {:tool_error, "missing_#{key}"}
-    end
-  end
-
-  defp optional_payload(arguments) do
-    case Map.get(arguments, "payload", %{}) do
-      payload when is_map(payload) -> {:ok, payload}
-      _payload -> {:tool_error, "invalid_payload"}
-    end
-  end
-
-  defp optional_argument(arguments, key, default) do
-    case Map.get(arguments, key, default) do
-      value when is_binary(value) -> if String.trim(value) == "", do: default, else: value
-      nil -> default
-      value -> value
-    end
   end
 
   defp run_worker_transaction(repo, fun) do

@@ -25,13 +25,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
     ArchitectPRSync,
     Config,
     ErrorDetails,
-    ProgressEvents,
     ToolArguments,
     ToolResult,
     WorkRequestPayloads,
-    WorkRequestScope,
-    WorktreeScope,
-    Writer
+    WorkRequestScope
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
@@ -50,7 +47,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   @typep mcp_tool_result :: {:ok, map()} | {:error, integer(), String.t(), map()}
 
-  @tools ["reconcile_work_request", "attach_branch", "sync_pr", "record_work_package_delivery"]
+  @tools ["reconcile_work_request", "sync_pr", "record_work_package_delivery"]
 
   @spec tools() :: [String.t()]
   def tools, do: @tools
@@ -95,30 +92,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
       {:error, :not_found} -> not_found_error("sync_pr")
       {:error, _code, _message, _data} = error -> error
       {:error, reason} -> architect_error(reason, "sync_pr")
-    end
-  end
-
-  def call("attach_branch", %Config{} = config, %Terminal{} = terminal, arguments) do
-    with {:ok, arguments} <- validate_arguments(arguments, "attach_branch"),
-         {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
-         {:ok, work_request, work_package} <- WorkRequestScope.work_package_scope(config.repo, work_request_id, work_package_id),
-         scope = WorkRequestPayloads.redacted_work_request_scope(work_request),
-         writer = Writer.new(terminal, work_package.id),
-         {:ok, branch} <- architect_attach_branch_argument(work_package, arguments),
-         {:ok, head_sha} <- required_argument(arguments, "head_sha"),
-         {:ok, _idempotency_key, attrs} <-
-           ProgressEvents.metadata_attrs(writer, Map.drop(arguments, ["work_request_id", "work_package_id"]), "attach_branch", "branch_attached", %{
-             "type" => "branch",
-             "branch" => branch,
-             "head_sha" => head_sha
-           }),
-         attrs = Map.update!(attrs, "idempotency_key", &("attach_branch:#{work_package.id}:" <> &1)),
-         {:ok, event} <-
-           PlanningRepository.append_audit_progress_event_for_work_package(config.repo, writer.actor, work_package.id, attrs) do
-      {:ok, ToolResult.agent_tool_result(%{"progress_event" => ProgressEvents.payload(event), "scope" => scope})}
-    else
-      error -> attach_branch_error(error)
     end
   end
 
@@ -281,13 +254,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   defp reconcile_work_request_mode(true), do: :apply
   defp reconcile_work_request_mode(false), do: :dry_run
-
-  defp architect_attach_branch_argument(%WorkPackage{} = work_package, arguments) do
-    case optional_string_argument(arguments, "branch") do
-      {:ok, nil} -> WorktreeScope.prepared_branch(work_package)
-      result -> result
-    end
-  end
 
   defp architect_sync_pr_result(repo, work_package_id, %{status: status} = pr_sync, scope)
        when status in ["merged", "already_merged", "dispatched", "ready"] do
@@ -542,10 +508,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   defp architect_error(reason, tool),
     do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
-
-  defp attach_branch_error({:tool_error, reason}), do: ErrorDetails.invalid_params_error("attach_branch", reason)
-  defp attach_branch_error({:error, :not_found}), do: not_found_error("attach_branch")
-  defp attach_branch_error({:error, reason}), do: architect_error(reason, "attach_branch")
 
   defp auth_error(:unauthorized, resource),
     do: {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => "missing_session"}}

@@ -9,12 +9,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
       required_argument: 2
     ]
 
-  import SymphonyElixir.SymphonyPlusPlus.MCP.Payloads,
-    only: [
-      dispatch_work_package_result_payload: 3,
-      json_safe_payload: 1,
-      worktree_lifecycle_payload: 3
-    ]
+  import SymphonyElixir.SymphonyPlusPlus.MCP.Payloads, only: [json_safe_payload: 1]
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext
   alias SymphonyElixir.SymphonyPlusPlus.BranchPattern
@@ -24,16 +19,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     ErrorDetails,
     ToolCatalog,
     ToolResult,
+    WorkPackageLaunch,
     WorkRequestPayloads,
-    WorkRequestScope,
-    WorktreeScope
+    WorkRequestScope
   }
 
+  alias SymphonyElixir.SymphonyPlusPlus.HerdrCore
+
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Service, as: WorkPackageService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
@@ -48,8 +42,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     "answer_question",
     "answer_question_and_record_decision",
     "close_question",
-    "dispatch_work_package",
-    "prepare_work_package_worktree"
+    "dispatch_work_package"
   ]
   @work_request_product_tree_views ToolCatalog.work_request_product_tree_views()
   @default_list_limit 50
@@ -243,16 +236,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     end
   end
 
+  # Dispatch is the whole hand-off: the ledger dispatch (or its replay) commits
+  # first, then the worktree, the assignment file and the launch line. When the
+  # hand-off fails the package stays dispatched, and the response carries the
+  # error and its next action instead of a launch line; dispatching again
+  # retries the hand-off.
   defp call_tool("dispatch_work_package", config, terminal, arguments, _opts) do
-    with {:ok, detail} <- payload_detail(arguments),
-         {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
+    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
-         {:ok, work_request, work_package} <- WorkRequestScope.work_package_scope(config.repo, work_request_id, work_package_id),
-         scope = WorkRequestPayloads.redacted_work_request_scope(work_request),
-         :ok <- require_planned_dispatch_work_package(work_package),
-         {:ok, dispatch} <- WorkPackageDispatch.dispatch(config.repo, work_request_id, work_package_id, dispatched_by: Terminal.attribution(terminal)) do
-      payload = dispatch_work_package_result_payload(dispatch, scope, detail)
-      {:ok, ToolResult.with_text_profile(:full, fn -> ToolResult.tool_result(payload) end)}
+         {:ok, review_mode} <- required_enum_argument(arguments, "review_mode", WorkPackage.review_modes()),
+         {:ok, agent} <- optional_enum_argument(arguments, "agent", WorkPackageLaunch.agents(), "codex"),
+         {:ok, machine} <- optional_string_argument(arguments, "machine"),
+         {:ok, target_repo_root} <- optional_string_argument(arguments, "target_repo_root"),
+         {:ok, _work_request, _work_package} <- WorkRequestScope.work_package_scope(config.repo, work_request_id, work_package_id),
+         {:ok, dispatch} <-
+           WorkPackageDispatch.dispatch(config.repo, work_request_id, work_package_id,
+             review_mode: review_mode,
+             launch_machine: machine || HerdrCore.machine_name(),
+             dispatched_by: Terminal.attribution(terminal)
+           ) do
+      payload =
+        case WorkPackageLaunch.hand_off(config, terminal, dispatch.work_package, agent, target_repo_root) do
+          {:ok, launch} -> launched_payload(dispatch, launch, agent)
+          error -> hand_off_failed_payload(dispatch, error)
+        end
+
+      {:ok, ToolResult.agent_tool_result(payload, fn -> WorkerContext.encode_tool_payload(payload) end)}
     else
       {:tool_error, reason} -> invalid_params_error("dispatch_work_package", reason)
       {:error, :not_found} -> not_found_error("dispatch_work_package")
@@ -260,41 +269,54 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     end
   end
 
-  defp call_tool("prepare_work_package_worktree", config, terminal, arguments, _opts) do
-    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
-         {:ok, work_request, work_package} <- WorkRequestScope.work_package_scope(config.repo, work_request_id, work_package_id),
-         scope = WorkRequestPayloads.redacted_work_request_scope(work_request),
-         {:ok, explicit_root} <- optional_string_argument(arguments, "target_repo_root"),
-         {:ok, target_repo_root} <- WorktreeScope.prepare_target_repo_root(explicit_root, work_package, config),
-         {:ok, branch_arg} <- optional_string_argument(arguments, "branch"),
-         {:ok, branch} <- WorktreeScope.prepare_branch(work_package, branch_arg),
-         {:ok, result} <-
-           WorkPackageService.prepare_worktree(
-             config.repo,
-             work_package_id,
-             %{
-               "target_repo_root" => target_repo_root,
-               "base_branch" => work_package.base_branch,
-               "branch" => branch
-             }
-           ),
-         {:ok, audit_event} <- append_worktree_lifecycle_audit(config.repo, terminal, work_package_id, "prepare_work_package_worktree", result) do
-      {:ok, ToolResult.tool_result(worktree_lifecycle_payload(result, scope, audit_event))}
-    else
-      {:tool_error, reason, details} ->
-        {:error, -32_602, "Invalid params", Map.merge(details, %{"tool" => "prepare_work_package_worktree", "reason" => reason})}
-
-      {:tool_error, reason} ->
-        {:error, -32_602, "Invalid params", %{"tool" => "prepare_work_package_worktree", "reason" => reason}}
-
-      {:error, :not_found} ->
-        not_found_error("prepare_work_package_worktree")
-
-      {:error, reason} ->
-        architect_error(reason, "prepare_work_package_worktree")
-    end
+  defp launched_payload(%{work_package: work_package} = dispatch, launch, agent) do
+    dispatch
+    |> dispatched_payload()
+    |> Map.merge(%{
+      "worktree" => %{
+        "machine" => work_package.launch_machine,
+        "path" => launch.worktree.worktree_path,
+        "branch" => launch.worktree.branch,
+        "base_branch" => launch.worktree.base_branch
+      },
+      "assignment_file" => launch.assignment_file,
+      "launch_line" => launch.launch_line,
+      "next_action" => launch_next_action(agent)
+    })
   end
+
+  defp hand_off_failed_payload(%{work_package: work_package} = dispatch, error) do
+    {:error, _code, _message, data} =
+      case error do
+        {:tool_error, reason, details} -> {:error, -32_602, "Invalid params", Map.put(details, "reason", reason)}
+        {:tool_error, reason} -> invalid_params_error("dispatch_work_package", reason)
+        {:error, reason} -> architect_error(reason, "dispatch_work_package")
+      end
+
+    dispatch
+    |> dispatched_payload()
+    |> Map.merge(%{
+      "error" => Map.delete(data, "tool"),
+      "next_action" => "Fix the error, then call dispatch_work_package again with review_mode #{work_package.review_mode}; it reuses this dispatch."
+    })
+  end
+
+  defp dispatched_payload(%{work_package: work_package, replay?: replay?}) do
+    %{
+      "work_package" => %{
+        "id" => work_package.id,
+        "status" => work_package.status,
+        "review_mode" => work_package.review_mode,
+        "review_id" => work_package.review_id
+      },
+      "replay" => replay?
+    }
+  end
+
+  defp launch_next_action("claude"),
+    do: "Run launch_line, then read the worker's screen: approve Claude's trust prompt for this worktree only."
+
+  defp launch_next_action(_agent), do: "Run launch_line."
 
   defp read_plan_arguments(arguments) do
     with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
@@ -335,13 +357,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   defp operational_delivery_board(repo, work_request, work_packages),
     do: WorkRequestScope.scoped_delivery_board(repo, work_request, work_packages, slice_projection: :operational_state)
 
-  defp require_planned_dispatch_work_package(%WorkPackage{status: "planned"}), do: :ok
+  defp dispatch_work_package_error({:invalid_work_package_status, status} = reason) do
+    {:error, -32_009, WorkPackageDispatch.error_message(reason),
+     %{"tool" => "dispatch_work_package", "reason" => "invalid_work_package_status", "state" => status, "next_action" => dispatch_next_action(status)}}
+  end
 
-  defp require_planned_dispatch_work_package(%WorkPackage{status: status}),
-    do: {:error, {:invalid_work_package_status, status}}
-
-  defp dispatch_work_package_error({:invalid_work_package_status, _status}) do
-    {:error, -32_602, "Invalid params", %{"tool" => "dispatch_work_package", "reason" => "invalid_work_package_status"}}
+  defp dispatch_work_package_error({:review_mode_conflict, stored} = reason) do
+    {:error, -32_009, WorkPackageDispatch.error_message(reason),
+     %{
+       "tool" => "dispatch_work_package",
+       "reason" => "review_mode_conflict",
+       "state" => "dispatched",
+       "review_mode" => stored,
+       "next_action" => "Call dispatch_work_package with review_mode #{stored}."
+     }}
   end
 
   defp dispatch_work_package_error({:execution_graph_cycle, cycles}) do
@@ -381,39 +410,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
 
   defp dispatch_work_package_error(reason), do: architect_error(reason, "dispatch_work_package")
 
-  defp append_worktree_lifecycle_audit(repo, %Terminal{} = terminal, work_package_id, source_tool, result) do
-    actor = Actor.from_terminal(terminal)
+  defp dispatch_next_action("ready"), do: "The package is ready; merge or sync its PR."
+  defp dispatch_next_action("ended"), do: "The package has ended; nothing to dispatch."
+  defp dispatch_next_action(_status), do: "Read the WorkPackage before dispatching again."
 
-    PlanningRepository.append_audit_progress_event_for_work_package(repo, actor, work_package_id, %{
-      "summary" => worktree_lifecycle_summary(source_tool, result.status),
-      "status" => result.status,
-      "idempotency_key" => worktree_lifecycle_idempotency_key(work_package_id, source_tool, result),
-      "payload" => %{
-        "type" => "worktree_lifecycle",
-        "source_tool" => source_tool,
-        "work_package_id" => work_package_id,
-        "worktree_path" => audit_local_path(result.worktree_path),
-        "target_repo_root" => audit_local_path(result.target_repo_root || result.repo_root),
-        "branch" => result.branch,
-        "base_branch" => result.base_branch,
-        "status" => result.status
-      }
-    })
+  defp required_enum_argument(arguments, key, allowed) do
+    case Map.fetch(arguments, key) do
+      {:ok, value} when is_binary(value) -> enum_value(String.trim(value), key, allowed)
+      _missing -> {:tool_error, {:invalid_enum, key, allowed}}
+    end
   end
 
-  defp audit_local_path(nil), do: nil
-  defp audit_local_path(_path), do: "[REDACTED]"
+  defp optional_enum_argument(arguments, key, allowed, default) do
+    case Map.fetch(arguments, key) do
+      :error -> {:ok, default}
+      {:ok, value} when is_binary(value) -> enum_value(String.trim(value), key, allowed)
+      {:ok, _value} -> {:tool_error, {:invalid_enum, key, allowed}}
+    end
+  end
 
-  defp worktree_lifecycle_summary("prepare_work_package_worktree", "already_prepared"), do: "WorkPackage worktree already prepared"
-  defp worktree_lifecycle_summary("prepare_work_package_worktree", _status), do: "Prepared WorkPackage worktree"
-
-  defp worktree_lifecycle_idempotency_key(work_package_id, source_tool, result) do
-    fingerprint =
-      :sha256
-      |> :crypto.hash([to_string(result.status), "\0", to_string(result.worktree_path), "\0", to_string(result.branch)])
-      |> Base.url_encode64(padding: false)
-
-    "worktree_lifecycle:#{source_tool}:#{work_package_id}:#{fingerprint}"
+  defp enum_value(value, key, allowed) do
+    if value in allowed, do: {:ok, value}, else: {:tool_error, {:invalid_enum, key, allowed}}
   end
 
   defp optional_work_request_phase(arguments) do
@@ -647,6 +664,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
        "message" => "expected clarification question status=#{Enum.join(expected, " or ")}, got #{got}"
      }}
   end
+
+  defp invalid_params_error(tool, {:invalid_enum, _field, _allowed} = reason), do: ErrorDetails.invalid_params_error(tool, reason)
 
   defp invalid_params_error(tool, reason) when reason in [:missing_target_repo_root, "missing_target_repo_root"] do
     {:error, -32_602, "Invalid params",

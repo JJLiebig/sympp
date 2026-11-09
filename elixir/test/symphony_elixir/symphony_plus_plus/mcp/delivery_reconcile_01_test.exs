@@ -6,6 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
   alias SymphonyElixir.FakeGitHubClient
   alias SymphonyElixir.GitHubPullRequestFixtures
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
 
   test "reads redact historical credential-bearing request and delivery scope", %{repo: repo} do
     work_request =
@@ -148,28 +149,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
         repo,
         "t1",
         "dispatch_work_package",
-        %{"detail" => "full", "work_request_id" => work_request.id, "work_package_id" => approved_slice.id},
+        %{"review_mode" => "fast", "work_request_id" => work_request.id, "work_package_id" => approved_slice.id},
         config: Config.default(repo: repo, database: configured_database)
       )
 
     payload = get_in(response, ["result", "structuredContent"])
-    serialized_response = inspect(response)
-    assert payload["scope"] == %{"repo" => anchor.repo, "base_branch" => anchor.base_branch}
-    assert payload["work_request"] == %{"id" => work_request.id}
     assert payload["work_package"]["id"] == approved_slice.id
     assert payload["work_package"]["status"] == "dispatched"
-    assert is_binary(payload["work_package"]["dispatched_at"])
-    refute Map.has_key?(payload, "worker_handoff")
-    assignment = payload["worker_bootstrap"]["assignment"]
+    assert payload["work_package"]["review_mode"] == "fast"
+
+    # The worker reads this assignment from the file dispatch writes.
+    assert {:ok, assignment} = WorkPackageDispatch.assignment(repo, repo.get!(WorkPackage, approved_slice.id))
     assert assignment["work_package"]["id"] == approved_slice.id
     assert assignment["work_package"]["allowed_file_globs"] == work_package.allowed_file_globs
     assert assignment["work_package"]["acceptance_criteria"] == work_package.acceptance_criteria
     assert assignment["work_package"]["validation_steps"] == work_package.validation_steps
     assert assignment["parent_work_request"]["id"] == work_request.id
-    refute Map.has_key?(payload["worker_bootstrap"], "claim")
-    assert payload["worker_bootstrap"]["launch_prompt"] =~ "No worker MCP calls"
-    refute Map.has_key?(payload["worker_bootstrap"], "prompt")
-    refute Map.has_key?(payload["worker_bootstrap"], "legacy_private_handoff")
+    refute Map.has_key?(assignment, "claim")
+    serialized_response = inspect(response) <> inspect(assignment)
     refute serialized_response =~ "raw_secret_value"
     refute serialized_response =~ "secret_hash"
     refute serialized_response =~ secret_title_token
@@ -306,7 +303,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
         Application.put_env(:symphony_elixir, :sympp_repo_database, configured_live_database)
 
         mcp_tool(repo, "t1", "dispatch_work_package", %{
-          "detail" => "full",
+          "review_mode" => "none",
           "work_request_id" => in_scope.id,
           "work_package_id" => approved_live_database_slice.id
         })
@@ -316,9 +313,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
 
     live_database_payload = get_in(live_database_response, ["result", "structuredContent"])
     assert live_database_payload["work_package"]["status"] == "dispatched"
-    refute Map.has_key?(live_database_payload, "worker_handoff")
-    assert live_database_payload["worker_bootstrap"]["assignment"]["work_package"]["id"] == approved_live_database_slice.id
-    refute inspect(live_database_response) =~ "run_mcp_command"
+    assert repo.get!(WorkPackage, approved_live_database_slice.id).review_mode == "none"
 
     assert {:ok, blank_database_slice} =
              CanonicalWorkPackageFixtures.add_work_package(
@@ -335,15 +330,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
         repo,
         "t1",
         "dispatch_work_package",
-        %{"detail" => "full", "work_request_id" => in_scope.id, "work_package_id" => approved_blank_database_slice.id},
+        %{"review_mode" => "none", "work_request_id" => in_scope.id, "work_package_id" => approved_blank_database_slice.id},
         config: Config.default(repo: repo, repo_root: test_repo_root(), database: "   ")
       )
 
     blank_database_payload = get_in(blank_database_response, ["result", "structuredContent"])
     assert blank_database_payload["work_package"]["status"] == "dispatched"
-    refute Map.has_key?(blank_database_payload, "worker_handoff")
-    assert blank_database_payload["worker_bootstrap"]["assignment"]["work_package"]["id"] == approved_blank_database_slice.id
-    refute inspect(blank_database_response) =~ "run_mcp_command"
 
     delivery_base = "feature/integration-base"
 
@@ -362,7 +354,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
 
     delivery_base_response =
       mcp_tool(repo, "t1", "dispatch_work_package", %{
-        "detail" => "full",
+        "review_mode" => "none",
         "work_request_id" => in_scope.id,
         "work_package_id" => approved_delivery_base_slice.id
       })
