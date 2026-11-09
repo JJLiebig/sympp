@@ -49,11 +49,12 @@ Provider and MCP receipts accompany the process logs, including failed calls.
 Watcher journeys (delivery, stacking and cards) start the candidate as the
 installed service runs it: the packaged supervision tree on a disposable ledger
 (`tests/support/watcher.exs`). The Observer's two passes run only when the
-journey asks and finish before it continues, so no timer runs between steps. GitHub's HTTP API is the same
-loopback provider, answering GraphQL and REST from the PR model `gh` reads; a
-test-only `hc` stands in for herdr-core; card checkouts are real disposable Git
-repositories. This proves the Observer's decisions on real inputs, not GitHub's
-GraphQL compatibility or a live herdr-core.
+journey asks and finish before it continues, so no timer runs between steps.
+GitHub's HTTP API is the same loopback provider, answering GraphQL and REST
+from the PR model `gh` reads; a test-only `hc` stands in for herdr-core; card
+checkouts are real disposable Git repositories. This proves the Observer's
+decisions on real inputs, not GitHub's GraphQL compatibility or a live
+herdr-core.
 
 Authority and recovery journeys use real candidate clients that assert distinct
 synthetic Herdr terminal identities for ownership contention, read-only access
