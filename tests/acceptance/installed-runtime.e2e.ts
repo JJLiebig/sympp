@@ -282,8 +282,9 @@ if (process.platform !== 'win32') {
     expect((await helper('send', '--receipt', launched.receipt, '--message', followUp)).started).toBe(true);
     expect((await state()).terminals.t1.sent).toEqual(['Also update the changelog.']);
 
-    // Once the agent's process is replaced by a shell, nothing types into it.
-    await change((value) => { value.terminals.t1.pid += 1; value.terminals.t1.status = null; });
+    // A shell that replaces the agent just before a send gets nothing, then or afterwards.
+    await change((value) => { value.recover_before_send = true; });
+    expect((await helper('send', '--receipt', launched.receipt, '--message', followUp)).error).toBe('status_mismatch');
     expect((await helper('check', '--receipt', launched.receipt)).reason).toBe('process_changed');
     expect((await helper('send', '--receipt', launched.receipt, '--message', followUp)).error).toBe('agent_not_ready');
     expect((await state()).terminals.t1.sent).toHaveLength(1);
@@ -305,6 +306,7 @@ if (process.platform !== 'win32') {
     expect([codex.config.model, codex.config.projects[project], codex.credential_present]).toEqual(['keep', { trust_level: 'trusted', keep: true }, false]);
     await writeFile(codexState, JSON.stringify({ ...codexBefore, concurrent_update: true }));
     expect((await helper('launch', '--provider', 'codex', '--task', task, '--cwd', project, '--attempt', 'conflict')).error).toBe('workspace_trust_failed');
+    expect(JSON.parse(await readFile(codexState, 'utf8')).config).toMatchObject({ concurrent: 'preserved', projects: { [project]: { trust_level: 'untrusted' } } });
     expect(Object.keys((await state()).terminals)).toHaveLength(2);
 
     // A title that looks like a credential is not shown, and a lost reply never starts the task twice.

@@ -19,13 +19,14 @@ createInterface({ input: process.stdin }).on("line", line => {
   let result;
   let error;
   if (method === "initialize") result = {};
-  else if (method === "config/read") result = { layers: [{ name: { type: "user", file: path.join(process.env.CODEX_HOME, "config.toml") }, config: state.config, version: state.version }] };
-  else if (method === "config/value/write") {
-    if (state.concurrent_update) {
-      state.config.concurrent = "preserved";
-      state.version = "changed";
-      error = { code: -32000, data: { errorCode: "configVersionConflict" } };
-    } else {
+  else if (method === "config/read") {
+    result = { layers: [{ name: { type: "user", file: path.join(process.env.CODEX_HOME, "config.toml") }, config: structuredClone(state.config), version: state.version }] };
+    // Another writer saves between this read and the launcher's write.
+    if (state.concurrent_update) { state.config.concurrent = "preserved"; state.version = "changed"; }
+  } else if (method === "config/value/write") {
+    // Codex refuses a write whose expected version is not the current one.
+    if (params.expectedVersion !== state.version) error = { code: -32000, data: { errorCode: "configVersionConflict" } };
+    else {
       const key = JSON.parse(params.keyPath.slice("projects.".length, -".trust_level".length));
       state.config.projects ||= {};
       state.config.projects[key] = { ...state.config.projects[key], trust_level: params.value };

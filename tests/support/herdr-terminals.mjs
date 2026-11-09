@@ -30,6 +30,8 @@ if (command === 'connect') {
         reply = { result: { address, ...started } };
       }
     } else if (method === 'terminal.send' && terminal) {
+      // The agent exits and its shell takes the terminal just before the text arrives.
+      if (state.recover_before_send) { terminal.pid += 1; terminal.status = null; delete state.recover_before_send; }
       if (params.if !== terminal.status?.state) reply = { error: { data: { kind: 'status_mismatch' } } };
       else { (terminal.sent ??= []).push(params.text); reply = { result: { started: true, turn: terminal.sent.length } }; }
     } else if (method === 'terminal.get' && terminal) reply = { result: { address: params.terminal, ...terminal } };
