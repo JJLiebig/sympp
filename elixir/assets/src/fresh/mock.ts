@@ -28,6 +28,8 @@ type Plan = {
   review?: Reviewed;
   worker?: Worker;
   stale?: Array<"github" | "review">;
+  // The sequence number of the package that took over.
+  successor?: number;
 };
 type GoalPlan = { id: string; title: string; repo: string; phase: string; owner?: Owned; age?: number; completed?: number; brief?: [text: string, ago: number, eta?: string]; parked?: [text: string, ago: number]; plans: Plan[] };
 
@@ -66,9 +68,9 @@ function statusOf(plan: Plan) {
 }
 
 // How the package ended, or since when it has been ready.
-function endingOf(plan: Plan, now: number): Pick<Slice, "delivery" | "board_state"> {
+function endingOf(goalId: string, plan: Plan, now: number): Pick<Slice, "delivery" | "board_state"> {
   const endedAt = iso(now, plan.ended ?? 0);
-  if (plan.outcome) return { delivery: { outcome: plan.outcome, recorded_at: endedAt, pr_merged_at: plan.outcome === "pr_merged" ? endedAt : null }, board_state: { stage: "done", entered_at: endedAt, outcome: plan.outcome } };
+  if (plan.outcome) return { delivery: { outcome: plan.outcome, recorded_at: endedAt, pr_merged_at: plan.outcome === "pr_merged" ? endedAt : null, successor_work_package_id: plan.successor === undefined ? null : `${goalId}-${plan.successor}` }, board_state: { stage: "done", entered_at: endedAt, outcome: plan.outcome } };
   return { delivery: null, board_state: plan.progress === "ready" ? { stage: "merge", entered_at: iso(now, plan.since ?? 0) } : null };
 }
 
@@ -87,7 +89,7 @@ function slice(goal: GoalPlan, seq: number, plan: Plan, now: number): Slice {
     progress: status === "dispatched" ? plan.progress : null,
     worker_terminal: plan.worker ? workerTerminal(plan.worker) : null,
     observation_stale: plan.stale ?? [],
-    ...endingOf(plan, now),
+    ...endingOf(goal.id, plan, now),
     pr_signal: prSignal(plan, now),
     review_signal: plan.review ? { mode: plan.review[0], status: plan.review[1], round: plan.review[2] ?? 1 } : null,
   };
@@ -175,7 +177,7 @@ const GOALS: GoalPlan[] = [
       { title: "Restore layout on start", outcome: "pr_merged", started: 500, ended: 260, pr: [HERDR_CORE, 193], ci: "passing" },
       { title: "Crash-safe session file write", outcome: "finished", started: 450, ended: 200, pr: ["herdrdev/herdr-app", 198], ci: "passing" },
       { title: "Check restore on Windows", outcome: "completed_no_pr", started: 300, ended: 190 },
-      { title: "Reattach agents (first take)", outcome: "superseded", started: 600, ended: 300 },
+      { title: "Reattach agents (first take)", outcome: "superseded", started: 600, ended: 300, successor: 6 },
       { title: "Reattach agents", outcome: "pr_merged", started: 290, ended: 185, pr: [HERDR_CORE, 196], ci: "passing" },
     ],
   },

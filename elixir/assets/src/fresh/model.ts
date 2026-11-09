@@ -41,6 +41,8 @@ export type Pkg = {
   owner: Terminal | null;
   // The worker terminal finished without opening a PR.
   exited: boolean;
+  // The package that took over when this one was superseded or skipped.
+  successor: string | null;
   stale: Stale[];
 };
 
@@ -75,8 +77,8 @@ export type GoalView = { goal: Goal; live: PkgView[]; queued: Pkg[]; done: Pkg[]
 
 // The hydrated board as the backend sends it, limited to what the board reads.
 export type Owned = { address?: string | null; role?: string | null; domain?: string | null; liveness?: string | null; since?: string | null };
-export type PrSignal = { status?: string | null; number?: number | null; url?: string | null; repository?: string | null; created_at?: string | null; head_changed_at?: string | null; checks?: { status?: string | null; changed_at?: string | null } | null };
-export type ReviewSignal = { status?: string | null; mode?: string | null; round?: number | null; started_at?: string | null; round_started_at?: string | null };
+export type PrSignal = { status?: string | null; head_sha?: string | null; number?: number | null; url?: string | null; repository?: string | null; created_at?: string | null; head_changed_at?: string | null; checks?: { status?: string | null; changed_at?: string | null } | null };
+export type ReviewSignal = { status?: string | null; reviewed_head?: string | null; mode?: string | null; round?: number | null; started_at?: string | null; round_started_at?: string | null };
 export type Slice = {
   id: string;
   work_package_id?: string | null;
@@ -90,7 +92,7 @@ export type Slice = {
   progress?: string | null;
   worker_terminal?: { address?: string | null; state?: string | null; status?: string | null } | null;
   observation_stale?: string[] | null;
-  delivery?: { outcome?: string | null; legacy_status?: string | null; recorded_at?: string | null; pr_merged_at?: string | null } | null;
+  delivery?: { outcome?: string | null; legacy_status?: string | null; recorded_at?: string | null; pr_merged_at?: string | null; successor_work_package_id?: string | null } | null;
   board_state?: { stage?: string | null; entered_at?: string | null; outcome?: string | null } | null;
   pr_signal?: PrSignal | null;
   review_signal?: ReviewSignal | null;
@@ -135,8 +137,8 @@ const STATUS_RULES: Array<[RegExp, Stage]> = [
   [/^ready$|merge_ready|ready_for_merge|review_complete|^reviewed$|review_owner_accepted|acceptance|ready_for_close/, "ready"],
   [/review|validat|ci_waiting/, "review_ci"],
 ];
-// Used only to replay the past: the backend's phase describes the present.
-const RESOLVES: Record<Outcome, boolean> = { merged: true, finished: true, completed: true, superseded: true, abandoned: false, skipped: false };
+// Whether an ending counts as delivered for its goal. A superseded or skipped package counts as its successor does.
+const RESOLVES: Record<Outcome, boolean | "successor"> = { merged: true, finished: true, completed: true, superseded: "successor", abandoned: false, skipped: "successor" };
 
 export function buildBoard(hydrated: Hydrated, history: Record<string, HistoryEvent[]>, archived: Archived | null = null): { board: Board; now: number } {
   const now = Date.parse(hydrated.generated_at ?? "") || Date.now();
@@ -326,13 +328,18 @@ function blankPkg(slice: Slice, now: number): Pkg {
     segs: [],
     endAt: null,
     outcome: null,
-    pr: prOf(slice.pr_signal, ""),
-    ci: ciOf(slice.pr_signal?.checks?.status),
-    review: reviewOf(slice.review_signal, stale),
+    ...signalsOf(slice, stale),
     owner: workerOf(slice.worker_terminal),
     exited: slice.status === "dispatched" && slice.progress === "worker_exited",
+    successor: slice.delivery?.successor_work_package_id ?? null,
     stale,
   };
+}
+
+// The PR, its checks and its review, as the factory last read them.
+function signalsOf(slice: Slice, stale: Stale[]): Pick<Pkg, "pr" | "ci" | "review"> {
+  const pr = slice.pr_signal;
+  return { pr: prOf(pr, ""), ci: ciOf(pr?.checks?.status), review: reviewOf(slice.review_signal, pr?.head_sha ?? null, stale) };
 }
 
 // The worker terminal as the factory's herdr-core last saw it.
@@ -352,11 +359,19 @@ function ciOf(checks: string | null | undefined): Ci | null {
 }
 
 // A review host the factory could not read leaves the state unknown, whatever it said last.
-function reviewOf(signal: ReviewSignal | null | undefined, stale: Stale[]): Review | null {
+// A review that passed for an older head than the PR's has not reviewed what is there now.
+function reviewOf(signal: ReviewSignal | null | undefined, head: string | null, stale: Stale[]): Review | null {
   const mode = REVIEW_MODES[signal?.mode ?? ""];
   if (!signal || !mode) return null;
-  const state = stale.includes("review") ? "unknown" : (REVIEW_STATES[signal.status ?? ""] ?? null);
-  return { mode, state, round: signal.round ?? 0 };
+  if (stale.includes("review")) return { mode, state: "unknown", round: signal.round ?? 0 };
+  const moved = signal.status === "passed" && !sameHead(signal.reviewed_head, head);
+  return { mode, state: moved ? null : (REVIEW_STATES[signal.status ?? ""] ?? null), round: signal.round ?? 0 };
+}
+
+// Heads may be reported in full or abbreviated. An unknown head on either side can't show the review is current.
+function sameHead(left: string | null | undefined, right: string | null | undefined) {
+  if (!left || !right) return false;
+  return left.startsWith(right) || right.startsWith(left);
 }
 
 function outcomeOf(slice: Slice): Outcome | null {
@@ -480,8 +495,7 @@ function phaseAt(goal: Goal, at: number, live: number, queued: number, ended: Pk
   if (live + queued + ended.length === 0) return "intake";
   if (live > 0) return "active";
   if (queued > 0) return "planned";
-  const counted = ended.filter((pkg) => pkg.outcome !== "skipped");
-  return counted.length === 0 || counted.some((pkg) => !RESOLVES[pkg.outcome ?? "abandoned"]) ? "unresolved" : "done";
+  return unresolvedOf(goal.pkgs, ended).length > 0 ? "unresolved" : "done";
 }
 
 // Whether the ask was waiting for the operator at `at`.
@@ -491,8 +505,23 @@ export function openAt(ask: Ask, at: number) {
 
 // The ended packages that keep a goal from resolving.
 export function unresolvedPkgs(view: GoalView) {
-  const counted = view.done.filter((pkg) => pkg.outcome !== "skipped");
-  return counted.length === 0 ? view.done : counted.filter((pkg) => !RESOLVES[pkg.outcome ?? "abandoned"]);
+  return unresolvedOf(view.goal.pkgs, view.done);
+}
+
+// As the backend reads it: a goal whose packages were all skipped resolves nothing, and otherwise every
+// package that was not plainly skipped must resolve, following successors within the goal.
+function unresolvedOf(pkgs: Pkg[], ended: Pkg[]) {
+  const counted = ended.filter((pkg) => pkg.outcome !== "skipped" || pkg.successor !== null);
+  if (counted.length === 0) return ended;
+  const byId = new Map(pkgs.map((pkg) => [pkg.id, pkg]));
+  return counted.filter((pkg) => !resolves(pkg, byId, new Set()));
+}
+
+function resolves(pkg: Pkg | undefined, byId: Map<string, Pkg>, seen: Set<string>): boolean {
+  if (!pkg?.outcome || seen.has(pkg.id)) return false;
+  const rule = RESOLVES[pkg.outcome];
+  if (rule !== "successor") return rule;
+  return pkg.successor !== null && resolves(byId.get(pkg.successor), byId, seen.add(pkg.id));
 }
 
 function pkgViewAt(pkg: Pkg, at: number): PkgView {

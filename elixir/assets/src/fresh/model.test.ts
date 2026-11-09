@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { applyDemo, demoLedger } from "./mock";
-import { buildBoard, openAt, viewAt, type Hydrated } from "./model";
+import { buildBoard, openAt, unresolvedPkgs, viewAt, type Hydrated } from "./model";
 import { refusalText } from "./operator";
 
 const NOW = Date.parse("2026-11-09T12:00:00Z");
@@ -62,6 +62,20 @@ describe("replaying the past", () => {
     const board = read({ work_request_details: [{ work_request: { id: "wr", phase: "active", inserted_at: "2026-11-09T08:00:00Z" }, asks: [{ id: "a", work_request_id: "wr", state: "answered", asked_at: "2026-11-09T10:00:00Z", resolved_at: "2026-11-09T11:00:00Z" }] }] });
     const open = (at: string) => viewAt(board, Date.parse(at))[0]?.asks.map((ask) => ask.id);
     expect([open("2026-11-09T09:30:00Z"), open("2026-11-09T10:30:00Z"), open("2026-11-09T11:30:00Z")]).toEqual([[], ["a"], []]);
+  });
+});
+
+describe("an unresolved goal", () => {
+  it("follows a superseded package to its successor", () => {
+    const ended = (id: string, outcome: string, successor: string | null = null) => ({ id, status: "ended", delivery: { outcome, successor_work_package_id: successor, recorded_at: "2026-11-09T10:00:00Z" } });
+    const board = read({ work_request_details: [{ work_request: { id: "wr", phase: "unresolved" }, work_packages: [ended("a", "superseded", "b"), ended("b", "skipped"), ended("c", "pr_merged")] }] });
+    const [view] = viewAt(board, NOW);
+    expect(unresolvedPkgs(view).map((pkg) => pkg.id)).toEqual(["a"]);
+  });
+
+  it("does not show a review of an older head as done", () => {
+    const board = read({ work_request_details: [{ work_request: { id: "wr", phase: "active" }, work_packages: [{ id: "p", status: "ready", pr_signal: { status: "open", number: 1, url: "u", head_sha: "bbbb2222" }, review_signal: { mode: "fast", status: "passed", reviewed_head: "aaaa1111" } }] }] });
+    expect(viewAt(board, NOW)[0].live[0].pkg.review).toMatchObject({ mode: "fast", state: null });
   });
 });
 
