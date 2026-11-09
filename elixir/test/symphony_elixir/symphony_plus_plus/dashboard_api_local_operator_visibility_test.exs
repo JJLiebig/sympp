@@ -195,7 +195,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
       assert [%OperatorAudit{action: "dangerous_override", target_work_request_id: work_request_id}] = repo.all(OperatorAudit)
       assert work_request_id == request.id
 
-      assert %{"error" => "not_owned"} = json_response(post(local_operator_conn(), path), 409)
+      assert %{"error" => %{"code" => "not_owned"}} = json_response(post(local_operator_conn(), path), 409)
       assert {:ok, _row, :acquired} = Ownership.acquire(repo, request.id, terminal("t9"))
     end)
   end

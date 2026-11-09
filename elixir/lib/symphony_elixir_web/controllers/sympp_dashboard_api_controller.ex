@@ -355,87 +355,82 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     end)
   end
 
+  # Finish, Release, Complete, Archive, Restore and Delete each have an operator
+  # route (browser or remote-authenticated board) and a native Herdr route
+  # (local JSON process). Both run the same handler, audit and error shape.
+
   @spec operator_archive_work_request(Conn.t(), map()) :: Conn.t()
-  def operator_archive_work_request(conn, %{"work_request_id" => work_request_id}) do
-    send_local_operator_response(
-      conn,
-      :dangerous_delete,
-      work_request_target(work_request_id),
-      :operator_archive_work_request,
-      fn repo ->
-        with {:ok, work_request} <- WorkRequestService.archive(repo, work_request_id),
-             {:ok, payload} <- LocalOperatorDashboard.work_request_mutation_payload(repo, work_request) do
-          json(conn, mutation_success_payload(%{work_request: payload}, %{work_request_id: work_request.id}))
-        end
+  def operator_archive_work_request(conn, params), do: archive_work_request(&send_local_operator_response/5, conn, params)
+
+  @spec herdr_archive_work_request(Conn.t(), map()) :: Conn.t()
+  def herdr_archive_work_request(conn, params), do: archive_work_request(&send_native_operator_response/5, conn, params)
+
+  defp archive_work_request(send, conn, %{"work_request_id" => work_request_id}) do
+    send.(conn, :dangerous_delete, work_request_target(work_request_id), :operator_archive_work_request, fn repo ->
+      with {:ok, work_request} <- WorkRequestService.archive(repo, work_request_id),
+           {:ok, payload} <- LocalOperatorDashboard.work_request_mutation_payload(repo, work_request) do
+        json(conn, mutation_success_payload(%{work_request: payload}, %{work_request_id: work_request.id}))
       end
-    )
+    end)
   end
 
   @spec operator_delete_work_request(Conn.t(), map()) :: Conn.t()
-  def operator_delete_work_request(conn, %{"work_request_id" => work_request_id}) do
-    send_local_operator_response(
-      conn,
-      :dangerous_delete,
-      work_request_target(work_request_id),
-      :operator_delete_work_request,
-      fn repo ->
-        with {:ok, deleted_id} <- WorkRequestService.delete(repo, work_request_id) do
-          json(conn, mutation_success_payload(%{work_request: %{id: deleted_id}}, %{work_request_id: deleted_id}))
-        end
+  def operator_delete_work_request(conn, params), do: delete_work_request(&send_local_operator_response/5, conn, params)
+
+  @spec herdr_delete_work_request(Conn.t(), map()) :: Conn.t()
+  def herdr_delete_work_request(conn, params), do: delete_work_request(&send_native_operator_response/5, conn, params)
+
+  defp delete_work_request(send, conn, %{"work_request_id" => work_request_id}) do
+    send.(conn, :dangerous_delete, work_request_target(work_request_id), :operator_delete_work_request, fn repo ->
+      with {:ok, deleted_id} <- WorkRequestService.delete(repo, work_request_id) do
+        json(conn, mutation_success_payload(%{work_request: %{id: deleted_id}}, %{work_request_id: deleted_id}))
       end
-    )
+    end)
   end
 
   @spec operator_restore_work_request(Conn.t(), map()) :: Conn.t()
-  def operator_restore_work_request(conn, %{"work_request_id" => work_request_id}) do
-    send_local_operator_response(
-      conn,
-      :dangerous_override,
-      work_request_target(work_request_id),
-      :operator_restore_work_request,
-      fn repo ->
-        with {:ok, work_request} <- WorkRequestService.restore(repo, work_request_id),
-             {:ok, payload} <- LocalOperatorDashboard.work_request_mutation_payload(repo, work_request) do
-          json(conn, mutation_success_payload(%{work_request: payload}, %{work_request_id: work_request.id}))
-        end
+  def operator_restore_work_request(conn, params), do: restore_work_request(&send_local_operator_response/5, conn, params)
+
+  @spec herdr_restore_work_request(Conn.t(), map()) :: Conn.t()
+  def herdr_restore_work_request(conn, params), do: restore_work_request(&send_native_operator_response/5, conn, params)
+
+  defp restore_work_request(send, conn, %{"work_request_id" => work_request_id}) do
+    send.(conn, :dangerous_override, work_request_target(work_request_id), :operator_restore_work_request, fn repo ->
+      with {:ok, work_request} <- WorkRequestService.restore(repo, work_request_id),
+           {:ok, payload} <- LocalOperatorDashboard.work_request_mutation_payload(repo, work_request) do
+        json(conn, mutation_success_payload(%{work_request: payload}, %{work_request_id: work_request.id}))
       end
-    )
+    end)
   end
 
   @spec operator_complete_work_request(Conn.t(), map()) :: Conn.t()
-  def operator_complete_work_request(conn, %{"work_request_id" => work_request_id}) do
-    send_local_operator_response(
-      conn,
-      :dangerous_override,
-      work_request_target(work_request_id),
-      :operator_complete_work_request,
-      fn repo ->
-        with {:ok, work_request} <- WorkRequestService.complete(repo, work_request_id),
-             {:ok, payload} <- LocalOperatorDashboard.work_request_mutation_payload(repo, work_request) do
-          json(conn, mutation_success_payload(%{work_request: payload}, %{dashboard: false, work_request_id: work_request.id}))
-        end
+  def operator_complete_work_request(conn, params), do: complete_work_request(&send_local_operator_response/5, conn, params)
+
+  @spec herdr_complete_work_request(Conn.t(), map()) :: Conn.t()
+  def herdr_complete_work_request(conn, params), do: complete_work_request(&send_native_operator_response/5, conn, params)
+
+  defp complete_work_request(send, conn, %{"work_request_id" => work_request_id}) do
+    send.(conn, :dangerous_override, work_request_target(work_request_id), :operator_complete_work_request, fn repo ->
+      with {:ok, work_request} <- WorkRequestService.complete(repo, work_request_id),
+           {:ok, payload} <- LocalOperatorDashboard.work_request_mutation_payload(repo, work_request) do
+        json(conn, mutation_success_payload(%{work_request: payload}, %{dashboard: false, work_request_id: work_request.id}))
       end
-    )
+    end)
   end
 
   @spec operator_finish_work_package(Conn.t(), map()) :: Conn.t()
-  def operator_finish_work_package(conn, %{"work_package_id" => work_package_id}) do
-    send_local_operator_response(
-      conn,
-      :dangerous_override,
-      work_package_target(work_package_id),
-      :operator_finish_work_package,
-      fn repo ->
-        case LocalOperatorActions.finish_work_package_for_local_operator(repo, work_package_id) do
-          {:ok, work_package} ->
-            payload = %{work_package_id: work_package.id, status: work_package.status}
-            json(conn, mutation_success_payload(payload, %{work_package_id: work_package.id}))
+  def operator_finish_work_package(conn, params), do: finish_work_package(&send_local_operator_response/5, conn, params)
 
-          {:error, reason} ->
-            {:error, reason}
-        end
+  @spec herdr_finish_work_package(Conn.t(), map()) :: Conn.t()
+  def herdr_finish_work_package(conn, params), do: finish_work_package(&send_native_operator_response/5, conn, params)
+
+  defp finish_work_package(send, conn, %{"work_package_id" => work_package_id}) do
+    send.(conn, :dangerous_override, work_package_target(work_package_id), :operator_finish_work_package, fn repo ->
+      with {:ok, work_package} <- LocalOperatorActions.finish_work_package_for_local_operator(repo, work_package_id) do
+        payload = %{work_package_id: work_package.id, status: work_package.status}
+        json(conn, mutation_success_payload(payload, %{work_package_id: work_package.id}))
       end
-    )
+    end)
   end
 
   @doc """
@@ -444,26 +439,18 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   any Herdr terminal takes it.
   """
   @spec operator_release_work_request(Conn.t(), map()) :: Conn.t()
-  def operator_release_work_request(conn, %{"work_request_id" => work_request_id}) do
-    send_local_operator_response(
-      conn,
-      :dangerous_override,
-      work_request_target(work_request_id),
-      :operator_release_work_request,
-      fn repo ->
-        case Ownership.release(repo, work_request_id) do
-          {:ok, released} ->
-            payload = %{work_request_id: work_request_id, released: Ownership.public(released)}
-            json(conn, mutation_success_payload(payload, %{work_request_id: work_request_id}))
+  def operator_release_work_request(conn, params), do: release_work_request(&send_local_operator_response/5, conn, params)
 
-          {:error, :not_owned} ->
-            conn |> put_status(409) |> json(%{error: "not_owned", message: "No terminal works on this WorkRequest."})
+  @spec herdr_release_work_request(Conn.t(), map()) :: Conn.t()
+  def herdr_release_work_request(conn, params), do: release_work_request(&send_native_operator_response/5, conn, params)
 
-          {:error, reason} ->
-            {:error, reason}
-        end
+  defp release_work_request(send, conn, %{"work_request_id" => work_request_id}) do
+    send.(conn, :dangerous_override, work_request_target(work_request_id), :operator_release_work_request, fn repo ->
+      with {:ok, released} <- Ownership.release(repo, work_request_id) do
+        payload = %{work_request_id: work_request_id, released: Ownership.public(released)}
+        json(conn, mutation_success_payload(payload, %{work_request_id: work_request_id}))
       end
-    )
+    end)
   end
 
   @spec operator_clear_work_package_blocker(Conn.t(), map()) :: Conn.t()
@@ -771,6 +758,8 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     |> put_status(409)
     |> json(%{error: %{code: "decision_transition_refused", message: "This decision is #{state}", state: state, next_action: next_action}})
   end
+
+  defp error_response(conn, :not_owned), do: error_response(conn, 409, "not_owned", "No terminal works on this WorkRequest")
 
   defp error_response(conn, :not_completed), do: error_response(conn, 422, "not_completed", "Only a done or unresolved WorkRequest can be archived")
 
