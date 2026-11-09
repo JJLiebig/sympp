@@ -101,19 +101,20 @@ test('unknown inputs never end a card, a finished terminal without a PR does, an
   await observe(factory);
   expect((await cards(architect))['Asking'].state).toBe('working');
 
-  // GitHub or herdr-core can't be read: cards only show it.
+  // GitHub or herdr-core can't be read: cards only show it, even for a terminal that finished.
+  provider.terminal({ address: 'f1', state: 'finished' });
   provider.github = 'down';
   await observe(factory);
   let board = await cards(architect);
   expect(board['Asking']).toMatchObject({ state: 'working', stale: ['github'] });
+  expect(board['Finishing']).toMatchObject({ state: 'working', stale: ['github'] });
   provider.github = 'up';
   provider.core = null;
   await observe(factory);
   expect((await cards(architect))['Asking'].state).toBe('working');
   provider.core = { id: 'acceptance-core', name: 'acceptance' };
 
-  // A finished terminal whose branch has no PR is done.
-  provider.terminal({ address: 'f1', state: 'finished' });
+  // Once GitHub confirms the finished terminal's branch has no PR, its card is done.
   await observe(factory);
   board = await cards(architect);
   expect(board['Finishing'].state).toBe('done');
