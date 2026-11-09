@@ -2,6 +2,8 @@ System.put_env("SYMPP_OPEN_DASHBOARD", "0")
 # Tests never read the machine's real herdr-core, Review Suite state or GitHub
 # token; a test that needs one sets its source to a function.
 Application.put_env(:symphony_elixir, :sympp_herdr_core, nil)
+# Tests never type into real terminals; a test that checks delivery sets a function.
+Application.put_env(:symphony_elixir, :sympp_herdr_send, nil)
 Application.put_env(:symphony_elixir, :sympp_review_command, nil)
 Application.put_env(:symphony_elixir, :sympp_gh_token_command, fn -> nil end)
 ExUnit.start()

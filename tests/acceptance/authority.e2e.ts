@@ -83,7 +83,7 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
   };
   const nativeActions = [
     '/api/v1/sympp/herdr/work-requests',
-    `/api/v1/sympp/herdr/work-requests/${id}/questions/missing/answer`,
+    '/api/v1/sympp/herdr/asks/missing/answer',
   ];
   for (const action of nativeActions) {
     for (const headers of [
@@ -154,18 +154,16 @@ test('ownership lets every terminal read any request but refuses writes to anoth
     { repo: 'example/service', base_branch: 'integration' },
   ]);
   const [ownWp] = await packages(architect, ['Owned package']);
-  const malformedQuestion = await architect.reject('ask_question', { work_request_id: own, category: 'scope',
-    question: 'Continue implementation?', why_needed: 'A choice is required.',
+  const malformedAsk = await architect.reject('ask', { work_request_id: own, question: 'Continue implementation?',
     decision_prompt: { tl_dr: 'Private malformed prompt sentinel', details: 'Missing options' },
-  }, 'decision_prompt must contain 1 to 4 options');
-  expect(JSON.stringify(malformedQuestion)).not.toContain('Private malformed prompt sentinel');
-  expect((await architect.call('read_work_request', { detail: 'full', work_request_id: own })).clarification_questions).toEqual([]);
+  }, 'invalid_decision_prompt');
+  expect(malformedAsk.message).toBe('must contain 1 to 4 options');
+  expect(JSON.stringify(malformedAsk)).not.toContain('Private malformed prompt sentinel');
+  expect((await architect.call('read_work_request', { detail: 'full', work_request_id: own })).asks).toEqual([]);
   const peer = await factory.client();
   const other = await peer.request('Other request');
   const [otherWp] = await peer.addPackages([contract('Hidden sibling')]);
-  const question = (await peer.call('ask_question', {
-    work_request_id: other, category: 'scope', question: 'Which behavior is required?', why_needed: 'A concrete choice is needed.',
-  })).clarification_question;
+  const question = (await peer.call('ask', { work_request_id: other, question: 'Which behavior is required?' })).ask;
   expect((await architect.call('read_work_request', { detail: 'full', work_request_id: other })).work_request.id).toBe(other);
   for (const [name, args] of [
     ['edit_plan', { work_request_id: other, ops: [{ op: 'add_package', ...contract('Stolen') }] }],
@@ -179,13 +177,8 @@ test('ownership lets every terminal read any request but refuses writes to anoth
   }
   await architect.reject('sync_pr', { work_request_id: own, work_package_id: otherWp }, 'not_found');
   await architect.reject('dispatch_work_package', { work_request_id: own, work_package_id: 'missing-package' }, 'not_found');
-  for (const [name, fields] of [
-    ['answer_question', { answer: 'Stolen', answered_by: 'attacker' }],
-    ['close_question', {}],
-  ] as const) {
-    const denied = await architect.reject(name, {
-      work_request_id: own, question_id: question.id, expected_question_status: 'open', ...fields,
-    }, 'not_found');
+  for (const fields of [{ to: 'answered', answer: 'Stolen' }, { to: 'withdrawn' }]) {
+    const denied = await architect.reject('resolve_ask', { ask_id: question.id, ...fields }, 'not_asker_or_owner');
     expect(JSON.stringify(denied)).not.toContain(other);
   }
   await architect.reject('skip_work_package', { work_request_id: own, work_package_id: otherWp }, 'not_found');
@@ -202,7 +195,7 @@ test('ownership lets every terminal read any request but refuses writes to anoth
   const unchanged = await peer.call('read_work_request', { detail: 'full', work_request_id: other });
   expect(unchanged.work_request.title).toBe('Other request');
   expect(unchanged.work_packages[0].status).toBe('planned');
-  expect(unchanged.clarification_questions.find((entry: any) => entry.id === question.id).status).toBe('open');
+  expect(unchanged.asks.find((entry: any) => entry.id === question.id).state).toBe('open');
   await peer.call('dispatch_work_package', { work_package_id: otherWp });
 
   const secondary = await factory.client();
@@ -290,7 +283,7 @@ test('read views give a terminal that owns another request the same complete pla
   await assertComplete('ended');
 });
 
-test('package evidence tools keep plans atomic, findings idempotent and progress redacted for the owner', async ({ processes }) => {
+test('package documents stay redacted and blocker history is attributed to the owning terminal', async ({ processes }) => {
   const factory = processes.factory();
   const architect = await factory.client();
   const request = await architect.request('Package planning and history');
@@ -302,62 +295,36 @@ test('package evidence tools keep plans atomic, findings idempotent and progress
   ]);
   for (const work_package_id of [wp, sibling]) await architect.call('dispatch_work_package', { work_package_id });
   const own = (args: object) => ({ work_package_id: wp, ...args });
-  const other = (args: object) => ({ work_package_id: sibling, ...args });
   const taskPlan = async (work_package_id: string) =>
     (await architect.call('read_work_request', { work_request_id: request, view: 'package', work_package_id, detail: 'full' })).task_plan;
   expect((await taskPlan(wp)).text).toContain('Implement requested scope');
   const progressBefore = (await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).progress;
   for (const [args, reason] of [
-    [{ summary: 'Invalid key', idempotency_key: 123 }, 'invalid_idempotency_key'],
-    [{ summary: 123, idempotency_key: 'invalid-summary' }, 'invalid_summary'],
-    [{ summary: 'Invalid payload', idempotency_key: 'invalid-payload', payload: false }, 'invalid_payload'],
-  ] as const) await architect.reject('append_progress', own(args), reason);
+    [{ blocker_id: 'no-summary', active: true }, 'missing_summary'],
+    [{ blocker_id: 'not-boolean', active: 'yes', summary: 'Invalid state' }, 'invalid_active'],
+    [{ blocker_id: 'forged', active: true, summary: 'Cannot forge audit identity', id: 'caller-progress-id', created_at: '2000-01-01T00:00:00Z', actor_id: 'forged-worker' }, 'unexpected_argument'],
+  ] as const) await architect.reject('set_blocker', own(args), reason);
   expect((await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).progress).toEqual(progressBefore);
-  const first = await architect.call('append_finding', own({ id: 'synthetic-finding', title: 'Finding', body: 'Evidence', idempotency_key: ' finding-once ' }));
-  expect((await architect.call('append_finding', own({ id: 'synthetic-finding', title: 'Finding', body: 'Evidence', idempotency_key: 'finding-once' }))).finding.id).toBe(first.finding.id);
-  await architect.reject('append_finding', own({ id: 'different-finding', title: 'Finding', body: 'Evidence', idempotency_key: 'finding-once' }), 'idempotency_conflict');
-  await architect.reject('append_finding', own({ id: 'synthetic-finding', title: 'Finding', body: 'Evidence', idempotency_key: 'other-key' }), 'idempotency_conflict');
-  const safeIdentity = 'finding_embeddedSk-syntheticIdentifier';
-  const sensitiveFinding = await architect.call('append_finding', own({
-    id: safeIdentity, title: 'Identity survives document encoding',
-    body: 'Keep identity while hiding sk-synthetic-document-secret', severity: 'sk-synthetic-severity-secret',
-    idempotency_key: 'document-identity',
-  }));
-  expect(sensitiveFinding.finding.id).toBe(safeIdentity);
+  const redacted = await architect.tool('set_blocker', own({ blocker_id: 'redacted', active: true, summary: 'Recorded blocker sk-synthetic-progress-token' }));
+  expect(redacted.result.structuredContent.blocker.summary).toContain('[REDACTED]');
+  const history = (await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).progress;
+  const audit = history.find((entry: any) => entry.summary === redacted.result.structuredContent.blocker.summary);
+  expect(Date.parse(audit.created_at)).toBeGreaterThan(Date.parse('2026-01-01T00:00:00Z'));
+  // Blocker history is attributed to the terminal that wrote it.
+  expect(audit.actor.id).toBe(architect.address);
+  expect(history.some((entry: any) => entry.summary === 'Cannot forge audit identity')).toBe(false);
   // Package documents are readable by every trusted caller and stay redacted.
   const reader = await factory.client(null);
-  for (const document of ['context.md', 'task_plan.md', 'findings.md', 'progress.md', 'review.md']) {
+  for (const document of ['context.md', 'task_plan.md', 'progress.md', 'review.md']) {
     const resource = await reader.rpc('resources/read', { uri: `sympp://work-packages/${wp}/${document}` });
     expect(resource.result.contents[0].mimeType).toBe('text/vnd.toon');
     const text = resource.result.contents[0].text;
-    for (const secret of ['sk-synthetic-document-secret', 'sk-synthetic-severity-secret', ...reviewValues]) expect(text).not.toContain(secret);
+    for (const secret of ['sk-synthetic-progress-token', ...reviewValues]) expect(text).not.toContain(secret);
   }
-  await architect.reject('append_progress', own({
-    summary: 'Cannot forge audit identity', idempotency_key: 'forged-audit',
-    id: 'caller-progress-id', created_at: '2000-01-01T00:00:00Z', actor_id: 'forged-worker',
-    actor_type: 'architect', agent_run_id: 'forged-run',
-  }), 'unexpected_argument');
-  const redacted = await architect.tool('append_progress', own({
-    summary: 'Recorded progress sk-synthetic-progress-token', idempotency_key: 'redacted-progress',
-    payload: { accessKey: 'synthetic-access-value', apiKey: 'synthetic-api-value', grant_verifier: 'synthetic-verifier-value', private_payload: { path: 'synthetic-private-path' }, safe: 'unprojected-safe-value' },
-  }));
-  expect(redacted.result.structuredContent.progress_event.summary).toContain('[REDACTED]');
-  expect(redacted.result.structuredContent.progress_event.id).not.toBe('caller-progress-id');
-  const history = (await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).progress;
-  const audit = history.find((entry: any) => entry.id === redacted.result.structuredContent.progress_event.id);
-  expect(Date.parse(audit.created_at)).toBeGreaterThan(Date.parse('2026-01-01T00:00:00Z'));
-  // Progress is attributed to the terminal that wrote it, never to a caller-supplied author.
-  expect(audit.actor.id).toBe(architect.address);
-  for (const forged of ['forged-worker', 'forged-grant', 'forged-run']) expect(JSON.stringify(audit)).not.toContain(forged);
-  expect(history.some((entry: any) => entry.summary === 'Cannot forge audit identity')).toBe(false);
-  const projected = await reader.rpc('resources/read', { uri: `sympp://work-packages/${wp}/progress.md` });
-  for (const value of ['sk-synthetic-progress-token', 'synthetic-access-value', 'synthetic-api-value', 'synthetic-verifier-value', 'synthetic-private-path', 'unprojected-safe-value']) {
-    expect(redacted.result.content[0].text).not.toContain(value);
-    expect(projected.result.contents[0].text).not.toContain(value);
-  }
-  // Another terminal cannot write this request's package evidence.
+  expect(redacted.result.content[0].text).not.toContain('sk-synthetic-progress-token');
+  // Another terminal cannot change this request's blockers.
   const peer = await factory.client();
-  await peer.reject('append_finding', own({ title: 'Foreign', body: 'Refused', idempotency_key: 'foreign-finding' }), 'owned_by_other_terminal');
+  await peer.reject('set_blocker', own({ blocker_id: 'foreign', active: true, summary: 'Refused' }), 'owned_by_other_terminal');
 });
 
 deliveryTest('architect CI observations reach the native dashboard with stable per-head change times', async ({ delivery: { factory, provider } }) => {
@@ -403,14 +370,11 @@ test('operator reports keep server times and partial edits and only the owner wr
   const architect = await factory.client();
   const request = await architect.request('Truthful operator reports');
   const [wp] = await packages(architect, ['Report boundary']);
-  const question = (await architect.call('ask_question', { work_request_id: request, category: 'scope',
-    question: 'Which release should include this?', why_needed: 'Select the intended release.' })).clarification_question;
+  const question = (await architect.call('ask', { work_request_id: request, question: 'Which release should include this?' })).ask;
   const read = async () => (await architect.call('read_work_request', { detail: 'full', work_request_id: request })).work_request.operator_report;
   const peer = await factory.client();
   await peer.reject('set_report', { work_request_id: request, brief: 'Forged brief' }, 'owned_by_other_terminal');
   await (await factory.client(null)).reject('set_report', { work_request_id: request, brief: 'Forged brief' }, 'read_only_outside_herdr');
-  await architect.reject('append_progress', { work_package_id: wp, summary: 'Old report path', idempotency_key: 'old-report',
-    payload: { type: 'architect_operator_report', brief: 'Old path' } }, 'operator_report_moved');
   expect(await read()).toBeFalsy();
   await architect.call('set_report', { brief: 'x'.repeat(4000) });
   expect((await read()).brief.text).toHaveLength(4000);
@@ -444,51 +408,35 @@ test('operator reports keep server times and partial edits and only the owner wr
   expect(detail.work_request.worked_on.address).toBe(architect.address);
   const unchanged = await architect.call('read_work_request', { detail: 'full', work_request_id: request });
   expect(unchanged.work_request.phase).toBe('active');
-  expect(unchanged.clarification_questions.find((entry: any) => entry.id === question.id).status).toBe('open');
+  expect(unchanged.asks.find((entry: any) => entry.id === question.id).state).toBe('open');
   expect((await row(architect, request, wp)).attention_reason_codes).not.toContain('active_blocker');
 });
 
-test('architect question and decision mutations preserve provenance and redact compact responses', async ({ processes }) => {
+test('asks and decisions preserve provenance and redact their responses', async ({ processes }) => {
   const factory = processes.factory();
   const architect = await factory.client();
-  const request = await architect.request('Redacted clarification authority');
-  const ask = await architect.call('ask_question', { work_request_id: request, category: 'scope',
-    question: 'Avoid Bearer raw_secret_synthetic', why_needed: 'Keep raw_secret_synthetic out of responses.',
-    asked_by_agent_run_id: 'raw_secret_synthetic', decision_prompt: { tl_dr: 'Choose scope', details: 'A bounded decision is required.',
-      options: [{ id: 'continue', label: 'Continue', answer: 'Proceed without raw_secret_synthetic.' }],
+  const request = await architect.request('Redacted ask authority');
+  const asked = await architect.call('ask', { work_request_id: request, question: 'Avoid Bearer raw_secret_synthetic',
+    decision_prompt: { tl_dr: 'Choose scope', details: 'A bounded decision is required.',
+      options: [{ id: 'continue', label: 'Continue', answer: 'Proceed with the bounded scope.' }],
     },
   });
-  expect(ask.scope.repo).toBe('example/service');
-  expect(ask.scope.base_branch).toBe('beta');
-  const question = ask.clarification_question.id;
-  for (const field of ['asked_by_agent_run_id', 'decision_prompt']) expect(ask.clarification_question[field]).toBeUndefined();
-  expect(JSON.stringify(ask)).not.toContain('raw_secret_synthetic');
-  for (const [value, got] of [['ready_for_slicing', 'ready_for_slicing'], [123, 'non_string']] as const) {
-    const invalid = await architect.reject('answer_question', { work_request_id: request, question_id: question,
-      expected_question_status: value, answer: 'Invalid status domain',
-    }, 'invalid_question_status');
-    expect(invalid.status_domain).toBe('clarification_question');
-    expect(invalid.expected_statuses).toEqual(['open']);
-    expect(invalid.got).toBe(got);
-  }
-  const answered = await architect.call('answer_question', { work_request_id: request, question_id: question,
-    answer: 'Use https://example.invalid/evidence?sig=raw_secret_synthetic',
-  });
-  expect(answered.clarification_question.status).toBe('answered');
-  expect(answered.clarification_question.answered_by).toBeUndefined();
+  const first = asked.ask.id;
+  expect(asked.ask.asked_by).toBe(architect.address);
+  expect(JSON.stringify(asked)).not.toContain('raw_secret_synthetic');
+  await architect.reject('resolve_ask', { ask_id: first, to: 'closed' }, 'invalid_to');
+  await architect.reject('resolve_ask', { ask_id: first, to: 'answered' }, 'missing_answer');
+  const answered = await architect.call('resolve_ask', { ask_id: first, to: 'answered', answer: 'Use https://example.invalid/evidence?sig=raw_secret_synthetic' });
+  expect(answered.ask.state).toBe('answered');
+  expect(answered.ask.answered_by).toBe(architect.address);
   expect(JSON.stringify(answered)).not.toContain('raw_secret_synthetic');
-  const closing = (await architect.call('ask_question', { work_request_id: request, category: 'acceptance',
-    question: 'Can the obsolete alternative be closed?', why_needed: 'Retire an unused choice.',
-  })).clarification_question.id;
-  expect((await architect.call('close_question', { work_request_id: request, question_id: closing, expected_question_status: 'open' })).clarification_question.status).toBe('closed');
-  const deciding = (await architect.call('ask_question', { work_request_id: request, category: 'product',
-    question: 'Keep this scope bounded?', why_needed: 'The answer must become decision provenance.',
-  })).clarification_question.id;
-  const combined = await architect.call('answer_question_and_record_decision', { work_request_id: request, question_id: deciding,
-    answer: 'Keep the bounded scope.', source_type: 'architect', decision: 'Keep the bounded scope.',
-    rationale: 'Adjacent work has another owner.', scope_impact: 'No scope expansion.',
+  const closing = (await architect.call('ask', { work_request_id: request, question: 'Can the obsolete alternative be dropped?' })).ask.id;
+  expect((await architect.call('resolve_ask', { ask_id: closing, to: 'withdrawn' })).ask.state).toBe('withdrawn');
+  const deciding = (await architect.call('ask', { work_request_id: request, question: 'Keep this scope bounded?' })).ask.id;
+  const combined = await architect.call('resolve_ask', { ask_id: deciding, to: 'answered', answer: 'Keep the bounded scope.',
+    decision: { source_type: 'architect', decision: 'Keep the bounded scope.', rationale: 'Adjacent work has another owner.', scope_impact: 'No scope expansion.' },
   });
-  expect(combined.clarification_question.status).toBe('answered');
+  expect(combined.ask.state).toBe('answered');
   expect(combined.decision_log_entry.source_id).toBe(deciding);
   const ids: string[] = [combined.decision_log_entry.id];
   for (const [source, by] of [['implicit', undefined], ['override', 'synthetic-architect-override']] as const) {
@@ -502,7 +450,7 @@ test('architect question and decision mutations preserve provenance and redact c
   }
   const persisted = await architect.call('read_work_request', { detail: 'full', work_request_id: request });
   expect(persisted.work_request.phase).toBe('intake');
-  expect(persisted.clarification_questions.map((entry: any) => entry.status)).toEqual(['answered', 'closed', 'answered']);
+  expect(persisted.asks.map((entry: any) => entry.state).sort()).toEqual(['answered', 'answered', 'withdrawn']);
   expect(persisted.decision_log_entries.map((entry: any) => entry.id)).toEqual(ids);
   expect(JSON.stringify(persisted)).not.toContain('raw_secret_synthetic');
 });
@@ -544,25 +492,22 @@ test('architect descendant planning stays owned through terminal closeout and re
   const architect = await factory.client();
   const request = await architect.request('Architect descendant evidence');
   const [wp] = await architect.addPackages([contract('Secondary planning', { repo: 'example/client', base_branch: 'integration' })]);
-  const finding = (await architect.call('append_finding', { work_package_id: wp, title: 'Scoped evidence', body: 'Owned descendant', idempotency_key: 'architect-finding' })).finding;
-  const progress = (await architect.call('append_progress', { work_package_id: wp, summary: 'Owned descendant progress', idempotency_key: 'architect-progress' })).progress_event;
+  const blocker = (await architect.call('set_blocker', { work_package_id: wp, blocker_id: 'scoped', active: true, summary: 'Scoped evidence' })).blocker;
   const detail = await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`);
-  expect(detail.findings[0].id).toBe(finding.id);
-  expect(detail.progress[0].id).toBe(progress.id);
-  const uri = `sympp://work-packages/${wp}/findings.md`;
+  expect(detail.blockers[0].id).toBe(blocker.id);
+  expect(detail.progress[0].summary).toBe('Scoped evidence');
+  const uri = `sympp://work-packages/${wp}/progress.md`;
   expect((await architect.rpc('resources/read', { uri })).result.contents[0].text).toContain('Scoped evidence');
   const foreign = await factory.client();
   const foreignRequest = await foreign.request('Other planning owner');
   const [otherWp] = await packages(foreign, ['Private foreign plan']);
   // Reads by explicit id are free for trusted callers; writes need the owner.
   expect((await architect.call('read_work_request', { work_request_id: foreignRequest, view: 'package', work_package_id: otherWp })).task_plan).toBeTruthy();
-  await architect.reject('append_progress', { work_package_id: otherWp, summary: 'Foreign', idempotency_key: 'foreign' }, 'owned_by_other_terminal');
+  await architect.reject('set_blocker', { work_package_id: otherWp, blocker_id: 'foreign', active: true, summary: 'Foreign' }, 'owned_by_other_terminal');
   await close(architect, wp);
-  for (const [name, args] of [
-    ['append_finding', { title: 'Late finding', body: 'Must not persist', idempotency_key: 'late-architect-finding' }],
-    ['append_progress', { summary: 'Late progress', idempotency_key: 'late-architect-progress' }],
-  ] as const) await architect.reject(name, { work_package_id: wp, ...args }, 'work_package_terminal');
-  expect((await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).findings).toHaveLength(1);
+  // Ending the package cleared its blocker; an ended package takes no new one.
+  await architect.reject('set_blocker', { work_package_id: wp, blocker_id: 'late', active: true, summary: 'Must not persist' }, 'work_package_ended');
+  expect((await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).blockers.map((entry: any) => [entry.id, entry.active])).toEqual([['scoped', false]]);
   expect((await architect.operator(`/api/v1/sympp/operator/work-requests/${request}/archive`, {})).status).toBe(200);
   // Archiving ends ownership; the archived request's evidence stays readable by id and refuses writes.
   expect((await architect.call('sympp.health')).caller.owns).toEqual([]);

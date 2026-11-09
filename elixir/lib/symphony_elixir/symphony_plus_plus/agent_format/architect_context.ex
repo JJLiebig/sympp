@@ -31,7 +31,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
       "work_request" => payload |> map_value("work_request") |> compact_work_request(),
       "scope" => payload |> map_value("scope") |> primitive_map(),
       "summary" => payload |> map_value("summary") |> primitive_map(),
-      "clarification_questions" => payload |> map_value("clarification_questions") |> list_rows(&question_row/1),
+      "asks" => payload |> map_value("asks") |> list_rows(&ask_row/1),
       "decisions_as_rationale" => payload |> map_value("decision_log_entries") |> list_rows(&decision_row/1),
       "work_packages" => payload |> map_value("work_packages") |> list_rows(&work_package_row/1)
     }
@@ -96,14 +96,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
 
   defp compact_mutation_work_request(_value), do: %{}
 
-  defp question_row(%{} = question) do
+  defp ask_row(%{} = ask) do
     %{
-      "id" => text_value(map_value(question, "id")),
-      "sequence" => integer_value(map_value(question, "sequence")),
-      "status" => text_value(map_value(question, "status")),
-      "category" => text_value(map_value(question, "category")),
-      "question" => text_value(map_value(question, "question")),
-      "answer" => text_value(map_value(question, "answer"))
+      "id" => text_value(map_value(ask, "id")),
+      "state" => text_value(map_value(ask, "state")),
+      "work_package_id" => text_value(map_value(ask, "work_package_id")),
+      "asked_by" => text_value(map_value(ask, "asked_by")),
+      "question" => text_value(map_value(ask, "question")),
+      "answer" => text_value(map_value(ask, "answer"))
     }
   end
 

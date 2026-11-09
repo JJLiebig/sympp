@@ -566,7 +566,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
         eligibility
         |> Map.put(:eligible, false)
         |> Map.update!(:reason_codes, &Enum.uniq(["active_blocker" | &1]))
-        |> Map.put(:next_action, "resolve_blocker")
+        |> Map.put(:next_action, "clear_blocker")
 
       # A package whose GitHub or review state can't be read isn't merge
       # eligible until the Observer reads it again.

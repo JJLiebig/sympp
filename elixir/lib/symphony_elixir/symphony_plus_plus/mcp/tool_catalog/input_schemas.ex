@@ -80,23 +80,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
 
   defp require_work_request_target(schema), do: schema
 
-  defp architect_schema("append_finding") do
-    schema(
-      scoped_properties(%{
-        "body" => markdown_string_schema("Human-facing finding details in Markdown."),
-        "id" => string_schema(),
-        "idempotency_key" => string_schema(),
-        "severity" => string_schema(),
-        "title" => string_schema()
-      }),
-      ["work_package_id", "title", "body", "idempotency_key"]
-    )
-  end
-
-  defp architect_schema("append_progress") do
-    schema(progress_properties(:explicit), ["work_package_id", "summary", "idempotency_key"])
-  end
-
   defp architect_schema("list_work_requests") do
     schema(
       %{
@@ -163,18 +146,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  defp architect_schema("resolve_blocker") do
-    schema(
-      progress_properties(:explicit)
-      |> Map.merge(%{
-        "blocker_id" => string_schema(),
-        "resolution" => string_schema(),
-        "status" => string_enum_schema(["resolved"])
-      }),
-      ["work_package_id", "blocker_id", "resolution", "summary", "idempotency_key"]
-    )
-  end
-
   defp architect_schema("set_report") do
     nullable_text = %{"type" => ["string", "null"], "description" => "New text; null clears it."}
 
@@ -195,60 +166,50 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  defp architect_schema("ask_question") do
+  defp architect_schema("set_blocker") do
     schema(
       %{
-        "work_request_id" => string_schema(),
-        "category" => string_schema(),
-        "question" => markdown_string_schema("Human-facing clarification question in Markdown."),
-        "why_needed" => markdown_string_schema("Human-facing Markdown explanation of why the answer is needed."),
-        "decision_prompt" => decision_prompt_schema(),
-        "asked_by_agent_run_id" => string_schema()
+        "work_package_id" => string_schema(),
+        "blocker_id" => described_string_schema("Your stable id for this blocker, reused to update or clear it."),
+        "active" => boolean_schema() |> Map.put("description", "true declares or updates the blocker; false clears it."),
+        "summary" => described_string_schema("What blocks the package. Required when active is true.")
       },
-      ["work_request_id", "category", "question", "why_needed"]
+      ["work_package_id", "blocker_id", "active"]
     )
   end
 
-  defp architect_schema("answer_question") do
+  defp architect_schema("ask") do
     schema(
       %{
         "work_request_id" => string_schema(),
-        "question_id" => string_schema(),
-        "expected_question_status" => string_schema(),
-        "answer" => markdown_string_schema("Human-facing clarification answer in Markdown."),
-        "answered_by" => string_schema()
+        "work_package_id" => described_string_schema("Optional package the ask is about; the ask is withdrawn when that package ends."),
+        "question" => markdown_string_schema("The question for the operator, in Markdown."),
+        "decision_prompt" => decision_prompt_schema()
       },
-      ["work_request_id", "question_id", "answer"]
+      ["work_request_id", "question"]
     )
   end
 
-  defp architect_schema("answer_question_and_record_decision") do
+  defp architect_schema("resolve_ask") do
     schema(
       %{
-        "work_request_id" => string_schema(),
-        "question_id" => string_schema(),
-        "expected_question_status" => string_schema(),
-        "answer" => markdown_string_schema("Human-facing clarification answer in Markdown."),
-        "answered_by" => string_schema(),
-        "source_type" => string_enum_schema(DecisionLogEntry.source_types()),
-        "source_id" => string_schema(),
-        "decision" => string_schema(),
-        "rationale" => markdown_string_schema("Human-facing decision rationale in Markdown."),
-        "scope_impact" => markdown_string_schema("Human-facing scope impact note in Markdown."),
-        "created_by" => string_schema()
+        "ask_id" => string_schema(),
+        "to" => string_enum_schema(["answered", "withdrawn"]),
+        "answer" => markdown_string_schema("The answer, in Markdown. Required for to: answered."),
+        "decision" => %{
+          "type" => "object",
+          "additionalProperties" => false,
+          "description" => "Optional decision recorded in the same step, citing this ask.",
+          "properties" => %{
+            "source_type" => string_enum_schema(DecisionLogEntry.source_types()),
+            "decision" => string_schema(),
+            "rationale" => markdown_string_schema("Human-facing decision rationale in Markdown."),
+            "scope_impact" => markdown_string_schema("Human-facing scope impact note in Markdown.")
+          },
+          "required" => ["source_type", "decision", "rationale", "scope_impact"]
+        }
       },
-      ["work_request_id", "question_id", "answer", "source_type", "decision", "rationale", "scope_impact"]
-    )
-  end
-
-  defp architect_schema("close_question") do
-    schema(
-      %{
-        "work_request_id" => string_schema(),
-        "question_id" => string_schema(),
-        "expected_question_status" => string_schema()
-      },
-      ["work_request_id", "question_id"]
+      ["ask_id", "to"]
     )
   end
 
@@ -354,18 +315,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     %{"type" => "object", "additionalProperties" => false, "properties" => properties, "required" => required}
   end
 
-  defp scoped_properties(properties), do: Map.put(properties, "work_package_id", string_schema())
-
-  defp progress_properties(:explicit) do
-    scoped_properties(%{
-      "summary" => string_schema(),
-      "body" => markdown_nullable_string_schema("Optional human-facing Markdown body."),
-      "status" => string_schema(),
-      "idempotency_key" => string_schema(),
-      "payload" => object_schema()
-    })
-  end
-
   defp string_schema, do: %{"type" => "string"}
   defp described_string_schema(description), do: Map.put(string_schema(), "description", description)
 
@@ -384,7 +333,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   end
 
   defp nullable_string_schema, do: %{"type" => ["string", "null"]}
-  defp markdown_nullable_string_schema(description), do: Map.put(nullable_string_schema(), "description", description)
   defp object_schema, do: %{"type" => "object", "additionalProperties" => true}
 
   defp add_package_op_schema do

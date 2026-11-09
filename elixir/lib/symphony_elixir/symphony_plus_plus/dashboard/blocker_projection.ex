@@ -19,10 +19,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection do
         summary: Sanitizer.redacted_text(event.summary),
         body: Sanitizer.redacted_text(event.body),
         status: event.status,
-        source_tool: Map.get(payload, "source_tool"),
-        resolution: Map.get(payload, "resolution"),
-        blocked_by: blocker_endpoint(Map.get(payload, "blocked_by")),
-        blocked_item: blocker_endpoint(Map.get(payload, "blocked_item")),
         actor: actor(event),
         event_id: event.id,
         updated_at: Sanitizer.timestamp(event.created_at)
@@ -34,39 +30,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection do
 
   @spec blocker_event?(ProgressEvent.t()) :: boolean()
   def blocker_event?(%ProgressEvent{payload: payload}) when is_map(payload) do
-    Map.get(payload, "type") == "blocker" and Map.get(payload, "source_tool") in ["report_blocker", "resolve_blocker"]
+    Map.get(payload, "type") == "blocker" and Map.get(payload, "source_tool") == "set_blocker"
   end
 
   def blocker_event?(%ProgressEvent{}), do: false
-
-  defp blocker_endpoint(%{} = value) do
-    kind = value |> Map.get("kind", Map.get(value, :kind)) |> normalize_blocker_endpoint_kind()
-    id = value |> Map.get("id", Map.get(value, :id)) |> normalize_blocker_endpoint_id()
-
-    if kind && id do
-      %{kind: kind, id: id}
-    end
-  end
-
-  defp blocker_endpoint(_value), do: nil
-
-  defp normalize_blocker_endpoint_kind(value) when is_binary(value) do
-    case String.trim(value) do
-      "work_package" -> "work_package"
-      _other -> nil
-    end
-  end
-
-  defp normalize_blocker_endpoint_kind(_value), do: nil
-
-  defp normalize_blocker_endpoint_id(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> nil
-      id -> id
-    end
-  end
-
-  defp normalize_blocker_endpoint_id(_value), do: nil
 
   @spec actor(ProgressEvent.t()) :: map()
   def actor(%ProgressEvent{} = event) do

@@ -152,9 +152,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
   defp compact_tool_entry("progress_event", key, value),
     do: {key, compact_status_payload(value, ["id", "status", "summary", "idempotency_key"])}
 
-  defp compact_tool_entry("clarification_question", key, value),
-    do: {key, compact_status_payload(value, ["id", "status", "sequence"])}
-
   defp compact_tool_entry("decision_log_entry", key, value),
     do: {key, compact_status_payload(value, ["id", "sequence", "source_type", "source_id", "decision", "created_by"])}
 

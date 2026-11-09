@@ -28,7 +28,7 @@ Windows process qualification remain separate gates.
 
 Factory journeys start the candidate cockpit on an ephemeral loopback port with
 a separate disposable SQLite ledger. They use real HTTP MCP clients for request
-creation, ownership, clarification, decisions, plan edits, grouping,
+creation, ownership, asks, decisions, plan edits, grouping,
 repository scope, dependency refusal, ordinary dispatch, and explicit blockers.
 Human choice validation also exercises the public operator answer route with its
 required same-origin header and reads persisted answers through MCP. The cockpit

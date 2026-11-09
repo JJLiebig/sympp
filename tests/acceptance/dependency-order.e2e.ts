@@ -33,7 +33,7 @@ test('all dependency endpoint combinations dispatch only after canonical deliver
   expect((await row(architect, request, cancelled)).delivery_outcome).toBe('skipped');
   await architect.call('edit_plan', { ops: [{ op: 'remove_dependency', from: next, to: cancelled }] });
   // Retiring scope is not completion; only the delivered end of the chain satisfies it.
-  await architect.call('append_progress', { work_package_id: direct, summary: 'This attempt is blocked.', idempotency_key: 'superseded-blocker', payload: { type: 'blocker', active: true, blocker_id: 'old-attempt' } });
+  await architect.call('set_blocker', { work_package_id: direct, blocker_id: 'old-attempt', active: true, summary: 'This attempt is blocked.' });
   await close(architect, direct, 'superseded', { successor_work_package_id: successor, superseded_reason: 'A replacement owns the same scope.' });
   expect((await row(architect, request, direct)).work_package.blocker_state['active?']).toBe(false);
   await close(architect, successor, 'superseded', { successor_work_package_id: final, superseded_reason: 'The final attempt owns the same scope.' });
@@ -160,7 +160,7 @@ test('out-of-order automatic and manual closeout retain order violations through
   for (const [wp, number] of [[ui, 204], [replay, 205]] as const) {
     await architect.call('dispatch_work_package', { work_package_id: wp });
     await depend(architect, wp, backend, { reason: 'Prerequisite must deliver first.' });
-    await architect.call('append_progress', { work_package_id: wp, summary: 'External merge bypassed this blocker.', idempotency_key: `block-${wp}`, payload: { type: 'blocker', active: true, blocker_id: 'merge-order' } });
+    await architect.call('set_blocker', { work_package_id: wp, blocker_id: 'merge-order', active: true, summary: 'External merge bypassed this blocker.' });
     provider.set(number, pr(number, head('d')));
     expect((await sync(architect, wp, number, head('d'))).pr_sync.readiness_reasons).toContain('dependencies_unavailable');
     expect((await row(architect, request, wp)).merge_eligibility.eligible).toBe(false);

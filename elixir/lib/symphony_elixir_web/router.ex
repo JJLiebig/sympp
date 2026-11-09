@@ -27,14 +27,10 @@ defmodule SymphonyElixirWeb.Router do
 
     post("/api/v1/sympp/herdr/work-requests", SymppDashboardApiController, :herdr_create_work_request)
 
-    post(
-      "/api/v1/sympp/herdr/work-requests/:work_request_id/questions/:question_id/answer",
-      SymppDashboardApiController,
-      :herdr_answer_question
-    )
+    post("/api/v1/sympp/herdr/asks/:ask_id/answer", SymppDashboardApiController, :herdr_answer_ask)
 
     match(:*, "/api/v1/sympp/herdr/work-requests", ObservabilityApiController, :method_not_allowed)
-    match(:*, "/api/v1/sympp/herdr/work-requests/:work_request_id/questions/:question_id/answer", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/sympp/herdr/asks/:ask_id/answer", ObservabilityApiController, :method_not_allowed)
   end
 
   scope "/", SymphonyElixirWeb do
@@ -63,12 +59,7 @@ defmodule SymphonyElixirWeb.Router do
     post("/api/v1/sympp/operator/work-packages/:work_package_id/finish", SymppDashboardApiController, :operator_finish_work_package)
     post("/api/v1/sympp/operator/work-packages/:work_package_id/blockers/:blocker_id/clear", SymppDashboardApiController, :operator_clear_work_package_blocker)
     post("/api/v1/sympp/operator/work-packages/:work_package_id/archive", SymppDashboardApiController, :operator_archive_work_package)
-
-    post(
-      "/api/v1/sympp/operator/work-requests/:work_request_id/questions/:question_id/answer",
-      SymppDashboardApiController,
-      :operator_answer_question
-    )
+    post("/api/v1/sympp/operator/asks/:ask_id/answer", SymppDashboardApiController, :operator_answer_ask)
   end
 
   scope "/", SymphonyElixirWeb do
@@ -90,6 +81,7 @@ defmodule SymphonyElixirWeb.Router do
     match(:*, "/api/v1/sympp/operator/work-packages/:work_package_id/finish", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-packages/:work_package_id/blockers/:blocker_id/clear", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-packages/:work_package_id/archive", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/sympp/operator/asks/:ask_id/answer", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-packages/:work_package_id", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/solo-sessions/:solo_session_id", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-requests", ObservabilityApiController, :method_not_allowed)

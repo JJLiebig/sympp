@@ -135,7 +135,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   @spec alert_indicators(map(), [map()], map()) :: [map()]
   def alert_indicators(repo, %State{} = state, runtime) when is_atom(repo) do
     state
-    |> readiness_context(repo, length(state.artifacts), length(state.findings))
+    |> readiness_context(repo)
     |> alert_indicators(blockers(state.progress_events), runtime)
   end
 
@@ -148,16 +148,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     ]
   end
 
-  @spec readiness_context(State.t(), repo(), non_neg_integer(), non_neg_integer()) :: map()
-  def readiness_context(%State{} = state, repo, _artifact_count, _finding_count) do
-    readiness_context(
-      repo,
-      state.work_package,
-      state.plan_nodes,
-      state.progress_events,
-      state.artifacts,
-      state.findings
-    )
+  @spec readiness_context(State.t(), repo()) :: map()
+  def readiness_context(%State{} = state, repo) do
+    readiness_context(repo, state.work_package, state.plan_nodes, state.progress_events, state.artifacts)
   end
 
   @spec readiness_context(
@@ -165,19 +158,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
           WorkPackage.t(),
           [PlanNode.t()],
           [ProgressEvent.t()],
-          [term()],
           [term()]
         ) :: map()
-  def readiness_context(repo, %WorkPackage{} = work_package, plan_nodes, progress_events, artifacts, findings) do
+  def readiness_context(repo, %WorkPackage{} = work_package, plan_nodes, progress_events, artifacts) do
     %{
       repo: repo,
       work_package: work_package,
       plan_nodes: plan_nodes,
       progress_events: chronological_progress_events(progress_events),
       artifacts: artifacts,
-      findings: findings,
-      artifact_count: length(artifacts),
-      finding_count: length(findings)
+      artifact_count: length(artifacts)
     }
   end
 
@@ -679,8 +669,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       {active_blocker?(context.progress_events), "no_active_blockers"},
       {merge_metadata_missing?(context, "branch"), "branch_attached"},
       {merge_metadata_missing?(context, "pr"), "pr_attached"},
-      {current_pr_state_missing?(context), "current_pr_state"},
-      {investigation_findings_missing?(context), "findings_documented"}
+      {current_pr_state_missing?(context), "current_pr_state"}
     ]
     |> Enum.flat_map(fn
       {true, gate} -> [readiness_failure_reason(gate)]
@@ -700,7 +689,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   defp readiness_failure_message("branch_attached"), do: "Current branch metadata is missing."
   defp readiness_failure_message("pr_attached"), do: "Current PR metadata is missing."
   defp readiness_failure_message("current_pr_state"), do: "Current synced PR state is missing."
-  defp readiness_failure_message("findings_documented"), do: "Investigation findings are missing."
   defp readiness_failure_message(_gate), do: "Readiness gate is not satisfied."
 
   defp merge_metadata_missing?(context, "pr") do
@@ -723,8 +711,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       required_gate?(context.work_package, "current_pr_state") and
       not current_pr_state_present?(context.progress_events, latest_current_head_sha(context.progress_events))
   end
-
-  defp investigation_findings_missing?(context), do: context.work_package.kind == "investigation" and context.findings == []
 
   defp active_blocker?(progress_events) do
     progress_events

@@ -1,9 +1,8 @@
-defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestClarificationsTest do
+defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDecisionsTest do
   use ExUnit.Case, async: false
 
   alias Ecto.Adapters.SQL
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -68,19 +67,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestClarificationsTest do
 
   setup %{repo: repo} do
     repo.delete_all(DecisionLogEntry)
-    repo.delete_all(ClarificationQuestion)
     repo.delete_all(WorkRequest)
     :ok
   end
 
   test "rejects duplicate ids invalid values and missing WorkRequest foreign keys", %{repo: repo} do
     work_request = create_work_request!(repo)
-
-    assert {:ok, question} = Repository.ask_question(repo, work_request.id, question_attrs(id: "WRQ-DUPLICATE"))
-    assert question.id == "WRQ-DUPLICATE"
-    assert {:error, :id_already_exists} = Repository.ask_question(repo, work_request.id, question_attrs(id: "WRQ-DUPLICATE"))
-
-    assert {:error, :not_found} = Repository.ask_question(repo, "WR-MISSING", question_attrs(id: "WRQ-MISSING-PARENT"))
 
     assert {:ok, decision} = Repository.record_decision(repo, work_request.id, decision_attrs(id: "WRD-DUPLICATE"))
     assert decision.id == "WRD-DUPLICATE"
@@ -97,18 +89,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestClarificationsTest do
 
   test "retries repeated sequence conflicts and database busy responses" do
     with_sequence_retry_attempts(5, fn ->
-      assert {{:ok, %ClarificationQuestion{} = question}, transaction_attempts, insert_attempts} =
+      assert {{:ok, %DecisionLogEntry{} = decision}, transaction_attempts, insert_attempts} =
                with_transient_failures(
                  :sequence_conflict,
                  3,
-                 [constraint: "sympp_work_request_questions_work_request_sequence_unique_index"],
+                 [constraint: "sympp_work_request_decision_logs_work_request_sequence_unique_index"],
                  fn ->
-                   Repository.ask_question(RetryRepo, "WR-RETRY", question_attrs(id: "WRQ-RETRY"))
+                   Repository.record_decision(RetryRepo, "WR-RETRY", decision_attrs(id: "WRD-RETRY-SEQUENCE"))
                  end
                )
 
-      assert question.id == "WRQ-RETRY"
-      assert question.sequence == 1
+      assert decision.id == "WRD-RETRY-SEQUENCE"
+      assert decision.sequence == 1
       assert transaction_attempts == 4
       assert insert_attempts == 4
 
@@ -130,9 +122,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestClarificationsTest do
                with_transient_failures(
                  :sequence_conflict,
                  3,
-                 [constraint: "sympp_work_request_questions_work_request_sequence_unique_index"],
+                 [constraint: "sympp_work_request_decision_logs_work_request_sequence_unique_index"],
                  fn ->
-                   Repository.ask_question(RetryRepo, "WR-EXHAUSTED", question_attrs(id: "WRQ-EXHAUSTED"))
+                   Repository.record_decision(RetryRepo, "WR-EXHAUSTED", decision_attrs(id: "WRD-EXHAUSTED-SEQUENCE"))
                  end
                )
 
@@ -149,29 +141,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestClarificationsTest do
     end)
   end
 
-  test "deleting a WorkRequest deletes its clarification and decision records", %{repo: repo} do
+  test "deleting a WorkRequest deletes its decision records", %{repo: repo} do
     work_request = create_work_request!(repo)
-    assert {:ok, _question} = Repository.ask_question(repo, work_request.id, question_attrs())
     assert {:ok, _decision} = Repository.record_decision(repo, work_request.id, decision_attrs())
 
     repo.delete!(work_request)
 
-    assert {:ok, []} = Repository.list_questions(repo, work_request.id)
     assert {:ok, []} = Repository.list_decisions(repo, work_request.id)
   end
 
   test "migration is idempotent and creates primary keys plus WorkRequest sequence indexes", %{repo: repo} do
     assert :ok = Repository.migrate(repo)
 
-    assert_primary_key(repo, "sympp_work_request_clarification_questions")
     assert_primary_key(repo, "sympp_work_request_decision_logs")
 
-    question_indexes = index_names(repo, "sympp_work_request_clarification_questions")
     decision_indexes = index_names(repo, "sympp_work_request_decision_logs")
 
-    assert "sympp_work_request_questions_id_unique_index" in question_indexes
-    assert "sympp_work_request_questions_work_request_sequence_unique_index" in question_indexes
-    assert "sympp_work_request_questions_work_request_status_index" in question_indexes
     assert "sympp_work_request_decision_logs_id_unique_index" in decision_indexes
     assert "sympp_work_request_decision_logs_work_request_sequence_unique_index" in decision_indexes
     assert "sympp_work_request_decision_logs_work_request_source_index" in decision_indexes
@@ -192,16 +177,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestClarificationsTest do
       human_description: "Record the human's desired outcome before slicing.",
       constraints: %{"allowed_paths" => ["elixir/lib"], "forbidden_paths" => [], "requires_secret" => false},
       desired_dispatch_shape: "single_package"
-    }
-
-    Enum.into(overrides, defaults)
-  end
-
-  defp question_attrs(overrides \\ []) do
-    defaults = %{
-      category: "scope",
-      question: "Which branch should this target?",
-      why_needed: "The architect needs the target before slicing."
     }
 
     Enum.into(overrides, defaults)

@@ -2,7 +2,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
   use ExUnit.Case, async: false
 
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer
@@ -27,38 +26,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
   setup %{repo: repo} do
     repo.delete_all(Artifact)
     repo.delete_all(ProgressEvent)
-    repo.delete_all(Finding)
     repo.delete_all(PlanNode)
     repo.delete_all(WorkPackage)
     :ok
-  end
-
-  test "allocates append sequence uniquely during concurrent findings", %{repo: repo} do
-    assert {:ok, work_package} = create_work_package(repo)
-
-    results =
-      1..8
-      |> Task.async_stream(
-        fn index ->
-          Service.append_finding(repo, %{
-            work_package_id: work_package.id,
-            title: "Finding #{index}",
-            body: "Concurrent append #{index}"
-          })
-        end,
-        max_concurrency: 8,
-        timeout: 5_000
-      )
-      |> Enum.map(fn {:ok, result} -> result end)
-
-    assert Enum.all?(results, &match?({:ok, %Finding{}}, &1))
-
-    sequences =
-      results
-      |> Enum.map(fn {:ok, finding} -> finding.sequence end)
-      |> Enum.sort()
-
-    assert sequences == Enum.to_list(1..8)
   end
 
   test "allocates append sequence uniquely during concurrent artifacts", %{repo: repo} do
@@ -147,29 +117,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
     assert {:ok, work_package} = create_work_package(repo)
 
     for index <- 1..105 do
-      assert {:ok, _finding} =
-               Service.append_finding(repo, %{
-                 work_package_id: work_package.id,
-                 title: "Finding #{index}",
-                 body: "Body #{index}"
-               })
+      assert {:ok, _event} = append_event(repo, work_package.id, index, "Body #{index}")
     end
 
-    assert {:ok, findings} = Renderer.render(repo, work_package.id, "findings.md")
+    assert {:ok, progress} = Renderer.render(repo, work_package.id, "progress.md")
 
-    assert findings =~ "_5 older findings omitted from this virtual file._"
-    refute findings =~ "source: `Finding 1`\n\n- Severity"
-    assert findings =~ "source: `Finding 6`"
-    assert findings =~ "source: `Finding 105`"
+    assert progress =~ "_5 older progress events omitted from this virtual file._"
+    refute progress =~ "source: `Event 1`\n\n- Status"
+    assert progress =~ "source: `Event 6`"
+    assert progress =~ "source: `Event 105`"
 
     assert {:ok, state} = Service.get_state(repo, work_package.id)
-    assert length(state.findings) == 105
-    assert state.findings_omitted_count == 0
+    assert length(state.progress_events) == 105
+    assert state.progress_events_omitted_count == 0
 
-    assert {:ok, rendered_from_full_state} = Renderer.render_state(state, "findings.md")
-    assert rendered_from_full_state =~ "_5 older findings omitted from this virtual file._"
-    refute rendered_from_full_state =~ "source: `Finding 1`\n\n- Severity"
-    assert rendered_from_full_state =~ "source: `Finding 105`"
+    assert {:ok, rendered_from_full_state} = Renderer.render_state(state, "progress.md")
+    assert rendered_from_full_state =~ "_5 older progress events omitted from this virtual file._"
+    refute rendered_from_full_state =~ "source: `Event 1`\n\n- Status"
+    assert rendered_from_full_state =~ "source: `Event 105`"
   end
 
   test "canonical state is not silently render-capped", %{repo: repo} do
@@ -193,22 +158,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
     large_body = String.duplicate("x", 4_050)
 
     for index <- 1..105 do
-      assert {:ok, _finding} =
-               Service.append_finding(repo, %{
-                 work_package_id: work_package.id,
-                 title: "Finding #{index}",
-                 body: large_body
-               })
+      assert {:ok, _event} = append_event(repo, work_package.id, index, large_body)
     end
 
-    assert {:ok, findings} = Renderer.render(repo, work_package.id, "findings.md")
+    assert {:ok, progress} = Renderer.render(repo, work_package.id, "progress.md")
 
-    assert String.length(findings) < 125_000
-    assert findings =~ "[virtual file truncated]"
-    assert findings =~ "[virtual file truncated]\n\n## "
-    assert findings =~ "source: `Finding 105`"
-    refute findings =~ "source: `Finding 6`"
-    assert findings |> fenced_source_count() |> rem(2) == 0
+    assert String.length(progress) < 125_000
+    assert progress =~ "[virtual file truncated]"
+    assert progress =~ "[virtual file truncated]\n\n## "
+    assert progress =~ "source: `Event 105`"
+    refute progress =~ "source: `Event 6`"
+    assert progress |> fenced_source_count() |> rem(2) == 0
   end
 
   test "caps ordered plan and acceptance lists from the head", %{repo: repo} do
@@ -240,10 +200,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
   test "normalizes duplicate planning ids", %{repo: repo} do
     assert {:ok, work_package} = create_work_package(repo)
 
-    attrs = %{id: "finding-duplicate", work_package_id: work_package.id, title: "Duplicate", body: "First insert"}
+    attrs = %{id: "artifact-duplicate", work_package_id: work_package.id, path: "first.md", title: "Duplicate"}
 
-    assert {:ok, _finding} = Service.append_finding(repo, attrs)
-    assert {:error, :id_already_exists} = Service.append_finding(repo, Map.put(attrs, :body, "Second insert"))
+    assert {:ok, _artifact} = Service.append_artifact(repo, attrs)
+    assert {:error, :id_already_exists} = Service.append_artifact(repo, Map.put(attrs, :path, "second.md"))
+  end
+
+  defp append_event(repo, work_package_id, index, body) do
+    Service.append_progress_event(repo, %{
+      work_package_id: work_package_id,
+      summary: "Event #{index}",
+      body: body,
+      status: "recorded",
+      idempotency_key: "event-#{index}"
+    })
   end
 
   defp create_work_package(repo, overrides \\ []) do

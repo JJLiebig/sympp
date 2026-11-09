@@ -8,6 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.NeverStartedRetention do
 
   import Ecto.Query, only: [from: 2]
 
+  alias SymphonyElixir.SymphonyPlusPlus.Asks
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{WorkPackage, WorkPackageDelivery}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{Phase, Repository, WorkRequest}
 
@@ -34,6 +35,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.NeverStartedRetention do
         repo.update_all(from(request in WorkRequest, where: request.id in ^ids and is_nil(request.archived_at)),
           set: [archived_at: now, archive_reason: "never_started", updated_at: now]
         )
+
+        Asks.withdraw_for_work_requests(repo, ids)
       end
 
       ids

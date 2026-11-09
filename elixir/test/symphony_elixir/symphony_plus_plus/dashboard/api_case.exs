@@ -13,7 +13,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.ApiCase do
       alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
       alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
       alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
-      alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
       alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
       alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
       alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
@@ -23,7 +22,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.ApiCase do
       alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
       alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
       alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
-      alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
       alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
       alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
       alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -58,7 +56,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.ApiCase do
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Planning.Artifact)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent)
-    repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Planning.Finding)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession)
@@ -67,7 +64,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.ApiCase do
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Phases.Phase)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry)
-    repo.delete_all(SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion)
+    repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Asks.Ask)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings)
     :ok

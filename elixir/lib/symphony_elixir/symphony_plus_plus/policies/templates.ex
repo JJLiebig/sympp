@@ -38,7 +38,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
     "investigation" => %{
       template: "investigation",
       constraints: %{expiry_seconds: nil, planning_depth: "findings"},
-      required_gates: ["findings_documented"]
+      required_gates: []
     }
   }
 

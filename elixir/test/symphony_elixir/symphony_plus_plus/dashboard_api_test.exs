@@ -8,6 +8,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
+  alias SymphonyElixir.SymphonyPlusPlus.Asks
+  alias SymphonyElixir.SymphonyPlusPlus.Asks.Ask
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
@@ -20,10 +22,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.RetentionThrottle
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
@@ -37,7 +39,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase, as: WorkRequestPhase
@@ -94,7 +95,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
     @counted_tables [
       "sympp_work_requests",
-      "sympp_work_request_clarification_questions",
+      "sympp_asks",
       "sympp_work_request_decision_logs",
       "sympp_work_packages",
       "sympp_work_package_deliveries"
@@ -172,7 +173,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     repo.delete_all(AgentRun)
     repo.delete_all(Artifact)
     repo.delete_all(ProgressEvent)
-    repo.delete_all(Finding)
     repo.delete_all(PlanNode)
     repo.delete_all(SoloSessionEntry)
     repo.delete_all(SoloSession)
@@ -181,7 +181,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     repo.delete_all(WorkPackage)
     repo.delete_all(Phase)
     repo.delete_all(DecisionLogEntry)
-    repo.delete_all(ClarificationQuestion)
+    repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Asks.Ask)
     repo.delete_all(WorkRequest)
     repo.delete_all(OperatorSettings)
     RetentionThrottle.reset(repo)
@@ -487,7 +487,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     first = create_work_request!(repo, id: "WR-DASH-BATCH-1")
     second = create_work_request!(repo, id: "WR-DASH-BATCH-2")
 
-    assert {:ok, _question} = WorkRequestRepository.ask_question(repo, first.id, question_attrs(id: "WRQ-DASH-BATCH-1"))
+    insert_ask!(repo, first.id)
     assert {:ok, _decision} = WorkRequestRepository.record_decision(repo, second.id, decision_attrs(id: "WRD-DASH-BATCH-1"))
     assert {:ok, _slice} = CanonicalWorkPackageFixtures.add_work_package(repo, second.id, work_package_attrs(id: "WRS-DASH-BATCH-1"))
 
@@ -655,7 +655,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert detail.work_request.phase == "unresolved"
   end
 
-  test "WorkRequest delivery truth stays primary over open questions", %{repo: repo} do
+  test "WorkRequest delivery truth stays primary over open asks", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-DASH-OP-GATED-DELIVERY")
 
     assert {:ok, work_package} =
@@ -686,7 +686,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                })
              )
 
-    assert {:ok, _question} = WorkRequestRepository.ask_question(repo, work_request.id, question_attrs(id: "WRQ-DASH-GATED-DELIVERY"))
+    insert_ask!(repo, work_request.id)
 
     assert {:ok, payload} = Dashboard.work_requests(repo)
     card = Enum.find(payload.work_requests, &(&1.id == work_request.id))
@@ -701,15 +701,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert slice.operational_state.key == "delivered"
   end
 
-  test "operator-completed WorkRequest stays completed over open questions", %{repo: repo} do
+  test "operator-completed WorkRequest stays completed over open asks", %{repo: repo} do
     completed_at = ~U[2026-05-25 10:00:00.000000Z]
 
-    work_request =
-      create_work_request!(repo, id: "WR-DASH-OPERATOR-COMPLETED-GATED")
-      |> Ecto.Changeset.change(operator_completed_at: completed_at)
-      |> repo.update!()
-
-    assert {:ok, _question} = WorkRequestRepository.ask_question(repo, work_request.id, question_attrs(id: "WRQ-DASH-OPERATOR-COMPLETED"))
+    work_request = create_work_request!(repo, id: "WR-DASH-OPERATOR-COMPLETED-GATED")
+    insert_ask!(repo, work_request.id)
+    work_request = work_request |> Ecto.Changeset.change(operator_completed_at: completed_at) |> repo.update!()
     assert {:ok, payload} = Dashboard.work_requests(repo)
     card = Enum.find(payload.work_requests, &(&1.id == work_request.id))
 
@@ -721,14 +718,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert detail.work_request.operational_state.key == "completed"
   end
 
-  test "actual no-PR delivery stays visible over open questions", %{repo: repo} do
+  test "actual no-PR delivery stays visible over open asks", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-DASH-DERIVED-COMPLETED-GATED")
 
     assert {:ok, work_package} =
              CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-DERIVED-COMPLETED-GATED"))
 
     record_completed_delivery!(repo, work_package)
-    assert {:ok, _question} = WorkRequestRepository.ask_question(repo, work_request.id, question_attrs(id: "WRQ-DASH-DERIVED-COMPLETED"))
+    insert_ask!(repo, work_request.id)
 
     assert {:ok, payload} = Dashboard.work_requests(repo)
     card = Enum.find(payload.work_requests, &(&1.id == work_request.id))
@@ -907,15 +904,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
              })
 
     for index <- 1..101 do
-      assert {:ok, _finding} =
-               PlanningRepository.append_finding(repo, %{
-                 work_package_id: work_package.id,
-                 title: "Finding #{index}",
-                 body: "Finding body #{index}",
-                 severity: "low",
-                 created_at: DateTime.add(timestamp, 200 + index, :second)
-               })
-
       assert {:ok, _artifact} =
                PlanningService.append_artifact(repo, %{
                  work_package_id: work_package.id,
@@ -927,7 +915,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end
 
     assert {:ok, card} = Dashboard.card(repo, work_package)
-    assert card.finding_count == 102
     assert card.artifact_count == 102
     assert card.active_blocker_count == 1
     assert {:ok, latest_progress_at, _offset} = DateTime.from_iso8601(card.latest_progress_at)
@@ -1749,31 +1736,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       repeated_payload = local_operator_dashboard_payload()
       assert Enum.map(repeated_payload["active_blocking_edges"], & &1["id"]) == Enum.map(edges, & &1["id"])
-
-      assert {:ok, _outbound_blocker} =
-               PlanningRepository.append_progress_event(repo, %{
-                 work_package_id: unlinked_package.id,
-                 summary: "Linked package is blocked",
-                 status: "blocked",
-                 idempotency_key: "blocker-unlinked-owner",
-                 payload: %{
-                   type: "blocker",
-                   source_tool: "report_blocker",
-                   blocker_id: "blocker-unlinked-owner",
-                   active: true,
-                   blocked_by: %{kind: "work_package", id: unlinked_package.id},
-                   blocked_item: %{kind: "work_package", id: linked_package.id}
-                 }
-               })
-
-      assert {:ok, %{active_blocking_edges: scoped_edges}} =
-               Dashboard.operator_work_package_signals(repo, [linked_package.id], [])
-
-      assert Enum.any?(scoped_edges, fn edge ->
-               edge.blocker_id == "blocker-unlinked-owner" and
-                 edge.work_package_id == unlinked_package.id and
-                 edge.to == %{kind: "work_package", id: linked_package.id}
-             end)
     end)
   end
 
@@ -1918,20 +1880,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert {abandoned["next_actor"], abandoned["next_action"]} == {"architect", "inspect_worker"}
   end
 
-  test "native asks omit textless waits and resolved escalations" do
+  test "native asks list open asks with their answer route" do
     detail = %{
-      work_request: %{id: "wr-asks", operator_report: %{"human_escalation" => %{"question" => "Approve the scope?", "raised_at" => "2026-11-06T01:00:00Z", "resolved_at" => nil}}},
-      clarification_questions: [],
-      work_packages: [%{id: "wp-asks", activity_signal: %{next_actor: "human", waiting_reason: "Do not invent this as a question"}}]
+      asks: [
+        %{id: "ask-open", state: "open", question: "Approve the scope?", work_package_id: "wp-asks", decision_prompt: nil, asked_by: "jjdev/t1", asked_at: "2026-11-06T01:00:00Z"},
+        %{id: "ask-done", state: "answered", question: "Earlier?", work_package_id: nil, decision_prompt: nil, asked_by: nil, asked_at: "2026-11-05T01:00:00Z"}
+      ]
     }
 
     assert [
-             %{kind: "architect", text: "Approve the scope?", answer_route: nil}
-           ] = asks = LocalOperatorDashboard.native_asks(detail)
-
-    assert LocalOperatorDashboard.native_asks(detail) == asks
-    resolved = put_in(detail, [:work_request, :operator_report, "human_escalation", "resolved_at"], "2026-11-06T02:00:00Z")
-    assert [] = LocalOperatorDashboard.native_asks(resolved)
+             %{id: "ask-open", kind: "ask", text: "Approve the scope?", work_package_id: "wp-asks", asked_by: "jjdev/t1", answer_route: "/api/v1/sympp/herdr/asks/ask-open/answer"}
+           ] = LocalOperatorDashboard.native_asks(detail)
   end
 
   test "Herdr board exposes answerable asks and distinguishes prepared, fresh and stale workers", %{repo: repo} do
@@ -1942,7 +1901,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       stale = create_work_package!(repo, id: "WP-LENS-STALE", work_request_id: request.id, status: "dispatched")
       assert {:ok, _run} = AgentRunRepository.start_run(repo, %{work_package_id: live.id, status: "running"})
       assert {:ok, _run} = AgentRunRepository.start_run(repo, %{work_package_id: stale.id, status: "running", last_seen_at: DateTime.add(DateTime.utc_now(:microsecond), -600, :second)})
-      assert {:ok, question} = WorkRequestRepository.ask_question(repo, request.id, question_attrs(question: "Which region?"))
+      capture_pastes!()
+      # The factory's own core sees the asking terminal live.
+      factory_view = {:ok, %{core_id: "core-test", terminals: %{"t7" => %{"state" => "live"}}}}
+      Application.put_env(:symphony_elixir, :sympp_herdr_core, fn -> factory_view end)
+      on_exit(fn -> Application.put_env(:symphony_elixir, :sympp_herdr_core, nil) end)
+      assert {:ok, question} = Asks.open(repo, asking_terminal("t7"), %{"work_request_id" => request.id, "question" => "Which region?"})
 
       read = fn ->
         board = build_conn() |> Map.put(:host, "localhost") |> Map.put(:remote_ip, {127, 0, 0, 1}) |> get("/api/v1/sympp/herdr/dashboard") |> json_response(200)
@@ -1956,9 +1920,66 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert packages[stale.id]["activity_signal"]["observation_state"] == "stale"
       asks = Map.new(detail["asks"], &{&1["id"], &1})
       assert asks[question.id]["text"] == "Which region?"
-      assert asks[question.id]["kind"] == "clarification"
-      assert json_response(post(native_operator_conn(), asks[question.id]["answer_route"], Jason.encode!(%{answer: "Europe"})), 200)["ok"]
+      assert asks[question.id]["kind"] == "ask"
+      answered = json_response(post(native_operator_conn(), asks[question.id]["answer_route"], Jason.encode!(%{answer: "Europe"})), 200)
+      assert answered["ok"]
+      # The answer is typed into the asking terminal without being submitted.
+      assert answered["delivery"] == %{"state" => "delivered", "to" => "jjdev/t7"}
+      assert_received {:pasted, "t7", "Answer: Europe"}
       assert read.()["asks"] == []
+      assert %Ask{state: "answered", answer: "Europe", answered_by: "operator", delivered_at: %DateTime{}} = repo.get!(Ask, question.id)
+    end)
+  end
+
+  test "an answer goes only to a terminal the factory's own core sees live", %{repo: repo} do
+    with_local_operator_endpoint(fn ->
+      request = create_work_request!(repo, id: "WR-ASK-TARGETS")
+      capture_pastes!()
+      answer = fn ask -> json_response(post(local_operator_conn(), "/api/v1/sympp/operator/asks/#{ask.id}/answer", %{answer: "Yes"}), 200)["delivery"] end
+      on_exit(fn -> Application.put_env(:symphony_elixir, :sympp_herdr_core, nil) end)
+
+      factory_core = fn core_id, terminals ->
+        snapshot = {:ok, %{core_id: core_id, terminals: terminals}}
+        Application.put_env(:symphony_elixir, :sympp_herdr_core, fn -> snapshot end)
+      end
+
+      factory_core.("core-test", %{"t3" => %{"state" => "live"}})
+      assert {:ok, local} = Asks.open(repo, asking_terminal("t3"), %{"work_request_id" => request.id, "question" => "Local?"})
+      assert %{"state" => "delivered"} = answer.(local)
+      assert_received {:pasted, "t3", "Answer: Yes"}
+
+      # Machine names are local aliases, so a terminal on another core is never addressed by name,
+      # even when the factory host has a terminal with the same address.
+      factory_core.("factory-core", %{"t4" => %{"state" => "live"}})
+      assert {:ok, remote} = Asks.open(repo, asking_terminal("t4"), %{"work_request_id" => request.id, "question" => "Remote?"})
+      assert answer.(remote) == %{"state" => "not_delivered", "reason" => "terminal_unreachable"}
+      refute_received {:pasted, _target, _text}
+    end)
+  end
+
+  test "the operator answers an ask with its decision prompt; a finished asker keeps the answer undelivered", %{repo: repo} do
+    with_local_operator_endpoint(fn ->
+      request = create_work_request!(repo, id: "WR-OPERATOR-ASK")
+      capture_pastes!()
+      # The factory's core lists no live t9 on the asker's core: the terminal has finished.
+      Application.put_env(:symphony_elixir, :sympp_herdr_core, fn -> {:ok, %{core_id: "core-test", terminals: %{}}} end)
+      on_exit(fn -> Application.put_env(:symphony_elixir, :sympp_herdr_core, nil) end)
+
+      prompt = %{"tl_dr" => "Pick a region", "details" => "Pricing differs.", "options" => [%{"id" => "eu", "label" => "Europe", "answer" => "Ship to Europe first."}]}
+      assert {:ok, ask} = Asks.open(repo, asking_terminal("t9"), %{"work_request_id" => request.id, "question" => "Which region?", "decision_prompt" => prompt})
+      path = "/api/v1/sympp/operator/asks/#{ask.id}/answer"
+
+      invalid = local_operator_conn() |> post(path, %{answer_choice: "mars"}) |> json_response(422)
+      assert invalid["error"]["code"] == "invalid_answer_choice"
+      assert %Ask{state: "open"} = repo.get!(Ask, ask.id)
+
+      answered = local_operator_conn() |> post(path, %{answer_choice: "eu"}) |> json_response(200)
+      assert answered["delivery"] == %{"state" => "not_delivered", "reason" => "terminal_finished"}
+      refute_received {:pasted, _target, _text}
+      assert %Ask{state: "answered", answer: "Ship to Europe first.", delivered_at: nil} = repo.get!(Ask, ask.id)
+
+      repeated = local_operator_conn() |> post(path, %{answer_choice: "eu"}) |> json_response(409)
+      assert repeated["error"]["code"] == "ask_not_open"
     end)
   end
 
@@ -2135,7 +2156,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
         for path <- [
               "/api/v1/sympp/herdr/work-requests",
-              "/api/v1/sympp/herdr/work-requests/#{work_request.id}/questions/missing/answer"
+              "/api/v1/sympp/herdr/asks/missing/answer"
             ] do
           mutation =
             native_operator_conn()
@@ -2151,7 +2172,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         for method <- [:post, :options],
             path <- [
               "/api/v1/sympp/herdr/work-requests",
-              "/api/v1/sympp/herdr/work-requests/#{work_request.id}/questions/missing/answer"
+              "/api/v1/sympp/herdr/asks/missing/answer"
             ] do
           request =
             native_operator_conn()
@@ -2927,7 +2948,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  body: "Reviewer requested an out-of-scope file change.",
                  status: "blocked",
                  idempotency_key: "local-clear-blocker",
-                 payload: %{type: "blocker", source_tool: "report_blocker", blocker_id: "local-clear-blocker", active: true}
+                 payload: %{type: "blocker", source_tool: "set_blocker", blocker_id: "local-clear-blocker", active: true}
                })
 
       _payload =
@@ -2937,8 +2958,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       assert {:ok, progress_events} = PlanningRepository.list_progress_events(repo, work_package.id)
       refute Enum.any?(BlockerProjection.blockers(progress_events), & &1.active)
-      assert Enum.any?(progress_events, &(get_in(&1.payload, ["source_tool"]) == "resolve_blocker" and get_in(&1.payload, ["blocker_id"]) == "local-clear-blocker"))
-      assert length(resolve_blocker_events(progress_events, "local-clear-blocker")) == 1
+      assert length(blocker_clear_events(progress_events, "local-clear-blocker")) == 1
 
       assert {:ok, _blocker} =
                PlanningRepository.append_progress_event(repo, %{
@@ -2947,7 +2967,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  body: "Reviewer re-raised the same blocker id after more review.",
                  status: "blocked",
                  idempotency_key: "local-clear-blocker-reraised",
-                 payload: %{type: "blocker", source_tool: "report_blocker", blocker_id: "local-clear-blocker", active: true}
+                 payload: %{type: "blocker", source_tool: "set_blocker", blocker_id: "local-clear-blocker", active: true}
                })
 
       second_payload =
@@ -2957,7 +2977,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       assert {:ok, progress_events} = PlanningRepository.list_progress_events(repo, work_package.id)
       refute Enum.any?(BlockerProjection.blockers(progress_events), & &1.active)
-      assert length(resolve_blocker_events(progress_events, "local-clear-blocker")) == 2
+      assert length(blocker_clear_events(progress_events, "local-clear-blocker")) == 2
 
       assert {:ok, persisted_package} = WorkPackageRepository.get(repo, work_package.id)
       assert persisted_package.status == "dispatched"
@@ -3004,7 +3024,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  body: "Reviewer requested an out-of-scope file change.",
                  status: "blocked",
                  idempotency_key: "local-clear-blocker-stale-dashboard",
-                 payload: %{type: "blocker", source_tool: "report_blocker", blocker_id: "local-clear-blocker-stale-dashboard", active: true}
+                 payload: %{type: "blocker", source_tool: "set_blocker", blocker_id: "local-clear-blocker-stale-dashboard", active: true}
                })
 
       assert {:ok, _settings} = OperatorSettingsRepository.update(repo, %{"hidden_work_package_ids" => []})
@@ -3030,7 +3050,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       assert {:ok, progress_events} = PlanningRepository.list_progress_events(repo, work_package.id)
       refute Enum.any?(BlockerProjection.blockers(progress_events), & &1.active)
-      assert length(resolve_blocker_events(progress_events, "local-clear-blocker-stale-dashboard")) == 1
+      assert length(blocker_clear_events(progress_events, "local-clear-blocker-stale-dashboard")) == 1
 
       assert {:ok, persisted_package} = WorkPackageRepository.get(repo, work_package.id)
       assert persisted_package.status == "dispatched"
@@ -3138,8 +3158,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert {:ok, work_package} =
                CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-LOCAL-COMPLETE-STATE"))
 
-      assert {:ok, open_question} =
-               WorkRequestRepository.ask_question(repo, work_request.id, question_attrs(id: "WRQ-LOCAL-COMPLETE-STATE"))
+      open_ask = insert_ask!(repo, work_request.id)
 
       assert {:ok, _blocker} =
                PlanningRepository.append_progress_event(repo, %{
@@ -3148,7 +3167,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  body: "The package is waiting for operator action.",
                  status: "blocked",
                  idempotency_key: "blocker-local-complete",
-                 payload: %{type: "blocker", source_tool: "report_blocker", blocker_id: "blocker-local-complete", active: true}
+                 payload: %{type: "blocker", source_tool: "set_blocker", blocker_id: "blocker-local-complete", active: true}
                })
 
       payload =
@@ -3182,9 +3201,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert persisted_slice.id == work_package.id
       assert persisted_slice.status == "planned"
 
-      assert {:ok, [persisted_question]} = WorkRequestRepository.list_questions(repo, work_request.id)
-      assert persisted_question.id == open_question.id
-      assert persisted_question.status == "closed"
+      # Completing the WorkRequest withdraws its open asks.
+      assert %Ask{state: "withdrawn"} = repo.get!(Ask, open_ask.id)
 
       assert {:ok, progress_events} = PlanningRepository.list_progress_events(repo, work_package.id)
       refute Enum.any?(BlockerProjection.blockers(progress_events), & &1.active)
@@ -3223,7 +3241,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-LOCAL-DELETE-DIRECT"))
 
       assert {:ok, work_package} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
-      assert {:ok, open_question} = WorkRequestRepository.ask_question(repo, work_request.id, question_attrs(id: "WRQ-LOCAL-DELETE-DIRECT"))
+      open_ask = insert_ask!(repo, work_request.id)
 
       linked_package =
         create_matching_work_package!(repo, work_request, work_package,
@@ -3240,7 +3258,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  body: "This blocker belongs only to the deleted WorkRequest.",
                  status: "blocked",
                  idempotency_key: "blocker-local-delete",
-                 payload: %{type: "blocker", source_tool: "report_blocker", blocker_id: "blocker-local-delete", active: true}
+                 payload: %{type: "blocker", source_tool: "set_blocker", blocker_id: "blocker-local-delete", active: true}
                })
 
       payload =
@@ -3253,7 +3271,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert {:error, :not_found} = WorkRequestService.get(repo, work_request.id)
       assert {:error, :not_found} = WorkPackageRepository.get(repo, linked_package.id)
       assert repo.get(ProgressEvent, blocker_event.id) == nil
-      assert repo.get(ClarificationQuestion, open_question.id) == nil
+      assert repo.get(Ask, open_ask.id) == nil
       assert {:ok, settings} = OperatorSettingsRepository.get(repo)
       assert linked_package.id in settings.hidden_work_package_ids
 
@@ -3457,7 +3475,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         summary: "Blocked",
         status: if(active, do: "blocked", else: "unblocked"),
         idempotency_key: "#{blocker_id}-#{active}-#{System.unique_integer([:positive])}",
-        payload: %{type: "blocker", source_tool: blocker_source_tool(active), blocker_id: blocker_id, active: active}
+        payload: %{type: "blocker", source_tool: "set_blocker", blocker_id: blocker_id, active: active}
       ]
       |> Keyword.merge(overrides)
       |> Map.new()
@@ -3466,11 +3484,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     event
   end
 
-  defp blocker_source_tool(true), do: "report_blocker"
-  defp blocker_source_tool(false), do: "resolve_blocker"
-
-  defp resolve_blocker_events(progress_events, blocker_id) do
-    Enum.filter(progress_events, &(get_in(&1.payload, ["source_tool"]) == "resolve_blocker" and get_in(&1.payload, ["blocker_id"]) == blocker_id))
+  defp blocker_clear_events(progress_events, blocker_id) do
+    Enum.filter(progress_events, &(get_in(&1.payload, ["active"]) == false and get_in(&1.payload, ["blocker_id"]) == blocker_id))
   end
 
   defp work_request_attrs(overrides) do
@@ -3488,14 +3503,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     Enum.into(overrides, defaults)
   end
 
-  defp question_attrs(overrides) do
-    defaults = %{
-      category: "scope",
-      question: "Which branch should this target?",
-      why_needed: "The architect needs the target before slicing."
-    }
+  defp asking_terminal(address), do: Terminal.from_meta(%{"core_id" => "core-test", "terminal_id" => address, "core_name" => "jjdev"})
 
-    Enum.into(overrides, defaults)
+  # Text the factory would type into a terminal arrives here as {:pasted, target, text}.
+  defp capture_pastes! do
+    test_pid = self()
+    paste = fn target, text -> send(test_pid, {:pasted, target, text}) && :ok end
+    Application.put_env(:symphony_elixir, :sympp_herdr_send, paste)
+    on_exit(fn -> Application.put_env(:symphony_elixir, :sympp_herdr_send, nil) end)
+  end
+
+  defp insert_ask!(repo, work_request_id) do
+    assert {:ok, ask} = Asks.open(repo, asking_terminal("t1"), %{"work_request_id" => work_request_id, "question" => "Which branch should this target?"})
+    ask
   end
 
   defp decision_attrs(overrides) do
@@ -3596,17 +3616,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                summary: "Blocked on validation",
                status: "blocked",
                idempotency_key: "blocker-a",
-               payload: %{type: "blocker", source_tool: "report_blocker", blocker_id: "blocker-a", active: true},
+               payload: %{type: "blocker", source_tool: "set_blocker", blocker_id: "blocker-a", active: true},
                created_at: DateTime.add(timestamp, 4, :second)
-             })
-
-    assert {:ok, _finding} =
-             PlanningRepository.append_finding(repo, %{
-               work_package_id: work_package.id,
-               title: "Finding one",
-               body: "Needs attention",
-               severity: "medium",
-               created_at: DateTime.add(timestamp, 5, :second)
              })
 
     assert {:ok, _artifact} =

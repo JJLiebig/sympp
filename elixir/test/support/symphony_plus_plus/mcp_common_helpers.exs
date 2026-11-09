@@ -168,14 +168,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.CommonHelpers do
     Enum.into(overrides, defaults)
   end
 
-  def work_request_question_attrs(overrides) do
-    defaults = %{
-      category: "scope",
-      question: "Which branch should this target?",
-      why_needed: "The architect needs the target before slicing."
-    }
+  def insert_ask!(repo, work_request_id, overrides \\ []) do
+    now = DateTime.utc_now(:microsecond)
 
-    Enum.into(overrides, defaults)
+    attrs =
+      Enum.into(overrides, %{
+        id: "ask_#{System.unique_integer([:positive])}",
+        work_request_id: work_request_id,
+        question: "Which branch should this target?",
+        state: "open",
+        inserted_at: now,
+        updated_at: now
+      })
+
+    repo.insert!(struct!(SymphonyElixir.SymphonyPlusPlus.Asks.Ask, attrs))
   end
 
   def work_request_decision_attrs(overrides) do

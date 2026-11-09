@@ -11,7 +11,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
 
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -46,17 +45,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
 
   @spec work_request_repository_filters(filters()) :: map()
   def work_request_repository_filters(filters), do: Map.take(filters, ["repo", "base_branch", "phase"])
-
-  @spec scoped_work_request_question(repo(), String.t(), String.t()) ::
-          {:ok, ClarificationQuestion.t()} | {:error, term()}
-  def scoped_work_request_question(repo, work_request_id, question_id) do
-    with {:ok, questions} <- WorkRequestService.list_questions(repo, work_request_id) do
-      case Enum.find(questions, &(&1.id == question_id)) do
-        %ClarificationQuestion{} = question -> {:ok, question}
-        nil -> {:error, :not_found}
-      end
-    end
-  end
 
   @spec scoped_delivery_board(repo(), WorkRequest.t(), [WorkPackage.t()], keyword()) :: term()
   def scoped_delivery_board(repo, %WorkRequest{} = work_request, work_packages, opts \\ []) when is_list(work_packages) do

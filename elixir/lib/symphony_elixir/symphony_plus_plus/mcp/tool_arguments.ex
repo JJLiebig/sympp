@@ -280,33 +280,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
       {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "unexpected_argument", "arguments" => unexpected}}
     else
       case validate_tool_required_arguments(ToolCatalog.architect_tool_input_schema(name), arguments) do
-        :ok -> normalize_implied_status(name, arguments)
+        :ok -> {:ok, arguments}
         {:error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => reason}}
       end
-    end
-  end
-
-  defp normalize_implied_status(name, arguments) do
-    expected_status = %{"resolve_blocker" => "resolved"}[name]
-
-    case {expected_status, Map.fetch(arguments, "status")} do
-      {nil, _status} ->
-        {:ok, arguments}
-
-      {_expected, :error} ->
-        {:ok, arguments}
-
-      {expected, {:ok, status}} when status == expected ->
-        {:ok, Map.delete(arguments, "status")}
-
-      {expected, {:ok, _status}} ->
-        {:error, -32_602, "Invalid params",
-         %{
-           "tool" => name,
-           "reason" => "implied_status_mismatch",
-           "expected_status" => expected,
-           "recovery" => %{"next_action" => "omit_status_or_use_expected", "expected_status" => expected}
-         }}
     end
   end
 
@@ -385,6 +361,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
       "object" -> validate_required_architect_object_argument(key, value)
       "array" -> validate_required_architect_array_argument_value(properties, key, value)
       "integer" -> validate_required_architect_integer_argument(properties, key, value)
+      "boolean" when is_boolean(value) -> :ok
       _type -> {:error, "invalid_#{key}"}
     end
   end

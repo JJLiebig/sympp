@@ -54,16 +54,15 @@ An optional architect report gives the goal a brief, free-text ETA, parking
 reason, and explicit question requiring a human decision. The hydrated dashboard
 returns it at `work_request_details[].work_request.operator_report`;
 `read_work_request` returns the same report. Each brief/ETA has `text` and
-`written_at`. Parking has `reason`, `parked_at`, and `resumed_at`; escalation has
-`question`, `raised_at`, and `resolved_at`. A missing report/field is absent
-information; a non-null resume/resolution time means that interval is closed.
-Open clarification questions and worker waits do not imply escalation. Reports
-do not change blockers or completion. See the
+`written_at`. Parking has `reason`, `parked_at`, and `resumed_at`. A missing
+report/field is absent information; a non-null resume time means that interval
+is closed. Questions for the operator are asks, which the board shows as Needs
+you; worker waits do not. Reports do not change blockers or completion. See the
 [architect procedure](../packages/sympp/skills/symphony-architect/SKILL.md#guidance)
 for optional milestone updates and resolving answers given in the conversation.
 
 MCP `read_work_request` defaults to a compact overview: request description,
-open questions, package status/PR/next action, and five recent decision previews.
+open asks, package status/PR/next action, and five recent decision previews.
 Omission counts point to `detail: "full"` for complete contracts and history.
 Its `plan`, `board` and `package` views use the same detail option; the plan
 view keeps the execution graph and dependency evidence in both. Large progress documents summarize five
@@ -129,7 +128,7 @@ output.
    an architect).
 2. Give an architect the WorkRequest id; its first plan write makes its terminal
    the owner.
-3. Answer material clarification questions.
+3. Answer the asks the board shows as Needs you.
 4. Let the architect plan WorkPackages, optional group paths and dependencies.
 5. Dispatch dependency-ready WorkPackages to isolated workers.
 6. Merge reviewed pull requests.

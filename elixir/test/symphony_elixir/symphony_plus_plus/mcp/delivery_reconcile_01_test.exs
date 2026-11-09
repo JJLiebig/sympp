@@ -204,7 +204,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
 
       url_only = Map.delete(handoff, "head_sha")
 
-      blocker = %{type: "blocker", source_tool: "report_blocker", blocker_id: "sync-hold", active: true}
+      blocker = %{type: "blocker", source_tool: "set_blocker", blocker_id: "sync-hold", active: true}
 
       assert {:ok, _blocked} =
                PlanningRepository.append_progress_event(repo, %{

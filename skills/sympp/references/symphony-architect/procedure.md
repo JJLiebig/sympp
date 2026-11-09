@@ -44,7 +44,7 @@ TOON is presentation only. Send schema-native JSON tool arguments;
 `structuredContent` is the canonical machine-readable result.
 
 `read_work_request` reads one WorkRequest in a `view`. The default `overview`
-has the request description, open questions, compact package rows with
+has the request description, open asks, compact package rows with
 PRs/next actions, and the five most recent decision previews. `plan` lists
 packages with their groups, dependencies and the execution graph. `board` has
 delivery state and evidence. `package` (with `work_package_id`) has one
@@ -58,18 +58,21 @@ rationale. Decisions explain choices; current status remains delivery truth.
 - Ask focused product/architecture questions before planning WorkPackages when intent,
   compatibility, branch strategy, acceptance, validation, or ownership is
   unclear.
-- Ask questions naturally in the conversation. Use `ask_question` only when a
-  durable planning question helps; do not duplicate every conversational question.
+- A question only the human can answer goes through `ask`, never only in
+  conversation prose: the ask is what puts it on the boards as **Needs you**,
+  and the operator's answer is typed into your terminal when it runs on the
+  factory's machine; otherwise read it from the ask in
+  `read_work_request(detail: "full")`. Questions for the chief stay in
+  conversation.
 - Record durable decisions with `record_decision`. Valid
   `source_type`: `human`, `architect`, `operator`, `ask_pro_advisory`.
 - Route product or scope questions that approved intent and available evidence
   cannot answer to the chief when present; the chief applies existing user decisions and escalates
   only what it cannot settle. Without a chief, ask the user. Do not choose
   product behavior just to keep work moving.
-- Once open questions are answered or closed, continue straight to
-  `read_work_request` and `edit_plan`; no separate
-  clarification-complete status tool is required. Open questions still block
-  WorkPackage planning.
+- Asks never block planning or dispatch. Plan what intent already settles and
+  continue with `read_work_request` and `edit_plan`; no separate
+  clarification-complete status tool is required.
 
 ## Plan WorkPackages
 
@@ -180,10 +183,13 @@ Optionally write one concise operator report at a meaningful package/phase deliv
 or road bump with `set_report(work_request_id, ...)`, sending only changed fields:
 `brief` (2–3 sentences), free-text `eta`, or `parking:{reason}`. Set a field to
 `null` to clear it; clearing `parking` records that work resumed. The server owns
-times and keeps other fields. For a human question that needs the board's
-**Needs you**, use `ask_question` (with a `decision_prompt` for choices) and close
-it once answered. Route human decisions to the chief when present, otherwise the
-user. Questions and ordinary waits are not blockers. No report cadence is required.
+times and keeps other fields. Raise a human question with `ask` (with a
+`decision_prompt` for choices; name `work_package_id` when it is about one
+package). When the human answers in conversation instead of on the board,
+record it with `resolve_ask(to: "answered", answer, decision?)`; withdraw an ask
+that stops mattering with `resolve_ask(to: "withdrawn")`. An ask on a package is
+withdrawn when the package ends. Route human decisions to the chief when
+present. Asks and ordinary waits are not blockers. No report cadence is required.
 
 - Answer worker questions in the conversation when recorded intent decides them.
   Do not require a duplicate sympp question record. Ordinary waits are not blockers.
@@ -193,9 +199,9 @@ user. Questions and ordinary waits are not blockers. No report cadence is requir
 - Only the architect (or coordinating parent for direct work) explicitly declares
   and clears work blockers after resolving or escalating the issue. Scope each
   blocker to affected work; do not automatically block the whole WorkRequest.
-  Declare with scoped `append_progress` and explicit payload
-  `{"type":"blocker","active":true,"blocker_id":"<id>"}`; clear with `resolve_blocker`.
-  Asking, escalation, and answering do not create or clear these blockers.
+  Declare with `set_blocker(work_package_id, blocker_id, active: true, summary)`;
+  clear with `set_blocker(..., active: false)`. Ending a package clears its
+  blockers. Asks and answers do not create or clear blockers.
 - Optional Herdr/OSC observations augment last-known state. Missing observation
   means unknown and never blocks work or grants takeover authority.
 - Write every human question so it stands alone in plain English: avoid jargon
@@ -267,5 +273,5 @@ retire obsolete scope but cannot satisfy dependencies or deliver an all-skipped 
 After required delivery and WR acceptance, optional sanity checks create follow-up
 work; they are not another completion gate.
 
-Human attention is **Needs you**, raised only by the chief or architect with one sentence stating the action: a human question or product/policy approval, access only the human can grant, or recovery exhausted after the system tried. Raise it with `ask_question`.
+Human attention is **Needs you**, raised only by the chief or architect with one sentence stating the action: a human question or product/policy approval, access only the human can grant, or recovery exhausted after the system tried. Raise it with `ask`.
 Read `read_work_request(view: "board")` for workers that need you (`next_actor: architect`: `run_launch_line` when no worker terminal has appeared, `inspect_worker` when it exited without a PR or sits idle with failing CI or review findings), blockers and validation evidence; handle silent workers, failing checks and quiet tasks before escalating exhausted recovery. Review rounds, running CI, dependencies, queues and worker-parent questions never need human attention by themselves.

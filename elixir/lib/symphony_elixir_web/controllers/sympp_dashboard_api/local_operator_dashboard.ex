@@ -1,6 +1,7 @@
 defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   @moduledoc false
 
+  alias SymphonyElixir.SymphonyPlusPlus.Asks
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
@@ -172,7 +173,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
 
   defp native_detail(detail) do
     detail
-    |> Map.take([:work_request, :work_packages, :clarification_questions, :product_tree, :asks])
+    |> Map.take([:work_request, :work_packages, :product_tree, :asks])
     |> Map.update!(
       :work_request,
       &Map.take(&1, [
@@ -227,29 +228,18 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   @doc false
   @spec native_asks(map()) :: [map()]
   def native_asks(detail) do
-    request_id = detail.work_request.id
-
-    questions =
-      detail.clarification_questions
-      |> Enum.filter(&(&1.status == "open"))
-      |> Enum.map(fn question ->
-        native_ask(question.id, "clarification", question.question, nil, "/api/v1/sympp/herdr/work-requests/#{URI.encode_www_form(request_id)}/questions/#{URI.encode_www_form(question.id)}/answer")
-      end)
-
-    escalation = get_in(detail, [:work_request, :operator_report, "human_escalation"])
-
-    architect =
-      if escalation && escalation["question"] && is_nil(escalation["resolved_at"]) do
-        [native_ask("#{request_id}:escalation:#{escalation["raised_at"]}", "architect", escalation["question"], nil, nil)]
-      else
-        []
-      end
-
-    Enum.filter(questions ++ architect, &(is_binary(&1.text) and String.trim(&1.text) != ""))
-  end
-
-  defp native_ask(id, kind, text, package_id, route) do
-    %{id: id, kind: kind, text: Sanitizer.redacted_text(text), work_package_id: package_id, answer_route: route}
+    for ask <- detail.asks, ask.state == "open", is_binary(ask.question) and String.trim(ask.question) != "" do
+      %{
+        id: ask.id,
+        kind: "ask",
+        text: ask.question,
+        work_package_id: ask.work_package_id,
+        decision_prompt: ask.decision_prompt,
+        asked_by: ask.asked_by,
+        asked_at: ask.asked_at,
+        answer_route: "/api/v1/sympp/herdr/asks/#{URI.encode_www_form(ask.id)}/answer"
+      }
+    end
   end
 
   defp native_product_tree(tree) do
@@ -500,21 +490,19 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   def operator_work_request_detail_payload(repo, work_request_id, opts \\ []) when is_binary(work_request_id) do
     with {:ok, work_request} <- WorkRequestRepository.get(repo, work_request_id),
          {:ok, phase} <- Phase.load_one(repo, work_request),
-         {:ok, questions} <- WorkRequestRepository.list_questions(repo, work_request_id),
          {:ok, decisions} <- WorkRequestRepository.list_decisions(repo, work_request_id),
          {:ok, selected_work_package} <- operator_selected_work_package(repo, work_request_id, opts) do
       newest_decisions = Enum.reverse(decisions)
       visible_decisions = if Keyword.get(opts, :all_decisions?, false), do: newest_decisions, else: Enum.take(newest_decisions, 3)
+      asks = Map.get(Asks.by_work_request(repo, [work_request_id]), work_request_id, [])
 
       payload =
         %{
           work_request: operator_work_request_enrichment(work_request, phase),
-          clarification_questions: Enum.map(questions, &Dashboard.clarification_question/1),
+          asks: Enum.map(asks, &Dashboard.ask/1),
           decision_logs: Enum.map(visible_decisions, &Dashboard.decision_log_entry/1),
           summary: %{
-            open_question_count: Enum.count(questions, &(&1.status == "open")),
-            answered_question_count: Enum.count(questions, &(&1.status == "answered")),
-            closed_question_count: Enum.count(questions, &(&1.status == "closed")),
+            open_ask_count: Enum.count(asks, &(&1.state == "open")),
             decision_count: length(decisions)
           }
         }

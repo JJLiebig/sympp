@@ -28,7 +28,7 @@ const ACTION_LABELS: Record<string, string> = {
   fix_findings: "fix review findings",
   inspect_runtime: "inspect runtime",
   inspect_changed_since_review: "inspect and validate changes since review",
-  resolve_blocker: "resolve blocker",
+  clear_blocker: "clear the blocker",
   resolve_delivery_order_violation: "resolve delivery order",
   resolve_dependencies: "resolve dependencies",
   select_current_candidate_and_requalify_affected_work: "select current input and requalify",

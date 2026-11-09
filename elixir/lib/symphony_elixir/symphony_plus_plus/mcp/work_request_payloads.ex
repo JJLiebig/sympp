@@ -1,13 +1,13 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
   @moduledoc false
 
+  alias SymphonyElixir.SymphonyPlusPlus.Asks
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport
@@ -125,7 +125,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
   @spec work_request_cards(repo(), [WorkRequest.t()]) :: {:ok, [map()]} | {:error, term()}
   def work_request_cards(repo, work_requests) do
     with {:ok, summaries} <- Phase.load(repo, work_requests) do
-      {:ok, Enum.map(work_requests, &(&1 |> work_request_card() |> put_phase(Map.fetch!(summaries, &1.id))))}
+      open_asks = Asks.open_counts(repo, Enum.map(work_requests, & &1.id))
+
+      {:ok,
+       Enum.map(work_requests, fn work_request ->
+         work_request
+         |> work_request_card()
+         |> put_phase(Map.fetch!(summaries, work_request.id))
+         |> optional_put("open_asks", open_asks[work_request.id])
+       end)}
     end
   end
 
@@ -171,8 +179,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
 
   @spec work_request_detail(repo(), WorkRequest.t(), keyword()) :: {:ok, map()} | {:error, dashboard_error()}
   def work_request_detail(repo, %WorkRequest{} = work_request, _opts) do
-    with {:ok, questions} <- WorkRequestService.list_questions(repo, work_request.id),
-         {:ok, decisions} <- WorkRequestService.list_decisions(repo, work_request.id),
+    asks = Map.get(Asks.by_work_request(repo, [work_request.id]), work_request.id, [])
+
+    with {:ok, decisions} <- WorkRequestService.list_decisions(repo, work_request.id),
          {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request.id),
          {:ok, slice_visibility} <- DeliveryBoard.work_package_visibility(repo, work_request.id, work_packages),
          {:ok, operator_reports} <- OperatorReport.load_many(repo, [work_request]),
@@ -182,10 +191,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
       {:ok,
        %{
          "work_request" => Map.put(work_request_payload, "operator_report", Map.fetch!(operator_reports, work_request.id)),
-         "clarification_questions" => Enum.map(questions, &clarification_question/1),
+         "asks" => Enum.map(asks, &Asks.public/1),
          "decision_log_entries" => Enum.map(decisions, &decision_log_entry/1),
          "work_packages" => Enum.map(visible_work_packages, &work_package/1),
-         "summary" => work_request_summary(questions, decisions, visible_work_packages)
+         "summary" => work_request_summary(asks, decisions, visible_work_packages)
        }}
     end
   end
@@ -197,22 +206,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     with {:ok, payload} <- work_request_detail(repo, work_request, []),
          {:ok, board} <- DeliveryBoard.project(repo, work_request.id) do
       decisions = payload["decision_log_entries"]
-      questions = payload["clarification_questions"]
+      asks = payload["asks"]
 
       {:ok,
        %{
          "work_request" => Map.take(payload["work_request"], ~w(id title repo base_branch phase next_action human_description constraints operator_report)),
-         "clarification_questions" => Enum.filter(questions, &(&1["status"] == "open")),
+         "asks" => Enum.filter(asks, &(&1["state"] == "open")),
          "decision_log_entries" => decisions |> Enum.take(-5) |> Enum.map(&Map.take(&1, ~w(id sequence decision))) |> Enum.map(&Map.update!(&1, "decision", fn text -> one_line(text, 160) end)),
          "work_packages" => board |> delivery_board() |> Map.fetch!("work_packages") |> Enum.map(&work_package_read_summary/1),
          "summary" => payload["summary"],
          "omitted" => %{
            "package_contracts" => length(payload["work_packages"]),
-           "resolved_questions" => Enum.count(questions, &(&1["status"] != "open")),
+           "resolved_asks" => Enum.count(asks, &(&1["state"] != "open")),
            "older_decisions" => max(length(decisions) - 5, 0),
            "decision_details" => length(decisions)
          },
-         "help" => "Use read_work_request with detail: full for all contracts, questions and decisions; view: plan for dependencies."
+         "help" => "Use read_work_request with detail: full for all contracts, asks and decisions; view: plan for dependencies."
        }}
     end
   end
@@ -355,26 +364,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     }
   end
 
-  @spec clarification_question(ClarificationQuestion.t()) :: map()
-  def clarification_question(%ClarificationQuestion{} = question) do
-    %{
-      "id" => question.id,
-      "work_request_id" => question.work_request_id,
-      "sequence" => question.sequence,
-      "category" => Redactor.redact_text(question.category),
-      "question" => Redactor.redact_text(question.question),
-      "why_needed" => Redactor.redact_text(question.why_needed),
-      "decision_prompt" => Redactor.redact_output(question.decision_prompt),
-      "status" => question.status,
-      "asked_by_agent_run_id" => Redactor.redact_text(question.asked_by_agent_run_id),
-      "answer" => Redactor.redact_text(question.answer),
-      "answered_by" => Redactor.redact_text(question.answered_by),
-      "answered_at" => timestamp(question.answered_at),
-      "inserted_at" => timestamp(question.inserted_at),
-      "updated_at" => timestamp(question.updated_at)
-    }
-  end
-
   @spec decision_log_entry(DecisionLogEntry.t()) :: map()
   def decision_log_entry(%DecisionLogEntry{} = decision) do
     %{
@@ -513,11 +502,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     }
   end
 
-  defp work_request_summary(questions, decisions, work_packages) do
+  defp work_request_summary(asks, decisions, work_packages) do
     %{
-      "open_question_count" => Enum.count(questions, &(&1.status == "open")),
-      "answered_question_count" => Enum.count(questions, &(&1.status == "answered")),
-      "closed_question_count" => Enum.count(questions, &(&1.status == "closed")),
+      "open_ask_count" => Enum.count(asks, &(&1.state == "open")),
       "decision_count" => length(decisions),
       "work_package_count" => length(work_packages),
       "planned_work_package_count" => Enum.count(work_packages, &(&1.status == "planned")),

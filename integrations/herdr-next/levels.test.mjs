@@ -99,17 +99,14 @@ test('a toast is due only for a need that appeared between two successful reads,
   assert.deepEqual(start.fresh, [], 'the first read only records');
   assert.deepEqual(L.newNeeds(start.seen, first).fresh, [], 'a repaint or unchanged read says nothing');
   const payload = boardPayload();
-  payload.work_request_details.find((d) => d.work_request.id === 'wr-nopr').clarification_questions = [{ id: 'q-new', question: 'Publish where?', status: 'open', inserted_at: new Date(NOW).toISOString() }];
+  payload.work_request_details.find((d) => d.work_request.id === 'wr-nopr').asks = [{ id: 'ask-new', kind: 'ask', text: 'Publish where?', work_package_id: null, asked_at: new Date(NOW).toISOString(), answer_route: '/api/v1/sympp/herdr/asks/ask-new/answer' }];
   const next = M.parseBoard(payload);
   const { fresh } = L.newNeeds(start.seen, next);
-  assert.deepEqual(fresh.map((n) => [n.key, n.job.id]), [['question:q-new', 'wr-nopr']]);
+  assert.deepEqual(fresh.map((n) => [n.key, n.job.id]), [['ask:ask-new', 'wr-nopr']]);
   assert.deepEqual(L.newNeeds(start.seen, { ...next, offline: true }).fresh, [], 'an offline copy never announces');
   assert.notEqual(L.toastId(fresh[0]), L.toastId({ ...fresh[0], since: NOW + 1 }), 'a need raised again later is a new item');
 
   const later = (minutes) => new Date(NOW + minutes * 60e3).toISOString();
-  const reraised = boardPayload();
-  reraised.work_request_details.find((d) => d.work_request.id === 'wr-cross').work_request.operator_report.human_escalation.raised_at = later(1);
-  assert.deepEqual(L.newNeeds(start.seen, M.parseBoard(reraised)).fresh.map((n) => n.key), ['wr-cross:ask'], 'an escalation raised again between reads is new');
   const moved = boardPayload();
   const review = moved.work_request_details[0].work_packages.find((pkg) => pkg.id === 'wp-review');
   review.activity_signal = { ...review.activity_signal, last_update_at: later(1) };

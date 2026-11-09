@@ -107,26 +107,15 @@ test('operator attention differs from explicit blockers and settings/archive act
   const prematureArchive = await client.operator(`/api/v1/sympp/operator/work-requests/${request}/archive`, {});
   expect(prematureArchive.status).toBe(422);
   expect(prematureArchive.body.error.code).toBe('not_completed');
-  // Until asks exist, the only operator escalation is one carried over from the
-  // old architect report as `report.pending_ask`; no tool raises a new one.
-  const pendingAsk = (ask: object | null) => {
-    const db = new DatabaseSync(candidate.factory!.database, { timeout: 5000 });
-    try {
-      db.prepare('UPDATE sympp_work_requests SET report = ? WHERE id = ?').run(ask ? JSON.stringify({ pending_ask: ask }) : null, request);
-    } finally { db.close(); }
-  };
-  pendingAsk({ question: 'Approve the bounded scope?', raised_at: new Date().toISOString() });
+  const ask = (await client.call('ask', { work_request_id: request, question: 'Approve the bounded scope?' })).ask.id;
   await candidate.capture('operator-needed');
   await app.open('/sympp/board');
   const goal = browser.locator(`[data-goal="${request}"]`);
   await expect(goal).toContainText('Approve the bounded scope?');
   await expect(browser.locator('title')).toHaveText(/^\(1\)\s/);
   expect((await row(client, request, wp)).work_package.blocker_state['active?']).toBe(false);
-  await client.call('append_progress', {
-    work_package_id: wp, summary: 'Required schema missing.', idempotency_key: 'browser-blocker',
-    payload: { type: 'blocker', active: true, blocker_id: 'schema' },
-  });
-  pendingAsk(null);
+  await client.call('set_blocker', { work_package_id: wp, blocker_id: 'schema', active: true, summary: 'Required schema missing.' });
+  await client.call('resolve_ask', { ask_id: ask, to: 'withdrawn' });
   await candidate.capture('blocker-without-escalation');
   await browser.reload();
   await expect(goal).not.toContainText('Approve the bounded scope?');

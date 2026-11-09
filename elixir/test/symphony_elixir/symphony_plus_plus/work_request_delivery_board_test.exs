@@ -82,7 +82,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
                summary: "Still appears blocked",
                status: "blocked",
                idempotency_key: "delivery-board-stale-blocker",
-               payload: %{type: "blocker", source_tool: "report_blocker", blocker_id: "stale", active: true}
+               payload: %{type: "blocker", source_tool: "set_blocker", blocker_id: "stale", active: true}
              })
 
     assert {:ok, _pr} =

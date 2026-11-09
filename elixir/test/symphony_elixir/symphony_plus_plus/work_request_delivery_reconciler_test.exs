@@ -531,7 +531,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
                idempotency_key: Keyword.get(opts, :idempotency_key, blocker_id),
                payload: %{
                  type: "blocker",
-                 source_tool: "report_blocker",
+                 source_tool: "set_blocker",
                  blocker_id: blocker_id,
                  active: true
                }

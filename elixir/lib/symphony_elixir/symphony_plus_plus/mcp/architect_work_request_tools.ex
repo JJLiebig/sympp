@@ -5,7 +5,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     only: [
       optional_positive_integer_argument: 2,
       optional_string_argument: 2,
-      optional_string_argument: 3,
       required_argument: 2
     ]
 
@@ -37,9 +36,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   @tools [
     "list_work_requests",
     "read_work_request",
-    "answer_question",
-    "answer_question_and_record_decision",
-    "close_question",
     "dispatch_work_package"
   ]
   @work_request_views ToolCatalog.work_request_views()
@@ -93,109 +89,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_work_request", "reason" => reason}}
       {:error, :not_found} -> not_found_error("read_work_request")
       {:error, reason} -> architect_error(reason, "read_work_request")
-    end
-  end
-
-  defp call_tool("answer_question", config, terminal, arguments, _opts) do
-    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, question_id} <- required_argument(arguments, "question_id"),
-         {:ok, expected_question_status} <- expected_question_status_argument(arguments),
-         {:ok, answer} <- required_argument(arguments, "answer"),
-         {:ok, answered_by} <- optional_string_argument(arguments, "answered_by", terminal_name(terminal)),
-         {:ok, work_request, _filters} <- WorkRequestScope.work_request_scope(config.repo, work_request_id),
-         scope = WorkRequestPayloads.redacted_work_request_scope(work_request),
-         {:ok, _question} <- WorkRequestScope.scoped_work_request_question(config.repo, work_request_id, question_id),
-         {:ok, question_record} <-
-           WorkRequestService.answer_question(config.repo, question_id, expected_question_status, %{
-             "answer" => answer,
-             "answered_by" => answered_by
-           }),
-         {:ok, updated_work_request} <- WorkRequestScope.scoped_work_request(config.repo, work_request_id) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
-         "clarification_question" => WorkRequestPayloads.clarification_question(question_record),
-         "scope" => scope,
-         "status" => %{
-           "previous_question_status" => expected_question_status,
-           "question_status" => question_record.status
-         }
-       })}
-    else
-      {:tool_error, reason} -> invalid_params_error("answer_question", reason)
-      {:error, :not_found} -> not_found_error("answer_question")
-      {:error, reason} -> architect_error(reason, "answer_question")
-    end
-  end
-
-  defp call_tool("answer_question_and_record_decision", config, terminal, arguments, _opts) do
-    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, question_id} <- required_argument(arguments, "question_id"),
-         {:ok, expected_question_status} <- expected_question_status_argument(arguments),
-         {:ok, answer} <- required_argument(arguments, "answer"),
-         {:ok, answered_by} <- optional_string_argument(arguments, "answered_by", terminal_name(terminal)),
-         {:ok, source_type} <- required_argument(arguments, "source_type"),
-         {:ok, decision} <- required_argument(arguments, "decision"),
-         {:ok, rationale} <- required_argument(arguments, "rationale"),
-         {:ok, scope_impact} <- required_argument(arguments, "scope_impact"),
-         {:ok, created_by} <- optional_string_argument(arguments, "created_by", answered_by),
-         {:ok, source_id} <- optional_string_argument(arguments, "source_id", question_id),
-         {:ok, work_request, _filters} <- WorkRequestScope.work_request_scope(config.repo, work_request_id),
-         scope = WorkRequestPayloads.redacted_work_request_scope(work_request),
-         {:ok, _question} <- WorkRequestScope.scoped_work_request_question(config.repo, work_request_id, question_id),
-         {:ok, %{decision: decision_record, question: question_record}} <-
-           answer_question_and_record_decision_transaction(config.repo, work_request_id, question_id, expected_question_status, %{
-             "answer" => answer,
-             "answered_by" => answered_by,
-             "source_type" => source_type,
-             "source_id" => source_id,
-             "decision" => decision,
-             "rationale" => rationale,
-             "scope_impact" => scope_impact,
-             "created_by" => created_by
-           }),
-         {:ok, updated_work_request} <- WorkRequestScope.scoped_work_request(config.repo, work_request_id) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
-         "clarification_question" => WorkRequestPayloads.clarification_question(question_record),
-         "decision_log_entry" => WorkRequestPayloads.decision_log_entry(decision_record),
-         "scope" => scope,
-         "status" => %{
-           "previous_question_status" => expected_question_status,
-           "question_status" => question_record.status
-         }
-       })}
-    else
-      {:tool_error, reason} -> invalid_params_error("answer_question_and_record_decision", reason)
-      {:error, :not_found} -> not_found_error("answer_question_and_record_decision")
-      {:error, reason} -> architect_error(reason, "answer_question_and_record_decision")
-    end
-  end
-
-  defp call_tool("close_question", config, _terminal, arguments, _opts) do
-    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, question_id} <- required_argument(arguments, "question_id"),
-         {:ok, expected_question_status} <- expected_question_status_argument(arguments),
-         {:ok, work_request, _filters} <- WorkRequestScope.work_request_scope(config.repo, work_request_id),
-         scope = WorkRequestPayloads.redacted_work_request_scope(work_request),
-         {:ok, _question} <- WorkRequestScope.scoped_work_request_question(config.repo, work_request_id, question_id),
-         {:ok, question_record} <- WorkRequestService.close_question(config.repo, question_id, expected_question_status),
-         {:ok, updated_work_request} <- WorkRequestScope.scoped_work_request(config.repo, work_request_id) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
-         "clarification_question" => WorkRequestPayloads.clarification_question(question_record),
-         "scope" => scope,
-         "status" => %{
-           "previous_question_status" => expected_question_status,
-           "question_status" => question_record.status
-         }
-       })}
-    else
-      {:tool_error, reason} -> invalid_params_error("close_question", reason)
-      {:error, :not_found} -> not_found_error("close_question")
-      {:error, reason} -> architect_error(reason, "close_question")
     end
   end
 
@@ -506,60 +399,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     end
   end
 
-  defp optional_put(attrs, _key, nil), do: attrs
-  defp optional_put(attrs, key, value), do: Map.put(attrs, key, value)
-
-  defp terminal_name(%Terminal{display_address: address}), do: address
-  defp terminal_name(nil), do: "architect"
-
-  defp expected_question_status_argument(arguments) do
-    case Map.fetch(arguments, "expected_question_status") do
-      {:ok, status} -> parse_question_status_guard(status)
-      :error -> {:ok, "open"}
-    end
-  end
-
-  defp parse_question_status_guard(status) when is_binary(status) do
-    status
-    |> String.trim()
-    |> require_open_question_status()
-  end
-
-  defp parse_question_status_guard(_status), do: {:tool_error, {:invalid_question_status, "non_string", ["open"]}}
-
-  defp require_open_question_status("open"), do: {:ok, "open"}
-  defp require_open_question_status(status), do: {:tool_error, {:invalid_question_status, status, ["open"]}}
-
-  defp answer_question_and_record_decision_transaction(repo, work_request_id, question_id, expected_question_status, attrs) do
-    repo.transaction(fn ->
-      with {:ok, question_record} <-
-             WorkRequestService.answer_question(repo, question_id, expected_question_status, %{
-               "answer" => Map.fetch!(attrs, "answer"),
-               "answered_by" => Map.fetch!(attrs, "answered_by")
-             }),
-           {:ok, decision_record} <-
-             WorkRequestService.record_decision(
-               repo,
-               work_request_id,
-               optional_put(
-                 %{
-                   "source_type" => Map.fetch!(attrs, "source_type"),
-                   "decision" => Map.fetch!(attrs, "decision"),
-                   "rationale" => Map.fetch!(attrs, "rationale"),
-                   "scope_impact" => Map.fetch!(attrs, "scope_impact"),
-                   "created_by" => Map.fetch!(attrs, "created_by")
-                 },
-                 "source_id",
-                 Map.get(attrs, "source_id")
-               )
-             ) do
-        %{question: question_record, decision: decision_record}
-      else
-        {:error, reason} -> repo.rollback(reason)
-      end
-    end)
-  end
-
   defp architect_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
 
   defp architect_error({:unauthorized, {:work_request_terminal, terminal_state}}, resource) do
@@ -627,20 +466,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
            "message" => BranchPattern.error_message(reason)
          }
        ]
-     }}
-  end
-
-  defp invalid_params_error(tool, {:invalid_question_status, got, expected}) do
-    expected = Enum.map(expected, &to_string/1)
-
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "invalid_question_status",
-       "status_domain" => "clarification_question",
-       "expected_statuses" => expected,
-       "got" => got,
-       "message" => "expected clarification question status=#{Enum.join(expected, " or ")}, got #{got}"
      }}
   end
 

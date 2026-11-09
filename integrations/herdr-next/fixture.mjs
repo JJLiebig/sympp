@@ -19,6 +19,9 @@ export function chiefTerminals() {
   ];
 }
 
+// An open ask as the board reports it, with its answer route.
+const ask = (id, text, askedAt) => ({ id, kind: 'ask', text, work_package_id: null, decision_prompt: null, asked_by: 'build-desk/t4', asked_at: at(askedAt), answer_route: `/api/v1/sympp/herdr/asks/${id}/answer` });
+
 export function boardPayload() {
   return {
     generated_at: new Date(NOW).toISOString(),
@@ -36,7 +39,7 @@ export function boardPayload() {
           { prerequisite_work_package_id: 'wp-build', dependent_work_package_id: 'wp-queued' },
           { prerequisite_work_package_id: 'wp-review', dependent_work_package_id: 'wp-queued' },
         ] } },
-        clarification_questions: [{ id: 'q1', question: 'Which order should the levels land in?', status: 'open' }],
+        asks: [ask('ask-order', 'Which order should the levels land in?', 60)],
         work_packages: [
           pkg('wp-queued', 'Factory level', 4, { stage: 'queued', track: 'pr' }, { dependency_signal: { unmet_work_package_ids: ['wp-build'] } }),
           pkg('wp-build', 'Stage board', 2, { stage: 'build', track: 'pr', entered_at: at(90) }, {
@@ -76,11 +79,11 @@ export function boardPayload() {
         work_request: {
           id: 'wr-cross', title: 'Shared tokens', repo: 'owner/api', phase: 'active', inserted_at: at(1000),
           operator_report: {
-            human_escalation: { question: 'Ship tokens before the API?', raised_at: at(240) },
             brief: { text: 'Token API is building; the UI waits on it and on your call.', written_at: at(60) },
           },
         },
         product_tree: { execution_graph: { effective_edges: [{ prerequisite_work_package_id: 'x-api', dependent_work_package_id: 'x-web' }] } },
+        asks: [ask('ask-tokens', 'Ship tokens before the API?', 240)],
         work_packages: [
           pkg('x-api', 'Token API', 1, { stage: 'build', track: 'pr', entered_at: at(120) }, { repo: 'owner/api', dispatched_at: at(120), dispatched_by: { kind: 'chief', domain: 'Herdr' } }),
           pkg('x-web', 'Token UI', 2, { stage: 'queued', track: 'pr' }, { dependency_signal: { unmet_work_package_ids: ['x-api'] } }),
@@ -166,25 +169,19 @@ export function variantPayload(variant) {
       work_packages: [pkg('k-1', 'Key table', 1, { stage: 'queued', track: 'pr' }), pkg('k-2', 'Help overlay', 2, { stage: 'queued', track: 'pr' })],
     },
   );
-  // The board's own asks (work_request_details[].asks): answerable ones carry their route.
-  board.work_request_details[0].asks = quiet ? [] : [
-    { id: 'q1', kind: 'clarification', text: 'Which order should the levels land in?', work_package_id: null, answer_route: '/api/v1/sympp/herdr/work-requests/wr-pr/questions/q1/answer' },
-    { id: 'wait-wp-review', kind: 'human_wait', text: null, work_package_id: 'wp-review', answer_route: null },
-  ];
-  board.work_request_details[3].asks = quiet ? [] : [
-    { id: 'esc-1', kind: 'architect', text: 'Ship tokens before the API?', work_package_id: null, answer_route: null },
-  ];
+  if (quiet) {
+    board.work_request_details[0].asks = [];
+    board.work_request_details[3].asks = [];
+  }
   for (const detail of board.work_request_details) {
     for (const p of detail.work_packages ?? []) p.repo_signal = { has_ci: CI[p.repo] };
   }
   const tokenApi = board.work_request_details[3].work_packages.find((p) => p.id === 'x-api');
   tokenApi.activity_signal = { observation_state: 'current' };
   if (quiet) {
-    board.work_request_details[0].clarification_questions = [];
     const review = board.work_request_details[0].work_packages.find((p) => p.id === 'wp-review');
     review.activity_signal = { current_actor: { role: 'worker', name: 'opus-lens' }, observation_state: 'current', next_actor: 'worker', next_action: 'address_findings' };
     review.review_signal = { ...review.review_signal, round: 1, started_at: at(40), round_history: [] };
-    delete board.work_request_details[3].work_request.operator_report.human_escalation;
   }
   return board;
 }
