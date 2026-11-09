@@ -183,7 +183,8 @@ later-opened PR is. Commit lists come from GitHub: the Observer reads them only
 for repositories with two or more open watched PRs and only when a PR's head or
 base moves; `sync_pr` reads its own PR and the other active packages' attached
 PRs in the repository with `gh`. When another PR's state or commits can't be
-read (GitHub lists at most 250 commits), qualification waits (`stale:
+read (GitHub lists at most 250 commits; `gh` at most 100, so `sync_pr` leaves a
+longer PR to the Observer), qualification waits (`stale:
 stacking`) rather than blocking. A sibling PR the Observer hasn't attached yet
 is checked on its next sweep. The check matches exact commits; a cherry-pick with new commit ids
 isn't detected.

@@ -299,8 +299,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.GhCliClient do
     |> reject_nil_values()
   end
 
-  # The PR's commits as GitHub lists them; nil when the answer has none.
-  defp commit_oids(commits) when is_list(commits) do
+  # The PR's commits as GitHub lists them; nil when the answer has none, or
+  # may be cut short: `gh` reads only the first 100.
+  @gh_commit_limit 100
+  defp commit_oids(commits) when is_list(commits) and length(commits) < @gh_commit_limit do
     oids = for %{"oid" => oid} when is_binary(oid) <- commits, do: oid
     if length(oids) == length(commits), do: oids
   end
