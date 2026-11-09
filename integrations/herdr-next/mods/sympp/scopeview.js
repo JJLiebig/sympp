@@ -203,6 +203,20 @@ function taskRow(v, t, task, wide) {
   return reach(v, t, el, `task:${job.id}`, (cx) => v.openJob(job, { pkg: task.asks.find((a) => a.pkgId)?.pkgId ?? null }, cx), job.title);
 }
 
+// A task as one compact line under its topic on the Factory: its name, its phase when it isn't
+// simply active, the Needs-you flag and its strip. A click opens it as the topic does.
+export function compactTask(v, t, job, now) {
+  const task = S.taskOf(job, now);
+  const el = h_flex().id(`ftask-${job.id}`).flex_none().pl(36).pr(10).py(5).gap(10).items_center()
+    .child(div().min_w(0).flex_shrink(1).truncate().text_size(12.5).text_color(t.foreground).child(job.title))
+    .when(job.phase !== "active", (x) => x.child(P.phaseBadge(t, job.phase, `f-${job.id}`)))
+    .child(div().flex_1())
+    .when(job.needs.length > 0, (x) => x.child(h_flex().id(`fneeds-${job.id}`).flex_none().gap(5).items_center()
+      .child(div().size(6).rounded(3).bg(signal().you)).child(div().text_size(11.5).font_semibold().text_color(signal().you).child("Needs you"))))
+    .when(task.total > 0, (x) => x.child(strip(v, t, task.strip, `fstrip-${job.id}`, 8)));
+  return reach(v, t, el, `ftask:${job.id}`, (cx) => v.openJob(job, { pkg: task.asks.find((a) => a.pkgId)?.pkgId ?? null }, cx), job.title);
+}
+
 // A shelf, closed until asked for, as the dashboard keeps its shelves.
 function shelf(v, t, key, label, rows) {
   if (!rows.length) return [];

@@ -8,6 +8,7 @@ import * as M from "./model.js";
 import * as L from "./levels.js";
 import { CLEAR, EXPAND, icon, button, iconButton, field, mark, presence, section, signal } from "./ui.js";
 import { askBlock, decisionBlock } from "./parts.js";
+import { compactTask } from "./scopeview.js";
 
 // ---------- Bar ----------
 
@@ -92,12 +93,22 @@ function needRow(v, t, need, names) {
   return askBlock(v, t, need.ask, { where, id: need.key, open: job ? (cx) => v.openJob(job, { pkg: need.pkgId }, cx) : null });
 }
 
+// A topic: its mark, name, chief and counts; a click opens it. The chevron beside it opens its
+// tasks in place, each a compact line; a topic with none has no chevron.
 function topicRow(v, t, row, now) {
   const verdict = row.needs > 0 ? "needs_you" : row.moving > 0 ? "on_track" : "idle";
   const quiet = verdict === "idle" && !row.jobs.length;
+  const open = row.jobs.length > 0 && v.openTopics.has(row.id);
   const sub = [row.repos.join(", "), ...row.shared.map((s) => `shares ${s.count} ${s.count === 1 ? "job" : "jobs"} with ${s.name}`)].filter(Boolean).join(" · ");
-  return reachable(v, t, h_flex().id(`topic-${row.id}`).flex_none().px(12).py(9).gap(10).items_start(), `topic:${row.id}`, (cx) => v.openTopic(row.id, cx),
+  const toggle = row.jobs.length ? Button.new(`topic-toggle-${row.id}`).flex().flex_none().items_center().justify_center().size(18).mt(1).rounded(4).cursor_pointer()
+    .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).focus((s) => s.border(1).border_color(t.accent))
+    .accessibility_label(open ? `Hide ${row.name}'s tasks` : `Show ${row.name}'s tasks`).tooltip(open ? "Hide its tasks" : "Show its tasks")
+    .on_click((_e, cx) => { cx.stop_propagation(); v.toggleTopic(row.id, cx); })
+    .child(svg(icon(open ? "chevron-down" : "chevron-right")).size(11).flex_none()) : div().w(18).flex_none();
+  const tasks = open ? [...row.jobs].sort((a, b) => (b.needs.length > 0) - (a.needs.length > 0) || a.createdAt - b.createdAt) : [];
+  const head = reachable(v, t, h_flex().id(`topic-${row.id}`).flex_none().pl(6).pr(12).py(9).gap(8).items_start(), `topic:${row.id}`, (cx) => v.openTopic(row.id, cx),
     `${row.name}: ${row.needs} need you, ${row.moving} moving`)
+    .child(toggle)
     .child(div().pt(5).flex_none().child(mark(t, verdict)))
     .child(v_flex().flex_1().min_w(0).gap(3)
       .child(h_flex().gap(8).items_center()
@@ -108,6 +119,7 @@ function topicRow(v, t, row, now) {
         .when(row.moving > 0, (el) => el.child(div().flex_none().text_size(11.5).text_color(t.foreground).child(`${row.moving} moving`)))
         .when(quiet, (el) => el.child(div().flex_none().text_size(11.5).text_color(t.dim).child("Quiet"))))
       .when(Boolean(sub), (el) => el.child(div().truncate().text_size(11.5).text_color(t.muted).child(sub))));
+  return v_flex().id(`topic-group-${row.id}`).flex_none().child(head).children(tasks.map((job) => compactTask(v, t, job, now)));
 }
 
 

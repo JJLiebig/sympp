@@ -94,6 +94,16 @@ function storedPath() {
   }
 }
 
+// The Factory topics this copy shows opened, by topic id.
+function storedTopics() {
+  try {
+    const ids = JSON.parse(localStorage.getItem("topics.open") ?? "[]");
+    return new Set(Array.isArray(ids) ? ids.filter((id) => typeof id === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
 export default class Lens extends View {
   init(p, cx) {
     const own = p ?? props() ?? {};
@@ -137,6 +147,7 @@ export default class Lens extends View {
     // Where this copy is: its own across restarts. A panel's pin stops it following focus.
     this.path = scope ? { ...TOP, topic: scope.topic ?? null, space: scope.space ?? null } : storedPath();
     this.pin = localStorage.getItem("pin") === "1";
+    this.openTopics = storedTopics();
     this.lastFocus = null;
     this.cursor = null;
     this.rows = [];
@@ -420,6 +431,14 @@ export default class Lens extends View {
     this.pin = !this.pin;
     try { localStorage.setItem("pin", this.pin ? "1" : "0"); } catch { /* storage is a convenience */ }
     this.lastFocus = null;
+    cx.notify();
+  }
+
+  // Opens or closes a topic's tasks on the Factory; this copy remembers it across restarts.
+  toggleTopic(id, cx) {
+    if (this.openTopics.has(id)) this.openTopics.delete(id);
+    else this.openTopics.add(id);
+    try { localStorage.setItem("topics.open", JSON.stringify([...this.openTopics])); } catch { /* storage is a convenience */ }
     cx.notify();
   }
 
