@@ -101,15 +101,15 @@ test('a toast is due only for a need that appeared between two successful reads,
   assert.deepEqual(start.fresh, [], 'the first read only records');
   assert.deepEqual(L.newNeeds(start.seen, first).fresh, [], 'a repaint or unchanged read says nothing');
   const payload = boardPayload();
-  payload.work_request_details.find((d) => d.work_request.id === 'wr-nopr').asks = [{ id: 'q-new', question: 'Publish where?', asked_at: new Date(NOW).toISOString() }];
-  payload.cards = [{ id: 'c1', task: 'Small fix', repo: 'owner/web', state: 'working', asks: [{ id: 'q-card', question: 'Keep the old flag?' }] }];
+  payload.work_request_details.find((d) => d.work_request.id === 'wr-nopr').asks = [{ id: 'q-new', kind: 'ask', text: 'Publish where?', asked_at: new Date(NOW).toISOString(), answer_route: '/api/v1/sympp/herdr/asks/q-new/answer' }];
+  payload.cards = [{ id: 'c1', title: 'Small fix', repository: 'owner/web', state: 'working', asks: [{ id: 'q-card', question: 'Keep the old flag?', state: 'open' }] }];
   const next = M.parseBoard(payload);
   const { fresh } = L.newNeeds(start.seen, next);
   assert.deepEqual(fresh.map((n) => [n.key, n.job?.id ?? n.card.id]), [['ask:q-new', 'wr-nopr'], ['ask:q-card', 'c1']]);
   assert.deepEqual(L.newNeeds(start.seen, { ...next, offline: true }).fresh, [], 'an offline copy never announces');
   assert.notEqual(L.toastId(fresh[0]), L.toastId({ ...fresh[0], since: NOW + 1 }), 'a need raised again later is a new item');
   const moved = boardPayload();
-  moved.work_request_details[0].work_packages.find((pkg) => pkg.id === 'wp-review').progress.since = new Date(NOW + 60e3).toISOString();
+  moved.work_request_details[0].work_packages.find((pkg) => pkg.id === 'wp-review').board_state.entered_at = new Date(NOW + 60e3).toISOString();
   assert.deepEqual(L.newNeeds(start.seen, M.parseBoard(moved)).fresh, [], 'work moving on raises nothing');
 });
 

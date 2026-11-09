@@ -34,10 +34,9 @@ export function taskCi(packages) {
 }
 
 // The review's mode and state in a word or two: "fast · done", "normal · round 2", "deep · findings".
-// Mode none is said plainly; no review recorded says nothing.
+// No review recorded says nothing.
 export function reviewText(review) {
-  if (!review?.mode) return null;
-  if (review.mode === "none") return "no review";
+  if (!review?.mode && !review?.state) return null;
   const round = review.round > 1 ? `round ${review.round}` : null;
   const state = review.state === "running" ? round ?? "running" : review.state === "findings" ? "findings" : review.state;
   return [review.mode, state].filter(Boolean).join(" · ");

@@ -15,6 +15,7 @@ import * as S from "./scope.js";
 import * as O from "./overview.js";
 import * as M from "./model.js";
 import * as P from "./parts.js";
+import * as C from "./controls.js";
 import { reviewPane } from "./jobview.js";
 import { CLEAR, EXPAND, MONO, SANS, icon, tint, signal, micro, mono, ghost } from "./ui.js";
 import { CHIEF_SPACES, isChiefSpace } from "./chief.js";
@@ -324,9 +325,9 @@ function pkgRow(v, t, job, e, ctx, wide, odd, indent = 0) {
   const lead = h_flex().id(`lead-${pkg.id}`).w(10).flex_none().justify_center().child(box(v, t, pkg, 8, `lead-${pkg.id}`));
   const ci = h_flex().w(8).flex_none().child(ciDot(v, t, pkg.id, S.ciOf(pkg), `ci-${pkg.id}`, M.ago(pkg.pr.checksAt, ctx.now)) ?? div());
   const owner = h_flex().w(wide ? 150 : 118).flex_none().justify_end()
-    .child(P.ownerChip(v, t, pkg.owner, `pkg-${pkg.id}`, { path: `/work-packages/${encodeURIComponent(pkg.id)}` }) ?? div());
+    .child(P.ownerChip(v, t, pkg.owner, `pkg-${pkg.id}`) ?? div());
   const finish = pkg.finishable ? P.confirmButton(v, t, `finish-${pkg.id}`, "Finish", "Finish it?", `finish:${pkg.id}`,
-    (cx) => v.operate(`finish:${pkg.id}`, `/work-packages/${encodeURIComponent(pkg.id)}/finish`, {}, cx)) : null;
+    (cx) => v.operate(`finish:${pkg.id}`, `${C.OPERATOR}/work-packages/${encodeURIComponent(pkg.id)}/finish`, {}, cx)) : null;
   const finishError = v.ops[`finish:${pkg.id}`]?.error;
   const columns = progress(v, t, pkg, ctx.now);
   // A nested group indents only the name, so every column keeps its place.

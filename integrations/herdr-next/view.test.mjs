@@ -81,7 +81,6 @@ test('a space shows only the tasks on its repository, drawn as its topic draws t
   assert.ok(space.text('api') && space.has('task-wr-cross') && space.has('task-wr-restore') && space.has('card-card-ocr'));
   assert.ok(space.has('filter-all') && space.has('filter-vps/s-api'), 'back to the whole topic, or on to another space');
   assert.equal(space.has('task-wr-pr') || space.has('task-wr-theme') || space.has('card-card-flicker'), false);
-  assert.ok(space.has('release-card-card-ocr'), 'a card whose terminal stopped answering can be released');
   const empty = await render(t, { props: {}, width: 1400, path: { topic: 'unsorted', space: 's-home' } });
   assert.ok(empty.text('Nothing running here'));
 });
@@ -89,13 +88,13 @@ test('a space shows only the tasks on its repository, drawn as its topic draws t
 test('a task shows its phase and owner, its packages at work under their groups with their progress, and folds ended and planned work', skip, async (t) => {
   for (const width of [1400, 700]) {
     const view = await render(t, { props: {}, width, board: 'busy', path: { topic: 't-herdr', job: 'wr-restore' }, pkg: 'r-4' });
-    for (const id of ['task-head', 'phase-wr-restore', 'owner-job-wr-restore', 'complete-wr-restore', 'archive-wr-restore', 'delete-wr-restore', 'strip-wr-restore',
+    for (const id of ['task-head', 'phase-wr-restore', 'owner-job-wr-restore', 'complete-wr-restore', 'delete-wr-restore', 'strip-wr-restore',
       'group-wr-restore-0-Recovery', 'group-wr-restore-1-Shell', 'group-wr-restore-0-Polish', 'pkg-r-4', 'pkg-r-5', 'pkg-r-6', 'pkg-r-7',
       'owner-pkg-r-4', 'fold-Landed:wr-restore', 'fold-Up next:wr-restore', 'pr-step-r-4', 'review-r-4'])
       assert.ok(view.has(id), `${id} at ${width}`);
     assert.equal(view.has('pkg-r-1') || view.has('pkg-r-9'), false, 'ended and planned packages are folded');
     assert.ok(view.text('Review/CI') && view.text('Implementing') && view.text('Ready') && view.text('deep · round 3') && view.text('normal · findings'));
-    assert.equal(view.has('finish-r-4') || view.has('restore-wr-restore'), false, 'no Finish for a PR into its own repository; no Restore while open');
+    assert.equal(view.has('finish-r-4') || view.has('restore-wr-restore') || view.has('archive-wr-restore'), false, 'no Finish for a PR into its own repository; no Archive or Restore while open');
     const at = (id) => view.out.indexOf(`:id[Str("${id}")]`);
     assert.ok(at('group-wr-restore-0-Recovery') < at('pkg-r-4') && at('pkg-r-4') < at('group-wr-restore-1-Shell') && at('group-wr-restore-1-Shell') < at('pkg-r-5')
       && at('pkg-r-6') < at('group-wr-restore-0-Polish') && at('group-wr-restore-0-Polish') < at('pkg-r-7'), 'groups nest in planned order');

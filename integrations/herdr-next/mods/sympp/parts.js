@@ -5,8 +5,9 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, Button } from "gpui-base";
 import { ago, PHASE_LABEL } from "./model.js";
+import { OPERATOR } from "./controls.js";
 import { reviewText } from "./scope.js";
-import { questionRow } from "./jobview.js";
+import { answerForm } from "./jobview.js";
 import { CLEAR, MONO, SANS, icon, tint, signal, mono, ghost, youButton, field, button } from "./ui.js";
 
 // ---------- Worked on by ----------
@@ -22,24 +23,26 @@ export function liveDot(t, liveness) {
 
 // A terminal's address with its liveness. A running one is a link that focuses it; Release appears
 // beside an owner that stopped answering, and asks again before it acts.
-export function ownerChip(v, t, owner, id, release = null) {
-  if (!owner) return null;
-  const word = owner.liveness === "live" ? "live" : owner.liveness === "unknown" ? "not answering" : "finished";
-  const tip = `${ROLE[owner.role] ?? "Terminal"} ${owner.address} · ${word}${owner.since ? ` · since ${ago(owner.since, Date.now())}` : ""}`;
+export function ownerChip(v, t, given, id, release = null) {
+  if (!given) return null;
+  // A terminal known only by its address is live while Herdr shows it running.
+  const owner = given.liveness ? given : { ...given, liveness: v.running(given.address) ? "live" : null };
+  const word = { live: "live", unknown: "not answering", finished: "finished" }[owner.liveness];
+  const tip = [`${ROLE[owner.role] ?? "Terminal"} ${owner.address}`, word, owner.since ? `since ${ago(owner.since, v.now())}` : null].filter(Boolean).join(" · ");
   // An offline copy's addresses may name other terminals now, so only a live factory's are links.
-  const reachable = owner.liveness !== "finished" && v.net.data?.offline === false;
+  const reachable = owner.liveness !== "finished" && owner.liveness !== null && v.net.data?.offline === false;
   const chip = Button.new(`owner-${id}`).flex().flex_none().items_center().gap(5).h(20).px(5).rounded(4)
     .font_family(MONO).text_size(11).text_color(owner.liveness === "finished" ? t.dim : t.muted)
     .accessibility_label(tip).tooltip(reachable ? `${tip}. Click to focus it.` : tip)
     .when(reachable, (el) => el.cursor_pointer().hover((s) => s.bg(tint(t.foreground, "14")).text_color(t.foreground))
       .on_click((_e, cx) => { cx.stop_propagation(); v.focusTerminal(owner.address, cx); }))
-    .child(liveDot(t, owner.liveness)).child(owner.address);
+    .when(owner.liveness !== null, (el) => el.child(liveDot(t, owner.liveness))).child(owner.address);
   const op = release ? v.ops[`release:${release.path}`] : null;
   const error = v.ops[`focus:${owner.address}`]?.error ?? op?.error ?? null;
   return h_flex().id(`owned-${id}`).flex_none().gap(2).items_center()
     .child(chip)
     .when(owner.liveness === "unknown" && Boolean(release), (el) => el.child(confirmButton(v, t, `release-${id}`, "Release", "Release this owner?",
-      `release:${release.path}`, (cx) => v.operate(`release:${release.path}`, `${release.path}/release`, {}, cx), signal().checks)))
+      `release:${release.path}`, (cx) => v.operate(`release:${release.path}`, `${OPERATOR}${release.path}/release`, {}, cx), signal().checks)))
     .when(Boolean(error), (el) => el.child(div().max_w(180).truncate().text_size(11).text_color(signal().fail).tooltip(error).child(error)));
 }
 
@@ -74,7 +77,7 @@ export function askBlock(v, t, ask, { where = [], id = ask.key, open = null } = 
   const draft = v.answers[ask.key];
   const open = Boolean(draft?.open);
   const action = draft?.saved ? mono(11, t.dim).child("answered")
-    : youButton(t, `answer-${id}`, "Answer", (cx) => v.openAnswer(ask, cx), "Answer here");
+    : ask.route ? youButton(t, `answer-${id}`, "Answer", (cx) => v.openAnswer(ask, cx), "Answer here") : null;
   return v_flex().id(`ask-${id}`).flex_none().mr(4).mt(2).mb(8)
     .child(h_flex().items_start()
       .child(div().w(2).flex_none().self_stretch().rounded(1).bg(signal().you))
@@ -83,8 +86,8 @@ export function askBlock(v, t, ask, { where = [], id = ask.key, open = null } = 
           .child(context(t, where, id, open)).child(ownerChip(v, t, ask.by, `ask-${id}`))))
         .child(h_flex().gap(10).items_center()
           .child(div().flex_1().min_w(0).py(1).text_size(13.5).line_height("19px").text_color(t.foreground).child(ask.text))
-          .when(!open, (el) => el.child(action)))))
-    .when(open, (el) => el.child(div().pl(14).child(questionRow(v, t, ask, true, { titled: false }))));
+          .when(!open && Boolean(action), (el) => el.child(action)))))
+    .when(open, (el) => el.child(div().pl(14).child(answerForm(v, t, ask))));
 }
 
 // ---------- Decisions ----------
@@ -104,12 +107,13 @@ export function decisionBlock(v, t, d, { where = [], open = null } = {}) {
     .child(div().w(2).flex_none().self_stretch().rounded(1).bg(tint(t.foreground, "40")))
     .child(v_flex().flex_1().min_w(0).pl(12).gap(4).child(head).child(body)
       .when(d.undelivered, (el) => el.child(undelivered(v, t, d)))
-      .when(!d.undelivered && !open, (el) => el.child(h_flex().gap(4).pt(2).items_center()
-        .child(ghost(t, `ack-${d.id}`, ack?.pending ? "…" : "Ack", (cx) => v.operate(`ack:${d.id}`, `/decisions/${encodeURIComponent(d.id)}/ack`, {}, cx), { strong: true, tip: "Acknowledge this decision", disabled: Boolean(ack?.pending) }))
+      .when(d.sending, (el) => el.child(div().text_size(11.5).text_color(t.dim).child(`Sending “${d.feedback ?? ""}”…`)))
+      .when(Boolean(d.routes.ack && d.routes.feedback) && !open, (el) => el.child(h_flex().gap(4).pt(2).items_center()
+        .child(ghost(t, `ack-${d.id}`, ack?.pending ? "…" : "Ack", (cx) => v.operate(`ack:${d.id}`, d.routes.ack, {}, cx), { strong: true, tip: "Acknowledge this decision", disabled: Boolean(ack?.pending) }))
         .child(ghost(t, `feedback-${d.id}`, "Feedback", (cx) => v.openFeedback(d, cx)))
         .when(Boolean(ack?.error), (x) => x.child(div().text_size(11.5).text_color(signal().fail).child(ack.error)))))
       .when(open, (el) => el.child(feedbackForm(v, t, d, draft))));
-  if (d.undelivered || open) return row;
+  if (!d.routes.feedback || open) return row;
   return row.cursor_pointer().hover((s) => s.bg(tint(t.foreground, "07"))).accessibility_label(`Decision: ${d.text}. Click to give feedback.`)
     .on_click((_e, cx) => v.openFeedback(d, cx));
 }
@@ -122,7 +126,7 @@ function undelivered(v, t, d) {
     .child(Button.new(`dismiss-feedback-${d.id}`).flex().flex_none().items_center().justify_center().size(18).rounded(4).cursor_pointer()
       .text_color(t.dim).hover((s) => s.bg(tint(t.foreground, "14")).text_color(t.foreground)).disabled(Boolean(op?.pending))
       .accessibility_label("Dismiss").tooltip("Dismiss: the feedback stays on the decision")
-      .on_click((_e, cx) => { cx.stop_propagation(); v.operate(`dismiss:${d.id}`, `/decisions/${encodeURIComponent(d.id)}/dismiss`, {}, cx); })
+      .on_click((_e, cx) => { cx.stop_propagation(); v.operate(`dismiss:${d.id}`, d.routes.dismiss, {}, cx); })
       .child(svg(icon("x")).size(11).flex_none()));
 }
 
@@ -130,7 +134,7 @@ function undelivered(v, t, d) {
 // Focus sends it and opens that terminal.
 function feedbackForm(v, t, d, draft) {
   const role = d.by?.role === "architect" ? "architect" : "chief";
-  const reachable = d.by?.liveness === "live" && v.running(d.by.address);
+  const reachable = Boolean(d.by) && v.running(d.by.address);
   return v_flex().gap(8).pt(4).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
     .child(field(t, "Feedback", draft.input, true))
     .when(Boolean(draft.error), (el) => el.child(div().role("alert").text_size(12).text_color(signal().fail).child(draft.error)))
@@ -160,11 +164,11 @@ export function cardRow(v, t, card, ci) {
       .child(div().size(8).flex_none().rounded(2).bg(tone))
       .child(div().flex_1().min_w(0).truncate().text_size(13).text_color(settled ? t.muted : t.foreground).child(card.task))
       .when(Boolean(ci), (el) => el.child(ci))
-      .child(ownerChip(v, t, card.owner, `card-${card.id}`, { path: `/cards/${encodeURIComponent(card.id)}` }))
+      .child(ownerChip(v, t, card.owner, `card-${card.id}`))
       .child(Button.new(`dismiss-card-${card.id}`).flex().flex_none().items_center().justify_center().size(18).rounded(4).cursor_pointer()
         .text_color(t.dim).hover((s) => s.bg(tint(t.foreground, "14")).text_color(t.foreground)).disabled(Boolean(op?.pending))
         .accessibility_label(`Dismiss ${card.task}`).tooltip("Dismiss")
-        .on_click((_e, cx) => { cx.stop_propagation(); v.operate(`dismiss-card:${card.id}`, `/cards/${encodeURIComponent(card.id)}/dismiss`, {}, cx); })
+        .on_click((_e, cx) => { cx.stop_propagation(); v.operate(`dismiss-card:${card.id}`, `${OPERATOR}/cards/${encodeURIComponent(card.id)}/dismiss`, {}, cx); })
         .child(svg(icon("x")).size(11).flex_none())))
     .child(h_flex().pl(18).gap(10).items_center()
       .child(mono(11, tone).w(64).child(CARD_STATE[card.state]))
@@ -185,17 +189,18 @@ export function phaseBadge(t, phase, id) {
     .child(div().text_size(11.5).font_semibold().text_color(tone).child(PHASE_LABEL[phase] ?? phase));
 }
 
-// The person's calls on a whole task: Complete and Archive while it is open, Archive once it is
-// done, Restore once archived, and Delete. Complete and Delete ask again; Restore undoes Archive.
+// The person's calls on a whole task: Complete while it is open, Archive once it is done or
+// unresolved, Restore once archived, and Delete. Complete and Delete ask again; Restore undoes Archive.
 export function phaseActions(v, t, job) {
-  const path = `/work-requests/${encodeURIComponent(job.id)}`;
+  const path = `${OPERATOR}/work-requests/${encodeURIComponent(job.id)}`;
   const go = (step) => (cx) => v.operate(`${step}:${job.id}`, `${path}/${step}`, {}, cx);
   const error = ["complete", "archive", "restore", "delete"].map((step) => v.ops[`${step}:${job.id}`]?.error).find(Boolean);
   const remove = confirmButton(v, t, `delete-${job.id}`, "Delete", "Delete this task?", `delete:${job.id}`,
     (cx) => v.operate(`delete:${job.id}`, `${path}/delete`, {}, cx, (cx) => { if (v.level !== "factory" && !v.pinned) v.goUp(cx); }));
   const list = job.phase === "archived" ? [ghost(t, `restore-${job.id}`, "Restore", go("restore"))]
     : job.phase === "done" ? [ghost(t, `archive-${job.id}`, "Archive", go("archive"))]
-      : [confirmButton(v, t, `complete-${job.id}`, "Complete", "Complete this task?", `complete:${job.id}`, go("complete")), ghost(t, `archive-${job.id}`, "Archive", go("archive"))];
+      : [confirmButton(v, t, `complete-${job.id}`, "Complete", "Complete this task?", `complete:${job.id}`, go("complete")),
+        ...(job.phase === "unresolved" ? [ghost(t, `archive-${job.id}`, "Archive", go("archive"))] : [])];
   return h_flex().flex_none().gap(2).items_center().children([...list, remove])
     .when(Boolean(error), (el) => el.child(div().max_w(200).truncate().text_size(11.5).text_color(signal().fail).tooltip(error).child(error)));
 }

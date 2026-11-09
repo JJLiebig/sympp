@@ -926,7 +926,12 @@ export default class Lens extends View {
     cx.spawn(async (cx) => {
       const submission = C.submitAction(draft,
         async () => C.postAction(this.endpoint, question.route, C.answerBody(question, draft.choice, draft.input.value()), this.request),
-        () => { draft.open = false; draft.saved = true; draft.input.set_value(""); this.retry(cx); });
+        (payload) => {
+          draft.open = false; draft.saved = true; draft.input.set_value("");
+          const note = C.undeliveredNote(payload);
+          if (note) notify({ title: "Answer not delivered", body: note, level: "warning" });
+          this.retry(cx);
+        });
       cx.notify();
       await submission;
       cx.notify();
@@ -948,7 +953,7 @@ export default class Lens extends View {
     const op = this.ops[key] = { ...(this.ops[key] ?? {}), armed: false };
     if (op.pending) return;
     cx.spawn(async (cx) => {
-      const submission = C.submitAction(op, async () => C.postAction(this.endpoint, `${C.OPERATOR}${path}`, body, this.request), () => { delete this.ops[key]; after?.(cx); this.retry(cx); });
+      const submission = C.submitAction(op, async () => C.postAction(this.endpoint, path, body, this.request), () => { delete this.ops[key]; after?.(cx); this.retry(cx); });
       cx.notify();
       await submission;
       cx.notify();
@@ -971,7 +976,7 @@ export default class Lens extends View {
     if (!text) { draft.error = "Write the feedback first."; cx.notify(); return; }
     cx.spawn(async (cx) => {
       const submission = C.submitAction(draft, async () => {
-        await C.postAction(this.endpoint, `${C.OPERATOR}/decisions/${encodeURIComponent(decision.id)}/feedback`, { text }, this.request);
+        await C.postAction(this.endpoint, decision.routes.feedback, { text }, this.request);
       }, () => {
         draft.open = false;
         draft.input.set_value("");

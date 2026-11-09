@@ -18,15 +18,23 @@ node integrations/herdr-next/install.mjs --endpoint $origin --open overview
 ```
 
 The view opens at the Factory: what needs you, ranked by how many packages
-wait on each answer, then one row per Herdr topic. A topic shows each task
-touching it as its name and a strip of its packages, coloured by stage; a space
-shows the same for the tasks on its repository. Only recorded questions and chief/architect escalations show **Needs you**;
-worker silence, review rounds and failing checks go to the chief first. Questions come first, each with Answer (or Chief,
-when only the topic's chief can take it). A task shows its packages at work on
-the Build ─ PR ─ Review ─ Merge pipeline, the PR's checks as a dot beside it, with landed and queued work
-folded. Click a row, or use ↑/↓ (j/k), Enter and Esc. Each copy remembers
-where it was. A toast appears when something newly needs you; click it to open
-the job's tab.
+wait on each answer, the decisions agents flagged for review, then one row per
+Herdr topic, whose chevron lists its open tasks in place. A topic shows each
+task touching it as its name and a strip of its packages, coloured by progress,
+and the small work (cards) on its repositories; a space shows the same for the
+tasks on its repository. Only asks show **Needs you**: answer them in place,
+with the decision prompt's choices when there is one. A flagged decision takes
+**Ack** or **Feedback**; the factory types the feedback into the terminal that
+made the call, and **Focus chief** also opens that terminal. A task shows its
+phase and the terminal working on it, and its packages at work under their
+groups, through Launching ─ Implementing ─ Review/CI ─ Ready, with the PR's
+checks and the review's mode and state; landed and planned work is folded.
+**Complete**, **Archive**, **Restore** and **Delete** act on the task, **Finish**
+ends a package whose PR goes into another repository, and **Release** frees a
+task from an owner that stopped answering. Click a terminal's address to focus
+it. Click a row, or use ↑/↓ (j/k), Enter and Esc. Each copy remembers where it
+was. A toast appears when something newly needs you; click it to open the
+job's tab.
 
 Herdr-app must already be open. If its executable is not on `PATH`, pass
 `--app <executable>`. `--home <folder>` selects an isolated Herdr-app home;
@@ -79,6 +87,8 @@ The desk mods currently consume:
   `sympp.work_request_id`, or `sympp.session_id` with
   `sympp.session_work_package_id` or `sympp.session_work_request_id`.
   desk-agents uses these to identify sympp terminals even without board data.
+  Workers started by a dispatch's launch line carry `sympp.role=worker` and
+  `sympp.work_package_id` instead; `sympp.agents` covers them from the board.
 - `shared('sympp.chiefs')`: map from topic ID to arrays of `{ domain, terminal }`.
   `terminal` is present only while confirmed running. desk-topics uses it for
   chief marks and navigation. `shared('sympp.chief.spaces')` maps space IDs to

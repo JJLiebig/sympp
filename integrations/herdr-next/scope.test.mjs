@@ -19,8 +19,8 @@ test("asks are the only Needs you, each answered through its own route, a card's
   const card = M.parseBoard(busy).cards.find((c) => c.id === 'card-flicker');
   assert.deepEqual(card.needs.map((n) => [n.text, n.ask.route]), [['OK to drop the resize workaround for Windows 10?', '/api/v1/sympp/herdr/asks/ask-flicker/answer']]);
   const odd = variantPayload('busy');
-  odd.work_request_details[0].asks = [{ id: 'x', question: '  ' }, { id: 'y', question: 'Pick one?', answer_route: '//evil.example/answer' }];
-  assert.deepEqual(task(odd, 'wr-pr').asks.map((a) => [a.text, a.question.route]), [['Pick one?', '/api/v1/sympp/herdr/asks/y/answer']], 'an answer only goes to this factory');
+  odd.work_request_details[0].asks = [{ id: 'x', text: '  ' }, { id: 'y', text: 'Pick one?', answer_route: '//evil.example/answer' }];
+  assert.deepEqual(task(odd, 'wr-pr').asks.map((a) => [a.text, a.question.route]), [['Pick one?', null]], 'an answer only goes back to this factory');
 });
 
 test("a task's checks are one live signal, with a slot from the start only where its repository runs CI", () => {
@@ -45,7 +45,7 @@ test("a task's checks are one live signal, with a slot from the start only where
 
 test('a review reads as its mode and state in a word or two, and a package dispatched without a worker yet reads as launching', () => {
   const pkgs = Object.fromEntries(jobsOf(variantPayload('busy')).flatMap((job) => job.packages).map((p) => [p.id, p]));
-  assert.deepEqual(['r-4', 'r-5', 'r-7', 'n-1', 'r-6'].map((id) => S.reviewText(pkgs[id].review)), ['deep · round 3', 'normal · findings', 'fast · done', 'no review', null]);
+  assert.deepEqual(['r-4', 'r-5', 'r-7', 'n-1', 'r-6'].map((id) => S.reviewText(pkgs[id].review)), ['deep · round 3', 'normal · findings', 'fast · done', null, null]);
   assert.deepEqual(['s-3', 'r-6', 't-1'].map((id) => S.unmanned(pkgs[id])), [true, false, false]);
 });
 
@@ -59,17 +59,16 @@ test("a package's step comes from its status and derived progress, and only an o
   assert.deepEqual(['r-4', 'u-2', 's-3'].map((id) => pkgs[id].owner?.liveness ?? null), ['live', 'finished', null]);
 });
 
-test('decisions to review are the recorded ones and feedback that never reached its terminal, until dismissed', () => {
+test('decisions to review act through the routes the board gives: Ack and Feedback while recorded, dismiss once feedback is undelivered', () => {
   const payload = variantPayload('busy');
   const recap = payload.work_request_details.find((d) => d.work_request.id === 'wr-recap');
-  recap.decisions.push(
-    { id: 'seen', decision: 'Acked call.', review_state: 'acknowledged' },
-    { id: 'sent', decision: 'Delivered call.', review_state: 'feedback', feedback: 'ok', delivered: true },
-    { id: 'gone', decision: 'Dismissed call.', review_state: 'feedback', feedback: 'later', delivered: false, dismissed_at: new Date(NOW).toISOString() },
-  );
+  recap.decisions_to_review.push({ id: 'typing', decision: 'Call being answered.', recorded_by: 'box/t1', created_at: new Date(NOW).toISOString(), review_state: 'feedback', feedback: 'later', undelivered_reason: 'delivering', next_action: 'wait: the feedback is being typed' });
   const jobs = jobsOf(payload);
-  assert.deepEqual(L.decisionQueue(jobs).map((d) => [d.id, d.undelivered]), [['dec-share', true], ['dec-order', false], ['dec-toast', false]], 'oldest first');
-  assert.equal(L.decisionQueue(jobs)[0].feedback, 'Keep share links on the list for Q1; two agencies asked.');
+  const queue = L.decisionQueue(jobs);
+  assert.deepEqual(queue.map((d) => [d.id, d.undelivered, d.sending]), [['dec-share', true, false], ['dec-order', false, false], ['dec-toast', false, false], ['typing', false, true]], 'oldest first');
+  assert.equal(queue[0].feedback, 'Keep share links on the list for Q1; two agencies asked.');
+  assert.deepEqual(queue.map((d) => Object.values(d.routes).filter(Boolean).length), [1, 2, 2, 0], 'only the routes the decision allows now');
+  assert.deepEqual([queue[1].by.address, queue[1].by.role], ['box/t4', 'architect'], "the task's owner is named as such");
 });
 
 test('phases come from group paths: the strip runs each first segment apart, and nested groups sit inside their phase', () => {
@@ -99,7 +98,7 @@ test('needs come first, then the rest by when they opened; a task does not move 
   const before = order(variantPayload('quiet'));
   const advanced = variantPayload('quiet');
   const theme = advanced.work_request_details.find((d) => d.work_request.id === 'wr-theme').work_packages[0];
-  theme.progress = { stage: 'review_ci', since: new Date(NOW - 60e3).toISOString() };
+  Object.assign(theme, { progress: 'review_ci', board_state: { entered_at: new Date(NOW - 60e3).toISOString() } });
   assert.deepEqual(order(advanced), before);
   const space = S.scopeTasks({ topic: 't-tools', space: 'vps/s-api' }, desk, jobsOf(variantPayload('busy')), null, NOW).map((t) => t.job.id);
   assert.deepEqual(space.sort(), ['wr-cross', 'wr-restore'], 'a space keeps only the tasks on its repository');

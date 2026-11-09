@@ -12,11 +12,6 @@ export const icon = (name) => (name.includes("/") ? name : `mods/workspace-chrom
 export const EXPAND = "mods/sympp/expand.svg";
 export const tint = (color, alpha) => (/^#[0-9a-f]{6}$/i.test(color ?? "") ? color + alpha : color);
 
-export function cap(text) {
-  const value = String(text);
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
 export function button(t, id, label, action, { strong = false, glyph = null, tip = null, disabled = false } = {}) {
   return Button.new(id).flex().flex_none().items_center().gap(6).h(26).px(9).rounded(6).text_size(12).cursor_pointer()
     .border(1).border_color(strong ? t.input : CLEAR)

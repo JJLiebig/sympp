@@ -24,7 +24,7 @@ const STAGE = {
 const STATUS = { inspection_needed: ["Head changed since review; caller inspection needed", "waiting"], in_progress: ["In progress", "active"], passed: ["Passed", "good"], failed: ["Failed", "bad"], pending: ["Not started", "quiet"] };
 const OUTCOME = { findings: "Findings", clean: "Clean", blocked: "Blocked" };
 const LANES = { "review-followup": "Follow-up", "review-github": "GitHub review", "review-deslop": "Simplification", "review-recovery": "Recovery" };
-const PROVIDERS = { review_suite: "Review Suite" };
+const PROVIDERS = { "review-suite": "Review Suite", review_suite: "Review Suite" };
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export function reviewed(pkg) {

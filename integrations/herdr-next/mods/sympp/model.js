@@ -102,7 +102,7 @@ export function parseBoard(payload) {
   }
   const now = ms(payload.generated_at) ?? Date.now();
   const jobs = payload.work_request_details.filter((detail) => detail?.work_request?.id).map((detail) => buildJob(detail, now));
-  return { now, jobs, cards: cardsOf(payload.cards, now), offline: typeof payload.runtime?.offline === "boolean" ? payload.runtime.offline : null,
+  return { now, jobs, cards: cardsOf(payload.cards), offline: typeof payload.runtime?.offline === "boolean" ? payload.runtime.offline : null,
     reposRoot: typeof payload.runtime?.repos_root === "string" && payload.runtime.repos_root ? payload.runtime.repos_root : null };
 }
 
@@ -135,7 +135,10 @@ function buildJob(detail, now) {
   for (const pkg of packages) pkg.after = pkg.unmet.map((id) => titles.get(id) ?? id);
 
   const report = reportOf(request.operator_report, now);
-  const asks = asksOf(detail.asks, now).map((ask) => ({ ...ask, jobId: request.id }));
+  const owner = workedOnOf(request.worked_on);
+  // Who asked or decided, named as the task's owner when it is that terminal.
+  const known = (by) => (by && owner && by.address === owner.address ? { ...by, role: owner.role } : by);
+  const asks = asksOf(detail.asks).map((ask) => ({ ...ask, by: known(ask.by), jobId: request.id }));
   const needs = asks.map((ask) => ({ key: ask.key, kind: "ask", label: "Needs you", text: ask.text, since: ask.since, jobId: request.id, pkgId: ask.pkgId, ask }));
   const live = packages.filter((pkg) => LIVE_STAGES.includes(pkg.stage));
   const done = packages.filter((pkg) => pkg.stage === "ended");
@@ -154,12 +157,12 @@ function buildJob(detail, now) {
     baseBranch: request.base_branch ?? null,
     offPrimary: offPrimary(request.base_branch, request.default_branch),
     createdAt,
-    closedAt: ms(request.operator_completed_at) ?? ms(request.archived_at),
+    closedAt: ms(request.completed_at),
     report,
     asks,
     needs,
-    decisions: decisionsOf(detail.decisions, now).map((d) => ({ ...d, jobId: request.id })),
-    owner: workedOnOf(request.worked_on),
+    decisions: decisionsOf(detail.decisions_to_review).map((d) => ({ ...d, by: known(d.by), jobId: request.id })),
+    owner,
     dispatchedBy: chiefOf(request.dispatched_by),
     packages,
     // Prerequisite → dependent package pairs from the effective execution graph.
@@ -185,14 +188,26 @@ function workedOnOf(owner) {
     liveness: LIVENESS.has(owner.liveness) ? owner.liveness : "unknown", since: ms(owner.since) };
 }
 
-// Open asks: the only source of Needs you. Each answers through its own operator route on this factory.
+// A terminal named only by its address (who asked, who recorded a decision): its liveness is what
+// Herdr itself shows.
+function terminalOf(address) {
+  return typeof address === "string" && address.trim() ? { address: address.trim(), role: null, liveness: null, since: null } : null;
+}
+
+// A route the board hands over: only a plain path on this factory, so an action can only go back to
+// where the board came from.
+const routeOf = (route) => (typeof route === "string" && /^\/[^/\\]/.test(route) ? route : null);
+
+// Open asks: the only source of Needs you. A task's asks carry their answer route; a card's answer on
+// the same native route.
 function asksOf(list) {
   if (!Array.isArray(list)) return [];
-  return list.filter((ask) => ask && (typeof ask.id === "string" || typeof ask.id === "number") && typeof ask.question === "string" && ask.question.trim())
-    .map((ask) => ({
-      key: `ask:${ask.id}`, id: String(ask.id), text: ask.question.trim(), prompt: promptOf(ask.decision_prompt),
-      pkgId: ask.work_package_id ?? null, by: workedOnOf(ask.asked_by), since: ms(ask.asked_at), status: "open",
-      route: `/api/v1/sympp/herdr/asks/${encodeURIComponent(String(ask.id))}/answer`,
+  return list.map((ask) => ({ ask, text: typeof ask?.text === "string" ? ask.text : ask?.question }))
+    .filter(({ ask, text }) => typeof ask.id === "string" && ask.id && typeof text === "string" && text.trim() && (ask.state ?? "open") === "open")
+    .map(({ ask, text }) => ({
+      key: `ask:${ask.id}`, id: ask.id, text: text.trim(), prompt: promptOf(ask.decision_prompt),
+      pkgId: ask.work_package_id ?? null, by: terminalOf(ask.asked_by), since: ms(ask.asked_at),
+      route: ask.answer_route === undefined ? `/api/v1/sympp/herdr/asks/${encodeURIComponent(ask.id)}/answer` : routeOf(ask.answer_route),
     }));
 }
 
@@ -202,32 +217,40 @@ function promptOf(prompt) {
   return options.length ? { ...prompt, options } : null;
 }
 
-// Flagged decisions the person reviews: recorded ones wait for Ack or Feedback; feedback that never
-// reached its terminal stays until dismissed. Acknowledged and delivered ones are done.
+// Flagged decisions the person reviews, as the board lists them: recorded ones wait for Ack or
+// Feedback; feedback that never reached its terminal stays until dismissed. Each action is the route
+// the board gives; while the feedback is being typed there is none.
 function decisionsOf(list) {
   if (!Array.isArray(list)) return [];
-  return list.filter((d) => d && (typeof d.id === "string" || typeof d.id === "number") && typeof d.decision === "string" && d.decision.trim())
+  return list.filter((d) => d && typeof d.id === "string" && d.id && typeof d.decision === "string" && d.decision.trim())
     .map((d) => ({
-      key: `decision:${d.id}`, id: String(d.id), text: d.decision.trim(), rationale: typeof d.rationale === "string" && d.rationale.trim() ? d.rationale.trim() : null,
-      by: workedOnOf(d.recorded_by), at: ms(d.recorded_at), state: d.review_state ?? "recorded",
-      feedback: typeof d.feedback === "string" ? d.feedback : null, undelivered: d.review_state === "feedback" && d.delivered === false && !d.dismissed_at,
+      key: `decision:${d.id}`, id: d.id, text: d.decision.trim(), rationale: typeof d.rationale === "string" && d.rationale.trim() ? d.rationale.trim() : null,
+      by: terminalOf(d.recorded_by), at: ms(d.created_at), state: d.review_state ?? "recorded",
+      feedback: typeof d.feedback === "string" ? d.feedback : null,
+      routes: { ack: routeOf(d.ack_route), feedback: routeOf(d.feedback_route), dismiss: routeOf(d.dismiss_route) },
     }))
-    .filter((d) => d.state === "recorded" || d.undelivered);
+    .map((d) => ({ ...d, undelivered: d.state === "feedback" && Boolean(d.routes.dismiss), sending: d.state === "feedback" && !d.routes.dismiss }));
 }
 
-// Small work outside any task: one card per eligible terminal with a branch or PR.
+// Small work outside any task: one card per eligible terminal with a branch or PR. Dismissed cards
+// leave the panel.
 const CARD_STATES = new Set(["working", "review_ci", "merged", "done"]);
+// Review Suite's reading of a review: running, findings, done, or unknown when its host can't be read.
+const REVIEW_STATE = { in_progress: "running", passed: "done", failed: "findings", inspection_needed: "findings" };
 function cardsOf(list) {
   if (!Array.isArray(list)) return [];
-  return list.filter((c) => c?.id && typeof c.task === "string" && CARD_STATES.has(c.state)).map((c) => {
-    const review = c.review_signal ?? {};
-    const id = String(c.id);
+  return list.filter((c) => typeof c?.id === "string" && c.id && CARD_STATES.has(c.state)).map((c) => {
+    const id = c.id;
     const asks = asksOf(c.asks).map((ask) => ({ ...ask, cardId: id }));
+    const repo = c.repository ?? null;
+    const pr = c.pr ?? {};
+    const review = c.review ?? null;
     return {
-      id, task: c.task.trim(), repo: c.repo ?? null, repos: c.repo ? [c.repo] : [], branch: c.branch ?? null,
+      id, task: typeof c.title === "string" && c.title.trim() ? c.title.trim() : c.branch ?? id, repo, repos: repo ? [repo] : [], branch: c.branch ?? null,
       owner: workedOnOf(c.worked_on), state: c.state, since: ms(c.since),
-      pr: prOf(c.pr_signal ?? {}), review: { mode: review.mode ?? null, state: review.state ?? null, round: roundOf(review) },
-      ci: typeof c.repo_signal?.has_ci === "boolean" ? c.repo_signal.has_ci : null,
+      pr: prOf({ status: pr.state, number: pr.number, url: pr.url, repository: pr.repository, checks: pr.ci }),
+      review: review ? { mode: null, state: review.state === "unknown" ? "unknown" : review.state === "done" ? "done" : REVIEW_STATE[review.status] ?? null, round: 1 } : { mode: null, state: null, round: 1 },
+      ci: null,
       asks, needs: asks.map((ask) => ({ key: ask.key, kind: "ask", label: "Needs you", text: ask.text, since: ask.since, cardId: id, pkgId: null, ask })),
     };
   });
@@ -238,12 +261,22 @@ function prOf(pr) {
   return { status: pr.status ?? null, number: pr.number ?? null, url: pr.url ?? null, repo, checks: pr.checks?.status ?? null, checksAt: ms(pr.checks?.changed_at) };
 }
 
+// The worker terminal the factory saw on a package: live while its core lists it running, finished
+// once it ended, else not answering.
+function workerOf(terminal) {
+  if (typeof terminal?.address !== "string" || !terminal.address.trim()) return null;
+  const liveness = terminal.state === "finished" ? "finished" : terminal.state === "live" && terminal.status !== "unknown" ? "live" : "unknown";
+  return { address: terminal.address.trim(), role: "worker", liveness, since: null };
+}
+
 // Review Suite counts rounds from zero before the first; older signals carry no count.
 function roundOf(review) {
   return Number.isSafeInteger(Number(review.round)) && review.round !== null && review.round !== undefined && review.round !== "" ? Number(review.round) : 1;
 }
 
-const DISPATCHED = new Set(["launching", "implementing", "review_ci"]);
+// The factory's derived progress of a dispatched package. A worker that exited without a PR stays
+// in Implementing; its finished terminal says the rest.
+const PROGRESS = { launching: "launching", implementing: "implementing", worker_exited: "implementing", review_ci: "review_ci" };
 const repoKey = (repo) => String(repo).toLowerCase().replace(/\.git$/, "").split(/[\\/:]/).filter(Boolean).slice(-2).join("/");
 
 function buildPackage(slice, jobRepo) {
@@ -251,8 +284,8 @@ function buildPackage(slice, jobRepo) {
   const review = slice.review_signal ?? {};
   const ending = slice.status === "ended" || slice.delivery?.outcome ? endingOf(slice.delivery) ?? "abandoned" : null;
   const stage = ending ? "ended" : slice.status === "ready" ? "ready"
-    : slice.status === "dispatched" ? (DISPATCHED.has(slice.progress?.stage) ? slice.progress.stage : "launching") : "planned";
-  const since = stage === "ended" ? ms(slice.delivery?.recorded_at) : stage === "planned" ? null : ms(slice.progress?.since) ?? ms(slice.dispatched_at);
+    : slice.status === "dispatched" ? PROGRESS[slice.progress] ?? "launching" : "planned";
+  const since = stage === "ended" ? ms(slice.delivery?.recorded_at) : stage === "planned" ? null : ms(slice.board_state?.entered_at) ?? ms(slice.dispatched_at);
   const repo = slice.repo_display || slice.repo || jobRepo || null;
   const group = typeof slice.group === "string" ? slice.group.split("/").map((part) => part.trim()).filter(Boolean) : [];
   return {
@@ -279,12 +312,12 @@ function buildPackage(slice, jobRepo) {
     pr,
     // An open PR into a repository this factory doesn't merge into: only Finish ends it.
     finishable: LIVE_STAGES.includes(stage) && pr.status === "open" && Boolean(pr.repo && repo) && repoKey(pr.repo) !== repoKey(repo),
-    owner: workedOnOf(slice.worked_on),
+    owner: workerOf(slice.worker_terminal),
     review: {
       type: review.type ?? null,
       mode: review.mode ?? null,
-      // Review Suite's state for the current head: running, findings, done or unknown.
-      state: review.state ?? null,
+      // Review Suite's reading for the current head: running, findings or done.
+      state: REVIEW_STATE[review.status] ?? null,
       round: roundOf(review),
       status: review.status ?? null,
       providerStatus: review.provider_status ?? null,

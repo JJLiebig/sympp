@@ -21,12 +21,40 @@ export function answerBody(question, choice, text) {
   return { answer_choice: choice, ...(note ? { answer_note: note } : {}) };
 }
 
+// What to tell the person when a saved answer could not be typed into the asking terminal; null when
+// it was delivered. The answer stays on the ask either way.
+const UNDELIVERED = {
+  terminal_finished: "the asking terminal has finished",
+  terminal_unreachable: "the asking terminal is on another machine or out of reach",
+  no_asking_terminal: "the ask has no asking terminal",
+  send_failed: "sending it to the asking terminal failed",
+};
+export function undeliveredNote(payload) {
+  const delivery = payload?.delivery;
+  if (!delivery || delivery.state !== "not_delivered") return null;
+  return `Answer saved, but ${UNDELIVERED[delivery.reason] ?? "it wasn't delivered"}. The agent can read it on the task.`;
+}
+
+// A refusal in words: what the route said, then what to do about it when it names a next step.
+const NEXT_STEP = {
+  restore: "Restore the task, then try again.",
+  "ack or feedback": "Ack it or send feedback instead.",
+  dismiss: "Dismiss the undelivered feedback instead.",
+};
+export function refusal(error, status) {
+  const said = typeof error?.message === "string" && error.message.trim() ? error.message.trim().split(";")[0].replace(/\.$/, "") : null;
+  const next = typeof error?.next_action === "string" ? error.next_action : "";
+  const step = NEXT_STEP[next] ?? (next.startsWith("wait") ? "Try again in a moment." : null);
+  if (!said) return `sympp answered ${status}. Try again after refreshing.`;
+  return step ? `${said}. ${step}` : `${said}.`;
+}
+
 export async function postAction(endpoint, path, body, fetcher = fetch) {
   const response = await fetcher(`${endpoint}${path}`, {
     method: "POST", headers: { accept: "application/json", "content-type": "application/json" }, body: JSON.stringify(body),
   });
   const payload = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(payload?.error?.message || `sympp answered ${response.status}. Try again after refreshing.`);
+  if (!response.ok) throw new Error(refusal(payload?.error, response.status));
   if (!payload) throw new Error("sympp returned an unreadable response. Refresh before trying again.");
   return payload;
 }

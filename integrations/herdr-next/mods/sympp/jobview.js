@@ -1,16 +1,15 @@
-// What a task's drill-in opens in place: the answer form for a question and a package's review
-// drill-down (Review Suite's stage, its step ladder and each round).
+// What opens in place: the answer form for an ask and a package's review drill-down (Review Suite's
+// stage, its step ladder and each round).
 
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, Button } from "gpui-base";
 import * as M from "./model.js";
 import * as Rv from "./review.js";
-import { CLEAR, MONO, icon, tint, cap, button, field, mark } from "./ui.js";
+import { CLEAR, MONO, icon, tint, button, field, mark } from "./ui.js";
 
-// `titled: false` leaves the question out, where the row above already shows it.
-export function questionRow(v, t, question, first = false, { titled = true } = {}) {
+// An open ask's answer: the decision prompt's choices when it has one, else a written answer.
+export function answerForm(v, t, question) {
   const draft = v.answers[question.key];
-  const open = question.status === "open";
   const prompt = question.prompt;
   const option = (id, label, description, pros = [], cons = [], answer = null) => Button.new(`choice-${question.key}-${id}`)
     .flex().w_full().min_w(0).px(10).py(8).rounded(6).border(1).border_color(draft?.choice === id ? t.accent : t.input)
@@ -24,14 +23,8 @@ export function questionRow(v, t, question, first = false, { titled = true } = {
       .when(Boolean(answer && answer !== description), (el) => el.child(div().text_size(12).text_color(t.muted).child(answer)))
       .children(pros.map((text) => div().text_size(11.5).text_color(t.muted).child(`For: ${text}`)))
       .children(cons.map((text) => div().text_size(11.5).text_color(t.muted).child(`Against: ${text}`))));
-  return v_flex().id(`question-${question.key}`).gap(8).py(10).when(!first, (el) => el.border_t(1).border_color(t.border))
-    .when(titled, (el) => el.child(div().text_size(13.5).font_medium().text_color(open ? t.foreground : t.muted).child(question.text)))
-    .when(Boolean(question.context) && open, (el) => el.child(div().text_size(12).text_color(t.muted).child(question.context)))
-    .when(!open, (el) => el.child(div().text_size(12).text_color(t.muted).child(question.answer || cap(question.status || "Closed"))))
-    .when(open && !draft?.open, (el) => el.child(h_flex().child(draft?.saved
-      ? div().text_size(12).text_color(t.muted).child("Answer saved · refreshing…")
-      : button(t, `answer-${question.key}`, "Answer", (cx) => v.openAnswer(question, cx), { strong: true }))))
-    .when(open && Boolean(draft?.open), (el) => el.child(v_flex().gap(8)
+  return v_flex().id(`question-${question.key}`).gap(8).py(10)
+    .child(v_flex().gap(8)
       .when(Boolean(prompt), (form) => form
         .child(div().text_size(13).font_medium().child(prompt.tl_dr))
         .child(div().text_size(12).text_color(t.muted).child(prompt.details))
@@ -41,7 +34,7 @@ export function questionRow(v, t, question, first = false, { titled = true } = {
       .when(Boolean(draft.error), (form) => form.child(div().role("alert").text_size(12).text_color(t.blocked).child(draft.error)))
       .child(h_flex().gap(8).flex_wrap()
         .child(button(t, `save-${question.key}`, draft.pending ? "Sending…" : "Send", (cx) => v.saveAnswer(question, cx), { strong: true, disabled: draft.pending }))
-        .child(button(t, `cancel-${question.key}`, "Cancel", (cx) => { draft.open = false; v.keys.focus(); cx.notify(); }, { disabled: draft.pending })))));
+        .child(button(t, `cancel-${question.key}`, "Cancel", (cx) => { draft.open = false; v.keys.focus(); cx.notify(); }, { disabled: draft.pending }))));
 }
 
 // ---------- Review drill-down ----------

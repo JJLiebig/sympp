@@ -9,7 +9,7 @@ const at = (minutesAgo) => new Date(NOW - minutesAgo * MIN).toISOString();
 const jobOf = (id, payload = boardPayload()) => M.parseBoard(payload).jobs.find((job) => job.id === id);
 const pkgOf = (job, id) => job.packages.find((pkg) => pkg.id === id);
 // The review package with another review signal and stage, as sympp would send it.
-const reviewing = (signal, state = { status: 'dispatched', progress: { stage: 'review_ci' } }) => {
+const reviewing = (signal, state = { status: 'dispatched', progress: 'review_ci' }) => {
   const payload = boardPayload();
   const slice = payload.work_request_details[0].work_packages.find((p) => p.id === 'wp-review');
   Object.assign(slice, { review_signal: signal, ...state });
@@ -88,7 +88,7 @@ test('a package without a PR or a review says so, and one with a review drills d
   assert.deepEqual([plain.reviewed, plain.stage, plain.rows, plain.bumps, plain.round, plain.overall, plain.total], [false, null, [], [], null, null, 1]);
   const payload = boardPayload();
   const slice = payload.work_request_details[1].work_packages.find((p) => p.id === 'np-2');
-  Object.assign(slice, { status: 'dispatched', progress: { stage: 'review_ci' }, review_signal: { type: 'review_suite', status: 'in_progress', round: 1, started_at: at(20), round_history: [{ number: 1, lane: 'review_t1', started_at: at(20) }] } });
+  Object.assign(slice, { status: 'dispatched', progress: 'review_ci', review_signal: { type: 'review_suite', status: 'in_progress', round: 1, started_at: at(20), round_history: [{ number: 1, lane: 'review_t1', started_at: at(20) }] } });
   const reviewed = Rv.reviewDetail(pkgOf(jobOf('wr-nopr', payload), 'np-2'), NOW);
   assert.deepEqual([reviewed.reviewed, reviewed.rows.length, reviewed.overall], [true, 1, '20m']);
 });
