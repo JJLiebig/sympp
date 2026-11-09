@@ -25,9 +25,9 @@ Ask your parent when context is missing or product, architecture, dependency or
 scope is unclear, and keep working on what doesn't depend on the answer. Raise
 scope growth before you implement it.
 
-Message only your own parent: one final handoff, plus questions or blockers.
-Never message a chief or another architect. Keep messages short; never send
-status or acknowledgements.
+Message only your own parent, whatever its role: one final handoff, plus
+questions or blockers. Never message any other chief or architect. Keep
+messages short; never send status or acknowledgements.
 
 ## Checks and review
 

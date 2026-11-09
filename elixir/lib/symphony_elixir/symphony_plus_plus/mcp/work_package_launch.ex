@@ -133,7 +133,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
     #{review_step(work_package, worktree.worktree_path)}
     - Make no sympp MCP calls. Message only your parent terminal: one final handoff with the PR URL, the
       exact head, check and review results, and remaining risks, plus questions or blockers. Never message
-      a chief or another architect, and never send status or acknowledgements. Keep messages short.
+      any other chief or architect, and never send status or acknowledgements. Keep messages short.
     - Ask your parent when scope, product intent or a dependency is unclear. Never print or store secrets.
 
     ## Assignment
