@@ -3,8 +3,8 @@ Code.require_file("../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.CardsTest do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  alias SymphonyElixir.SymphonyPlusPlus.{Cards, Observer}
   alias SymphonyElixir.SymphonyPlusPlus.Asks.Ask
+  alias SymphonyElixir.SymphonyPlusPlus.{Cards, Observer}
   alias SymphonyElixir.SymphonyPlusPlus.Cards.Card
 
   @core MCPHarness.test_core_id()

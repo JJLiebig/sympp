@@ -80,8 +80,8 @@ export class Candidate {
     for (const tick of this.ticks.splice(0)) tick.reject(error);
   }
 
-  // One Observer tick (watcher candidates): `sweep` reads GitHub, Review Suite
-  // and cards; `terminals` reads herdr-core. Resolves once the tick ran.
+  // One Observer pass (watcher candidates): `sweep` reads GitHub, Review Suite
+  // and cards; `terminals` reads herdr-core. Resolves once the pass finished.
   async tick(name: 'sweep' | 'terminals') {
     const done = new Promise<void>((resolve, reject) => this.ticks.push({ line: `watcher: ${name} done`, resolve, reject }));
     this.process.stdin.write(`${name}\n`);

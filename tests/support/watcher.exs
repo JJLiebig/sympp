@@ -1,10 +1,11 @@
 # The factory runtime as the installed service runs it: the packaged
-# supervision tree, including the Observer, on a disposable ledger. Only the
-# outside world is replaced: GitHub's HTTP endpoint is the journey's loopback
-# provider, and `hc`, `gh` and Review Suite are the journey's programs on PATH
-# and under HOME. The journey owns the clock: a `sweep` or `terminals` line on
-# stdin delivers that tick to the running Observer and answers once it ran.
-alias SymphonyElixir.SymphonyPlusPlus.Observer
+# supervision tree on a disposable ledger. Only the outside world and the
+# clock are replaced: GitHub's HTTP endpoint is the journey's loopback provider,
+# `hc`, `gh` and Review Suite are the journey's programs on PATH and under HOME,
+# and the Observer's two passes run only when the journey asks. A `sweep` or
+# `terminals` line on stdin runs that pass and answers once it finished.
+alias SymphonyElixir.SymphonyPlusPlus.GitHub.{Api, RateGovernor}
+alias SymphonyElixir.SymphonyPlusPlus.{Observer, Repo}
 
 github = System.fetch_env!("ACCEPTANCE_GITHUB")
 endpoint = Application.get_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, [])
@@ -23,9 +24,17 @@ Application.put_env(:symphony_elixir, :sympp_github_request, fn %{method: method
 end)
 
 {:ok, _started} = Application.ensure_all_started(:symphony_elixir)
+
+# The supervised Observer would also run its passes on its own timers, between
+# a journey's steps. This process runs the same passes instead, on request, and
+# owns the GitHub tables the Observer process would own.
+:ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, Observer)
+RateGovernor.create_table()
+Api.create_table()
+
 IO.puts("sympp API bridge: http://127.0.0.1:#{SymphonyElixir.HttpServer.bound_port()}")
 
-ticks = %{"sweep" => :sweep, "terminals" => :terminals}
+passes = %{"sweep" => fn -> Observer.sweep(Repo) end, "terminals" => fn -> Observer.observe_terminals(Repo) end}
 
 Stream.repeatedly(fn -> IO.gets("") end)
 |> Enum.reduce_while(:ok, fn
@@ -34,9 +43,7 @@ Stream.repeatedly(fn -> IO.gets("") end)
 
   line, _acc ->
     tick = String.trim(line)
-    send(Observer, Map.fetch!(ticks, tick))
-    # The Observer handles its mailbox in order, so this returns after the tick ran.
-    :sys.get_state(Observer, 60_000)
+    :ok = Map.fetch!(passes, tick).()
     IO.puts("watcher: #{tick} done")
     {:cont, :ok}
 end)

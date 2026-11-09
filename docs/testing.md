@@ -47,9 +47,9 @@ public operator reads observe stored qualification and request completion.
 Provider and MCP receipts accompany the process logs, including failed calls.
 
 Watcher journeys (delivery, stacking and cards) start the candidate as the
-installed service runs it: the packaged supervision tree with its Observer, on a
-disposable ledger (`tests/support/watcher.exs`). The journey sends each Observer
-tick and waits for it, so no timing is guessed. GitHub's HTTP API is the same
+installed service runs it: the packaged supervision tree on a disposable ledger
+(`tests/support/watcher.exs`). The Observer's two passes run only when the
+journey asks and finish before it continues, so no timer runs between steps. GitHub's HTTP API is the same
 loopback provider, answering GraphQL and REST from the PR model `gh` reads; a
 test-only `hc` stands in for herdr-core; card checkouts are real disposable Git
 repositories. This proves the Observer's decisions on real inputs, not GitHub's
