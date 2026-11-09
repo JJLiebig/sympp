@@ -148,7 +148,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
         repo,
         "t7",
         "record_decision",
-        %{"work_request_id" => work_request.id, "decision" => "Ship it", "rationale" => "Product call", "scope_impact" => "none", "source_type" => "architect", "flag" => true},
+        %{"work_request_id" => work_request.id, "decision" => "Ship it", "rationale" => "Key sk-synthetic-rationale", "scope_impact" => "none", "source_type" => "architect", "flag" => true},
         labels: %{"sympp.role" => "chief", "sympp.domain" => "Kraken"}
       )
 
@@ -156,7 +156,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
              get_in(response, ["result", "structuredContent", "decision_log_entry"])
 
     # The recording terminal is stored by key, so feedback can be typed into it.
-    assert %DecisionLogEntry{recorded_by_terminal: key, recorded_by_address: "testbox/t7"} = repo.get!(DecisionLogEntry, id)
+    # Secrets are redacted before they reach the ledger.
+    assert %DecisionLogEntry{recorded_by_terminal: key, recorded_by_address: "testbox/t7", rationale: "Key [REDACTED]"} = repo.get!(DecisionLogEntry, id)
     assert key == test_terminal("t7").key
     assert [%WorkedOn{display_address: "testbox/t1"}] = live_owner_rows(repo, work_request.id)
 

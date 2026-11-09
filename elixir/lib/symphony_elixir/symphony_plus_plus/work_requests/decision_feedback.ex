@@ -10,7 +10,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
   | recorded | `feedback(text)` | `feedback` | operator (HTTP); the factory types `Decision feedback: <text>` into the recording terminal |
 
   Feedback that can't be typed into the recording terminal stays on the
-  decision with its reason in `undelivered_reason`. The operator's `dismiss`
+  decision with its reason in `undelivered_reason` (`delivery_interrupted` if
+  the factory stopped mid-send). The operator's `dismiss`
   clears that marker; the feedback text stays. Every other event is refused
   with the current state and the next action.
   """
@@ -42,7 +43,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
   @spec feedback(repo(), String.t(), term()) :: {:ok, DecisionLogEntry.t(), delivery()} | {:error, refusal() | term()}
   def feedback(repo, decision_id, text) do
     with {:ok, text} <- feedback_text(text),
-         {:ok, decision} <- review_recorded(repo, decision_id, review_state: "feedback", feedback: text) do
+         # Marked undelivered until the send succeeds, so an attempt interrupted
+         # mid-send stays on the board.
+         {:ok, decision} <-
+           review_recorded(repo, decision_id, review_state: "feedback", feedback: text, undelivered_reason: "delivery_interrupted") do
       deliver(repo, decision)
     end
   end
@@ -117,15 +121,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
 
   defp deliver(repo, %DecisionLogEntry{} = decision) do
     case HerdrCore.deliver(decision.recorded_by_terminal, "Decision feedback: " <> decision.feedback) do
-      :ok -> {:ok, decision, %{"state" => "delivered", "to" => decision.recorded_by_address}}
-      {:error, reason} -> undelivered(repo, decision, reason)
+      :ok ->
+        decision = mark_undelivered(repo, decision, nil)
+        {:ok, decision, %{"state" => "delivered", "to" => decision.recorded_by_address}}
+
+      {:error, reason} ->
+        undelivered(repo, decision, reason)
     end
   end
 
-  defp undelivered(repo, %DecisionLogEntry{} = decision, reason) do
+  defp undelivered(repo, %DecisionLogEntry{} = decision, reason),
+    do: {:ok, mark_undelivered(repo, decision, reason), %{"state" => "not_delivered", "reason" => reason}}
+
+  defp mark_undelivered(repo, %DecisionLogEntry{} = decision, reason) do
     decision = repo.update!(Ecto.Changeset.change(decision, undelivered_reason: reason, updated_at: now()))
     DashboardPubSub.broadcast_changed()
-    {:ok, decision, %{"state" => "not_delivered", "reason" => reason}}
+    decision
   end
 
   defp review_recorded(repo, decision_id, changes) do
