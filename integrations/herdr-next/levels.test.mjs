@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as M from './mods/sympp/model.js';
 import * as L from './mods/sympp/levels.js';
-import { NOW, boardPayload, chiefTerminals, deskFixture } from './fixture.mjs';
+import { NOW, boardPayload, variantPayload, chiefTerminals, deskFixture } from './fixture.mjs';
 
 const board = () => M.parseBoard(boardPayload());
 const setup = (repoTopics) => {
@@ -53,11 +53,13 @@ test('needs-you ranks by downstream packages unblocked, then by the longest wait
   ], 'an ask holds every unfinished package of its job');
   const pr = byId(jobs, 'wr-pr');
   assert.equal(L.unblocks(pr, 'wp-done'), 2, 'transitive dependents count once each');
-  const finished = { ...pr, packages: pr.packages.map((pkg) => (pkg.id === 'wp-queued' ? { ...pkg, stage: 'done' } : pkg)) };
+  const finished = { ...pr, packages: pr.packages.map((pkg) => (pkg.id === 'wp-queued' ? { ...pkg, stage: 'ended' } : pkg)) };
   assert.equal(L.unblocks(finished, 'wp-review'), 0, 'finished dependents are not waiting');
   assert.equal(L.unblocks({ ...pr, edges: [['wp-build', 'wp-review'], ['wp-review', 'wp-build']] }, 'wp-build'), 1, 'a cycle ends');
   const tie = [{ ...pr, id: 'a', needs: [{ key: 'a', pkgId: 'wp-review', since: NOW - 5 }] }, { ...pr, id: 'b', needs: [{ key: 'b', pkgId: 'wp-review', since: NOW - 50 }] }];
   assert.deepEqual(L.needsQueue(tie).map((n) => n.key), ['b', 'a']);
+  const cards = M.parseBoard(variantPayload('busy')).cards;
+  assert.deepEqual(L.needsQueue([], cards).map((n) => [n.key, n.card.id, n.unblocks]), [['ask:ask-flicker', 'card-flicker', 0]], "a card's ask joins the queue");
 });
 
 test('a space shows the jobs touching its repository with their other repositories, and empty spaces stay ordinary', () => {
@@ -99,18 +101,16 @@ test('a toast is due only for a need that appeared between two successful reads,
   assert.deepEqual(start.fresh, [], 'the first read only records');
   assert.deepEqual(L.newNeeds(start.seen, first).fresh, [], 'a repaint or unchanged read says nothing');
   const payload = boardPayload();
-  payload.work_request_details.find((d) => d.work_request.id === 'wr-nopr').asks = [{ id: 'ask-new', kind: 'ask', text: 'Publish where?', work_package_id: null, asked_at: new Date(NOW).toISOString(), answer_route: '/api/v1/sympp/herdr/asks/ask-new/answer' }];
+  payload.work_request_details.find((d) => d.work_request.id === 'wr-nopr').asks = [{ id: 'q-new', question: 'Publish where?', asked_at: new Date(NOW).toISOString() }];
+  payload.cards = [{ id: 'c1', task: 'Small fix', repo: 'owner/web', state: 'working', asks: [{ id: 'q-card', question: 'Keep the old flag?' }] }];
   const next = M.parseBoard(payload);
   const { fresh } = L.newNeeds(start.seen, next);
-  assert.deepEqual(fresh.map((n) => [n.key, n.job.id]), [['ask:ask-new', 'wr-nopr']]);
+  assert.deepEqual(fresh.map((n) => [n.key, n.job?.id ?? n.card.id]), [['ask:q-new', 'wr-nopr'], ['ask:q-card', 'c1']]);
   assert.deepEqual(L.newNeeds(start.seen, { ...next, offline: true }).fresh, [], 'an offline copy never announces');
   assert.notEqual(L.toastId(fresh[0]), L.toastId({ ...fresh[0], since: NOW + 1 }), 'a need raised again later is a new item');
-
-  const later = (minutes) => new Date(NOW + minutes * 60e3).toISOString();
   const moved = boardPayload();
-  const review = moved.work_request_details[0].work_packages.find((pkg) => pkg.id === 'wp-review');
-  review.activity_signal = { ...review.activity_signal, last_update_at: later(1) };
-  assert.deepEqual(L.newNeeds(start.seen, M.parseBoard(moved)).fresh, [], 'a need whose activity moved is not new');
+  moved.work_request_details[0].work_packages.find((pkg) => pkg.id === 'wp-review').progress.since = new Date(NOW + 60e3).toISOString();
+  assert.deepEqual(L.newNeeds(start.seen, M.parseBoard(moved)).fresh, [], 'work moving on raises nothing');
 });
 
 test('the breadcrumb runs Factory > Topic > Space > Job, Esc goes up one level and gone places fall back', () => {

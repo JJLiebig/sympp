@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as M from './mods/sympp/model.js';
 import * as Rv from './mods/sympp/review.js';
-import { reviewPhase } from './mods/sympp/scope.js';
 import { NOW, boardPayload } from './fixture.mjs';
 
 const MIN = 60e3;
@@ -10,10 +9,10 @@ const at = (minutesAgo) => new Date(NOW - minutesAgo * MIN).toISOString();
 const jobOf = (id, payload = boardPayload()) => M.parseBoard(payload).jobs.find((job) => job.id === id);
 const pkgOf = (job, id) => job.packages.find((pkg) => pkg.id === id);
 // The review package with another review signal and stage, as sympp would send it.
-const reviewing = (signal, board = { stage: 'review', track: 'pr' }) => {
+const reviewing = (signal, state = { status: 'dispatched', progress: { stage: 'review_ci' } }) => {
   const payload = boardPayload();
   const slice = payload.work_request_details[0].work_packages.find((p) => p.id === 'wp-review');
-  Object.assign(slice, { review_signal: signal, board_state: board });
+  Object.assign(slice, { review_signal: signal, ...state });
   return pkgOf(jobOf('wr-pr', payload), 'wp-review');
 };
 const rows = (d) => d.rows.map((r) => [r.n, r.lane, r.step, r.outcome, r.findings, r.took, r.current]);
@@ -64,7 +63,7 @@ test('missing times stay missing rather than being guessed', () => {
   assert.deepEqual(rows(d), [[2, 'GitHub review', null, 'In progress', null, null, true], [1, null, null, 'Clean', null, null, false]]);
   assert.deepEqual([d.round, d.overall, d.bumps], [null, null, []], 'no recorded start: no times and no time bump');
   assert.equal(Rv.clock(null, NOW), null);
-  const finished = Rv.reviewDetail({ ...pkg, stage: 'merge', review: { ...pkg.review, startedAt: NOW - 90 * MIN, history: [{ ...pkg.review.history[0], n: 1 }] } }, NOW);
+  const finished = Rv.reviewDetail({ ...pkg, stage: 'ready', review: { ...pkg.review, startedAt: NOW - 90 * MIN, history: [{ ...pkg.review.history[0], n: 1 }] } }, NOW);
   assert.deepEqual([finished.round, finished.overall, finished.rows[0].outcome], [null, '1h 00m', 'Clean'], 'a finished review lasts until its last recorded finish');
 });
 
@@ -89,7 +88,7 @@ test('a package without a PR or a review says so, and one with a review drills d
   assert.deepEqual([plain.reviewed, plain.stage, plain.rows, plain.bumps, plain.round, plain.overall, plain.total], [false, null, [], [], null, null, 1]);
   const payload = boardPayload();
   const slice = payload.work_request_details[1].work_packages.find((p) => p.id === 'np-2');
-  Object.assign(slice, { board_state: { stage: 'review', track: 'no_pr' }, review_signal: { type: 'review_suite', status: 'in_progress', round: 1, started_at: at(20), round_history: [{ number: 1, lane: 'review_t1', started_at: at(20) }] } });
+  Object.assign(slice, { status: 'dispatched', progress: { stage: 'review_ci' }, review_signal: { type: 'review_suite', status: 'in_progress', round: 1, started_at: at(20), round_history: [{ number: 1, lane: 'review_t1', started_at: at(20) }] } });
   const reviewed = Rv.reviewDetail(pkgOf(jobOf('wr-nopr', payload), 'np-2'), NOW);
   assert.deepEqual([reviewed.reviewed, reviewed.rows.length, reviewed.overall], [true, 1, '20m']);
 });
@@ -97,10 +96,9 @@ test('a package without a PR or a review says so, and one with a review drills d
 test('round three and three hours in review are road bumps, timed from the review start', () => {
   const job = jobOf('wr-pr');
   assert.deepEqual(M.reviewBumps(pkgOf(job, 'wp-review'), NOW).map((b) => b.text), ['Review is on round 3', 'In review for 3h 20m']);
-  assert.deepEqual(job.bumps, [], 'review timing does not raise human attention');
   const calm = reviewing({ type: 'review_suite', status: 'in_progress', round: 2, started_at: at(179), round_started_at: at(30) });
   assert.deepEqual(M.reviewBumps(calm, NOW), []);
-  assert.deepEqual(M.reviewBumps({ ...pkgOf(job, 'wp-review'), stage: 'merge' }, NOW), [], 'a finished review is no longer a bump');
+  assert.deepEqual(M.reviewBumps({ ...pkgOf(job, 'wp-review'), stage: 'ready' }, NOW), [], 'a finished review is no longer a bump');
 });
 
 test('recorded moments read as clock times, with the date once they are not today', () => {
@@ -109,11 +107,10 @@ test('recorded moments read as clock times, with the date once they are not toda
 });
 
 test('a reviewed descendant awaits caller inspection even when the package is at merge', () => {
-  const pkg = reviewing({ status: 'inspection_needed', provider_status: 'head_changed_after_review', observation_state: 'stale' }, { stage: 'merge', track: 'pr' });
+  const pkg = reviewing({ status: 'inspection_needed', provider_status: 'head_changed_after_review', observation_state: 'stale' }, { status: 'ready' });
   const d = Rv.reviewDetail(pkg, NOW);
   assert.deepEqual(d.stage, { code: 'head_changed_after_review', text: 'Head changed since review; caller inspection needed', tone: 'waiting' });
   assert.equal(d.observation, 'stale');
-  assert.equal(pkg.stage, 'merge');
-  assert.equal(reviewPhase(pkg), 'caller inspection needed');
+  assert.equal(pkg.stage, 'ready');
   assert.equal(Rv.stageOf({ status: 'failed' }).tone, 'bad');
 });

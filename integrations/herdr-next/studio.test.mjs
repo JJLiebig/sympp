@@ -31,7 +31,7 @@ test('UI work is a package titled with UI as a word or one whose worker publishe
   const bindings = M.discoverBindings({ local: { node: 'node', helper: 'h' } }, terminals);
   assert.equal(S.uiPackage(pr, pkg(pr, 'wp-build'), bindings, terminals), true, 'a published preview marks the package');
   assert.equal(S.uiPackage(pr, pkg(pr, 'wp-build'), bindings, [worker('t1')]), false);
-  assert.equal(S.uiPackage(pr, { ...pkg(pr, 'wp-build'), title: 'Stage UI', stage: 'done' }, bindings, terminals), false, 'landed work gets no studio');
+  assert.equal(S.uiPackage(pr, { ...pkg(pr, 'wp-build'), title: 'Stage UI', stage: 'ended' }, bindings, terminals), false, 'landed work gets no studio');
 });
 
 test('only an http(s) preview a worker published is shown', () => {
@@ -108,8 +108,11 @@ test('the builder makes a sample-data copy of the view, changing only what chang
   assert.equal(first.written, first.files);
   const main = await readFile(join(to, 'main.js'), 'utf8');
   assert.match(main, /import Lens from "\.\/lens\.js"/);
-  assert.match(main, /this\.request = async \(\) => \{ throw SAMPLE; \}/, 'no request leaves the preview');
+  assert.match(main, /const done = applyDemo\(this\.sample, url,/, 'actions play on the sample board');
   assert.match(main, /tick\(\) \{\}/, 'it never reads sympp');
+  assert.match(main, /read\(cx\) \{\n {4}this\.net = M\.fetchSucceeded\(this\.net, M\.parseBoard\(this\.sample\)/, 'a refresh redraws the sample and shares nothing');
+  assert.match(main, /focusTerminal\(address, cx\) \{\n {4}this\.ops/, 'it never focuses a terminal');
+  assert.match(main, /async prefill\(\) \{\}/, 'nor types into one');
   const lens = await readFile(join(to, 'lens.js'), 'utf8');
   assert.equal(lens, (await readFile(join(here, 'mods', 'sympp', 'main.js'), 'utf8')).replaceAll('mods/sympp/', 'mods/sympp-dev-wp/'));
   assert.doesNotMatch(await readFile(join(to, 'studioview.js'), 'utf8'), /mods\/sympp\//, 'its pictures come from the copy');

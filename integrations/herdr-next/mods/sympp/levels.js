@@ -82,7 +82,7 @@ export function placeJobs(jobs, desk, repoTopics) {
 // What answering frees: every unfinished package after this one in the execution graph. An ask
 // about the whole job holds all of its unfinished packages.
 export function unblocks(job, pkgId) {
-  const open = new Set(job.packages.filter((pkg) => pkg.stage !== "done").map((pkg) => pkg.id));
+  const open = new Set(job.packages.filter((pkg) => pkg.stage !== "ended").map((pkg) => pkg.id));
   if (!pkgId) return open.size;
   const after = new Set();
   const queue = [pkgId];
@@ -95,11 +95,18 @@ export function unblocks(job, pkgId) {
   return [...after].filter((id) => open.has(id)).length;
 }
 
-// Needs-you across the factory: what unblocks the most waiting packages first, then the longest wait.
-export function needsQueue(jobs) {
+// Needs-you across the factory, from asks only: what unblocks the most waiting packages first, then
+// the longest wait. A card's ask frees no package.
+export function needsQueue(jobs, cards = []) {
   const age = (need) => need.since ?? Infinity;
-  return jobs.flatMap((job) => job.needs.map((need) => ({ ...need, job, unblocks: unblocks(job, need.pkgId) })))
+  return [...jobs.flatMap((job) => job.needs.map((need) => ({ ...need, job, card: null, unblocks: unblocks(job, need.pkgId) }))),
+    ...cards.flatMap((card) => card.needs.map((need) => ({ ...need, job: null, card, unblocks: 0 })))]
     .sort((a, b) => b.unblocks - a.unblocks || age(a) - age(b));
+}
+
+// Decisions to review across the factory, oldest first, each with its task.
+export function decisionQueue(jobs) {
+  return jobs.flatMap((job) => job.decisions.map((d) => ({ ...d, job }))).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
 }
 
 // One row per Herdr topic, then unsorted spaces and work without a space when either has anything.
@@ -289,11 +296,13 @@ export function followPath(target, jobs, desk, place) {
 // Needs that appeared between two successful reads. The first read only records what is there, and
 // an offline copy never announces anything.
 export function newNeeds(previous, board) {
-  const needs = board.jobs.flatMap((job) => job.needs.map((need) => ({ ...need, job })));
+  const needs = [...board.jobs.flatMap((job) => job.needs.map((need) => ({ ...need, job }))),
+    ...(board.cards ?? []).flatMap((card) => card.needs.map((need) => ({ ...need, card, job: null })))];
   const seen = new Set(needs.map((need) => need.key));
   if (previous === null || board.offline === true) return { seen, fresh: [] };
   return { seen, fresh: needs.filter((need) => !previous.has(need.key)) };
 }
+
 
 // One toast per need: the same need raised again later is a new item.
 export function toastId(need) {

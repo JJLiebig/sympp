@@ -7,7 +7,8 @@ import * as M from "./model.js";
 import * as Rv from "./review.js";
 import { CLEAR, MONO, icon, tint, cap, button, field, mark } from "./ui.js";
 
-export function questionRow(v, t, question, first = false) {
+// `titled: false` leaves the question out, where the row above already shows it.
+export function questionRow(v, t, question, first = false, { titled = true } = {}) {
   const draft = v.answers[question.key];
   const open = question.status === "open";
   const prompt = question.prompt;
@@ -24,7 +25,7 @@ export function questionRow(v, t, question, first = false) {
       .children(pros.map((text) => div().text_size(11.5).text_color(t.muted).child(`For: ${text}`)))
       .children(cons.map((text) => div().text_size(11.5).text_color(t.muted).child(`Against: ${text}`))));
   return v_flex().id(`question-${question.key}`).gap(8).py(10).when(!first, (el) => el.border_t(1).border_color(t.border))
-    .child(div().text_size(13.5).font_medium().text_color(open ? t.foreground : t.muted).child(question.text))
+    .when(titled, (el) => el.child(div().text_size(13.5).font_medium().text_color(open ? t.foreground : t.muted).child(question.text)))
     .when(Boolean(question.context) && open, (el) => el.child(div().text_size(12).text_color(t.muted).child(question.context)))
     .when(!open, (el) => el.child(div().text_size(12).text_color(t.muted).child(question.answer || cap(question.status || "Closed"))))
     .when(open && !draft?.open, (el) => el.child(h_flex().child(draft?.saved
@@ -39,8 +40,8 @@ export function questionRow(v, t, question, first = false) {
       .child(field(t, prompt ? draft.choice === "__custom_redirect__" ? "Your direction" : "Note (optional)" : "Your answer", draft.input, true))
       .when(Boolean(draft.error), (form) => form.child(div().role("alert").text_size(12).text_color(t.blocked).child(draft.error)))
       .child(h_flex().gap(8).flex_wrap()
-        .child(button(t, `save-${question.key}`, draft.pending ? "Saving…" : "Save answer", (cx) => v.saveAnswer(question, cx), { strong: true, disabled: draft.pending }))
-        .child(button(t, `cancel-${question.key}`, "Back", (cx) => { draft.open = false; v.keys.focus(); cx.notify(); }, { disabled: draft.pending })))));
+        .child(button(t, `save-${question.key}`, draft.pending ? "Sending…" : "Send", (cx) => v.saveAnswer(question, cx), { strong: true, disabled: draft.pending }))
+        .child(button(t, `cancel-${question.key}`, "Cancel", (cx) => { draft.open = false; v.keys.focus(); cx.notify(); }, { disabled: draft.pending })))));
 }
 
 // ---------- Review drill-down ----------

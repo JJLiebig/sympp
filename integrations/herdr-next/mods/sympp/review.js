@@ -51,7 +51,7 @@ export function reviewDetail(pkg, now) {
   const r = pkg.review;
   const history = r.history;
   const total = Math.max(pkg.round, 0, ...history.map((h) => h.n));
-  const active = pkg.stage === "review";
+  const active = pkg.stage === "review_ci";
   const rows = history.map((h) => {
     const running = active && h.n === total && h.finishedAt === null;
     return {

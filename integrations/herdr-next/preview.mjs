@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Builds this checkout's sympp view as a preview copy for a UI studio: mods/sympp drawn on the sample
-// board in fixture.mjs, with no sympp reads or writes, as its own mod. The studio runs it from the
-// worker's worktree and again on every save, so the copy follows the work in progress.
+// board in fixture.mjs, with no sympp reads or writes, as its own mod; its actions change the sample
+// in memory only. The studio runs it from the worker's worktree and again on every save, so the
+// copy follows the work in progress.
 //   node integrations/herdr-next/preview.mjs --to <herdr home>/mods/sympp-dev-<name> [--base <ref>]
 // With --base the first copy waits until the view differs from that ref (committed or not), exiting
 // 3 until then; an existing copy is always rebuilt, so reverted edits show too. It writes only into a mods/sympp-dev-* folder and only files whose contents changed.
@@ -16,33 +17,53 @@ export const PREFIX = 'sympp-dev-';
 const here = dirname(fileURLToPath(import.meta.url));
 const VIEW = 'integrations/herdr-next/mods';
 
-// The copy's entry: the view with the sample board already read and its timer, requests and new
-// tabs stubbed. The drawn-structure tests use it too, with a case that pins width and place.
+// The copy's entry: the view with the sample board already read and its timer and new tabs
+// stubbed. Its operator actions play on the sample board in memory (fixture.js applyDemo), so the
+// preview can be clicked through; a reload starts over. It never focuses or types into a terminal.
+// The drawn-structure tests use it too, with a case that pins width and place.
 export function previewMain(spec = {}) {
   return `import Lens from "./lens.js";
 import * as M from "./model.js";
-import { NOW, boardPayload, variantPayload, deskFixture } from "./fixture.js";
+import { NOW, boardPayload, variantPayload, deskFixture, applyDemo } from "./fixture.js";
 const CASE = ${JSON.stringify(spec)};
-const SAMPLE = Object.assign(new Error("This preview runs on sample data; nothing is saved."), { userMessage: "This preview runs on sample data; nothing is saved." });
+const answer = (status, body) => ({ ok: status < 300, status, json: async () => body });
 export default class Preview extends Lens {
   init(_p, cx) {
     super.init({ endpoint: "http://127.0.0.1:4000", ...CASE.props }, cx);
-    this.request = async () => { throw SAMPLE; };
-    this.net = M.fetchSucceeded(this.net, M.parseBoard(boardPayload()), NOW);
-    if (CASE.board) this.net = M.fetchSucceeded(this.net, M.parseBoard(variantPayload(CASE.board)), NOW);
-    if (CASE.error) this.net = M.fetchFailed(this.net, CASE.error, NOW);
+    this.sample = CASE.board ? variantPayload(CASE.board) : boardPayload();
+    this.request = async (url, init = {}) => {
+      const done = applyDemo(this.sample, url, JSON.parse(init.body ?? "{}"));
+      return done ? answer(200, done) : answer(404, { error: { message: "The sample board has no such action." } });
+    };
+    const now = Date.now();
+    this.net = M.fetchSucceeded(this.net, M.parseBoard(this.sample), now);
+    if (CASE.error) this.net = M.fetchFailed(this.net, CASE.error, now);
     if (CASE.path) this.path = { topic: null, space: null, job: null, ...CASE.path };
     if (CASE.pin) this.pin = true;
     if (CASE.pkg) this.pkgSel = CASE.pkg;
     if (CASE.review) this.review = CASE.review;
     if (CASE.expanded) this.expanded = new Set(CASE.expanded);
+    if (CASE.feedback) for (const key of CASE.feedback) this.feedback[key] = { input: this.input("What should change, and why?", true), open: true, pending: false, error: null };
+    if (CASE.answer) for (const key of CASE.answer) this.answers[key] = { input: this.input("Optional note", true), open: true, choice: CASE.choice ?? null, pending: false, error: null };
   }
   // Ages and timings are drawn at the sample's moment. Herdr runs every mod in one runtime, so the
   // app's clock (Date.now) stays untouched.
   now() { return NOW; }
   tick() {}
+  // A read only redraws the sample; it shares nothing with other mods.
+  read(cx) {
+    this.net = M.fetchSucceeded(this.net, M.parseBoard(this.sample), Date.now());
+    cx.notify();
+  }
   openInTab() {}
   openStudio() {}
+  focusTerminal(address, cx) {
+    this.ops["focus:" + address] = { error: "Sample data: this would open " + address + "." };
+    cx.notify();
+  }
+  async prefill() {}
+  // Every sample terminal counts as running, so Focus shows where it would.
+  running() { return true; }
   viewportWidth() { return CASE.width ?? super.viewportWidth(); }
   deskTopics() { return deskFixture().topics; }
   spaceList() { return deskFixture().spaces; }
