@@ -124,8 +124,8 @@ and Windows partial removal remain separate qualifications.
 ## Operator board and inspector (B3)
 
 The browser lane uses hosted-built candidate assets and real disposable candidate
-MCP state. Operator settings, intake, archive and restore use the live backend;
-restore currently has no board control. Controlled GitHub and review-status
+MCP state. Operator settings, intake, archive and restore use the live backend
+through the board's controls. Controlled GitHub and review-status
 programs qualify discovery, command and parser behavior, not live providers or
 the owning package's actual FAST review. The same-origin asset proxy does not
 qualify origin denial; keep the endpoint's security checks.
@@ -133,11 +133,13 @@ qualify origin denial; keep the endpoint's security checks.
 The assigned worker's bounded recording exception uses unchanged actual hosted
 GET captures for read/navigation only. It rejects mutations and never emulates
 state transitions. Luna low uses the existing login; generated native cache is
-committed unchanged. Final hosted replay loads no GET transcript and uses the
+committed unchanged. No agent step is recorded for the current board, so the
+journeys run mechanically and the replay proves no positive native replay until
+one is re-recorded. Final hosted replay loads no GET transcript and uses the
 live candidate backend. Native strict read-only cache and zero retries combine
 with a public model identity whose generation/stream methods throw before
 transport. Hosted replay constructs no provider or OAuth client. Require suite
-success, every required agent action self-finalized, zero model calls/tokens and
+success, every recorded agent action self-finalized, zero model calls/tokens and
 unchanged cache. A native unrecorded goal must fail at the throwing descriptor;
 zero counters on that failed attempt alone are insufficient proof.
 

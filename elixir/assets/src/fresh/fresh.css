@@ -42,7 +42,9 @@ button {
 }
 
 /* A goal jumped to from the header lands just below it. */
-[data-goal] {
+[data-goal],
+[data-ask],
+#needs-you {
   scroll-margin-top: 116px;
 }
 

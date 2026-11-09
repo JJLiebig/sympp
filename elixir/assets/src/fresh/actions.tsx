@@ -1,49 +1,62 @@
 import { MoreHorizontal } from "lucide-react";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { api, readOnly } from "./api";
-import type { Goal, GoalView } from "./model";
+import { readOnly } from "./api";
+import type { Goal, GoalView, Phase } from "./model";
+import { useAct, type GoalStep, type OperatorAction } from "./operator";
 
-// Called after an action went through, so the board reads the ledger again.
-export const ReloadContext = createContext<() => void>(() => undefined);
+type Action = { key: GoalStep; label: string; hint: string; confirm: string };
 
-type Step = [path: string, body: Record<string, string>];
-type Action = { key: string; label: string; hint: string; confirm: string; steps: Step[] };
-
-const COMPLETE: Step = ["complete", {}];
-const ARCHIVE: Step = ["archive", {}];
 const STALE_MS = 30 * 24 * 3600e3;
 
-// The backend archives only done or unresolved goals, so archiving one still in progress marks it done first.
-function archiveSteps(goal: Goal): Step[] {
-  return goal.closedAt === null && goal.phase !== "unresolved" ? [COMPLETE, ARCHIVE] : [ARCHIVE];
-}
-
 // None of these stops a running worker or merges a PR, so a goal with work in flight says so.
-function actionsFor(goal: Goal, moving: number): Action[] {
-  const finished = goal.closedAt !== null;
+function actionsFor(phase: Phase, moving: number): Action[] {
   const running = moving > 0 ? ` ${moving} ${moving === 1 ? "package is" : "packages are"} still moving and will keep running.` : "";
-  const done: Action = { key: "done", label: "Mark as done", hint: `Close this goal as finished, whatever its packages say.${running}`, confirm: "Mark as done?", steps: [COMPLETE] };
-  const archiveHint = finished ? "Take it off the board. It can be restored." : `Mark it done and take it off the board. It can be restored.${running}`;
-  const archive: Action = { key: "archive", label: "Archive", hint: archiveHint, confirm: "Archive?", steps: archiveSteps(goal) };
-  const remove: Action = { key: "delete", label: "Delete", hint: `Remove it for good, with its history, its packages and their worktrees.${running}`, confirm: "Delete for good?", steps: [["delete", {}]] };
-  return finished ? [archive, remove] : [done, archive, remove];
+  const complete: Action = { key: "complete", label: "Complete", hint: `Close this goal as done, whatever its packages say.${running}`, confirm: "Complete?" };
+  const archive: Action = { key: "archive", label: "Archive", hint: `Take it off the board. It can be restored.${running}`, confirm: "Archive?" };
+  const restore: Action = { key: "restore", label: "Restore", hint: "Put it back on the board.", confirm: "Restore?" };
+  const remove: Action = { key: "delete", label: "Delete", hint: `Remove it for good, with its history, its packages and their worktrees.${running}`, confirm: "Delete for good?" };
+  // Only a done or unresolved goal can be archived; anything still open is completed first.
+  if (phase === "archived") return [restore, remove];
+  if (phase === "done") return [archive, remove];
+  return phase === "unresolved" ? [complete, archive, remove] : [complete, remove];
 }
 
-async function run(goalId: string, [path, body]: Step) {
-  const response = await fetch(api(`/work-requests/${encodeURIComponent(goalId)}/${path}`), {
-    method: "POST",
-    headers: { accept: "application/json", "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (response.ok) return;
-  const payload = (await response.json().catch(() => null)) as { error?: { message?: string } } | null;
-  throw new Error(payload?.error?.message || "The backend refused this.");
+// A button for one operator action. With `confirm` it takes a second click. A refusal shows next to it.
+export function ActButton({ action, className = "", confirm, label, look = "rounded px-1.5 py-0.5 text-xs font-medium", tone = "text-dim" }: { action: OperatorAction; className?: string; confirm?: string; label: string; look?: string; tone?: string }) {
+  const act = useAct();
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  if (readOnly) return null;
+
+  const run = async () => {
+    if (confirm && !armed) return setArmed(true);
+    setBusy(true);
+    setFailure(null);
+    try {
+      await act(action);
+    } catch (caught) {
+      setFailure(caught instanceof Error ? caught.message : "The backend refused this.");
+    } finally {
+      setBusy(false);
+      setArmed(false);
+    }
+  };
+
+  return (
+    <span className={`flex shrink-0 items-center gap-2 ${className}`}>
+      <button className={`${look} hover:bg-line hover:text-ink disabled:opacity-50 ${armed ? "bg-line text-ink" : tone}`} disabled={busy} type="button" onBlur={() => setArmed(false)} onClick={() => void run()}>
+        {armed ? confirm : label}
+      </button>
+      {failure ? <span className="text-xs text-fail">{failure}</span> : null}
+    </span>
+  );
 }
 
-// The only things the board changes: closing, archiving or deleting a goal. Each takes a second click.
-export function GoalActions({ className, goal, moving = 0 }: { className?: string; goal: Goal; moving?: number }) {
-  const reload = useContext(ReloadContext);
+// Completing, archiving, restoring or deleting a goal. Each takes a second click.
+export function GoalActions({ className, goal, moving = 0, phase }: { className?: string; goal: Goal; moving?: number; phase: Phase }) {
+  const act = useAct();
   const [open, setOpen] = useState(false);
   const [armed, setArmed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -59,8 +72,7 @@ export function GoalActions({ className, goal, moving = 0 }: { className?: strin
     return () => window.removeEventListener("pointerdown", close);
   }, [open]);
 
-  // Mock goals are not in the ledger, so there is nothing to act on; the gap keeps rows aligned.
-  if (readOnly || goal.mock) return <span className={`inline-block size-6 shrink-0 ${className ?? ""}`} />;
+  if (readOnly) return <span className={`inline-block size-6 shrink-0 ${className ?? ""}`} />;
 
   const toggle = () => {
     setOpen(!open);
@@ -71,9 +83,8 @@ export function GoalActions({ className, goal, moving = 0 }: { className?: strin
     if (armed !== action.key) return setArmed(action.key);
     setBusy(true);
     try {
-      for (const step of action.steps) await run(goal.id, step);
+      await act({ kind: "goal", goalId: goal.id, step: action.key });
       setOpen(false);
-      reload();
     } catch (caught) {
       setFailure(caught instanceof Error ? caught.message : "The backend refused this.");
     } finally {
@@ -84,12 +95,12 @@ export function GoalActions({ className, goal, moving = 0 }: { className?: strin
 
   return (
     <span ref={root} className={`relative inline-block shrink-0 ${className ?? ""}`}>
-      <button aria-expanded={open} aria-label={`Actions for ${goal.title}`} className={`flex size-6 items-center justify-center rounded hover:bg-line hover:text-ink ${open ? "bg-line text-ink" : "text-faint"}`} title="Mark as done, archive or delete" type="button" onClick={toggle}>
+      <button aria-expanded={open} aria-label={`Actions for ${goal.title}`} className={`flex size-6 items-center justify-center rounded hover:bg-line hover:text-ink ${open ? "bg-line text-ink" : "text-faint"}`} title={actionsFor(phase, moving).map((action) => action.label).join(", ")} type="button" onClick={toggle}>
         <MoreHorizontal className="size-4" />
       </button>
       {open ? (
         <span className="absolute right-0 top-full z-30 mt-1 block w-72 rounded border border-line bg-bg p-1 text-left text-sm font-normal shadow-xl">
-          {actionsFor(goal, moving).map((action) => (
+          {actionsFor(phase, moving).map((action) => (
             <button key={action.key} className={`block w-full rounded px-2.5 py-1.5 text-left hover:bg-line disabled:opacity-50 ${action.key === "delete" ? "text-fail" : "text-ink"}`} disabled={busy} type="button" onClick={() => void pick(action)}>
               <span className="block font-medium">{armed === action.key ? `${action.confirm} Click again` : action.label}</span>
               <span className="block text-xs text-dim">{action.hint}</span>
@@ -104,15 +115,15 @@ export function GoalActions({ className, goal, moving = 0 }: { className?: strin
 
 // Clears a shelf in one go: everything on it, or only what has sat there for a month. Each takes a second click.
 export function ShelfCleanup({ at, views }: { at: number; views: GoalView[] }) {
-  const reload = useContext(ReloadContext);
+  const act = useAct();
   const [armed, setArmed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const real = views.filter((view) => !view.goal.mock);
-  const stale = real.filter((view) => at - view.lastMoveAt > STALE_MS);
+  // A goal counts as old from its last package move or its completion, whichever came later.
+  const stale = views.filter((view) => at - Math.max(view.lastMoveAt, view.goal.completedAt ?? 0) > STALE_MS);
   const choices = [
-    { key: "stale", label: `older than 30 days (${stale.length})`, picked: stale.length < real.length ? stale : [] },
-    { key: "all", label: `all (${real.length})`, picked: real },
+    { key: "stale", label: `older than 30 days (${stale.length})`, picked: stale.length < views.length ? stale : [] },
+    { key: "all", label: `all (${views.length})`, picked: views },
   ].filter((choice) => choice.picked.length > 0);
   if (readOnly || choices.length === 0) return null;
 
@@ -121,19 +132,18 @@ export function ShelfCleanup({ at, views }: { at: number; views: GoalView[] }) {
     setBusy(true);
     setFailure(null);
     try {
-      for (const view of choice.picked) for (const step of archiveSteps(view.goal)) await run(view.goal.id, step);
+      for (const view of choice.picked) await act({ kind: "goal", goalId: view.goal.id, step: "archive" });
     } catch (caught) {
       setFailure(caught instanceof Error ? caught.message : "The backend refused this.");
     } finally {
       setBusy(false);
       setArmed(null);
-      reload();
     }
   };
 
   return (
     <p className="flex items-center gap-1 text-xs text-faint">
-      <span title="Marks them done where needed and takes them off the board. They can be restored.">Archive</span>
+      <span title="Takes them off the board. They can be restored.">Archive</span>
       {choices.map((choice) => (
         <button key={choice.key} className={`rounded px-1.5 py-0.5 hover:bg-line hover:text-ink disabled:opacity-50 ${armed === choice.key ? "bg-line text-ink" : ""}`} disabled={busy} type="button" onClick={() => void pick(choice)}>
           {armed === choice.key ? `Archive ${choice.picked.length}? Click again` : choice.label}
