@@ -2,12 +2,28 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
+// Platform branches and process/path adapters used by installed runtime journeys.
+const windowsBackend = [
+  'shell', 'ssh', 'local_command', 'workspace', 'path_safety',
+  'symphony_plus_plus/repo', 'symphony_plus_plus/cards/git',
+  'symphony_plus_plus/operator_dashboard_opener', 'symphony_plus_plus/herdr_core',
+  'symphony_plus_plus/github/client', 'symphony_plus_plus/github/api',
+  'symphony_plus_plus/git_checkout', 'symphony_plus_plus/product_tree/repository',
+  'symphony_plus_plus/work_packages/worktree_target_root',
+  'symphony_plus_plus/work_packages/worktree_path',
+  'symphony_plus_plus/work_packages/worktree_lifecycle',
+  'symphony_plus_plus/mcp/worktree_scope', 'symphony_plus_plus/mcp/client_leases',
+  'symphony_plus_plus/mcp/config', 'symphony_plus_plus/mcp/work_package_launch',
+].map(name => `elixir/lib/symphony_elixir/${name}.ex`);
+windowsBackend.push('elixir/lib/mix/tasks/sympp.cockpit.ex', 'elixir/lib/mix/tasks/workspace.before_remove.ex');
+
 export function windowsJobs(event, paths = []) {
   if (event !== 'pull_request') return { runtime: true, frontend: true };
   // Both jobs consume the Node toolchain and frontend/Herdr build inputs.
   const frontend = paths.some(path => /^(\.github\/workflows\/|elixir\/assets\/|integrations\/herdr-next\/|packages\/sympp\/herdr\/)/.test(path)
     || ['elixir/mise.toml', 'package.json', 'package-lock.json', '.npmrc', '.gitattributes', '.gitmodules'].includes(path));
   const runtime = frontend || paths.some(path => /^(packages\/sympp\/|skills\/sympp\/|scripts\/|tests\/|\.e2e\/|elixir\/config\/|elixir\/rel\/|elixir\/priv\/)/.test(path)
+    || windowsBackend.includes(path)
     || /\.(ps1|psm1|psd1|cmd|bat)$/i.test(path)
     || ['elixir/mix.exs', 'elixir/mix.lock', 'elixir/Makefile', 'e2e.config.ts'].includes(path));
   return { runtime, frontend };

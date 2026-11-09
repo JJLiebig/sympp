@@ -19,6 +19,11 @@ test('PR selection covers Windows consumers and leaves ordinary source/docs on L
     'tests/support/installed-report.ts', 'e2e.config.ts']) {
     assert.deepEqual(windowsJobs('pull_request', [path]), { runtime: true, frontend: false }, path);
   }
+  for (const path of ['elixir/lib/symphony_elixir/shell.ex',
+    'elixir/lib/symphony_elixir/symphony_plus_plus/mcp/client_leases.ex',
+    'elixir/lib/mix/tasks/workspace.before_remove.ex']) {
+    assert.deepEqual(windowsJobs('pull_request', [path]), { runtime: true, frontend: false }, path);
+  }
   for (const path of ['elixir/assets/src/main.tsx', 'elixir/assets/package-lock.json',
     'integrations/herdr-next/install.mjs', 'packages/sympp/herdr/dist/sympp-herdr.mjs',
     'elixir/mise.toml', 'package-lock.json', '.github/workflows/make-all.yml']) {
