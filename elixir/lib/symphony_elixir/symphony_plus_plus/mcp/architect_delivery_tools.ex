@@ -231,9 +231,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   defp terminal_name(%Terminal{display_address: address}), do: address
 
+  # Immediate: concurrent closes of one package take the write lock in turn, so
+  # the later one reads the ending the earlier one recorded.
   defp run_architect_transaction(repo, fun, notify?) do
     result =
-      case repo.transaction(fn -> rollback_architect_transaction_result(repo, fun.()) end) do
+      case repo.transaction(fn -> rollback_architect_transaction_result(repo, fun.()) end, mode: :immediate) do
         {:ok, result} -> {:ok, result}
         {:error, {:tool_error, reason}} -> {:tool_error, reason}
         {:error, {:error, reason}} -> {:error, reason}

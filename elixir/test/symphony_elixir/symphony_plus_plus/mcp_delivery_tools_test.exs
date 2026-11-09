@@ -138,12 +138,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     {_request, racing, _package} = linked_slice!(repo, work_request_id: "WR-MCP-FINISH-RACE", work_package_status: "ready")
 
+    # Several connections, as in production, so the closes' transactions overlap.
+    [path] = for [_seq, "main", path] <- repo.query!("PRAGMA database_list").rows, do: path
+    pool = start_supervised!(Supervisor.child_spec({Repo, database: path, name: nil, pool_size: 4, log: false}, id: :race_pool))
+
     endings =
       for address <- ["t4", "t5", "t6"] do
-        Task.async(fn -> record_delivery(repo, address, %{"work_package_id" => racing.id, "outcome" => "finished"}) end)
+        Task.async(fn ->
+          Repo.put_dynamic_repo(pool)
+          record_delivery(repo, address, %{"work_package_id" => racing.id, "outcome" => "finished"})
+        end)
       end
       |> Task.await_many(30_000)
-      |> Enum.map(&get_in(&1, ["result", "structuredContent", "work_package_delivery", "id"]))
+      |> Enum.map(&(get_in(&1, ["result", "structuredContent", "work_package_delivery", "id"]) || &1))
 
     assert [id, id, id] = endings
     assert is_binary(id)
