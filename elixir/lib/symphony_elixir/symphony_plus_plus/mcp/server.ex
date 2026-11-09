@@ -484,6 +484,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          "constraints" => constraints || %{},
          "creator_kind" => "agent",
          "creator_name" => terminal.display_address,
+         "creator_terminal" => terminal.key,
          "created_via" => "mcp",
          "dispatched_by" => Terminal.attribution(terminal)
        }}

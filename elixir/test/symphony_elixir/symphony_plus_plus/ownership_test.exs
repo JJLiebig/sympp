@@ -182,6 +182,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
     by_chief = create.("t3", "Pricing\npage", chief)
     by_architect = create.("t4", "Search", %{})
     by_finished_chief = create.("t5", "Billing", chief)
+    # A chief on another core with the same name and address is a different terminal.
+    elsewhere = create_work_request!(repo, %{creator_kind: "agent", creator_name: "testbox/t3", creator_terminal: "other-core/t3"}).id
 
     # t3 and t5 are chiefs on the factory's core; t5 has since finished.
     terminals = %{
@@ -209,6 +211,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
     record.("t7", by_architect, "No chief", true)
     record.("t3", by_chief, "The chief's own call", true)
     record.("t7", by_finished_chief, "Chief finished", true)
+    record.("t7", elsewhere, "Another core's chief", true)
     refute_received {:typed, _target, _text, _mode}
   end
 

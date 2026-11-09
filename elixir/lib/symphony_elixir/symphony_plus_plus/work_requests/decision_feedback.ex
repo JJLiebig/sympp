@@ -25,6 +25,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
   import Ecto.Query, only: [from: 2]
 
   alias SymphonyElixir.SymphonyPlusPlus.{DashboardPubSub, HerdrCore}
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{DecisionLogEntry, Phase, WorkRequest}
 
@@ -50,10 +51,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
   chief recorded the decision itself, or when the send fails.
   """
   @spec notify_chief(WorkRequest.t(), DecisionLogEntry.t()) :: :ok
-  def notify_chief(%WorkRequest{creator_kind: "agent"} = work_request, %DecisionLogEntry{flagged: true} = decision) do
-    with {:ok, key, %{"labels" => %{"sympp.role" => "chief"}}} <- HerdrCore.live_terminal(work_request.creator_name),
-         true <- key != decision.recorded_by_terminal do
-      HerdrCore.deliver(key, chief_notice(work_request, decision), submit: true)
+  def notify_chief(%WorkRequest{creator_terminal: chief} = work_request, %DecisionLogEntry{flagged: true, recorded_by_terminal: recorder} = decision)
+      when is_binary(chief) and chief != recorder do
+    with {core_id, address} <- Terminal.split_key(chief),
+         {:live, %{"labels" => %{"sympp.role" => "chief"}}} <- HerdrCore.view(core_id, address) do
+      HerdrCore.deliver(chief, chief_notice(work_request, decision), submit: true)
     end
 
     :ok

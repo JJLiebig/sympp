@@ -128,33 +128,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   end
 
   @doc """
-  The key and record of the live terminal on the factory's own core that has
-  this display address (`<core name>/<address>`, or a bare address when the
-  core has no name), as a terminal's bridge records it. `:error` otherwise.
-  """
-  @spec live_terminal(String.t() | nil) :: {:ok, String.t(), map()} | :error
-  def live_terminal(display_address) when is_binary(display_address) do
-    with {:ok, %{core_id: core_id, terminals: terminals} = snapshot} <- snapshot(false),
-         {:ok, address} <- local_address(display_address, Map.get(snapshot, :core_name)),
-         %{"state" => "live"} = record <- Map.get(terminals, address) do
-      {:ok, Terminal.key(core_id, address), record}
-    else
-      _other -> :error
-    end
-  end
-
-  def live_terminal(_display_address), do: :error
-
-  defp local_address(display_address, nil), do: if(String.contains?(display_address, "/"), do: :error, else: {:ok, display_address})
-
-  defp local_address(display_address, core_name) do
-    case String.split(display_address, "/", parts: 2) do
-      [^core_name, address] -> {:ok, address}
-      _other_core -> :error
-    end
-  end
-
-  @doc """
   Types text into a recorded terminal's input. `terminal_key` is the
   terminal's key (core id plus address). By default the text is left in the
   input without submitting it, for operator answers and decision feedback;
