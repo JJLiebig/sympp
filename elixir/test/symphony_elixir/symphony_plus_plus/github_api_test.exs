@@ -79,9 +79,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubApiTest do
       RateGovernor.record(credential, budget.("0"), 0)
       assert {:error, {:rate_limited, _reset}} = RateGovernor.allow(credential, "core", :interactive, 0)
 
-      # A response that arrives late can't raise the budget within its reset window.
+      # A response that arrives late can't raise the budget within its reset
+      # window, whether it succeeded or was refused, nor bring back an older window.
       RateGovernor.record(credential, budget.("4999"), 0)
-      assert {:error, {:rate_limited, _reset}} = RateGovernor.allow(credential, "core", :interactive, 0)
+      RateGovernor.penalize(credential, Map.put(budget.("4999"), "retry-after", ["1"]), 0)
+      RateGovernor.record(credential, %{budget.("4999") | "x-ratelimit-reset" => ["1800"]}, 0)
+      assert {:error, {:rate_limited, 3_600_000}} = RateGovernor.allow(credential, "core", :interactive, 1_000)
 
       # After the reset time the old budget no longer applies.
       assert :ok = RateGovernor.allow(credential, "core", :background, 3_600_001)

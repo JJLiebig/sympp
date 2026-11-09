@@ -67,21 +67,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.RateGovernor do
     state = get(credential)
     state = if state.paused_until <= now_ms, do: %{state | backoff_ms: nil}, else: state
 
-    state =
-      case budget(headers) do
-        {resource, budget} -> put_in(state, [:resources, resource], newest_budget(state.resources[resource], budget))
-        nil -> state
-      end
-
-    put(credential, state)
+    put(credential, put_budget(state, headers))
   end
 
   # Responses can arrive out of order: within one reset window the budget only
-  # goes down, and a later window replaces it.
+  # goes down, a later window replaces it and an earlier one never does.
   defp newest_budget(%{reset_ms: reset_ms, remaining: remaining} = previous, %{reset_ms: reset_ms} = budget),
     do: if(previous.remaining < budget.remaining, do: %{budget | remaining: remaining}, else: budget)
 
+  defp newest_budget(%{reset_ms: previous_reset} = previous, %{reset_ms: reset_ms}) when previous_reset > reset_ms, do: previous
   defp newest_budget(_previous, budget), do: budget
+
+  defp put_budget(state, headers) do
+    case budget(headers) do
+      {resource, budget} -> put_in(state, [:resources, resource], newest_budget(state.resources[resource], budget))
+      nil -> state
+    end
+  end
 
   @doc """
   Records a 403 or 429 rate-limit answer and returns the time the credential is
@@ -91,13 +93,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.RateGovernor do
   def penalize(credential, headers, now_ms \\ now_ms()), do: locked(credential, fn -> penalize_locked(credential, headers, now_ms) end)
 
   defp penalize_locked(credential, headers, now_ms) do
-    state = get(credential)
-
-    state =
-      case budget(headers) do
-        {resource, budget} -> put_in(state, [:resources, resource], budget)
-        nil -> state
-      end
+    state = credential |> get() |> put_budget(headers)
 
     {until_ms, backoff_ms} =
       case retry_after_ms(headers) || reset_wait_ms(headers, now_ms) do
