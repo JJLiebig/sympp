@@ -175,7 +175,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CardsTest do
 
     Application.put_env(:symphony_elixir, :sympp_herdr_core, fn -> core(terminals) end)
     parent = self()
-    paste = fn target, text -> send(parent, {:pasted, target, text}) && :ok end
+    paste = fn target, text, :prefill -> send(parent, {:pasted, target, text}) && :ok end
     Application.put_env(:symphony_elixir, :sympp_herdr_send, paste)
 
     assert {:ok, %Ask{state: "answered", card_id: card_id}, %{"state" => "delivered"}} =

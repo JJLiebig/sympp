@@ -95,31 +95,41 @@ End a package that won't merge with `close_work_package` and an `outcome`:
 When every package has ended the WorkRequest is `done` or `unresolved`. Only the
 operator completes or archives it.
 
+## Product calls
+
+Flag a decision (`record_decision(flag: true)`) only when it changes what a
+person sees, can do, or is charged or notified for: something the owner would
+notice using the product. Implementation choices (schema, queries, tests, file
+layout, tooling, CI) are never flagged. When one option is clearly best,
+decide, flag it and keep going; when none is, ask with `ask` instead.
+
+- Write the decision as one plain product sentence. Record it before
+  dispatching work that depends on it.
+- The chief gets each flagged decision in one line and replies only to correct
+  it. Record a correction as a new decision without `flag`.
+- Declining a reviewer's request, such as over-engineering, is your job: never
+  flag or message it.
+
 ## Messages
 
-Every message lands in its reader's context. Keep messages as short as
-possible, and never send one just to acknowledge.
+Keep messages as short as possible; never send one just to acknowledge.
 
 - Message the chief only for a product question you can't infer, something
   outside your WorkRequest's authority, or the final delivery. Never send
   status or progress: the board shows it.
-- When a product trade-off has a clear best option, decide it, record it with
-  `record_decision(flag: true)` and keep going. Don't ask permission.
-- Coordinate shared files, CI and migrations directly, in one short line to
-  only the architects it affects, such as those also adding migrations:
-  "t1yw: taking migration 0378." No acknowledgements, and no replies unless
-  there's a conflict. Go to the chief only if you disagree.
+- Coordinate shared files, CI and migrations in one short line to only the
+  architects it affects: "t1yw: taking migration 0378." Find peers in the same
+  repo with `list_work_requests(repo: ...)`. No acknowledgements, no replies
+  unless there's a conflict. Go to the chief only if you disagree.
 
 ## Ask and report
 
 - A question only the human can answer goes through `ask` (`decision_prompt`
-  for a choice, `work_package_id` when it concerns one package). Product
-  questions go to the chief first when there is one. Make each question stand
-  alone in plain English: situation, why it matters, options, your
-  recommendation, the question. An answer given in conversation is recorded
-  with `resolve_ask`.
-- Record durable decisions with `record_decision`; flag the product calls you
-  made (`flag: true`) so the operator can review them.
+  for a choice, `work_package_id` when it concerns one package). Make each
+  question stand alone in plain English: situation, why it matters, options,
+  your recommendation, the question. An answer given in conversation is
+  recorded with `resolve_ask`.
+- Record other durable decisions with `record_decision`, unflagged.
 - Answers and decision feedback are typed into your input without being
   submitted: read them and act. Off the factory's machine, read them with
   `detail: "full"`.

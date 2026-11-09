@@ -128,19 +128,49 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   end
 
   @doc """
-  Types text into a recorded terminal's input without submitting it, for
-  operator answers and decision feedback. `terminal_key` is the terminal's key
-  (core id plus address).
+  The key and record of the live terminal on the factory's own core that has
+  this display address (`<core name>/<address>`, or a bare address when the
+  core has no name), as a terminal's bridge records it. `:error` otherwise.
+  """
+  @spec live_terminal(String.t() | nil) :: {:ok, String.t(), map()} | :error
+  def live_terminal(display_address) when is_binary(display_address) do
+    with {:ok, %{core_id: core_id, terminals: terminals} = snapshot} <- snapshot(false),
+         {:ok, address} <- local_address(display_address, Map.get(snapshot, :core_name)),
+         %{"state" => "live"} = record <- Map.get(terminals, address) do
+      {:ok, Terminal.key(core_id, address), record}
+    else
+      _other -> :error
+    end
+  end
+
+  def live_terminal(_display_address), do: :error
+
+  defp local_address(display_address, nil), do: if(String.contains?(display_address, "/"), do: :error, else: {:ok, display_address})
+
+  defp local_address(display_address, core_name) do
+    case String.split(display_address, "/", parts: 2) do
+      [^core_name, address] -> {:ok, address}
+      _other_core -> :error
+    end
+  end
+
+  @doc """
+  Types text into a recorded terminal's input. `terminal_key` is the
+  terminal's key (core id plus address). By default the text is left in the
+  input without submitting it, for operator answers and decision feedback;
+  with `submit: true` it is sent like an ordinary message.
 
   Text is typed only into a terminal the factory's own core sees live. Herdr
   machine names are local aliases, so a terminal on another core can't be
   addressed safely from here. Otherwise the reason is `terminal_finished`,
   `terminal_unreachable` or `send_failed`.
   """
-  @spec deliver(String.t(), String.t()) :: :ok | {:error, String.t()}
-  def deliver(terminal_key, text) when is_binary(terminal_key) and is_binary(text) do
+  @spec deliver(String.t(), String.t(), keyword()) :: :ok | {:error, String.t()}
+  def deliver(terminal_key, text, opts \\ []) when is_binary(terminal_key) and is_binary(text) do
+    mode = if Keyword.get(opts, :submit, false), do: :submit, else: :prefill
+
     with {:ok, address} <- delivery_target(terminal_key) do
-      if paste(address, text) == :ok, do: :ok, else: {:error, "send_failed"}
+      if type(address, text, mode) == :ok, do: :ok, else: {:error, "send_failed"}
     end
   end
 
@@ -158,27 +188,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
     end
   end
 
-  @doc """
-  Pastes text into a terminal's input without pressing Enter (`hc send
-  --no-submit`), so the agent reads it on its next turn and a person can still
-  edit it. `target` is a terminal address, optionally `machine/address`.
-
-  The command is the `:sympp_herdr_send` application setting: `"hc"` (default),
-  another command path, `nil` to disable, or a two-arity function (tests).
-  """
-  @spec paste(String.t(), String.t()) :: :ok | :error
-  def paste(target, text) when is_binary(target) and is_binary(text) do
+  # `hc send --raw`: `:prefill` adds `--no-submit`, so the agent reads the text
+  # on its next turn and a person can still edit it; `:submit` presses Enter.
+  # The command is the `:sympp_herdr_send` application setting: `"hc"`
+  # (default), another command path, `nil` to disable, or a three-arity
+  # function `(target, text, mode)` (tests).
+  defp type(target, text, mode) do
     case Application.get_env(:symphony_elixir, :sympp_herdr_send, "hc") do
       nil -> :error
-      fun when is_function(fun, 2) -> if fun.(target, text) == :ok, do: :ok, else: :error
-      command when is_binary(command) -> paste_with(System.find_executable(command), target, text)
+      fun when is_function(fun, 3) -> if fun.(target, text, mode) == :ok, do: :ok, else: :error
+      command when is_binary(command) -> type_with(System.find_executable(command), target, text, mode)
     end
   end
 
-  defp paste_with(nil, _target, _text), do: :error
+  defp type_with(nil, _target, _text, _mode), do: :error
 
-  defp paste_with(path, target, text) do
-    task = Task.async(fn -> System.cmd(path, ["send", "--no-submit", "--raw", target, text], stderr_to_stdout: true) end)
+  defp type_with(path, target, text, mode) do
+    args = if mode == :prefill, do: ["send", "--no-submit", "--raw", target, text], else: ["send", "--raw", target, text]
+    task = Task.async(fn -> System.cmd(path, args, stderr_to_stdout: true) end)
 
     case Task.yield(task, @send_timeout_ms) || Task.shutdown(task, :brutal_kill) do
       {:ok, {_output, 0}} -> :ok

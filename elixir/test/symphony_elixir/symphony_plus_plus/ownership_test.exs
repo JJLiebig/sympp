@@ -165,6 +165,53 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
     refute Map.has_key?(get_in(unflagged, ["result", "structuredContent", "decision_log_entry"]), "review_state")
   end
 
+  test "a flagged decision sends the WorkRequest's live chief one submitted line, and nothing otherwise", %{repo: repo} do
+    test_pid = self()
+    typed = fn target, text, mode -> send(test_pid, {:typed, target, text, mode}) && :ok end
+    Application.put_env(:symphony_elixir, :sympp_herdr_send, typed)
+    on_exit(fn -> Application.put_env(:symphony_elixir, :sympp_herdr_send, nil) end)
+
+    chief = %{"sympp.role" => "chief"}
+
+    create = fn address, title, labels ->
+      args = %{"repo" => "nextide/demo", "base_branch" => "main", "title" => title, "work_type" => "feature", "description" => "x", "own" => false}
+      response = mcp_tool(repo, address, "create_work_request", args, config: local_mcp_config(repo), labels: labels)
+      get_in(response, ["result", "structuredContent", "work_request", "id"])
+    end
+
+    by_chief = create.("t3", "Pricing\npage", chief)
+    by_architect = create.("t4", "Search", %{})
+    by_finished_chief = create.("t5", "Billing", chief)
+
+    # t3 and t5 are chiefs on the factory's core; t5 has since finished.
+    terminals = %{
+      "t3" => %{"address" => "t3", "state" => "live", "labels" => chief},
+      "t4" => %{"address" => "t4", "state" => "live"},
+      "t5" => %{"address" => "t5", "state" => "finished", "labels" => chief},
+      "t7" => %{"address" => "t7", "state" => "live"}
+    }
+
+    snapshot = {:ok, %{core_id: MCPHarness.test_core_id(), core_name: "testbox", terminals: terminals}}
+    Application.put_env(:symphony_elixir, :sympp_herdr_core, fn -> snapshot end)
+
+    record = fn address, work_request_id, decision, flag ->
+      args = %{"work_request_id" => work_request_id, "decision" => decision, "rationale" => "Why", "scope_impact" => "none", "source_type" => "architect", "flag" => flag}
+      assert %{"result" => _} = mcp_tool(repo, address, "record_decision", args)
+    end
+
+    long = "Use monthly prices\nfirst. " <> String.duplicate("x", 200)
+    record.("t7", by_chief, long, true)
+    assert_received {:typed, "t3", notice, :submit}
+    assert "Product call on Pricing page by testbox/t7: Use monthly prices first. " <> rest = notice
+    assert String.length(notice) == String.length("Product call on Pricing page by testbox/t7: ") + 160 and String.ends_with?(rest, "x…")
+
+    record.("t7", by_chief, "Unflagged", false)
+    record.("t7", by_architect, "No chief", true)
+    record.("t3", by_chief, "The chief's own call", true)
+    record.("t7", by_finished_chief, "Chief finished", true)
+    refute_received {:typed, _target, _text, _mode}
+  end
+
   test "starting a write takes ownership even when the write itself fails validation", %{repo: repo, work_request: work_request} do
     response = mcp_tool(repo, "t1", "set_report", %{"work_request_id" => work_request.id, "parking" => %{"reason" => "  "}})
 

@@ -36,6 +36,9 @@ read them with `read_work_request(detail: "full")`.
 
 ## Messages
 
+- An architect's flagged decision reaches you as one line,
+  `Product call on <title> by <terminal>: …`. It needs no reply; silence means
+  fine. If one is wrong, send that architect one line with the correction.
 - Don't ask architects for status: read the board.
 - Keep messages to agents as short as possible, and never send one just to
   acknowledge.

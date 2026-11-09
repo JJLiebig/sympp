@@ -16,6 +16,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
   operator's `dismiss` clears a settled marker (never `delivering`); the
   feedback text stays. Every other event is refused with the current state and
   the next action.
+
+  A flagged decision also sends the WorkRequest's chief one submitted line,
+  `Product call on <title> by <recorder>: <decision>`, so it can step in if it
+  disagrees. Nothing is stored about that notice.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -31,11 +35,42 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
   @delivering "delivering"
   # Longer than a delivery can take: a confirmed herdr-core snapshot plus the send timeout.
   @delivery_window_ms 60_000
+  @notice_decision_chars 160
 
   @doc "The review fields `record_decision` stores: a flagged decision starts `recorded`."
   @spec record_attrs(boolean()) :: map()
   def record_attrs(true), do: %{"flagged" => true, "review_state" => "recorded"}
   def record_attrs(false), do: %{"flagged" => false}
+
+  @doc """
+  Tells the WorkRequest's chief about a flagged decision, in one submitted
+  line that needs no reply. The chief is the terminal that created the
+  WorkRequest, when the factory's core sees it live and labelled
+  `sympp.role=chief`. Nothing is sent when there is no such chief, when the
+  chief recorded the decision itself, or when the send fails.
+  """
+  @spec notify_chief(WorkRequest.t(), DecisionLogEntry.t()) :: :ok
+  def notify_chief(%WorkRequest{creator_kind: "agent"} = work_request, %DecisionLogEntry{flagged: true} = decision) do
+    with {:ok, key, %{"labels" => %{"sympp.role" => "chief"}}} <- HerdrCore.live_terminal(work_request.creator_name),
+         true <- key != decision.recorded_by_terminal do
+      HerdrCore.deliver(key, chief_notice(work_request, decision), submit: true)
+    end
+
+    :ok
+  end
+
+  def notify_chief(%WorkRequest{}, %DecisionLogEntry{}), do: :ok
+
+  defp chief_notice(work_request, decision) do
+    "Product call on #{one_line(work_request.title)} by #{decision.recorded_by_address}: " <>
+      (decision.decision |> one_line() |> truncate(@notice_decision_chars))
+  end
+
+  defp one_line(text), do: text |> Redactor.redact_text() |> String.split() |> Enum.join(" ")
+
+  defp truncate(text, max) do
+    if String.length(text) > max, do: String.slice(text, 0, max - 1) <> "…", else: text
+  end
 
   @doc "Acknowledges a recorded decision."
   @spec ack(repo(), String.t()) :: {:ok, DecisionLogEntry.t()} | {:error, refusal() | term()}

@@ -88,6 +88,14 @@ recording terminal through the same delivery as answers. Feedback that can't be
 typed stays on the decision, marked undelivered with its reason, until the
 operator dismisses the marker.
 
+A flagged decision also sends the WorkRequest's chief one submitted line,
+`Product call on <title> by <terminal>: <decision>` (the decision cut to 160
+characters). The chief is the terminal that created the WorkRequest, when the
+factory's own herdr-core sees it live and labelled `sympp.role=chief`. Nothing
+is sent when the chief recorded the decision itself, has finished or can't be
+reached, and nothing about the notice is stored; the flag stays on the board
+either way.
+
 A declared review requirement identifies a provider and optional arguments,
 such as `review-suite` with its selected mode. It can also name another plugin
 or a human process. Results remain with the provider and worker handoff;
