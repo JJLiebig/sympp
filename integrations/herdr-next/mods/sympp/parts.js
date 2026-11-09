@@ -29,8 +29,9 @@ export function ownerChip(v, t, given, id, release = null) {
   const owner = given.liveness ? given : { ...given, liveness: v.running(given.address) ? "live" : null };
   const word = { live: "live", unknown: "not answering", finished: "finished" }[owner.liveness];
   const tip = [`${ROLE[owner.role] ?? "Terminal"} ${owner.address}`, word, owner.since ? `since ${ago(owner.since, v.now())}` : null].filter(Boolean).join(" · ");
-  // An offline copy's addresses may name other terminals now, so only a live factory's are links.
-  const reachable = owner.liveness !== "finished" && owner.liveness !== null && v.net.data?.offline === false;
+  // A link only while the online factory itself sees that terminal live: an address alone, or an
+  // offline copy's, may name another terminal now.
+  const reachable = given.liveness === "live" && v.net.data?.offline === false;
   const chip = Button.new(`owner-${id}`).flex().flex_none().items_center().gap(5).h(20).px(5).rounded(4)
     .font_family(MONO).text_size(11).text_color(owner.liveness === "finished" ? t.dim : t.muted)
     .accessibility_label(tip).tooltip(reachable ? `${tip}. Click to focus it.` : tip)
@@ -132,7 +133,7 @@ function undelivered(v, t, d) {
 }
 
 // The factory delivers feedback to the terminal that made the call. While that terminal runs here,
-// Focus sends it and opens that terminal.
+// Focus sends it and, once the factory has delivered it there, opens that terminal.
 function feedbackForm(v, t, d, draft) {
   const role = d.by?.role === "architect" ? "architect" : "chief";
   const reachable = Boolean(d.by) && v.running(d.by.address);

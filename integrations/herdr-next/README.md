@@ -193,8 +193,11 @@ Start chief labels the chief's terminal `sympp.role=chief` and
 the sympp bridge forwards them, so the factory attributes the chief's requests
 and dispatches to the topic. Labels name a chief; they never make it live.
 
-Native agent jumps require an online factory and a fresh process identity check.
-An offline copy can retain identical job IDs; it cannot authorize agent access.
+Focusing a terminal needs an online factory and its own word that the terminal
+is the one it records: an address is a link only while the factory sees that
+terminal live, and **Focus chief** opens the chief only after the factory has
+delivered the feedback to it. An offline copy can retain identical job IDs; it
+cannot authorize agent access.
 
 Reads and actions use Herdr's `fetch` directly, without a Node process per
 refresh or private request files. The installed Windows Herdr-app 0.1.4 was

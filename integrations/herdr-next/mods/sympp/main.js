@@ -975,18 +975,16 @@ export default class Lens extends View {
   }
 
   // The factory delivers feedback to the decision's terminal. With `focus`, the panel then opens
-  // that terminal, where the feedback arrives.
+  // that terminal, only once the factory reports the feedback delivered there.
   sendFeedback(decision, focus, cx) {
     const draft = this.feedback[decision.key];
     const text = draft.input.value().trim();
     if (!text) { draft.error = "Write the feedback first."; cx.notify(); return; }
     cx.spawn(async (cx) => {
-      const submission = C.submitAction(draft, async () => {
-        await C.postAction(this.endpoint, decision.routes.feedback, { text }, this.request);
-      }, () => {
+      const submission = C.submitAction(draft, async () => C.postAction(this.endpoint, decision.routes.feedback, { text }, this.request), (payload) => {
         draft.open = false;
         draft.input.set_value("");
-        if (focus) this.focusTerminal(decision.by.address, cx);
+        if (focus && payload?.delivery?.state === "delivered") this.focusTerminal(decision.by.address, cx);
         this.retry(cx);
       });
       cx.notify();
