@@ -203,6 +203,39 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CardsTest do
     refute get_in(mcp_tool(repo, "t2", "sympp.health", %{}), ["result", "structuredContent", "caller", "card"])
   end
 
+  test "an ended card stays in the ledger while its terminal is live, so its branch isn't taken for new work", %{repo: repo} do
+    terminals = [chief("t0"), child("t1", "t0")]
+    sweep(repo, terminals, %{head("feature-1") => {:ok, nil}})
+    [%{"id" => card_id}] = list(repo)
+    assert {:ok, _dismissed} = Cards.dismiss(repo, card_id)
+
+    later = DateTime.add(DateTime.utc_now(:microsecond), 40 * 86_400, :second)
+    Application.put_env(:symphony_elixir, :sympp_herdr_core, fn -> core(terminals) end)
+    assert {:ok, 0} = Cards.delete_expired(repo, 30, later)
+    assert Cards.list(repo, 30, later) == []
+
+    sweep(repo, terminals, %{head("feature-1") => {:ok, nil}})
+    assert [%{"state" => "dismissed"}] = list(repo)
+
+    Application.put_env(:symphony_elixir, :sympp_herdr_core, fn -> core([Map.put(child("t1", "t0"), "state", "finished")]) end)
+    assert {:ok, 1} = Cards.delete_expired(repo, 30, later)
+  end
+
+  test "git reads the repository, base and branch of a checkout without origin/HEAD" do
+    dir = Path.join(System.tmp_dir!(), "sympp-card-git-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf(dir) end)
+
+    git = fn args -> {_output, 0} = System.cmd("git", ["-C", dir | args], stderr_to_stdout: true) end
+    git.(["init", "--quiet", "--initial-branch", "main"])
+    git.(["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "root"])
+    git.(["remote", "add", "origin", "https://github.com/acme/app.git"])
+    git.(["update-ref", "refs/remotes/origin/main", "HEAD"])
+    git.(["checkout", "--quiet", "-b", "feature-1"])
+
+    assert {:ok, %{repository: "acme/app", base_branch: "main", branch: "feature-1"}} = Cards.Git.read(dir)
+  end
+
   defp sweep(repo, terminals, github, opts \\ []) do
     Observer.sweep(
       repo,

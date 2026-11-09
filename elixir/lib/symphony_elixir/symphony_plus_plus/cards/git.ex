@@ -5,8 +5,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards.Git do
   the terminals it lists.
 
   The repository (origin remote) and base branch (`origin/HEAD`) are cached
-  per cwd for 5 minutes; the current branch is read on every call. A cwd whose origin isn't
-  on GitHub has no card. The base is empty when `origin/HEAD` isn't set.
+  per cwd for 5 minutes; the current branch is read on every call. A cwd whose
+  origin isn't on GitHub has no card. Without `origin/HEAD` the base is
+  `origin/main` or `origin/master` when that ref exists, else empty.
   """
 
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
@@ -55,9 +56,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards.Git do
   defp base(git, cwd) do
     case run(git, cwd, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]) do
       {:ok, "origin/" <> base} when base != "" -> base
-      _unset -> nil
+      _unset -> Enum.find(["main", "master"], &remote_branch?(git, cwd, &1))
     end
   end
+
+  defp remote_branch?(git, cwd, name), do: match?({:ok, _sha}, run(git, cwd, ["rev-parse", "--verify", "--quiet", "refs/remotes/origin/" <> name]))
 
   # A detached HEAD has no branch.
   defp branch(git, cwd) do

@@ -516,13 +516,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
   defp review_state(%Card{review: %{"status" => "not_started"}}), do: :pending
   defp review_state(%Card{review: review, pr: pr}), do: ReviewStatus.state({:ok, review}, pr && pr["head_sha"])
 
-  @doc "Deletes cards that ended more than `retention_days` ago, with their asks and worked-on rows."
+  @doc """
+  Deletes cards that ended more than `retention_days` ago, with their asks and
+  worked-on rows. A card whose terminal the factory's core still sees live is
+  kept, so its ended branch isn't taken for new work; it has already left the
+  board (`list/3`).
+  """
   @spec delete_expired(repo(), pos_integer(), DateTime.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def delete_expired(repo, retention_days, now \\ DateTime.utc_now(:microsecond)) when is_integer(retention_days) do
     cutoff = DateTime.add(now, -retention_days * 86_400, :second)
 
     repo.transaction(fn ->
-      ids = repo.all(from(card in Card, where: card.state in ^@ended and card.ended_at <= ^cutoff, select: card.id))
+      ids =
+        repo.all(from(card in Card, where: card.state in ^@ended and card.ended_at <= ^cutoff, select: {card.id, card.terminal_key}))
+        |> Enum.reject(fn {_id, key} -> terminal_live?(key) end)
+        |> Enum.map(&elem(&1, 0))
+
       Asks.delete_for_cards(repo, ids)
       Ownership.delete_subjects(repo, "card", ids)
       {count, _rows} = repo.delete_all(from(card in Card, where: card.id in ^ids))
@@ -532,6 +541,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
       {:ok, 0} -> {:ok, 0}
       {:ok, count} -> DashboardPubSub.broadcast_changed_on_success({:ok, count})
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp terminal_live?(key) do
+    case Terminal.split_key(key) do
+      {core_id, address} -> match?({:live, _record}, HerdrCore.view(core_id, address))
+      :error -> false
     end
   end
 
