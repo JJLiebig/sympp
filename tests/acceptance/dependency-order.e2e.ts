@@ -35,7 +35,7 @@ test('all dependency endpoint combinations dispatch only after canonical deliver
   // A finished package's code isn't on the base: it never satisfies a dependent.
   await close(architect, parked, 'finished', {});
   expect((await architect.reject('dispatch_work_package', { work_package_id: later }, 'unmet_work_package_dependencies')).next_action)
-    .toBe(`${parked} ended finished and never delivers: add a successor that delivers it or remove the dependency`);
+    .toBe(`${parked} ended finished and never delivers: remove the dependency or depend on a package that delivers it`);
   await architect.call('edit_plan', { ops: [{ op: 'remove_dependency', from: later, to: parked }] });
   expect((await row(architect, request, cancelled)).raw_status).toBe('ended');
   expect((await row(architect, request, cancelled)).delivery_outcome).toBe('skipped');

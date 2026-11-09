@@ -181,13 +181,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
         do: ["wait for delivered closure (merged PR or completed without a PR) of #{Enum.map_join(open, ", ", &waited/1)}, then dispatch"],
         else: []
 
-    dead_ends =
-      Enum.map(ended, fn entry ->
-        "#{waited(entry)} ended #{entry.ended_as} and never delivers: add a successor that delivers it or remove the dependency"
-      end)
+    dead_ends = Enum.map(ended, &"#{waited(&1)} ended #{&1.ended_as} and never delivers: #{dead_end_action(&1.ended_as)}")
 
     Enum.join(wait ++ dead_ends, "; ")
   end
+
+  # Only a superseded or skipped package delivers through a successor.
+  defp dead_end_action(outcome) when outcome in ["superseded", "skipped"], do: "add a successor that delivers it or remove the dependency"
+  defp dead_end_action(_outcome), do: "remove the dependency or depend on a package that delivers it"
 
   defp waited(%{work_package_id: id, successor_of: nil}), do: id
   defp waited(%{work_package_id: id, successor_of: predecessor}), do: "#{id} (successor of #{predecessor})"
