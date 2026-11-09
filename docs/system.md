@@ -224,7 +224,8 @@ that a ready package whose PR moved to a new head goes back until that head's
 checks and review are known.
 A package qualifies only on passing CI. An architect's manual `sync_pr` also
 qualifies a head whose CI reports nothing when no PR snapshot recorded for the
-repository has ever reported checks. Otherwise `sync_pr` with `ci_override`
+repository has ever reported checks (kept per repository, so retention doesn't
+erase it). Otherwise `sync_pr` with `ci_override`
 (a non-blank reason) qualifies the current head while its CI is pending or
 reports nothing; the override is stored on the package for that head, shows on
 both boards as `ci_override`, and a new head clears it. Failing CI is never

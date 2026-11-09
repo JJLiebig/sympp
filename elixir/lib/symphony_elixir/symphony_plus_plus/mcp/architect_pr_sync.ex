@@ -17,7 +17,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     PullRequestProgress
   }
 
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.{Actor, ProgressEvent}
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, Qualification, Stacking, WorkPackage}
@@ -167,22 +167,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     }
   end
 
-  # A repository has CI once any PR snapshot recorded for it (by the Observer's
-  # sweeps or by `sync_pr`, for any package and any head) reported checks.
-  defp repository_has_ci?(repo, repository) when is_binary(repository) do
-    repository = String.downcase(repository)
-
-    query =
-      from(event in ProgressEvent,
-        where:
-          event.status == "pr_synced" and
-            fragment("lower(json_extract(?, '$.repository'))", event.payload) == ^repository and
-            fragment("json_extract(?, '$.check_summary.status')", event.payload) in ["passing", "failing", "pending"]
-      )
-
-    repo.exists?(query)
-  end
-
+  # A repository whose identity is unknown is assumed to have CI.
+  defp repository_has_ci?(repo, repository) when is_binary(repository), do: Qualification.repository_has_ci?(repo, repository)
   defp repository_has_ci?(_repo, _repository), do: true
 
   defp stacking(repo, work_package, metadata, payload) do

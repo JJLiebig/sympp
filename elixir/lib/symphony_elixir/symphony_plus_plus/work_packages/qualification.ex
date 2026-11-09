@@ -21,6 +21,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
   paths; recording a new head clears it. Failing CI is never accepted.
   """
 
+  import Ecto.Query, only: [from: 2]
+
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{PullRequestArtifact, PullRequestProgress}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
@@ -75,7 +77,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
 
   @doc """
   Records a PR snapshot: the branch, the attached PR and the synced snapshot.
-  A CI override recorded for another head is cleared.
+  A CI override recorded for another head is cleared, and a snapshot that
+  reports checks marks its repository as having CI.
   """
   @spec record_pr(module(), Actor.t(), WorkPackage.t(), map()) :: :ok | {:error, term()}
   def record_pr(repo, %Actor{} = actor, %WorkPackage{} = package, payload) do
@@ -86,9 +89,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
          {:ok, _snapshot} <- append_event(repo, actor, package.id, Map.put(payload, "source_tool", "sync_pr"), "pr_synced"),
          {:ok, _changed?} <- PullRequestArtifact.upsert(repo, package.id, payload),
          {:ok, _package} <- clear_ci_override(repo, package, payload["head_sha"]) do
-      :ok
+      note_repository_ci(repo, payload)
     end
   end
+
+  @doc """
+  Whether a PR snapshot recorded for this GitHub repository (`owner/name`) has
+  ever reported checks. Kept apart from package history, so retention doesn't
+  erase it.
+  """
+  @spec repository_has_ci?(module(), String.t()) :: boolean()
+  def repository_has_ci?(repo, repository) when is_binary(repository) do
+    repo.exists?(from(row in "sympp_repositories_with_ci", where: row.repository == ^String.downcase(repository)))
+  end
+
+  defp note_repository_ci(repo, %{"repository" => repository, "check_summary" => %{"status" => status}})
+       when is_binary(repository) and status in ["passing", "failing", "pending"] do
+    repo.insert_all("sympp_repositories_with_ci", [%{repository: String.downcase(repository)}], on_conflict: :nothing)
+    :ok
+  end
+
+  defp note_repository_ci(_repo, _payload), do: :ok
 
   @doc "Records an architect's CI override for `head`, replacing any earlier one."
   @spec put_ci_override(module(), WorkPackage.t(), %{reason: String.t(), by: String.t(), head: String.t()}) ::
