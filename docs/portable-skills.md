@@ -147,7 +147,7 @@ remain manual qualification.
 
 The installed offline path is also exercised with a synthetic populated
 old-schema WAL ledger: unchanged source bytes and records, staged conversion,
-the offline marker, populated board data, denied MCP/dispatch, untouched
+the offline marker, populated board data, denied MCP and client leases, untouched
 external-command sentinels, Ctrl+C shutdown, stopped refresh and refusal of
 ordinary startup. This uses the selected branch artifact, not a local source build.
 
