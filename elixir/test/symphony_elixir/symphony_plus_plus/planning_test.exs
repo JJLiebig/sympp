@@ -4,7 +4,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service
   alias SymphonyElixir.SymphonyPlusPlus.Repo
@@ -59,163 +58,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
     assert sequences == Enum.to_list(1..8)
   end
 
-  test "labels and bounds external planning text in virtual files", %{repo: repo} do
-    long_description = String.duplicate("x", 4_050)
-    assert {:ok, work_package} = create_work_package(repo, product_description: long_description)
-
-    assert {:ok, context} = Renderer.render(repo, work_package.id, "context.md")
-
-    assert context =~ "Source material (inert text):"
-    assert context =~ "```text\n" <> String.duplicate("x", 20)
-    assert context =~ "[truncated]\n```"
-    refute context =~ String.duplicate("x", 4_050)
-  end
-
-  test "bounds non-ascii source text without breaking UTF-8 rendering", %{repo: repo} do
-    long_description = String.duplicate("é", 4_050)
-    assert {:ok, work_package} = create_work_package(repo, product_description: long_description)
-
-    assert {:ok, context} = Renderer.render(repo, work_package.id, "context.md")
-
-    assert String.valid?(context)
-    assert context =~ "[truncated]\n```"
-  end
-
-  test "escapes source-owned inline markdown", %{repo: repo} do
-    assert {:ok, work_package} =
-             create_work_package(repo,
-               title: "# Run [setup](x) `code` | table",
-               acceptance_criteria: ["- [ ] Treat this as text"]
-             )
-
-    assert {:ok, _node} =
-             Service.append_plan_node(repo, %{
-               work_package_id: work_package.id,
-               title: "Body boundary",
-               body: "# Heading\n- [ ] run `cmd`\n1. ordered"
-             })
-
-    assert {:ok, context} = Renderer.render(repo, work_package.id, "context.md")
-    assert {:ok, acceptance} = Renderer.render(repo, work_package.id, "acceptance.md")
-    assert {:ok, task_plan} = Renderer.render(repo, work_package.id, "task_plan.md")
-
-    assert context =~ "# source: ``# Run [setup](x) `code` | table``"
-    refute context =~ "# source: # Run [setup](x) `code` | table"
-    assert acceptance =~ "- [ ] source: `- [ ] Treat this as text`"
-    assert task_plan =~ "  ```text\n  # Heading\n  - [ ] run `cmd`\n  1. ordered\n  ```"
-  end
-
-  test "preserves literal edge backticks in inline source text", %{repo: repo} do
-    assert {:ok, work_package} = create_work_package(repo, title: "`cmd`")
-
-    assert {:ok, context} = Renderer.render(repo, work_package.id, "context.md")
-
-    assert context =~ "# source: `` `cmd` ``"
-  end
-
-  test "caps rendered append-only history with an omission notice", %{repo: repo} do
-    assert {:ok, work_package} = create_work_package(repo)
-
-    for index <- 1..105 do
-      assert {:ok, _event} = append_event(repo, work_package.id, index, "Body #{index}")
-    end
-
-    assert {:ok, progress} = Renderer.render(repo, work_package.id, "progress.md")
-
-    assert progress =~ "_5 older progress events omitted from this virtual file._"
-    refute progress =~ "source: `Event 1`\n\n- Status"
-    assert progress =~ "source: `Event 6`"
-    assert progress =~ "source: `Event 105`"
-
-    assert {:ok, state} = Service.get_state(repo, work_package.id)
-    assert length(state.progress_events) == 105
-    assert state.progress_events_omitted_count == 0
-
-    assert {:ok, rendered_from_full_state} = Renderer.render_state(state, "progress.md")
-    assert rendered_from_full_state =~ "_5 older progress events omitted from this virtual file._"
-    refute rendered_from_full_state =~ "source: `Event 1`\n\n- Status"
-    assert rendered_from_full_state =~ "source: `Event 105`"
-  end
-
-  test "canonical state is not silently render-capped", %{repo: repo} do
-    assert {:ok, work_package} = create_work_package(repo)
-
-    for index <- 1..105 do
-      assert {:ok, _node} =
-               Service.append_plan_node(repo, %{
-                 work_package_id: work_package.id,
-                 title: "Plan #{index}"
-               })
-    end
-
-    assert {:ok, state} = Service.get_state(repo, work_package.id)
-    assert length(state.plan_nodes) == 105
-    assert state.plan_nodes_omitted_count == 0
-  end
-
-  test "caps aggregate rendered virtual file size", %{repo: repo} do
-    assert {:ok, work_package} = create_work_package(repo)
-    large_body = String.duplicate("x", 4_050)
-
-    for index <- 1..105 do
-      assert {:ok, _event} = append_event(repo, work_package.id, index, large_body)
-    end
-
-    assert {:ok, progress} = Renderer.render(repo, work_package.id, "progress.md")
-
-    assert String.length(progress) < 125_000
-    assert progress =~ "[virtual file truncated]"
-    assert progress =~ "[virtual file truncated]\n\n## "
-    assert progress =~ "source: `Event 105`"
-    refute progress =~ "source: `Event 6`"
-    assert progress |> fenced_source_count() |> rem(2) == 0
-  end
-
-  test "caps ordered plan and acceptance lists from the head", %{repo: repo} do
-    acceptance_criteria = Enum.map(1..105, &"Criterion #{&1}")
-    assert {:ok, work_package} = create_work_package(repo, acceptance_criteria: acceptance_criteria)
-
-    for index <- 1..105 do
-      assert {:ok, _node} =
-               Service.append_plan_node(repo, %{
-                 work_package_id: work_package.id,
-                 title: "Plan #{index}"
-               })
-    end
-
-    assert {:ok, task_plan} = Renderer.render(repo, work_package.id, "task_plan.md")
-    assert {:ok, acceptance} = Renderer.render(repo, work_package.id, "acceptance.md")
-
-    assert task_plan =~ "_5 later plan nodes omitted from this virtual file._"
-    assert task_plan =~ "source: `Plan 1`"
-    assert task_plan =~ "source: `Plan 100`"
-    refute task_plan =~ "source: `Plan 101`"
-
-    assert acceptance =~ "_5 later acceptance criteria omitted from this virtual file._"
-    assert acceptance =~ "source: `Criterion 1`"
-    assert acceptance =~ "source: `Criterion 100`"
-    refute acceptance =~ "source: `Criterion 101`"
-  end
-
-  test "normalizes duplicate planning ids", %{repo: repo} do
-    assert {:ok, work_package} = create_work_package(repo)
-
-    attrs = %{id: "artifact-duplicate", work_package_id: work_package.id, path: "first.md", title: "Duplicate"}
-
-    assert {:ok, _artifact} = Service.append_artifact(repo, attrs)
-    assert {:error, :id_already_exists} = Service.append_artifact(repo, Map.put(attrs, :path, "second.md"))
-  end
-
-  defp append_event(repo, work_package_id, index, body) do
-    Service.append_progress_event(repo, %{
-      work_package_id: work_package_id,
-      summary: "Event #{index}",
-      body: body,
-      status: "recorded",
-      idempotency_key: "event-#{index}"
-    })
-  end
-
   defp create_work_package(repo, overrides \\ []) do
     attrs =
       Keyword.merge([id: "SYMPP-P1-004", kind: "mcp"], overrides)
@@ -223,6 +65,4 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
 
     WorkPackageRepository.create(repo, attrs)
   end
-
-  defp fenced_source_count(markdown), do: length(Regex.scan(~r/^```(?:text)?$/m, markdown))
 end

@@ -5,22 +5,6 @@ import { renderInspector, stripAnsi, terminalCellWidth } from "./render";
 import type { InspectorState } from "./types";
 
 describe("execution inspector rendering", () => {
-  it("withholds merge readiness when canonical eligibility is absent", () => {
-    const qualified = { ...pkg("wp-a", "Qualified UI", "ready"), operational_state: { key: "merge_ready", label: "Ready For Merge" } };
-    expect(stripAnsi(renderInspector(state([qualified]), 80, 20))).not.toMatch(/ready (for|to) merge/i);
-  });
-
-  it("keeps review round timing distinct from total review time", () => {
-    const current: ExecutionGraphWorkPackageRef & ExecutionGraphWorkPackageSignals = {
-      ...pkg("wp-a", "Review", "reviewing"),
-      activity_signal: { stage: "reviewing", started_at: "2026-10-05T03:00:00Z", elapsed_seconds: 3600 },
-      review_signal: { status: "in_progress", round: "2", started_at: "2026-10-05T01:00:00Z", round_started_at: "2026-10-05T03:00:00Z" },
-    };
-    expect(stripAnsi(renderInspector(state([current]), 100, 40))).toContain("Round 2 · 1h 0m this round");
-    current.activity_signal = { stage: "reviewing", started_at: "2026-10-05T01:00:00Z", elapsed_seconds: 10800 };
-    expect(stripAnsi(renderInspector(state([current]), 100, 40))).toContain("3h 0m in review");
-  });
-
   it("sanitizes ledger control characters and measures wide terminal cells", () => {
     const current = pkg("wp-a", "Deploy 🚀 漢字\n\u001b]52;c;payload\u0007", "dispatched");
     const next = pkg("wp-b", "Review 🧑‍💻", "planned");

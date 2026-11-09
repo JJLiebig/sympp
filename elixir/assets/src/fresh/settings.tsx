@@ -1,7 +1,7 @@
 import { ChevronDown } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { api, readOnly } from "./api";
+import { api } from "./api";
 import type { Settings } from "./model";
 
 type Key = keyof Settings;
@@ -40,8 +40,6 @@ export function BoardMenu({ settings, onSaved }: { settings: Settings; onSaved: 
       window.removeEventListener("keydown", escape);
     };
   }, [open]);
-
-  if (readOnly) return <span className="text-sm font-semibold tracking-tight">sympp</span>;
 
   return (
     <span ref={root} className="relative">

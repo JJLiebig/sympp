@@ -222,6 +222,14 @@ unchanged ([review across head changes](operator-board-api.md#review-across-head
 or review state can't be read is flagged `stale` and changes nothing, except
 that a ready package whose PR moved to a new head goes back until that head's
 checks and review are known.
+A package qualifies only on passing CI. An architect's manual `sync_pr` also
+qualifies a head whose CI reports nothing when no PR snapshot recorded for the
+repository has ever reported checks (kept per repository, so retention doesn't
+erase it). Otherwise `sync_pr` with `ci_override`
+(a non-blank reason) qualifies the current head while its CI is pending or
+reports nothing; the override is stored on the package for that head, shows on
+both boards as `ci_override`, and a new head clears it. Failing CI is never
+overridden.
 Terminal packages have no pending merge next action. WorkRequest reads expose
 the derived `phase`, plus `next_action` when the operator has to act
 (`complete_or_archive` for `unresolved`, `restore` for `archived`). Native Herdr

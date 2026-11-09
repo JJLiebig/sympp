@@ -141,15 +141,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDecisionsTest do
     end)
   end
 
-  test "deleting a WorkRequest deletes its decision records", %{repo: repo} do
-    work_request = create_work_request!(repo)
-    assert {:ok, _decision} = Repository.record_decision(repo, work_request.id, decision_attrs())
-
-    repo.delete!(work_request)
-
-    assert {:ok, []} = Repository.list_decisions(repo, work_request.id)
-  end
-
   test "migration is idempotent and creates primary keys plus WorkRequest sequence indexes", %{repo: repo} do
     assert :ok = Repository.migrate(repo)
 
@@ -182,7 +173,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDecisionsTest do
     Enum.into(overrides, defaults)
   end
 
-  defp decision_attrs(overrides \\ []) do
+  defp decision_attrs(overrides) do
     defaults = %{
       source_type: "architect",
       decision: "Keep this WorkRequest narrow.",

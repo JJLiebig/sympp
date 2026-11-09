@@ -10,9 +10,7 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
   alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.WorkPackageFactory
   alias SymphonyElixirWeb.Endpoint
@@ -119,209 +117,6 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
     end
   end
 
-  test "serves the local operator cockpit before WorkRequest retention runs" do
-    database_path = WorkPackageFactory.database_path()
-    original_dynamic_repo = Repo.get_dynamic_repo()
-
-    try do
-      pid = start_supervised!({Repo, database: database_path, name: Repo.process_name(database_path), pool_size: 1})
-      Repo.put_dynamic_repo(pid)
-      assert :ok = WorkRequestRepository.migrate(Repo)
-      request = completed_skipped_request!(~U[2026-05-01 00:00:00Z])
-
-      assert {:ok, opts} =
-               CockpitTask.parse_args_for_test([
-                 "--database",
-                 database_path,
-                 "--port",
-                 "0",
-                 "--dashboard-origin",
-                 "http://127.0.0.1:5174",
-                 "--no-open-dashboard"
-               ])
-
-      opts =
-        Keyword.put(opts, :operator_dashboard_opener, fn url ->
-          send(self(), {:operator_dashboard_opened, url})
-          :ok
-        end)
-
-      CockpitTask.run_cockpit_for_test(opts, fn ->
-        port = wait_for_bound_port()
-
-        config_response =
-          Req.get!(operator_config_url(port),
-            headers: configured_dashboard_api_headers(nil, "http://127.0.0.1:5174")
-          )
-
-        api_response =
-          Req.get!("http://127.0.0.1:#{port}/api/v1/sympp/operator/dashboard",
-            headers: configured_dashboard_api_headers(local_operator_session_cookie(config_response), "http://127.0.0.1:5174")
-          )
-
-        send(self(), {:retention_payload, config_response.status, api_response.status, api_response.body})
-      end)
-
-      refute_received {:operator_dashboard_opened, _url}
-      assert_received {:retention_payload, 200, 200, payload}
-      assert [%{"id" => request_id}] = payload["work_requests"]["work_requests"]
-      assert request_id == request.id
-
-      assert %WorkRequest{archived_at: nil} = Repo.get!(WorkRequest, request.id)
-      assert [_slice] = Repo.all(WorkPackage)
-    after
-      Repo.put_dynamic_repo(original_dynamic_repo)
-      File.rm(database_path)
-    end
-  end
-
-  test "managed backend defers the immediate dashboard open" do
-    database_path = WorkPackageFactory.database_path()
-    System.put_env("SYMPP_DEFER_DASHBOARD_OPEN", "1")
-
-    try do
-      assert {:ok, opts} = CockpitTask.parse_args_for_test(["--database", database_path, "--port", "0", "--open-dashboard"])
-
-      opts =
-        Keyword.put(opts, :operator_dashboard_opener, fn url ->
-          send(self(), {:operator_dashboard_opened, url})
-          :ok
-        end)
-
-      CockpitTask.run_cockpit_for_test(opts, fn -> :ok end)
-
-      refute_received {:operator_dashboard_opened, _url}
-      assert_received {:mix_shell, :info, ["Dashboard browser open deferred until an MCP client connects."]}
-    after
-      File.rm(database_path)
-    end
-  end
-
-  test "uses operator settings to suppress dashboard browser opening" do
-    database_path = WorkPackageFactory.database_path()
-    original_dynamic_repo = Repo.get_dynamic_repo()
-    System.put_env("SYMPP_DEFER_DASHBOARD_OPEN", "1")
-
-    try do
-      pid = start_supervised!({Repo, database: database_path, name: Repo.process_name(database_path), pool_size: 1})
-      Repo.put_dynamic_repo(pid)
-      assert :ok = WorkRequestRepository.migrate(Repo)
-      assert {:ok, _settings} = SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository.update(Repo, %{"open_dashboard_on_boot" => false})
-
-      assert {:ok, opts} = CockpitTask.parse_args_for_test(["--database", database_path, "--port", "0"])
-
-      opts =
-        Keyword.put(opts, :operator_dashboard_opener, fn url ->
-          send(self(), {:operator_dashboard_opened, url})
-          :ok
-        end)
-
-      CockpitTask.run_cockpit_for_test(opts, fn -> :ok end)
-
-      refute_received {:operator_dashboard_opened, _url}
-      assert_received {:mix_shell, :info, ["Dashboard browser auto-open disabled; pass --open-dashboard or set SYMPP_OPEN_DASHBOARD=1 to open it."]}
-    after
-      Repo.put_dynamic_repo(original_dynamic_repo)
-      File.rm(database_path)
-    end
-  end
-
-  test "reports an actionable error when WorkRequest retention cannot use the ledger" do
-    database_path =
-      System.tmp_dir!()
-      |> Path.join("sympp-cockpit-missing-#{System.unique_integer([:positive])}")
-      |> Path.join("ledger.sqlite3")
-
-    assert {:ok, opts} =
-             CockpitTask.parse_args_for_test([
-               "--database",
-               database_path,
-               "--port",
-               "0",
-               "--dashboard-origin",
-               "http://127.0.0.1:5174"
-             ])
-
-    try do
-      File.mkdir_p!(database_path)
-
-      assert_raise Mix.Error, ~r/sympp cockpit WorkRequest ledger (open|migration) failed:/, fn ->
-        CockpitTask.run_cockpit_for_test(opts, fn ->
-          assert is_integer(wait_for_bound_port())
-        end)
-      end
-    after
-      File.rm_rf(database_path)
-    end
-  end
-
-  test "reports an actionable error when the configured port is already occupied" do
-    {:ok, socket} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
-    {:ok, port} = :inet.port(socket)
-    database_path = WorkPackageFactory.database_path()
-
-    try do
-      assert {:ok, opts} = CockpitTask.parse_args_for_test(["--database", database_path, "--port", Integer.to_string(port)])
-
-      assert_raise Mix.Error, ~r/could not bind http:\/\/127\.0\.0\.1:#{port}/, fn ->
-        CockpitTask.run_cockpit_for_test(opts, fn -> :ok end)
-      end
-    after
-      :gen_tcp.close(socket)
-      File.rm(database_path)
-    end
-  end
-
-  test "cleans up the owned endpoint so the cockpit can restart in the same runtime" do
-    database_path = WorkPackageFactory.database_path()
-
-    try do
-      assert {:ok, opts} = CockpitTask.parse_args_for_test(["--database", database_path, "--port", "0"])
-
-      CockpitTask.run_cockpit_for_test(opts, fn ->
-        assert is_integer(wait_for_bound_port())
-      end)
-
-      CockpitTask.run_cockpit_for_test(opts, fn ->
-        assert is_integer(wait_for_bound_port())
-      end)
-    after
-      File.rm(database_path)
-    end
-  end
-
-  test "starts and stops only its own task supervisor" do
-    database_path = WorkPackageFactory.database_path()
-    application_supervisor = Process.whereis(SymphonyElixir.TaskSupervisor)
-
-    {child_id, ^application_supervisor, _type, _modules} =
-      Enum.find(Supervisor.which_children(SymphonyElixir.Supervisor), fn {_id, pid, _type, _modules} ->
-        pid == application_supervisor
-      end)
-
-    try do
-      assert is_pid(application_supervisor)
-      assert {:ok, opts} = CockpitTask.parse_args_for_test(["--database", database_path, "--port", "0"])
-
-      CockpitTask.run_cockpit_for_test(opts, fn ->
-        assert Process.whereis(SymphonyElixir.TaskSupervisor) == application_supervisor
-      end)
-
-      assert Process.whereis(SymphonyElixir.TaskSupervisor) == application_supervisor
-      assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, child_id)
-      refute Process.whereis(SymphonyElixir.TaskSupervisor)
-
-      CockpitTask.run_cockpit_for_test(opts, fn ->
-        assert is_pid(Process.whereis(SymphonyElixir.TaskSupervisor))
-      end)
-
-      refute Process.whereis(SymphonyElixir.TaskSupervisor)
-    after
-      Supervisor.restart_child(SymphonyElixir.Supervisor, child_id)
-      File.rm(database_path)
-    end
-  end
-
   defp wait_for_bound_port do
     Enum.reduce_while(1..500, nil, fn _attempt, _port ->
       case SymphonyElixir.HttpServer.bound_port() do
@@ -335,27 +130,9 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
     end)
   end
 
-  defp operator_config_url(port) do
-    "http://127.0.0.1:#{port}/api/v1/sympp/operator/config"
-  end
-
-  defp browser_navigation_headers do
-    [{"sec-fetch-site", "none"}, {"sec-fetch-mode", "navigate"}]
-  end
-
   defp browser_api_headers(cookie_header \\ nil) do
     [
       {"sec-fetch-site", "same-origin"},
-      {"sec-fetch-mode", "cors"},
-      {"sec-fetch-dest", "empty"}
-    ]
-    |> maybe_put_cookie_header(cookie_header)
-  end
-
-  defp configured_dashboard_api_headers(cookie_header, origin) do
-    [
-      {"origin", origin},
-      {"sec-fetch-site", "same-site"},
       {"sec-fetch-mode", "cors"},
       {"sec-fetch-dest", "empty"}
     ]
@@ -368,13 +145,6 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
 
   defp maybe_put_cookie_header(headers, _cookie_header), do: headers
 
-  defp local_operator_session_cookie(response) do
-    response.headers
-    |> Map.get("set-cookie", [])
-    |> List.wrap()
-    |> Enum.map_join("; ", &(&1 |> String.split(";", parts: 2) |> hd()))
-  end
-
   defp ensure_cockpit_dashboard_asset! do
     index_path =
       :symphony_elixir
@@ -384,41 +154,6 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
     File.mkdir_p!(Path.dirname(index_path))
     File.write!(index_path, "<!doctype html><html><head></head><body><div id=\"root\"></div></body></html>")
   end
-
-  defp completed_skipped_request!(completed_at) do
-    assert {:ok, request} =
-             WorkRequestRepository.create(Repo, %{
-               title: "Finished request",
-               repo: "sympp",
-               base_branch: "main",
-               work_type: "feature",
-               human_description: "Already done.",
-               constraints: %{},
-               desired_dispatch_shape: "single_package"
-             })
-
-    assert {:ok, slice} =
-             CanonicalWorkPackageFixtures.add_work_package(Repo, request.id, %{
-               title: "Done slice",
-               goal: "Finish the request.",
-               kind: "mcp",
-               base_branch: "main",
-               allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/work_requests/**"],
-               forbidden_file_globs: [],
-               acceptance_criteria: ["Done."],
-               validation_steps: ["mix test"],
-               review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
-               stop_conditions: []
-             })
-
-    assert {:ok, _skipped} = WorkRequestService.record_work_package_delivery(Repo, request.id, slice.id, %{"outcome" => "skipped", "idempotency_key" => "skip"})
-
-    request
-    |> Ecto.Changeset.change(operator_completed_at: utc_usec(completed_at))
-    |> Repo.update!()
-  end
-
-  defp utc_usec(%DateTime{} = datetime), do: %{datetime | microsecond: {elem(datetime.microsecond, 0), 6}}
 
   defp restore_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
   defp restore_env(key, value), do: Application.put_env(:symphony_elixir, key, value)

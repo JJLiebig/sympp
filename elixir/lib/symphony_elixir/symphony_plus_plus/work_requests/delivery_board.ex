@@ -712,6 +712,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
           observation_stale: observation_stale(context, work_package.id),
           stacked_on: observed_stacking(context, work_package.id),
           review_signal: Signals.review(work_package, metadata, observed_review(context, work_package.id)),
+          ci_override: Signals.ci_override(work_package),
           dependency_signal: Signals.dependency(work_package, context),
           blocker_state: Map.fetch!(activity, :blocker_state),
           runtime_state: Map.fetch!(activity, :runtime_state)

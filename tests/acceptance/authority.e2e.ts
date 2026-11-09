@@ -1,4 +1,5 @@
 import { expect } from 'e2e';
+import { DatabaseSync } from 'node:sqlite';
 import { parseBoard } from '../../integrations/herdr-next/mods/sympp/model.js';
 import { Client, contract, nextTerminal } from '../support/factory.js';
 import { initialize, packages, test, tool } from '../support/authority.js';
@@ -526,5 +527,125 @@ test('architect descendant planning stays owned through terminal closeout and re
   expect((await architect.call('sympp.health')).caller.owns).toEqual([]);
   expect((await architect.call('read_work_request', { work_request_id: request, view: 'package', work_package_id: wp })).work_package.id).toBe(wp);
   await architect.reject('edit_plan', { work_request_id: request, ops: [{ op: 'add_package', ...contract('Archived scope') }] }, 'work_request_archived');
+  expect((await architect.reject('set_blocker', { work_package_id: wp, blocker_id: 'scoped', active: false }, 'work_request_archived')).next_action).toBe('restore');
 });
 
+
+test('the native board\'s operator actions finish, release, complete, archive, restore and delete, each refused when it does not apply and audited', async ({ processes }) => {
+  const factory = processes.factory();
+  const architect = await factory.client();
+  const native = new Client(await factory.endpoint, factory.receipt);
+  const act = async (path: string) => native.raw({}, {}, 'POST', `/api/v1/sympp/herdr/${path}`);
+  const request = await architect.request('Native operator actions');
+  const [dispatched] = await packages(architect, ['Native finish']);
+  const [planned] = await architect.addPackages([contract('Native planned')]);
+  const finished = await act(`work-packages/${dispatched}/finish`);
+  expect(finished.body).toMatchObject({ ok: true, work_package_id: dispatched, status: 'ended' });
+  expect((await act(`work-packages/${dispatched}/finish`)).status).toBe(200);
+  expect((await architect.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages.find((wp: any) => wp.id === dispatched))
+    .toMatchObject({ status: 'ended' });
+  expect((await row(architect, request, dispatched)).delivery_outcome).toBe('finished');
+  const plannedRefusal = await act(`work-packages/${planned}/finish`);
+  expect([plannedRefusal.status, plannedRefusal.body.error.code]).toEqual([422, 'ending_not_allowed']);
+  // Operators archive only delivered packages that no request still owns.
+  const [active] = await packages(architect, ['Native active']);
+  const packageArchive = (wp: string) => architect.operator(`/api/v1/sympp/operator/work-packages/${wp}/archive`, {});
+  expect((await packageArchive(active)).body.error.code).toBe('not_delivered');
+  expect((await packageArchive(dispatched)).body.error.code).toBe('work_request_package');
+  const [noPr] = await packages(architect, ['Native no PR']);
+  await architect.call('close_work_package', { work_package_id: noPr, outcome: 'completed_no_pr', evidence: 'Closed without a PR.' });
+  const ended = await architect.operator(`/api/v1/sympp/operator/work-packages/${noPr}/finish`, {});
+  expect([ended.status, ended.body.error.code]).toEqual([409, 'already_ended']);
+  // Clearing a blocker leaves delivery state alone and works again after it is raised again.
+  for (const _ of [1, 2]) {
+    await architect.call('set_blocker', { work_package_id: active, blocker_id: 'review-scope', active: true, summary: 'Reviewer asked for an out-of-scope change.' });
+    expect((await architect.operator(`/api/v1/sympp/operator/work-packages/${active}/blockers/review-scope/clear`, {})).status).toBe(200);
+    expect((await row(architect, request, active)).work_package.blocker_state['active?']).toBe(false);
+  }
+  expect((await row(architect, request, active)).work_package.status).toBe('dispatched');
+
+  const released = await act(`work-requests/${request}/release`);
+  expect(released.body).toMatchObject({ work_request_id: request, released: { address: architect.address } });
+  expect((await architect.call('sympp.health')).caller.owns).toEqual([]);
+  expect((await act(`work-requests/${request}/release`)).body.error.code).toBe('not_owned');
+
+  const intake = await architect.request('Native intake stays');
+  expect((await act(`work-requests/${intake}/archive`)).body.error.code).toBe('not_completed');
+  const ask = (await architect.call('ask', { work_request_id: request, question: 'Still open at completion?' })).ask.id;
+  const completed = await act(`work-requests/${request}/complete`);
+  expect(completed.body.work_request.phase).toBe('done');
+  expect(completed.body.refresh).toEqual({ dashboard: false, work_request_id: request });
+  const done = await architect.call('read_work_request', { detail: 'full', work_request_id: request });
+  expect(done.asks.find((entry: any) => entry.id === ask).state).toBe('withdrawn');
+  expect(done.work_packages.find((wp: any) => wp.id === planned).status).toBe('planned');
+  expect((await act(`work-requests/${request}/archive`)).body.work_request.phase).toBe('archived');
+  // The browser board drops an archived request and the packages only it links.
+  const browser = await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated');
+  expect(browser.work_request_details.map((detail: any) => detail.work_request.id)).not.toContain(request);
+  for (const wp of [dispatched, planned, active, noPr]) expect(browser.linked_work_package_ids ?? []).not.toContain(wp);
+  const shelf = await native.raw(null, {}, 'GET', '/api/v1/sympp/herdr/dashboard');
+  const shelved = shelf.body.work_request_details.find((detail: any) => detail.work_request.id === request);
+  expect(shelved.work_request.phase).toBe('archived');
+  expect(Number.isFinite(Date.parse(shelved.work_request.archived_at))).toBe(true);
+  expect(shelved.work_packages.map((wp: any) => wp.id).sort()).toEqual([dispatched, planned, active, noPr].sort());
+  expect(shelf.body.work_request_details.find((detail: any) => detail.work_request.id === intake).work_request.phase).toBe('intake');
+  const archivedComplete = await act(`work-requests/${request}/complete`);
+  expect([archivedComplete.status, archivedComplete.body.error.code, archivedComplete.body.error.next_action]).toEqual([409, 'work_request_archived', 'restore']);
+  const restored = await act(`work-requests/${request}/restore`);
+  expect(restored.body.work_request.archived_at).toBeNull();
+  expect((await architect.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.phase).toBe('done');
+  expect((await act('work-requests/missing-request/restore')).status).toBe(404);
+  expect((await act(`work-requests/${request}/delete`)).body).toMatchObject({ ok: true, work_request: { id: request } });
+  expect((await architect.tool('read_work_request', { work_request_id: request })).error.data.code).toBe('not_found');
+  expect((await act('work-requests/missing-request/delete')).status).toBe(404);
+
+  const db = new DatabaseSync(factory.database, { readOnly: true });
+  try {
+    const audits = db.prepare('SELECT action, actor_source, request_metadata, tool_metadata FROM sympp_operator_audit_events').all()
+      .map((audit: any) => JSON.stringify([JSON.parse(audit.request_metadata).path, audit.action, JSON.parse(audit.tool_metadata).name, audit.actor_source]));
+    for (const [path, action, tool] of [
+      [`work-packages/${dispatched}/finish`, 'dangerous_override', 'operator_finish_work_package'],
+      [`work-requests/${request}/release`, 'dangerous_override', 'operator_release_work_request'],
+      [`work-requests/${request}/complete`, 'dangerous_override', 'operator_complete_work_request'],
+      [`work-requests/${request}/archive`, 'dangerous_delete', 'operator_archive_work_request'],
+      [`work-requests/${request}/restore`, 'dangerous_override', 'operator_restore_work_request'],
+      [`work-requests/${request}/delete`, 'dangerous_delete', 'operator_delete_work_request'],
+    ]) expect(audits).toContain(JSON.stringify([`/api/v1/sympp/herdr/${path}`, action, tool, 'local_operator']));
+  } finally { db.close(); }
+});
+
+test('reads list every request, redact what they return, put open asks first and never write', async ({ processes }) => {
+  const factory = processes.factory();
+  const architect = await factory.client();
+  const created = await architect.call('create_work_request', { repo: 'example/service', base_branch: 'beta', title: 'Read WorkRequests',
+    description: 'Use Bearer raw-secret-value for validation', work_type: 'feature' });
+  const id = created.work_request.id;
+  architect.workRequest = id;
+  await (await factory.client()).request('Another request', 'beta', 'example/other');
+  const [plannedWp, , skippedWp] = await architect.addPackages(['Planned', 'Also planned', 'Skipped'].map((title) => contract(title)));
+  await architect.call('close_work_package', { work_package_id: skippedWp, outcome: 'skipped' });
+  const ask = async (question: string) => (await architect.call('ask', { work_request_id: id, question })).ask.id;
+  const open = await ask('Still open?');
+  const withdrawn = await ask('Withdrawn?');
+  await architect.call('resolve_ask', { ask_id: withdrawn, to: 'withdrawn' });
+  const answered = await ask('Answered?');
+  await architect.call('resolve_ask', { ask_id: answered, to: 'answered', answer: 'Bearer raw-secret-value' });
+  await architect.call('record_decision', { work_request_id: id, source_type: 'architect', decision: 'Use https://example.test/path?sig=raw-secret-value', rationale: 'Why', scope_impact: 'None' });
+  const reader = await factory.client(null);
+  const before = (await architect.inspect(`/api/v1/sympp/operator/work-packages/${plannedWp}`)).progress;
+  const listed = await reader.call('list_work_requests', { phase: 'planned' });
+  expect(listed.filters).toEqual({ phase: 'planned' });
+  expect(listed.total_count).toBe(1);
+  expect(listed.work_requests).toEqual([expect.objectContaining({ id, title: 'Read WorkRequests', repo: 'example/service', base_branch: 'beta', phase: 'planned', open_asks: 1 })]);
+  const read = await reader.tool('read_work_request', { detail: 'full', work_request_id: id });
+  expect(JSON.stringify(read)).not.toContain('raw-secret-value');
+  const payload = read.result.structuredContent;
+  // Open asks first, then newest first.
+  expect(payload.asks.map((entry: any) => entry.id)).toEqual([open, answered, withdrawn]);
+  expect(payload.summary).toEqual({ open_ask_count: 1, decision_count: 1, work_package_count: 3,
+    planned_work_package_count: 2, dispatched_work_package_count: 0, ended_work_package_count: 1 });
+  expect((await reader.tool('read_work_request', { detail: 'full', work_request_id: 'missing-request' })).error.data.code).toBe('not_found');
+  expect((await reader.reject('list_work_requests', { base_branch: 'other' }, 'unexpected_argument')).arguments).toEqual(['base_branch']);
+  await reader.reject('list_work_requests', { phase: 'merged' }, 'invalid_phase');
+  expect((await architect.inspect(`/api/v1/sympp/operator/work-packages/${plannedWp}`)).progress).toEqual(before);
+});

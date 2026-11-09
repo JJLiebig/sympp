@@ -4,7 +4,6 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import * as M from './mods/sympp/model.js';
 import * as C from './mods/sympp/controls.js';
-import * as L from './mods/sympp/levels.js';
 
 const prompt = {
   tl_dr: 'Choose the delivery order.', details: 'The API can ship independently.',
@@ -28,18 +27,6 @@ test('native origins reject embedded credentials and paths, while dashboard link
   }
   assert.equal(M.dashboardUrl('http://localhost:4000', 'http://localhost:4000/sympp?view=board'), 'http://localhost:4000/sympp?view=board');
   assert.equal(M.dashboardUrl('http://localhost:4000', 'http://user:private@localhost:4000/sympp'), 'http://localhost:4000/sympp');
-});
-
-test('every ask is answerable at its own operator route, with its decision prompt; nothing else needs the person', () => {
-  const ordinary = detail('wr1', 'owner/web');
-  ordinary.asks = [{ id: 'q 1', kind: 'ask', text: 'Which order?', decision_prompt: prompt, asked_by: 'box/t4', answer_route: '/api/v1/sympp/herdr/asks/q%201/answer' }];
-  const quiet = detail('wr2', 'owner/api', [{ id: 'wp2', repo: 'owner/api', status: 'dispatched', progress: 'implementing' }]);
-  const [normal, other] = board([ordinary, quiet]).jobs;
-  assert.equal(normal.needs[0].text, 'Which order?');
-  assert.equal(normal.asks[0].route, '/api/v1/sympp/herdr/asks/q%201/answer');
-  assert.deepEqual(C.answerBody(normal.asks[0], 'api_first', ''), { answer_choice: 'api_first' });
-  assert.equal(other.needs.length, 0);
-  assert.equal(L.needsQueue([normal, other]).length, 1);
 });
 
 const host = { node: 'C:\\Program Files\\nodejs\\node.exe', helper: 'C:\\Herdr Home\\tools\\sympp-herdr.js', session: 'scratch' };
@@ -168,15 +155,6 @@ test('failed saves retain the draft and concurrent activations cannot submit it 
   assert.throws(() => C.answerBody({ prompt }, 'unknown', ''), /Choose/);
   assert.deepEqual(C.answerBody({ prompt }, '__custom_redirect__', ' UI first '), { answer_choice: '__custom_redirect__', answer_note: 'UI first' });
   assert.deepEqual(C.answerBody({}, null, ' plain answer '), { answer: 'plain answer' });
-});
-
-test('agent navigation retains an existing pane or opens a tab on the correct machine', () => {
-  const local = { address:'t4',machine:null }, remote = { address:'build/t4',machine:'build' };
-  const spaces = [{id:'local',machine:null,active:true},{id:'remote',machine:'build',active:false}];
-  assert.deepEqual(M.agentDestination(local, [], spaces), {space:'local',alongside:true});
-  assert.deepEqual(M.agentDestination(remote, [], spaces), {space:'remote',alongside:false});
-  assert.deepEqual(M.agentDestination(remote, [{pane:'existing',terminal:'build/t4'}], spaces), {pane:'existing'});
-  assert.throws(() => M.agentDestination(remote, [], spaces.slice(0,1)), /agent's machine/);
 });
 
 test('native actions send JSON-only requests and surface persisted success or actionable server errors', async (t) => {

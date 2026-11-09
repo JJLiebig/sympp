@@ -359,6 +359,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   defp architect_error({:provider_head_mismatch, expected, actual}, tool),
     do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => "provider_head_mismatch", "expected_head_sha" => expected, "actual_head_sha" => actual}}
 
+  defp architect_error(:ci_failing, tool),
+    do: {:error, -32_009, "Precondition Failed", %{"tool" => tool, "reason" => "ci_failing", "next_action" => "fix the failing checks, then sync_pr"}}
+
   defp architect_error(:work_request_archived, tool),
     do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"state" => "archived"})
 

@@ -1,6 +1,5 @@
 import { useId, useState } from "react";
 
-import { readOnly } from "./api";
 import { span, type Ask, type Board, type Choice } from "./model";
 import { REDIRECT, useAct, type Answer } from "./operator";
 import { Owner } from "./owner";
@@ -54,7 +53,7 @@ function AskItem({ ask, at, board, onGoal }: { ask: Ask; at: number; board: Boar
         <p className="text-[15px] leading-snug text-ink">{ask.question}</p>
         {ask.details ? <p className="mt-0.5 text-sm text-dim">{ask.details}</p> : null}
       </div>
-      {readOnly ? null : <AnswerForm ask={ask} />}
+      <AnswerForm ask={ask} />
     </li>
   );
 }

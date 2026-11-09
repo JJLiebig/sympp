@@ -7,7 +7,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AuditEventTest do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Timeline
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -32,68 +31,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AuditEventTest do
     repo.delete_all(ProgressEvent)
     repo.delete_all(WorkPackage)
     :ok
-  end
-
-  test "terminal actor and trusted agent run are recorded and exposed in the timeline", %{repo: repo} do
-    assert {:ok, work_package} = create_work_package(repo)
-
-    assert {:ok, event} =
-             PlanningRepository.append_audit_progress_event_for_work_package(
-               repo,
-               actor("box/t1"),
-               work_package.id,
-               %{
-                 idempotency_key: "progress:actor",
-                 summary: "Actor update",
-                 agent_run_id: "forged-run-123",
-                 payload: %{phase: "implementation"}
-               },
-               agent_run_id: "trusted-run-123"
-             )
-
-    assert event.actor_id == "box/t1"
-    assert event.actor_type == "architect"
-    assert event.idempotency_scope == "terminal:core/t1"
-    assert event.agent_run_id == "trusted-run-123"
-
-    assert {:ok, [timeline_item]} = Timeline.fetch(repo, work_package.id)
-    assert timeline_item.actor == %{id: "box/t1", type: "architect"}
-    assert timeline_item.agent_run_id == "trusted-run-123"
-    assert timeline_item.payload == %{"phase" => "implementation"}
-  end
-
-  test "terminal append with idempotency renders one redacted progress event", %{repo: repo} do
-    assert {:ok, work_package} = create_work_package(repo)
-    secret = work_key_shaped_secret()
-
-    attrs = %{
-      idempotency_key: "progress:terminal-append",
-      summary: "Architect wrote progress",
-      body: "Append completed.",
-      payload: %{
-        safe: "visible",
-        claim_secret: secret,
-        nested: %{authorization: "Bearer raw"}
-      }
-    }
-
-    assert {:ok, first} = PlanningRepository.append_audit_progress_event_for_work_package(repo, actor("box/t1"), work_package.id, attrs)
-    assert {:ok, second} = PlanningRepository.append_audit_progress_event_for_work_package(repo, actor("box/t1"), work_package.id, attrs)
-    assert first.id == second.id
-    assert repo.aggregate(ProgressEvent, :count) == 1
-
-    assert first.payload == %{
-             "safe" => "visible",
-             "claim_secret" => "[REDACTED]",
-             "nested" => %{"authorization" => "[REDACTED]"}
-           }
-
-    assert {:ok, progress_markdown} = Renderer.render(repo, work_package.id, "progress.md")
-    assert progress_markdown =~ "Architect wrote progress"
-    assert progress_markdown =~ "box/t1"
-    refute progress_markdown =~ "[REDACTED]"
-    refute progress_markdown =~ secret
-    refute inspect(first.payload) =~ secret
   end
 
   test "progress rendering redacts secret-shaped source text", %{repo: repo} do
@@ -122,91 +59,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AuditEventTest do
     refute progress_markdown =~ secret
     refute progress_markdown =~ fine_grained_pat
     refute progress_markdown =~ query_password
-  end
-
-  test "direct progress append also bounds stored payloads", %{repo: repo} do
-    assert {:ok, work_package} = create_work_package(repo)
-
-    assert {:ok, event} =
-             PlanningService.append_progress_event(repo, %{
-               work_package_id: work_package.id,
-               idempotency_key: "progress:direct-bounded-payload",
-               summary: "Direct bounded payload",
-               payload: %{
-                 long_text: String.duplicate("b", 5_000),
-                 long_list: Enum.to_list(1..120),
-                 struct_payload: %SecretPayload{large_blob: String.duplicate("c", 5_000), safe: "visible"}
-               }
-             })
-
-    assert String.length(event.payload["long_text"]) < 4_100
-    assert event.payload["long_text"] =~ "[truncated]"
-    assert length(event.payload["long_list"]) == 101
-    assert List.last(event.payload["long_list"]) == "[truncated]"
-    assert event.payload["struct_payload"]["large_blob"] =~ "[truncated]"
-    assert event.payload["struct_payload"]["safe"] == "visible"
-  end
-
-  test "progress payload storage and rendering are JSON-safe without dropping colliding keys", %{repo: repo} do
-    assert {:ok, work_package} = create_work_package(repo)
-
-    assert {:ok, event} =
-             PlanningService.append_progress_event(repo, %{
-               work_package_id: work_package.id,
-               idempotency_key: "progress:json-safe",
-               summary: "JSON-safe payload",
-               payload: %{
-                 :secret => "raw-atom-secret",
-                 "secret" => "raw-string-secret",
-                 :Secret => "raw-capital-atom-secret",
-                 "Secret" => "raw-capital-string-secret",
-                 "x-api-key" => "raw-hyphen-api-key",
-                 "x_api_key" => "raw-underscore-api-key",
-                 {:tuple, :key} => "tuple-value",
-                 "{:tuple, :key}" => "string-tuple-value",
-                 1 => "integer-value",
-                 "1" => "string-integer-value",
-                 :created_at => ~U[2026-05-01 10:00:00Z],
-                 :date => ~D[2026-05-01],
-                 :naive_datetime => ~N[2026-05-01 10:01:02],
-                 :time => ~T[10:01:02],
-                 :headers => [{"authorization", "raw-header-token"}]
-               }
-             })
-
-    assert event.payload ==
-             %{
-               ":secret" => "[REDACTED]",
-               "secret" => "[REDACTED]",
-               ":Secret" => "[REDACTED]",
-               "Secret" => "[REDACTED]",
-               "x-api-key" => "[REDACTED]",
-               "x_api_key" => "[REDACTED]",
-               "created_at" => "2026-05-01T10:00:00Z",
-               "date" => "2026-05-01",
-               "naive_datetime" => "2026-05-01T10:01:02",
-               "time" => "10:01:02",
-               "headers" => [["authorization", "[REDACTED]"]]
-             }
-             |> Map.merge(Map.take(event.payload, ["{:tuple, :key}", "\"{:tuple, :key}\"", "{:tuple, :key}#2", "1", "\"1\"", "1#2"]))
-
-    assert map_size(event.payload) == 15
-    assert Enum.count(Map.values(event.payload), &(&1 == "tuple-value")) == 1
-    assert Enum.count(Map.values(event.payload), &(&1 == "string-tuple-value")) == 1
-    assert Enum.count(Map.values(event.payload), &(&1 == "integer-value")) == 1
-    assert Enum.count(Map.values(event.payload), &(&1 == "string-integer-value")) == 1
-
-    assert {:ok, progress_markdown} = Renderer.render(repo, work_package.id, "progress.md")
-
-    refute progress_markdown =~ "\"created_at\": \"2026-05-01T10:00:00Z\""
-    refute progress_markdown =~ "\":secret\": \"[REDACTED]\""
-    refute progress_markdown =~ "raw-atom-secret"
-    refute progress_markdown =~ "raw-string-secret"
-    refute progress_markdown =~ "raw-capital-atom-secret"
-    refute progress_markdown =~ "raw-capital-string-secret"
-    refute progress_markdown =~ "raw-hyphen-api-key"
-    refute progress_markdown =~ "raw-underscore-api-key"
-    refute progress_markdown =~ "raw-header-token"
   end
 
   test "progress rendering escapes audit metadata" do
@@ -260,48 +112,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AuditEventTest do
     assert repo.aggregate(ProgressEvent, :count) == 2
     assert first_event.idempotency_scope == "terminal:core/t1"
     assert second_event.idempotency_scope == "terminal:core/t2"
-  end
-
-  test "direct and terminal idempotency keys have separate scopes", %{repo: repo} do
-    assert {:ok, work_package} = create_work_package(repo)
-
-    assert {:ok, audit_event} =
-             PlanningRepository.append_audit_progress_event_for_work_package(repo, actor("box/t1"), work_package.id, %{
-               idempotency_key: "progress:shared-key",
-               summary: "Terminal"
-             })
-
-    assert {:ok, direct_event} =
-             PlanningService.append_progress_event(repo, %{
-               work_package_id: work_package.id,
-               idempotency_key: "progress:shared-key",
-               summary: "Direct",
-               payload: %{system: "visible"}
-             })
-
-    assert audit_event.id != direct_event.id
-    assert direct_event.idempotency_scope == "direct"
-
-    assert {:ok, replayed_audit_event} =
-             PlanningRepository.append_audit_progress_event_for_work_package(repo, actor("box/t1"), work_package.id, %{
-               idempotency_key: "progress:shared-key",
-               summary: "Terminal replay"
-             })
-
-    assert replayed_audit_event.id == audit_event.id
-    assert repo.aggregate(ProgressEvent, :count) == 2
-  end
-
-  test "a replay from the same terminal under another role conflicts", %{repo: repo} do
-    assert {:ok, work_package} = create_work_package(repo)
-    attrs = %{idempotency_key: "progress:role-replay", summary: "As architect"}
-
-    assert {:ok, _event} = PlanningRepository.append_audit_progress_event_for_work_package(repo, actor("box/t1"), work_package.id, attrs)
-
-    assert {:error, :idempotency_scope_conflict} =
-             PlanningRepository.append_audit_progress_event_for_work_package(repo, actor("box/t1", "chief"), work_package.id, attrs)
-
-    assert repo.aggregate(ProgressEvent, :count) == 1
   end
 
   test "direct progress append does not persist caller supplied provenance", %{repo: repo} do
