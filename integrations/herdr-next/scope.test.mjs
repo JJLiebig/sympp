@@ -137,4 +137,9 @@ test('a topic shows the small work on its repositories, open cards first', () =>
   const dismissed = variantPayload('busy');
   dismissed.cards.find((c) => c.id === 'card-logs').state = 'dismissed';
   assert.equal(M.parseBoard(dismissed).cards.some((c) => c.id === 'card-logs'), false, 'a dismissed card leaves');
+  const moved = variantPayload('busy');
+  moved.cards.find((c) => c.id === 'card-logs').review = { id: 'rvw_logs', state: 'pending', status: 'passed' };
+  const reviews = (payload) => Object.fromEntries(M.parseBoard(payload).cards.map((c) => [c.id, S.reviewText(c.review)]));
+  assert.deepEqual(reviews(variantPayload('busy')), { 'card-flicker': null, 'card-tokens': 'running', 'card-ocr': 'findings', 'card-logs': 'done', 'card-typos': null });
+  assert.equal(reviews(moved)['card-logs'], null, 'a pass on an older head is not done');
 });

@@ -242,6 +242,14 @@ function decisionsOf(list) {
 const CARD_STATES = new Set(["working", "review_ci", "merged", "done"]);
 // Review Suite's reading of a review: running, findings, done, or unknown when its host can't be read.
 const REVIEW_STATE = { in_progress: "running", passed: "done", failed: "findings", inspection_needed: "findings" };
+// A card's review: done only when the backend says it covers the current PR head; a pass on an older
+// head is still pending.
+function cardReview(review) {
+  if (!review) return null;
+  if (review.state === "done" || review.state === "unknown") return review.state;
+  return review.status === "passed" ? null : REVIEW_STATE[review.status] ?? null;
+}
+
 function cardsOf(list) {
   if (!Array.isArray(list)) return [];
   return list.filter((c) => typeof c?.id === "string" && c.id && CARD_STATES.has(c.state)).map((c) => {
@@ -254,7 +262,7 @@ function cardsOf(list) {
       id, task: typeof c.title === "string" && c.title.trim() ? c.title.trim() : c.branch ?? id, repo, repos: repo ? [repo] : [], branch: c.branch ?? null,
       owner: workedOnOf(c.worked_on), state: c.state, since: ms(c.since),
       pr: prOf({ status: pr.state, number: pr.number, url: pr.url, repository: pr.repository, checks: pr.ci }),
-      review: review ? { mode: null, state: review.state === "unknown" ? "unknown" : review.state === "done" ? "done" : REVIEW_STATE[review.status] ?? null, round: 1 } : { mode: null, state: null, round: 1 },
+      review: { mode: null, state: cardReview(review), round: 1 },
       ci: null,
       asks, needs: asks.map((ask) => ({ key: ask.key, kind: "ask", label: "Needs you", text: ask.text, since: ask.since, cardId: id, pkgId: null, ask })),
     };
