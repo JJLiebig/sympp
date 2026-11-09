@@ -107,7 +107,7 @@ export const test = base.extend<{ candidate: BrowserCandidate }>({
     let factory: Factory | undefined;
     let candidate: BrowserCandidate | undefined;
     try {
-      factory = new Factory(root, await provider.start(root), { onTerminal: provider.clientTerminal });
+      factory = new Factory(root, await provider.start(root));
       candidate = new BrowserCandidate(root, factory, provider);
       await candidate.start();
       await use(candidate);

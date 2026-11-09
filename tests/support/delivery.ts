@@ -142,13 +142,15 @@ export class Provider {
     return [404, { message: 'Not Found' }];
   }
 
-  async start(root: string) {
+  // `herdr` also puts the controlled `hc` on PATH; without it the candidate
+  // finds no herdr-core, as on a machine without Herdr.
+  async start(root: string, herdr = false) {
     this.server.listen(0, '127.0.0.1');
     await once(this.server, 'listening');
     const address = this.server.address() as { port: number };
     const bin = join(root, 'provider-bin');
     await mkdir(bin);
-    for (const program of ['gh', 'hc']) {
+    for (const program of herdr ? ['gh', 'hc'] : ['gh']) {
       await copyFile(resolve('tests/support/provider-cli.mjs'), join(bin, program));
       await chmod(join(bin, program), 0o755);
     }
@@ -200,7 +202,7 @@ async function delivery(watcher: boolean, use: (value: Delivery) => Promise<void
   const provider = new Provider(join('.e2e', `${basename(root)}-provider.jsonl`));
   let current: Factory | undefined;
   try {
-    const started = await provider.start(root);
+    const started = await provider.start(root, watcher);
     const options = {
       ...(watcher ? { watcher: started.endpoint } : {}),
       onTerminal: provider.clientTerminal,
