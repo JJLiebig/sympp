@@ -112,16 +112,16 @@ test('upstream reload keeps the last valid workflow and applies new prompts with
 test('upstream rejects unavailable workflow and missing operator acknowledgement at the CLI boundary', async ({ upstream: u }) => {
   await u.start([u.workflow]);
   await expect.poll(() => u.process?.exitCode).toBe(1);
-  expect(await readFile(u.logPath, 'utf8')).toContain('without any guardrails');
+  await expect.poll(() => readFile(u.logPath, 'utf8')).toContain('without any guardrails');
   await u.stop();
   await u.start(['--i-understand-that-this-will-be-running-without-the-usual-guardrails', join(u.root, 'missing.md')]);
   await expect.poll(() => u.process?.exitCode).toBe(1);
-  expect(await readFile(u.logPath, 'utf8')).toContain('Workflow file not found');
+  await expect.poll(() => readFile(u.logPath, 'utf8')).toContain('Workflow file not found');
   await u.stop();
   await writeFile(u.workflow, '---\n- invalid-front-matter\n---\nInvalid\n');
   await u.start(['--i-understand-that-this-will-be-running-without-the-usual-guardrails', u.workflow]);
   await expect.poll(() => u.process?.exitCode).toBe(1);
-  expect(await readFile(u.logPath, 'utf8')).toContain('Failed to start Symphony');
+  await expect.poll(() => readFile(u.logPath, 'utf8')).toContain('Failed to start Symphony');
   await u.stop();
   await u.configure({}, '');
   u.provider.issues = [issue('DEFAULT-1', { description: null })];
