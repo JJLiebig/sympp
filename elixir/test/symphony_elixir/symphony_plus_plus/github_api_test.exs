@@ -233,7 +233,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubApiTest do
         "e1" => %{"pullRequest" => %{"headRefOid" => "h2", "baseRefOid" => "b1", "commits" => commits.(Enum.map(1..100, &"c#{&1}"), 140)}}
       }
 
-      results = Snapshot.commits([{"o", "r", 1}, {"o", "r", 2}], graphql: fn _query, _variables, _priority -> {:ok, data} end)
+      graphql = fn _query, _variables, _priority -> {:ok, data} end
+      results = Snapshot.commits([{"o", "r", 1}, {"o", "r", 2}], graphql: graphql)
       assert results[{"o", "r", 1}] == {:ok, %{"head_sha" => "h1", "base_sha" => "b1", "commits" => ["c1", "h1"]}}
       assert {:error, _incomplete} = results[{"o", "r", 2}]
     end
