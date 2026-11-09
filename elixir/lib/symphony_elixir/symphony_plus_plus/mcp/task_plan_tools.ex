@@ -5,6 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer, as: PlanningRenderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -27,11 +28,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
     with {:ok, state} <- PlanningRepository.get_task_plan_render_state(repo, work_package_id),
          {:ok, text} <- task_plan_text(state, detail) do
       {:ok,
-       %{"version" => plan_version(state.plan_version_material), "steps" => Enum.map(state.plan_nodes, &plan_node_payload/1)}
+       %{"version" => plan_version(state.plan_version_material), "steps" => Enum.map(state.plan_nodes, &redacted_plan_node_payload/1)}
        |> put_present("omitted_steps", if((state.plan_nodes_omitted_count || 0) > 0, do: state.plan_nodes_omitted_count))
        |> put_present("text", text)}
     end
   end
+
+  defp redacted_plan_node_payload(%PlanNode{} = plan_node), do: Map.update!(plan_node_payload(plan_node), "title", &Redactor.redact_text/1)
 
   defp put_present(payload, _key, nil), do: payload
   defp put_present(payload, key, value), do: Map.put(payload, key, value)

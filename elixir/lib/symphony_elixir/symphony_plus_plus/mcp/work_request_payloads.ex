@@ -425,7 +425,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
 
     projection
     |> Map.put("dependencies", public_dependencies(Map.get(projection, "dependency_edges", [])))
-    |> Map.delete("dependency_edges")
+    |> Map.drop(["dependency_edges", "memberships"])
   end
 
   @spec work_package_delivery(WorkPackageDelivery.t()) :: map()

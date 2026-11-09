@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
   @moduledoc """
   The read model of a WorkRequest's plan: dependency intents, the effective
-  execution graph and the latest plan revision. Groups are a path on each
-  package, so they need no projection here.
+  execution graph, the latest plan revision and each package's group path
+  (`memberships`, so a plan revision records group moves).
   """
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.Sanitizer
@@ -47,6 +47,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
       available: true,
       dependency_edges: Enum.map(dependency_edges, &dependency_edge_payload/1),
       execution_graph: public_execution_graph(execution_graph),
+      memberships: Enum.map(work_package_payloads, &%{work_package_id: map_value(&1, "id"), group: map_value(&1, "group")}),
       summary: summary(work_package_payloads),
       latest_revision: revision_payload(latest_revision)
     }

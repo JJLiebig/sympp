@@ -70,6 +70,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.EditPlanTest do
 
     persisted = repo.get!(WorkPackage, package.id)
     assert {persisted.title, persisted.group, persisted.contract_revision} == {"Renamed", nil, 2}
+
+    # A group move alone is a new plan revision.
+    moved = repo.get!(WorkPackage, package.id)
+    before = read_plan(repo, work_request.id)["latest_revision"]["revision_number"]
+    edit_plan!(repo, work_request.id, [update_op(moved, %{"group" => "Frontend"})])
+    assert read_plan(repo, work_request.id)["latest_revision"]["revision_number"] == before + 1
   end
 
   test "a ready package's contract is frozen", %{repo: repo} do
