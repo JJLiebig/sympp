@@ -3,6 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
 
   alias Ecto.Changeset
   alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -12,6 +13,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.RepoScope
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
+
+  @redacted_decision_fields ["decision", "rationale", "scope_impact", "created_by", "source_id"]
 
   @work_package_delivery_replay_fields [
     :work_request_id,
@@ -201,6 +204,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       |> normalize_keys()
       |> Map.drop(["sequence", "inserted_at", "updated_at"])
       |> Map.put("work_request_id", work_request_id)
+      # Secrets never reach the ledger, whichever terminal or path records the decision.
+      |> Map.new(fn
+        {key, value} when key in @redacted_decision_fields -> {key, Redactor.redact_text(value)}
+        entry -> entry
+      end)
 
     insert_with_sequence(repo, attrs, &next_decision_sequence/2, &DecisionLogEntry.create_changeset/1)
   end

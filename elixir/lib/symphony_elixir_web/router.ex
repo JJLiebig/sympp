@@ -28,9 +28,15 @@ defmodule SymphonyElixirWeb.Router do
     post("/api/v1/sympp/herdr/work-requests", SymppDashboardApiController, :herdr_create_work_request)
 
     post("/api/v1/sympp/herdr/asks/:ask_id/answer", SymppDashboardApiController, :herdr_answer_ask)
+    post("/api/v1/sympp/herdr/decisions/:decision_id/ack", SymppDashboardApiController, :herdr_ack_decision)
+    post("/api/v1/sympp/herdr/decisions/:decision_id/feedback", SymppDashboardApiController, :herdr_feedback_decision)
+    post("/api/v1/sympp/herdr/decisions/:decision_id/dismiss", SymppDashboardApiController, :herdr_dismiss_decision)
 
     match(:*, "/api/v1/sympp/herdr/work-requests", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/herdr/asks/:ask_id/answer", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/sympp/herdr/decisions/:decision_id/ack", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/sympp/herdr/decisions/:decision_id/feedback", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/sympp/herdr/decisions/:decision_id/dismiss", ObservabilityApiController, :method_not_allowed)
   end
 
   scope "/", SymphonyElixirWeb do
@@ -61,6 +67,9 @@ defmodule SymphonyElixirWeb.Router do
     post("/api/v1/sympp/operator/work-packages/:work_package_id/blockers/:blocker_id/clear", SymppDashboardApiController, :operator_clear_work_package_blocker)
     post("/api/v1/sympp/operator/work-packages/:work_package_id/archive", SymppDashboardApiController, :operator_archive_work_package)
     post("/api/v1/sympp/operator/asks/:ask_id/answer", SymppDashboardApiController, :operator_answer_ask)
+    post("/api/v1/sympp/operator/decisions/:decision_id/ack", SymppDashboardApiController, :operator_ack_decision)
+    post("/api/v1/sympp/operator/decisions/:decision_id/feedback", SymppDashboardApiController, :operator_feedback_decision)
+    post("/api/v1/sympp/operator/decisions/:decision_id/dismiss", SymppDashboardApiController, :operator_dismiss_decision)
   end
 
   scope "/", SymphonyElixirWeb do
@@ -83,6 +92,9 @@ defmodule SymphonyElixirWeb.Router do
     match(:*, "/api/v1/sympp/operator/work-packages/:work_package_id/blockers/:blocker_id/clear", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-packages/:work_package_id/archive", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/asks/:ask_id/answer", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/sympp/operator/decisions/:decision_id/ack", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/sympp/operator/decisions/:decision_id/feedback", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/sympp/operator/decisions/:decision_id/dismiss", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/github/sync-prs", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-packages/:work_package_id", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/solo-sessions/:solo_session_id", ObservabilityApiController, :method_not_allowed)

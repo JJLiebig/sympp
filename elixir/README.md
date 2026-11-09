@@ -103,20 +103,18 @@ worker. Workers make no sympp MCP calls; in a `sympp.role=worker` terminal the
 bridge serves no tools, and no worker secret, grant or private handoff path is
 issued.
 
-## Ownership And Local Operator Decisions
+## Ownership And Decision Feedback
 
 Writes need the Herdr terminal identity the sympp bridge sends; other callers are
 read-only. The first owner-gated write on a WorkRequest makes the calling
 terminal its owner, and writes from other terminals are refused
 `owned_by_other_terminal`. See [Security](../docs/security.md).
 
-`record_work_request_operator_decision` records a non-secret operator decision on
-any WorkRequest without owning it. It requires `work_request_id`, `decision`,
-`rationale`, and `scope_impact`; `created_by` defaults to the calling terminal and
-`source_id` is optional. It stores `source_type: "operator"`, applies the standard
-redaction pass, and rejects unexpected, non-string, or overlong fields. It is
-decision capture only: it grants no dispatch, package mutation, status mutation,
-or lifecycle closeout authority.
+Any Herdr terminal may `record_decision` on a WorkRequest without owning it.
+With `flag: true` the decision waits for the operator's review on the board.
+The operator acknowledges it or sends feedback over HTTP; feedback is typed into
+the recording terminal as `Decision feedback: <text>` without being submitted.
+See the [operator board API](../docs/operator-board-api.md).
 
 ## Configuration
 

@@ -66,6 +66,11 @@ rationale. Decisions explain choices; current status remains delivery truth.
   conversation.
 - Record durable decisions with `record_decision`. Valid
   `source_type`: `human`, `architect`, `operator`, `ask_pro_advisory`.
+- When you make an in-scope product call yourself, record it with
+  `record_decision(flag: true)` so the operator can review it. Their feedback
+  arrives typed into your input as `Decision feedback: …`, not submitted: read
+  it and act on it. If your terminal isn't on the factory's machine, read it
+  from the decision in `read_work_request(detail: "full")`.
 - Route product or scope questions that approved intent and available evidence
   cannot answer to the chief when present; the chief applies existing user decisions and escalates
   only what it cannot settle. Without a chief, ask the user. Do not choose

@@ -14,6 +14,15 @@ text, work_package_id, decision_prompt, asked_by, asked_at, answer_route}`.
 `answer_route` is the native POST path below. Answered and withdrawn asks leave
 the list on the next read.
 
+Each `work_request_details[]` also includes `decisions_to_review`: decisions an
+agent flagged with `record_decision(flag: true)` that still need the operator,
+oldest first. Each has `{id, work_request_id, decision, rationale, scope_impact,
+recorded_by, created_at, review_state, feedback, undelivered_reason,
+next_action}`. A `recorded` decision waits for an ack or feedback; a `feedback`
+decision is listed only while `undelivered_reason` is set, until the operator
+dismisses it. The native board adds `ack_route` and `feedback_route` to recorded
+decisions and `dismiss_route` to undelivered ones that are no longer being typed.
+
 Package `activity_signal.observation_state` distinguishes `queued` (planned,
 created or prepared, without a current worker observation), `current` (current
 agent run), and `stale` (expired worker heartbeat). `unknown`
@@ -65,6 +74,9 @@ services, response shapes and dashboard invalidation as their operator siblings:
 | --- | --- |
 | `/work-requests` | Intake fields below; HTTP 201 with `{ok:true, work_request:<request detail>, refresh:{dashboard:true, work_request_id}}`. The new id is `work_request.work_request.id`. |
 | `/asks/:ask_id/answer` | Answer fields below; HTTP 200 with `{ok:true, ask_id, work_request_id, delivery, refresh:{dashboard:true, work_request_id}}`. |
+| `/decisions/:decision_id/ack` | No input; HTTP 200 with `{ok:true, decision_id, work_request_id, review_state, refresh:{dashboard:true, work_request_id}}`. |
+| `/decisions/:decision_id/feedback` | `{"text":"…"}`; HTTP 200 with the ack result plus `delivery`. |
+| `/decisions/:decision_id/dismiss` | No input; HTTP 200 with the ack result. |
 
 Native human authority means a trusted direct local process, not an authenticated
 Herdr application identity. Requests require a loopback peer and local Host,
@@ -101,6 +113,22 @@ submitting it. `delivery` reports the outcome: `{state: "delivered", to}`, or
 `terminal_unreachable` (the factory's own herdr-core doesn't see that terminal live; answers are not typed into other machines yet),
 `no_asking_terminal` or `send_failed`; the answer stays on the ask either way.
 An answer does not resume or unblock work by itself.
+
+Flagged decisions move `recorded → acknowledged` (ack) or `recorded → feedback`
+(feedback). Feedback is stored, then typed into the recording terminal's input
+as `Decision feedback: <text>` without submitting it, through the same delivery
+as answers, with the same `delivery` result (`no_recording_terminal` replaces
+`no_asking_terminal`). Feedback that wasn't delivered stays on the decision with
+its reason in `undelivered_reason`; dismiss clears that marker and keeps the
+text. While the factory is still typing it the reason is `delivering`, with
+`next_action` `wait: the feedback is being typed` and no dismiss; a send that
+never finished reads as `delivery_interrupted` after a minute and can be
+dismissed. Any other transition returns HTTP 409
+`{error:{code:"decision_transition_refused",message,state,next_action}}`, where
+`state` is the decision's review state (or `not_flagged`). Blank feedback returns
+HTTP 422 `missing_feedback`. Hydrated and detail reads also carry `flagged`,
+`review_state`, `feedback`, `reviewed_at` and `undelivered_reason` on every
+`decision_logs[]` entry.
 
 Refetch the native board after success or its event-stream invalidation. Errors
 use `{error:{code,message}}`: malformed input/choice returns HTTP 422,
@@ -291,6 +319,10 @@ ended another way returns `already_ended` (409).
 
 `POST /api/v1/sympp/operator/asks/:id/answer` answers an open ask with the
 answer fields and `delivery` result described under
+[Native human actions](#native-human-actions).
+
+`POST /api/v1/sympp/operator/decisions/:id/ack`, `…/feedback` and `…/dismiss`
+review flagged decisions as described under
 [Native human actions](#native-human-actions).
 
 Worktree cleanup runs asynchronously and defers active workers while

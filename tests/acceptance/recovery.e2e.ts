@@ -89,7 +89,7 @@ test('a supported disposable offline snapshot denies MCP and dispatch without ch
   for (const payload of [
     { jsonrpc: '2.0', id: 1, method: 'initialize', params: initialize },
     { ...tool('set_report', { work_request_id: request, brief: 'Must not write' }), params: { name: 'set_report', arguments: { work_request_id: request, brief: 'Must not write' }, _meta: { herdr: herdr('t-offline') } } },
-    tool('record_work_request_operator_decision', { work_request_id: request, decision: 'Must not write', rationale: 'Offline', scope_impact: 'None', created_by: 'offline' }),
+    tool('record_decision', { work_request_id: request, source_type: 'operator', decision: 'Must not write', rationale: 'Offline', scope_impact: 'None', created_by: 'offline' }),
   ]) {
     const refused = await client.raw(payload);
     expect(refused.status).toBe(403);
@@ -191,8 +191,8 @@ test('STDIO initialization serves trusted local reads, refuses writes outside He
   const blocker = { work_package_id: wp, blocker_id: 'stdio-foreign', active: true, summary: 'Not the owner' };
   expect((await peer.rawRequest('tools/call', { name: 'set_blocker', arguments: blocker, _meta: meta })).error.data.reason).toBe('owned_by_other_terminal');
   expect((await peer.rawRequest('tools/call', { name: 'set_blocker', arguments: blocker })).error.data.reason).toBe('read_only_outside_herdr');
-  const note = await peer.rawRequest('tools/call', { name: 'record_work_request_operator_decision', arguments: {
-    work_request_id: request, decision: 'Untrusted operator', rationale: 'STDIO', scope_impact: 'None', created_by: 'stdio-worker',
+  const note = await peer.rawRequest('tools/call', { name: 'record_decision', arguments: {
+    work_request_id: request, source_type: 'operator', decision: 'Untrusted operator', rationale: 'STDIO', scope_impact: 'None', created_by: 'stdio-worker',
   } });
   expect(note.error.data.reason).toBe('read_only_outside_herdr');
   expect((await architect.call('read_work_request', { detail: 'full', work_request_id: request })).decision_log_entries).toEqual([]);
