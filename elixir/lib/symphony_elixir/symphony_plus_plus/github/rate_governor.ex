@@ -69,12 +69,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.RateGovernor do
 
     state =
       case budget(headers) do
-        {resource, budget} -> put_in(state, [:resources, resource], budget)
+        {resource, budget} -> put_in(state, [:resources, resource], newest_budget(state.resources[resource], budget))
         nil -> state
       end
 
     put(credential, state)
   end
+
+  # Responses can arrive out of order: within one reset window the budget only
+  # goes down, and a later window replaces it.
+  defp newest_budget(%{reset_ms: reset_ms, remaining: remaining} = previous, %{reset_ms: reset_ms} = budget),
+    do: if(previous.remaining < budget.remaining, do: %{budget | remaining: remaining}, else: budget)
+
+  defp newest_budget(_previous, budget), do: budget
 
   @doc """
   Records a 403 or 429 rate-limit answer and returns the time the credential is
