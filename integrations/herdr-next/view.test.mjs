@@ -39,7 +39,7 @@ test('the factory lists every ask with its answer in place, the decisions to rev
   assert.ok(busy.has('factory') && busy.has('pin') && !busy.has('factory-aside'), 'the panel stacks and can be pinned');
   for (const id of ['ask-ask:ask-flicker', 'decision-queue', 'decision-dec-toast', 'ack-dec-toast', 'feedback-dec-toast', 'decision-dec-share', 'dismiss-feedback-dec-share'])
     assert.ok(busy.has(id), id);
-  assert.ok(busy.text("You're needed in 3") && busy.text('Undelivered'), "a card's ask counts too");
+  assert.ok(busy.text("You're needed in 3") && busy.text('2 need you') && busy.text('Undelivered'), "a card's ask counts too, in its topic as well");
   assert.equal(busy.has('ack-dec-share'), false, 'undelivered feedback has only its dismiss');
   const at = (id) => busy.out.indexOf(`:id[Str("${id}")]`);
   assert.ok(at('decision-dec-share') < at('decision-dec-order') && at('decision-dec-order') < at('decision-dec-toast'), 'oldest decision first');

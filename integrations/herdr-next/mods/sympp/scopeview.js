@@ -273,10 +273,10 @@ function progress(v, t, pkg, now) {
     .hover((s) => s.text_color(t.foreground)).tooltip(`Open ${pkg.pr.repo && pkg.pr.repo !== pkg.repo ? pkg.pr.repo : "PR"} #${pkg.pr.number}`)
     .on_click((_e, cx) => { cx.stop_propagation(); if (pkg.pr.url) cx.open_url(pkg.pr.url); })
     .child(pkg.finishable ? `${M.shortRepo(pkg.pr.repo)}#${pkg.pr.number}` : `#${pkg.pr.number}`) : null;
-  return h_flex().flex_1().min_w(0).gap(8).items_center()
+  return h_flex().flex_1().min_w(0).gap(6).items_center()
     .when(!ended && !planned, (el) => el.child(track(t, pkg)))
-    .child(mono(11, tone).font_semibold().when(!planned, (el) => el.w(ended ? 78 : 84)).when(planned, (el) => el.min_w(0).truncate()).child(label))
-    .when(!ended && !planned, (el) => el.child(mono(11, t.dim).w(44).child(time ?? "")))
+    .child(mono(11, tone).font_semibold().when(!planned, (el) => el.w(ended ? 78 : 82)).when(planned, (el) => el.min_w(0).truncate()).child(label))
+    .when(!ended && !planned, (el) => el.child(mono(11, t.dim).w(42).child(time ?? "")))
     .child(mono(11, pkg.review.state === "findings" ? signal().checks : t.dim).flex_1().min_w(0).truncate().child(review ?? ""))
     .when(Boolean(pr), (el) => el.child(pr));
 }
