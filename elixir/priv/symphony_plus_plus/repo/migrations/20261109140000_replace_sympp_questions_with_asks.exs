@@ -11,7 +11,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.ReplaceSymppQuestionsW
   #
   # Findings and free progress notes go away with their tools. Blockers keep
   # their progress events, now written only by set_blocker, so older blocker
-  # events are relabelled to that writer.
+  # events are relabelled to that writer, and one that described another
+  # package moves to that package.
   def up do
     create table(:sympp_asks, primary_key: false) do
       add(:id, :text, primary_key: true)
@@ -63,6 +64,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.ReplaceSymppQuestionsW
     drop(table(:sympp_work_request_clarification_questions))
     drop(table(:sympp_findings))
 
+    move_targeted_blockers()
+
     execute("""
     UPDATE sympp_progress_events
     SET payload = json_set(payload, '$.source_tool', 'set_blocker')
@@ -73,6 +76,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.ReplaceSymppQuestionsW
 
   def down do
     raise Ecto.MigrationError, message: "clarification questions, findings and progress notes were replaced and cannot be restored"
+  end
+
+  # A blocker recorded on one package could describe another (`blocked_item`).
+  # Blockers are now package-local, so each such event moves to the package it
+  # describes, after that package's own history.
+  defp move_targeted_blockers do
+    %{rows: rows} =
+      repo().query!("""
+      SELECT event.id, event.work_package_id, json_extract(event.payload, '$.blocked_item.id')
+      FROM sympp_progress_events event
+      JOIN sympp_work_packages target ON target.id = json_extract(event.payload, '$.blocked_item.id')
+      WHERE json_extract(event.payload, '$.type') = 'blocker'
+        AND json_extract(event.payload, '$.blocked_item.kind') = 'work_package'
+        AND event.work_package_id <> target.id
+      ORDER BY event.work_package_id, event.sequence
+      """)
+
+    for [id, owner_id, target_id] <- rows do
+      repo().query!(
+        """
+        UPDATE sympp_progress_events
+        SET work_package_id = ?2,
+            sequence = (SELECT coalesce(max(sequence), 0) + 1 FROM sympp_progress_events WHERE work_package_id = ?2),
+            idempotency_key = CASE WHEN idempotency_key IS NULL THEN NULL ELSE idempotency_key || ':from:' || ?3 END,
+            payload = json_remove(payload, '$.blocked_item', '$.blocked_by')
+        WHERE id = ?1
+        """,
+        [id, target_id, owner_id]
+      )
+    end
   end
 
   defp move_pending_asks do

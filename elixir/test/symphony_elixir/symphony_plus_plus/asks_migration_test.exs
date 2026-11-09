@@ -49,10 +49,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AsksMigrationTest do
 
   test "older blocker events are relabelled to set_blocker and other events are untouched" do
     assert [
-             ["evt_note", nil],
-             ["evt_raise", "set_blocker"],
-             ["evt_resolve", "set_blocker"]
-           ] = rows!("SELECT id, json_extract(payload, '$.source_tool') FROM sympp_progress_events ORDER BY id")
+             ["evt_note", "WP-ONE", nil],
+             ["evt_own", "WP-TWO", nil],
+             ["evt_raise", "WP-ONE", "set_blocker"],
+             ["evt_resolve", "WP-ONE", "set_blocker"],
+             ["evt_targeted", "WP-TWO", "set_blocker"]
+           ] = rows!("SELECT id, work_package_id, json_extract(payload, '$.source_tool') FROM sympp_progress_events ORDER BY id")
+  end
+
+  test "a blocker that described another package moves to that package" do
+    assert [["WP-TWO", 2, nil, "targeted:from:WP-ONE"]] =
+             rows!("SELECT work_package_id, sequence, json_extract(payload, '$.blocked_item'), idempotency_key FROM sympp_progress_events WHERE id = 'evt_targeted'")
   end
 
   defp seed! do
@@ -84,19 +91,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AsksMigrationTest do
       )
     end)
 
+    for {id, sequence} <- [{"WP-ONE", 1}, {"WP-TWO", 2}] do
+      Repo.query!(
+        "INSERT INTO sympp_work_packages (id, work_request_id, sequence, kind, title, goal, repo, base_branch, branch_pattern, engineering_scope, acceptance_criteria, status, inserted_at, updated_at) VALUES (?1, 'wr_one', ?2, 'standard_pr', 'Package', 'Goal', 'nextide/demo', 'main', 'agent/x', 'Scope', '[\"done\"]', 'dispatched', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')",
+        [id, sequence]
+      )
+    end
+
     Repo.query!(
-      "INSERT INTO sympp_work_packages (id, work_request_id, kind, title, goal, repo, base_branch, branch_pattern, engineering_scope, acceptance_criteria, status, inserted_at, updated_at) VALUES ('WP-ONE', 'wr_one', 'standard_pr', 'Package', 'Goal', 'nextide/demo', 'main', 'agent/x', 'Scope', '[\"done\"]', 'dispatched', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')"
+      "INSERT INTO sympp_progress_events (id, work_package_id, summary, status, sequence, idempotency_key, created_at, inserted_at, updated_at, payload) VALUES ('evt_own', 'WP-TWO', 'event', 'recorded', 1, 'own', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z', '{}')"
     )
 
     [
       {"evt_raise", 1, %{"type" => "blocker", "source_tool" => "report_blocker", "blocker_id" => "b1", "active" => true}},
       {"evt_resolve", 2, %{"type" => "blocker", "source_tool" => "resolve_blocker", "blocker_id" => "b1", "active" => false}},
-      {"evt_note", 3, %{}}
+      {"evt_note", 3, %{}},
+      {"evt_targeted", 4, %{"type" => "blocker", "source_tool" => "report_blocker", "blocker_id" => "b2", "active" => true, "blocked_item" => %{"kind" => "work_package", "id" => "WP-TWO"}}}
     ]
     |> Enum.each(fn {id, sequence, payload} ->
       Repo.query!(
-        "INSERT INTO sympp_progress_events (id, work_package_id, summary, status, sequence, created_at, inserted_at, updated_at, payload) VALUES (?1, 'WP-ONE', 'event', 'recorded', ?2, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z', ?3)",
-        [id, sequence, Jason.encode!(payload)]
+        "INSERT INTO sympp_progress_events (id, work_package_id, summary, status, sequence, idempotency_key, created_at, inserted_at, updated_at, payload) VALUES (?1, 'WP-ONE', 'event', 'recorded', ?2, ?4, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z', ?3)",
+        [id, sequence, Jason.encode!(payload), if(id == "evt_targeted", do: "targeted")]
       )
     end)
   end
