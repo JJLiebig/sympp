@@ -402,6 +402,7 @@ jobs:
   single-gates:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -410,6 +411,8 @@ jobs:
             target: ci-static
           - name: dialyzer
             target: ci-dialyzer
+          - name: boundary checks
+            target: ci-test
     defaults:
       run:
         working-directory: elixir
@@ -448,54 +451,17 @@ jobs:
             ${{ runner.os }}-dialyzer-${{ hashFiles('elixir/mise.toml') }}-${{ hashFiles('elixir/mix.exs') }}-
             ${{ runner.os }}-dialyzer-${{ hashFiles('elixir/mise.toml') }}-
 
+      - name: Qualify Linux service install boundaries
+        if: ${{ matrix.target == 'ci-test' }}
+        run: node --test ../scripts/tests/linux-service-install.test.js
+
       - name: Verify ${{ matrix.name }}
         run: make ${{ matrix.target }}
-      - name: Retain static gate evidence
+      - name: Retain gate evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: gate-${{ matrix.target }}
-          path: elixir/_build/make-logs
-
-  retained-qualification:
-    name: retained qualification
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: elixir
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
-
-      - name: Set up mise tools
-        uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
-        with:
-          install: true
-          cache: true
-          working_directory: elixir
-
-      - name: Cache deps and build
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: |
-            elixir/deps
-            elixir/_build
-          key: ${{ runner.os }}-mix-${{ hashFiles('elixir/mise.toml') }}-${{ hashFiles('elixir/mix.exs') }}-${{ hashFiles('elixir/mix.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-mix-${{ hashFiles('elixir/mise.toml') }}-${{ hashFiles('elixir/mix.exs') }}-
-            ${{ runner.os }}-mix-${{ hashFiles('elixir/mise.toml') }}-
-
-      - name: Qualify Linux service ref selection
-        run: node --test ../scripts/tests/linux-service-install.test.js
-
-      - name: Run all retained ExUnit qualifications
-        run: make ci-test
-      - name: Retain complete qualification evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: retained-qualification-evidence
           path: elixir/_build/make-logs
 
   frontend:
@@ -552,7 +518,6 @@ jobs:
       - portable-skills
       - offline-acceptance
       - single-gates
-      - retained-qualification
       - frontend
     if: ${{ always() }}
     steps:
@@ -563,8 +528,7 @@ jobs:
           node --input-type=module <<'NODE'
           const results = JSON.parse(process.env.REQUIRED_RESULTS);
           const required = ['windows-paths', 'browser-native-acceptance', 'windows-frontend', 'native-acceptance',
-            'portable-skills', 'offline-acceptance', 'single-gates',
-            'retained-qualification', 'frontend'];
+            'portable-skills', 'offline-acceptance', 'single-gates', 'frontend'];
           const windows = { 'windows-frontend': 'frontend', 'portable-skills': 'runtime' };
           for (const job of required) {
             const selection = results['windows-paths'];

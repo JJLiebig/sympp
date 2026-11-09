@@ -36,7 +36,7 @@ test('PR selection covers Windows consumers and leaves ordinary source/docs on L
 
 test('actual gate accepts intentional skips and refuses failed/cancelled/missing qualifications', () => {
   const jobs = ['windows-paths', 'browser-native-acceptance', 'windows-frontend', 'native-acceptance',
-    'portable-skills', 'offline-acceptance', 'single-gates', 'retained-qualification', 'frontend'];
+    'portable-skills', 'offline-acceptance', 'single-gates', 'frontend'];
   const results = Object.fromEntries(jobs.map(job => [job, { result: 'success' }]));
   const run = value => spawnSync(process.execPath, ['--input-type=module', '-e', gate], {
     env: { ...process.env, REQUIRED_RESULTS: JSON.stringify(value) }, encoding: 'utf8',

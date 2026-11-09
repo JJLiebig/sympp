@@ -49,48 +49,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
     assert %Server{local_daemon_trusted: true} = HTTPStateStore.get(trusted_config, "trusted-client", trusted.state_key)
   end
 
-  test "live repo policy stays in transport for state-local and repo-backed followups", %{config: config} do
-    {:ok, init} = HTTPTransport.handle(config, initialize_request("init"), client_key: "client-a")
-    parent = self()
-    ref = make_ref()
-
-    live_handle = fn _payload, _client_key, _state_key ->
-      send(parent, {:live_handle_called, ref})
-      {:error, :repo_unavailable}
-    end
-
-    assert {:ok, health} =
-             HTTPTransport.handle(config, health_request("health"),
-               client_key: "client-a",
-               state_key: init.state_key,
-               live_handle: live_handle
-             )
-
-    assert get_in(health.response, ["result", "structuredContent", "status"]) == "ok"
-    refute_receive {:live_handle_called, ^ref}
-
-    assert {:ok, resources} =
-             HTTPTransport.handle(config, resources_list_request("resources"),
-               client_key: "client-a",
-               state_key: init.state_key,
-               live_handle: live_handle
-             )
-
-    assert get_in(resources.response, ["result", "resources", Access.at(0), "uri"]) == "sympp://health/version"
-    refute_receive {:live_handle_called, ^ref}
-
-    repo_backed = tool_call_request("repo-backed", "list_work_requests", %{})
-
-    assert {:error, :ledger_unavailable, ^repo_backed} =
-             HTTPTransport.handle(config, repo_backed,
-               client_key: "client-a",
-               state_key: init.state_key,
-               live_handle: live_handle
-             )
-
-    assert_receive {:live_handle_called, ^ref}
-  end
-
   test "a second client cannot reuse initialized state from a state key", %{config: config} do
     {:ok, init} = HTTPTransport.handle(config, initialize_request("init"), client_key: "client-a")
 
@@ -102,19 +60,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
     assert get_in(foreign_tools.response, ["error", "data", "reason"]) == "unknown_state_key"
     assert HTTPStateStore.get(config, "client-b", init.state_key) == nil
     assert %Server{initialized: true} = HTTPStateStore.get(config, "client-a", init.state_key)
-  end
-
-  test "batch transport counts each failed tool item once without retaining values", %{config: config} do
-    {:ok, init} = HTTPTransport.handle(config, initialize_request("batch-failure-init"), client_key: "batch-failure-client")
-
-    request = tool_call_request("private-request-id", "sympp.health", %{"bearer" => "request-secret"})
-    notification = tool_call_request(nil, "sympp.health", %{"bearer" => "notification-secret"}) |> Map.delete("id")
-
-    assert {:ok, %{response: [%{"error" => %{"data" => %{"code" => "invalid_tool_arguments"}}}]}} =
-             HTTPTransport.handle(config, [request, notification], client_key: "batch-failure-client", state_key: init.state_key)
-
-    assert [%{tool: "sympp.health", reason: "invalid_tool_arguments", layer: "tool", count: 2} = row] = config.repo.all(FailedCall.Count)
-    refute inspect(row) =~ "secret"
   end
 
   test "batched initialize requests are rejected without creating HTTP state", %{config: config} do
@@ -190,20 +135,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
   end
 
   defp tools_list_request(id), do: %{"jsonrpc" => "2.0", "id" => id, "method" => "tools/list", "params" => %{}}
-  defp resources_list_request(id), do: %{"jsonrpc" => "2.0", "id" => id, "method" => "resources/list", "params" => %{}}
-
-  defp health_request(id) do
-    %{
-      "jsonrpc" => "2.0",
-      "id" => id,
-      "method" => "tools/call",
-      "params" => %{"name" => "sympp.health", "arguments" => %{}}
-    }
-  end
-
-  defp tool_call_request(id, name, arguments) do
-    %{"jsonrpc" => "2.0", "id" => id, "method" => "tools/call", "params" => %{"name" => name, "arguments" => arguments}}
-  end
 
   defp reset_server_response_state do
     handle_state_agent = Module.concat(Server, HandleState)

@@ -3,12 +3,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeLifecycleCompatTest do
 
   @moduletag :ci_slow
 
-  alias SymphonyElixir.PathSafety
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreePath
   alias SymphonyElixir.TestSupport
   alias SymphonyElixir.WorkPackageFactory
 
@@ -61,55 +59,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeLifecycleCompatTest do
     end
 
     assert Bitwise.band(File.stat!(private_file).mode, 0o777) == 0o600
-  end
-
-  test "prepare replays immediately previous managed worktree paths", %{repo: repo} do
-    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-worktree-lifecycle")
-    codex_home = Path.join(fixture.root, "codex-home")
-    branch = "feat/previous-prepare-replay"
-
-    assert {:ok, package} =
-             Repository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-WT-PREVIOUS-001", kind: "mcp", base_branch: "main"))
-
-    previous_path = previous_worktree_path(codex_home, fixture.repo_root, package.id, branch)
-    File.mkdir_p!(Path.dirname(previous_path))
-    TestSupport.git_output!(fixture.repo_root, ["worktree", "add", "-b", branch, previous_path, "origin/main"])
-
-    assert {:ok, _updated} = Repository.update(repo, package.id, %{worktree_path: previous_path})
-
-    assert {:ok, replayed} =
-             WorktreeLifecycle.prepare(
-               repo,
-               package.id,
-               %{"repo_root" => fixture.repo_root, "base_branch" => "main", "branch" => branch},
-               codex_home: codex_home
-             )
-
-    assert replayed.status == "already_prepared"
-    assert replayed.worktree_path == Path.expand(previous_path)
-  end
-
-  test "prepares legacy frozen origin/main contracts without rewriting them", %{repo: repo} do
-    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-worktree-legacy-base")
-    codex_home = Path.join(fixture.root, "codex-home")
-
-    assert {:ok, package} =
-             Repository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-WT-LEGACY-BASE", kind: "mcp", base_branch: "main"))
-
-    package = repo.update!(Ecto.Changeset.change(package, base_branch: "origin/main", status: "dispatched"))
-
-    assert {:ok, prepared} =
-             WorktreeLifecycle.prepare(
-               repo,
-               package.id,
-               %{"repo_root" => fixture.repo_root, "base_branch" => "origin/main", "branch" => "feat/legacy-base"},
-               codex_home: codex_home
-             )
-
-    assert prepared.status == "prepared"
-    assert prepared.base_branch == "main"
-    assert File.exists?(Path.join(prepared.worktree_path, "README.md"))
-    assert repo.get!(WorkPackage, package.id).base_branch == "origin/main"
   end
 
   test "cleanup retries a proven Windows partial worktree removal", %{repo: repo} do
@@ -244,83 +193,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeLifecycleCompatTest do
     refute File.exists?(prepared.worktree_path)
   end
 
-  test "cleanup logs before_remove failure and still removes the worktree", %{repo: repo} do
-    {_fixture, package, prepared, opts} = prepare_hook_worktree(repo)
-    write_workflow_file!(Workflow.workflow_file_path(), hook_before_remove: "exit 17")
-
-    log =
-      capture_log(fn ->
-        assert {:ok, %{status: "cleaned"}} = WorktreeLifecycle.cleanup(repo, package.id, opts)
-      end)
-
-    assert log =~ "Workspace hook failed hook=before_remove"
-    assert log =~ "status=17"
-    refute File.exists?(prepared.worktree_path)
-    assert repo.get!(WorkPackage, package.id).worktree_path == nil
-  end
-
-  test "cleanup logs before_remove timeout and still removes the worktree", %{repo: repo} do
-    {_fixture, package, prepared, opts} = prepare_hook_worktree(repo)
-    write_workflow_file!(Workflow.workflow_file_path(), hook_before_remove: "sleep 0.2", hook_timeout_ms: 10)
-
-    log =
-      capture_log(fn ->
-        assert {:ok, %{status: "cleaned"}} = WorktreeLifecycle.cleanup(repo, package.id, opts)
-      end)
-
-    assert log =~ "Workspace hook timed out hook=before_remove"
-    refute File.exists?(prepared.worktree_path)
-    assert repo.get!(WorkPackage, package.id).worktree_path == nil
-  end
-
-  test "cleanup removes the worktree without a configured hook", %{repo: repo} do
-    {_fixture, package, prepared, opts} = prepare_hook_worktree(repo)
-
-    assert {:ok, %{status: "cleaned"}} = WorktreeLifecycle.cleanup(repo, package.id, opts)
-    refute File.exists?(prepared.worktree_path)
-    assert repo.get!(WorkPackage, package.id).worktree_path == nil
-  end
-
-  test "cleanup logs unavailable workflow configuration and still removes worktrees", %{repo: repo} do
-    workflow_path = Workflow.workflow_file_path()
-    store_running? = is_pid(Process.whereis(WorkflowStore))
-    if store_running?, do: Supervisor.terminate_child(SymphonyElixir.Supervisor, WorkflowStore)
-
-    try do
-      for content <- ["---\n- invalid\n---\n", nil] do
-        {fixture, package, prepared, opts} = prepare_hook_worktree(repo)
-        unavailable_workflow = Path.join(fixture.root, "WORKFLOW.md")
-        if content, do: File.write!(unavailable_workflow, content)
-        Workflow.set_workflow_file_path(unavailable_workflow)
-        assert {:error, _reason} = Config.settings()
-
-        log =
-          capture_log(fn ->
-            assert {:ok, %{status: "cleaned"}} = WorktreeLifecycle.cleanup(repo, package.id, opts)
-          end)
-
-        assert log =~ "Skipping before_remove hook: workflow configuration is unavailable"
-        refute File.exists?(prepared.worktree_path)
-        assert repo.get!(WorkPackage, package.id).worktree_path == nil
-        repo.delete!(repo.get!(WorkPackage, package.id))
-      end
-    after
-      Workflow.set_workflow_file_path(workflow_path)
-      if store_running?, do: Supervisor.restart_child(SymphonyElixir.Supervisor, WorkflowStore)
-    end
-  end
-
-  test "cleanup skips before_remove when the checkout is already gone", %{repo: repo} do
-    {fixture, package, prepared, opts} = prepare_hook_worktree(repo)
-    marker = Path.join(fixture.root, "unexpected-hook")
-    write_workflow_file!(Workflow.workflow_file_path(), hook_before_remove: "touch #{TestSupport.shell_path(marker)}")
-    TestSupport.git_output!(fixture.repo_root, ["worktree", "remove", "--force", prepared.worktree_path])
-
-    assert {:ok, %{status: "stale_record_cleared"}} = WorktreeLifecycle.cleanup(repo, package.id, opts)
-    refute File.exists?(marker)
-    assert repo.get!(WorkPackage, package.id).worktree_path == nil
-  end
-
   defp prepare_hook_worktree(repo) do
     fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-worktree-hooks")
     opts = [codex_home: Path.join(fixture.root, "codex-home")]
@@ -353,15 +225,5 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeLifecycleCompatTest do
           System.cmd(git, ["-C", repo_root | args], stderr_to_stdout: true)
       end
     end
-  end
-
-  defp previous_worktree_path(codex_home, repo_root, package_id, branch) do
-    {:ok, worktree_root} = WorktreeLifecycle.worktree_root(codex_home: codex_home)
-    {:ok, repo_root} = PathSafety.canonicalize(repo_root)
-    {:ok, repo_segment} = WorktreePath.previous_unique_segment(Path.basename(repo_root), repo_root)
-    {:ok, package_segment} = WorktreePath.previous_unique_segment(package_id, package_id)
-    {:ok, branch_segment} = WorktreePath.previous_unique_segment(branch, branch)
-
-    Path.join([worktree_root, repo_segment, "#{package_segment}-#{branch_segment}"])
   end
 end

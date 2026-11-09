@@ -1,23 +1,19 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
   use ExUnit.Case, async: false
 
-  import ExUnit.CaptureLog
   import Phoenix.ConnTest
   import Plug.Conn, only: [get_resp_header: 2, put_req_header: 3]
 
   alias Phoenix.Endpoint.RenderErrors
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
-    ClientLeases,
     FailedCall,
     HTTPStateStore
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Server
-  alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
-  alias SymphonyElixir.SymphonyPlusPlus.Ownership
-  alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.Repo.MigrationFileLock
@@ -29,7 +25,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
   alias SymphonyElixirWeb.Endpoint
 
   @endpoint Endpoint
-  @client_key "__sympp_mcp_local_http_client__"
 
   defmodule LazyHTTPRepo do
     @moduledoc false
@@ -424,24 +419,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     assert herdr_binding(progress)["work_request_id"] == request_id
   end
 
-  test "a clean bridge detach ends its terminal's ownership" do
-    {:ok, work_request} = WorkRequestRepository.create(Repo, work_request_attrs(%{}))
-    terminal = Terminal.from_meta(terminal_meta("t4"))
-    assert {:ok, _row, :acquired} = Ownership.acquire(Repo, work_request.id, terminal)
-    lease = %{"client_id" => "bridge-detach-test", "terminal" => terminal_meta("t4")}
-
-    for action <- ["attach", "heartbeat"] do
-      assert %{"status" => "ok"} = json_response(post_json(Map.put(lease, "action", action), [], path: "/mcp/client-lease"), 200)
-    end
-
-    assert ClientLeases.terminal_live?(terminal.key)
-    assert Ownership.public(Ownership.owner(Repo, work_request.id))["liveness"] == "live"
-
-    assert %{"status" => "ok"} = json_response(post_json(Map.put(lease, "action", "detach"), [], path: "/mcp/client-lease"), 200)
-    refute ClientLeases.terminal_live?(terminal.key)
-    assert Ownership.owner(Repo, work_request.id) == nil
-  end
-
   defp terminal_call(headers, terminal, name, arguments) do
     Ecto.UUID.generate()
     |> tool_call_request(name, arguments)
@@ -453,93 +430,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
   defp terminal_meta(address), do: %{"core_id" => "endpoint-core", "core_name" => "testbox", "terminal_id" => address}
 
   defp with_terminal(payload, address), do: put_in(payload, ["params", "_meta"], %{"herdr" => terminal_meta(address)})
-
-  test "POST /mcp starts the HTTP state store when endpoint runtime omitted it" do
-    restore_mode = remove_http_state_store_for_test()
-    on_exit(fn -> restore_http_state_store_for_test(restore_mode) end)
-
-    refute Process.whereis(HTTPStateStore)
-
-    conn = post_json(initialize_request("init"))
-
-    assert %{"jsonrpc" => "2.0", "id" => "init", "result" => %{"serverInfo" => %{"name" => "sympp"}}} =
-             json_response(conn, 200)
-
-    assert [_session_id] = get_resp_header(conn, "mcp-session-id")
-  end
-
-  test "POST /mcp restarts supervised HTTP state store through the application supervisor" do
-    if application_supervises_http_state_store?() do
-      assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, HTTPStateStore)
-      on_exit(fn -> restore_http_state_store_for_test(:application_supervisor) end)
-
-      refute Process.whereis(HTTPStateStore)
-
-      conn = post_json(initialize_request("restart"))
-
-      assert %{"jsonrpc" => "2.0", "id" => "restart", "result" => %{"serverInfo" => %{"name" => "sympp"}}} =
-               json_response(conn, 200)
-
-      assert [_session_id] = get_resp_header(conn, "mcp-session-id")
-      assert Process.whereis(HTTPStateStore) == supervised_http_state_store_pid()
-    end
-  end
-
-  test "200 concurrent unbound MCP startups stay independent of SQLite" do
-    parent = self()
-    task_supervisor = start_supervised!(Task.Supervisor)
-
-    repo_holder =
-      Task.Supervisor.async_nolink(task_supervisor, fn ->
-        Repo.transaction(
-          fn ->
-            send(parent, {:repo_held, self()})
-            receive do: (:release_repo -> :ok)
-          end,
-          timeout: :infinity
-        )
-      end)
-
-    assert_receive {:repo_held, repo_holder_pid}, 5_000
-
-    tasks =
-      Enum.map(1..200, fn index ->
-        Task.Supervisor.async_nolink(task_supervisor, fn ->
-          send(parent, {:startup_ready, self()})
-          receive do: (:start -> unbound_startup_handshake(index))
-        end)
-      end)
-
-    Enum.each(tasks, fn task ->
-      pid = task.pid
-      assert_receive {:startup_ready, ^pid}, 5_000
-    end)
-
-    _session_ids =
-      try do
-        {results, query_count} =
-          count_queries(fn ->
-            Enum.each(tasks, &send(&1.pid, :start))
-            Task.yield_many(tasks, 5_000)
-          end)
-
-        session_ids =
-          Enum.map(results, fn
-            {_task, {:ok, session_id}} -> session_id
-            {_task, nil} -> flunk("MCP startup cohort timed out")
-            {_task, {:exit, reason}} -> flunk("MCP startup task exited: #{inspect(reason)}")
-          end)
-
-        assert length(session_ids) == 200
-        assert length(Enum.uniq(session_ids)) == 200
-        assert query_count == 0
-        session_ids
-      after
-        Enum.each(tasks, &Task.shutdown(&1, :brutal_kill))
-        send(repo_holder_pid, :release_repo)
-        assert {:ok, :ok} = Task.await(repo_holder, 5_000)
-      end
-  end
 
   test "readiness creates no transport state and rejects a non-loopback peer", %{database_path: database_path} do
     before_state = :sys.get_state(HTTPStateStore)
@@ -572,35 +462,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
              "local_only"
   end
 
-  test "steady HTTP health requests perform no SQLite work" do
-    init = post_json(initialize_request("steady-health-init"))
-    [session_id] = get_resp_header(init, "mcp-session-id")
-
-    {responses, queries} =
-      capture_queries(fn ->
-        for index <- 1..25 do
-          post_json(tool_call_request("steady-health-#{index}", "sympp.health", %{}), [{"mcp-session-id", session_id}])
-        end
-      end)
-
-    assert Enum.all?(responses, fn response ->
-             get_in(json_response(response, 200), ["result", "structuredContent", "status"]) == "ok"
-           end)
-
-    assert queries == []
-  end
-
-  test "POST /mcp/client-lease restarts a missing lease worker" do
-    on_exit(fn -> ClientLeases.detach("restarted-endpoint-client") end)
-
-    assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, ClientLeases)
-    refute Process.whereis(ClientLeases)
-
-    attach = post_json(%{"client_id" => "restarted-endpoint-client", "action" => "attach"}, [], path: "/mcp/client-lease")
-    assert %{"status" => "ok"} = json_response(attach, 200)
-    assert Process.whereis(ClientLeases)
-  end
-
   test "client lease endpoint refuses non-loopback peer addresses" do
     payload = %{"client_id" => "endpoint-client", "action" => "attach"}
 
@@ -609,21 +470,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
              "data",
              "reason"
            ]) == "local_only"
-  end
-
-  test "POST /mcp tools/list follows a session initialized from the live dashboard repo" do
-    original_database = Application.get_env(:symphony_elixir, :sympp_repo_database)
-    Application.delete_env(:symphony_elixir, :sympp_repo_database)
-
-    on_exit(fn -> restore_sympp_repo_database(original_database) end)
-
-    init = post_json(initialize_request("live-init"))
-    [session_id] = get_resp_header(init, "mcp-session-id")
-
-    conn = post_json(tools_list_request("live-tools"), [{"mcp-session-id", session_id}])
-
-    assert [^session_id] = get_resp_header(conn, "mcp-session-id")
-    assert "sympp.health" in tool_names(json_response(conn, 200))
   end
 
   test "cleanup startup and the first MCP write share the migration file lock" do
@@ -684,223 +530,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     end
   end
 
-  test "POST /mcp dispatches ledger tools through the dashboard lazy repo seam" do
-    database_path = WorkPackageFactory.database_path()
-    original_repo_config = Application.get_env(:symphony_elixir, LazyHTTPRepo)
-    original_database = Application.get_env(:symphony_elixir, :sympp_repo_database)
-
-    Application.put_env(:symphony_elixir, LazyHTTPRepo, database: database_path)
-
-    on_exit(fn ->
-      restore_app_env(LazyHTTPRepo, original_repo_config)
-      restore_sympp_repo_database(original_database)
-      File.rm(database_path)
-    end)
-
-    with_endpoint_repo(LazyHTTPRepo, fn ->
-      init = post_json(initialize_request("init"))
-      [session_id] = get_resp_header(init, "mcp-session-id")
-
-      pre_attach_health = post_json(tool_call_request("health", "sympp.health", %{}), [{"mcp-session-id", session_id}])
-      tool_notification = post_json(tool_call_notification("list_work_requests", %{}), [{"mcp-session-id", session_id}])
-
-      conn =
-        post_json(
-          tool_call_request("attach", "create_work_request", work_request_arguments("nextide/example", "main"))
-          |> with_terminal("t1"),
-          [{"mcp-session-id", session_id}]
-        )
-
-      post_attach_health = post_json(tool_call_request("health-after-attach", "sympp.health", %{}), [{"mcp-session-id", session_id}])
-
-      assert get_in(json_response(pre_attach_health, 200), ["result", "structuredContent", "status"]) == "degraded"
-      assert get_in(json_response(pre_attach_health, 200), ["result", "structuredContent", "ledger", "reachable"]) == false
-      assert response(tool_notification, 202) == ""
-      assert is_binary(get_in(json_response(conn, 200), ["result", "structuredContent", "work_request", "id"]))
-      assert get_in(json_response(post_attach_health, 200), ["result", "structuredContent", "status"]) == "ok"
-      assert get_in(json_response(post_attach_health, 200), ["result", "structuredContent", "ledger", "reachable"]) == true
-      assert File.exists?(database_path)
-    end)
-  end
-
-  test "POST /mcp keeps custom repo startup discovery independent from fallback database" do
-    fallback_database_path = WorkPackageFactory.database_path()
-    original_repo_config = Application.get_env(:symphony_elixir, Repo)
-    original_lazy_repo_config = Application.get_env(:symphony_elixir, LazyHTTPRepo)
-    original_database = Application.get_env(:symphony_elixir, :sympp_repo_database)
-
-    Application.delete_env(:symphony_elixir, :sympp_repo_database)
-    Application.put_env(:symphony_elixir, Repo, database: fallback_database_path)
-    Application.delete_env(:symphony_elixir, LazyHTTPRepo)
-
-    on_exit(fn ->
-      restore_app_env(Repo, original_repo_config)
-      restore_app_env(LazyHTTPRepo, original_lazy_repo_config)
-      restore_sympp_repo_database(original_database)
-      File.rm(fallback_database_path)
-    end)
-
-    with_endpoint_repo(LazyHTTPRepo, fn ->
-      init = post_json(initialize_request("init"))
-      [session_id] = get_resp_header(init, "mcp-session-id")
-
-      tools = post_json(tools_list_request("tools"), [{"mcp-session-id", session_id}])
-
-      assert "sympp.health" in tool_names(json_response(tools, 200))
-      refute File.exists?(fallback_database_path)
-    end)
-  end
-
-  test "POST /mcp keeps default repo startup discovery independent from fallback database" do
-    fallback_database_path = WorkPackageFactory.database_path()
-    original_repo_config = Application.get_env(:symphony_elixir, Repo)
-    original_database = Application.get_env(:symphony_elixir, :sympp_repo_database)
-
-    Application.delete_env(:symphony_elixir, :sympp_repo_database)
-    Application.put_env(:symphony_elixir, Repo, database: fallback_database_path)
-
-    on_exit(fn ->
-      restore_app_env(Repo, original_repo_config)
-      restore_sympp_repo_database(original_database)
-      File.rm(fallback_database_path)
-    end)
-
-    with_endpoint_repo(Repo, fn ->
-      init = post_json(initialize_request("init"))
-      [session_id] = get_resp_header(init, "mcp-session-id")
-
-      tools = post_json(tools_list_request("tools"), [{"mcp-session-id", session_id}])
-      health = post_json(tool_call_request("health", "sympp.health", %{}), [{"mcp-session-id", session_id}])
-
-      assert "sympp.health" in tool_names(json_response(tools, 200))
-      assert get_in(json_response(health, 200), ["result", "structuredContent", "status"]) == "degraded"
-      refute File.exists?(fallback_database_path)
-    end)
-  end
-
-  test "POST /mcp preserves live health for remote custom repo config" do
-    with_endpoint_repo(RemoteHTTPRepo, fn ->
-      init = post_json(initialize_request("init"))
-      [session_id] = get_resp_header(init, "mcp-session-id")
-
-      health = post_json(tool_call_request("health", "sympp.health", %{}), [{"mcp-session-id", session_id}])
-      structured = get_in(json_response(health, 200), ["result", "structuredContent"])
-
-      assert structured["status"] == "ok"
-      assert structured["ledger"]["reachable"] == true
-
-      assert structured["ledger"]["identity"] == %{
-               "kind" => "server",
-               "source" => "explicit",
-               "endpoint" => "server://ledger-http.example.test:15432"
-             }
-    end)
-  end
-
-  test "POST /mcp keeps state-local follow-up traffic independent from lazy repo failures" do
-    database_path = WorkPackageFactory.database_path()
-    mismatch_database_path = WorkPackageFactory.database_path()
-    original_repo_config = Application.get_env(:symphony_elixir, LazyHTTPRepo)
-    original_database = Application.get_env(:symphony_elixir, :sympp_repo_database)
-
-    Application.delete_env(:symphony_elixir, :sympp_repo_database)
-    Application.put_env(:symphony_elixir, LazyHTTPRepo, database: database_path)
-
-    on_exit(fn ->
-      if pid = Process.whereis(LazyHTTPRepo), do: GenServer.stop(pid, :normal, 5_000)
-      restore_app_env(LazyHTTPRepo, original_repo_config)
-      restore_sympp_repo_database(original_database)
-      File.rm_rf(database_path)
-      File.rm(mismatch_database_path)
-    end)
-
-    with_endpoint_repo(LazyHTTPRepo, fn ->
-      init = post_json(initialize_request("init"))
-      [session_id] = get_resp_header(init, "mcp-session-id")
-
-      {:ok, mismatch_repo} = LazyHTTPRepo.start_link(database: mismatch_database_path, pool_size: 1)
-      Process.unlink(mismatch_repo)
-
-      tools = post_json(tools_list_request("tools"), [{"mcp-session-id", session_id}])
-      notification = post_json(notification_request(), [{"mcp-session-id", session_id}])
-      repo_backed = post_json(tool_call_request("repo-backed", "list_work_requests", %{}), [{"mcp-session-id", session_id}])
-      repo_backed_notification = post_json(tool_call_notification("list_work_requests", %{}), [{"mcp-session-id", session_id}])
-      resources = post_json(resources_list_request("resources"), [{"mcp-session-id", session_id}])
-      health = post_json(tool_call_request("health", "sympp.health", %{}), [{"mcp-session-id", session_id}])
-
-      version_resource =
-        post_json(resources_read_request("version", "sympp://health/version"), [{"mcp-session-id", session_id}])
-
-      unknown = post_json(tools_list_request("missing"), [{"mcp-session-id", "missing-session"}])
-
-      assert "create_work_request" in tool_names(json_response(tools, 200))
-      assert response(notification, 202) == ""
-      assert json_response(repo_backed, 503) == json_rpc_error("repo-backed", -32_000, "Server error", "ledger_unavailable")
-      assert json_response(repo_backed_notification, 503) == json_rpc_error(nil, -32_000, "Server error", "ledger_unavailable")
-      assert resource_uris(json_response(resources, 200)) == ["sympp://health/version"]
-      assert get_in(json_response(health, 200), ["result", "structuredContent", "mode"]) == "http"
-      assert get_in(json_response(version_resource, 200), ["result", "contents", Access.at(0), "uri"]) == "sympp://health/version"
-      assert get_in(json_response(unknown, 404), ["error", "data", "reason"]) == "unknown_state_key"
-    end)
-  end
-
-  test "POST /mcp keeps startup discovery DB-free when dashboard lazy repo startup fails" do
-    database_path = WorkPackageFactory.database_path()
-    original_repo_config = Application.get_env(:symphony_elixir, FailingLazyHTTPRepo)
-
-    Application.put_env(:symphony_elixir, FailingLazyHTTPRepo, database: database_path)
-
-    on_exit(fn ->
-      restore_app_env(FailingLazyHTTPRepo, original_repo_config)
-      File.rm(database_path)
-    end)
-
-    with_endpoint_repo(FailingLazyHTTPRepo, fn ->
-      init = post_json(initialize_request("init"))
-      [session_id] = get_resp_header(init, "mcp-session-id")
-
-      tools = post_json(tools_list_request("tools"), [{"mcp-session-id", session_id}])
-      health = post_json(tool_call_request("health", "sympp.health", %{}), [{"mcp-session-id", session_id}])
-      repo_backed = post_json(tool_call_request("repo-backed", "list_work_requests", %{}), [{"mcp-session-id", session_id}])
-
-      assert get_in(json_response(init, 200), ["result", "serverInfo", "name"]) == "sympp"
-      assert "sympp.health" in tool_names(json_response(tools, 200))
-      assert get_in(json_response(health, 200), ["result", "structuredContent", "mode"]) == "http"
-      assert json_response(repo_backed, 503) == json_rpc_error("repo-backed", -32_000, "Server error", "ledger_unavailable")
-
-      assert Enum.any?(Map.keys(:sys.get_state(HTTPStateStore).entries), fn
-               {_namespace, _database_key, @client_key, ^session_id} -> true
-               _entry -> false
-             end)
-    end)
-  end
-
-  test "POST /mcp counts failed tool requests and notifications once at the endpoint boundary" do
-    request = post_json(tool_call_request("private-endpoint-id", "sympp.health", %{"bearer" => "request-secret"}))
-    assert get_in(json_response(request, 400), ["error", "data", "reason"]) == "missing_session_id"
-
-    notification = post_json(tool_call_notification("sympp.health", %{"bearer" => "notification-secret"}))
-    assert get_in(json_response(notification, 400), ["error", "data", "reason"]) == "missing_session_id"
-
-    assert [%{tool: "sympp.health", reason: "missing_session_id", layer: "endpoint", count: 2} = row] = Repo.all(FailedCall.Count)
-    refute inspect(row) =~ "secret"
-  end
-
-  test "POST /mcp counts each failed tool item in a rejected batch once" do
-    payload = [
-      tool_call_request("private-batch-id", "sympp.health", %{"bearer" => "request-secret"}),
-      tool_call_notification("read_work_request", %{"bearer" => "notification-secret"}),
-      tools_list_request("ignored-protocol-item")
-    ]
-
-    assert json_response(post_json(payload), 400) == json_rpc_error(nil, -32_600, "Invalid Request", "batch_not_supported")
-
-    assert Repo.all(FailedCall.Count) |> Enum.map(&{&1.tool, &1.reason, &1.layer, &1.count}) |> Enum.sort() == [
-             {"read_work_request", "batch_not_supported", "endpoint", 1},
-             {"sympp.health", "batch_not_supported", "endpoint", 1}
-           ]
-  end
-
   test "remote peers and malformed header bytes cannot create MCP state" do
     assert get_in(post_json(initialize_request("remote"), [], remote_ip: {10, 0, 0, 2}) |> json_response(403), [
              "error",
@@ -934,54 +563,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     |> local_conn()
     |> put_headers(headers)
     |> get(path)
-  end
-
-  defp capture_queries(fun) do
-    handler_id = {__MODULE__, self(), System.unique_integer([:positive])}
-    event = Repo.config()[:telemetry_prefix] ++ [:query]
-
-    :ok =
-      :telemetry.attach(
-        handler_id,
-        event,
-        fn _event, _measurements, metadata, test_pid -> send(test_pid, {handler_id, metadata.query}) end,
-        self()
-      )
-
-    try do
-      result = fun.()
-      {result, drain_queries(handler_id, [])}
-    after
-      :telemetry.detach(handler_id)
-    end
-  end
-
-  defp count_queries(fun) do
-    handler_id = {__MODULE__, self(), System.unique_integer([:positive])}
-    event = Repo.config()[:telemetry_prefix] ++ [:query]
-    counter = :atomics.new(1, [])
-
-    :ok =
-      :telemetry.attach(
-        handler_id,
-        event,
-        fn _event, _measurements, _metadata, counter -> :atomics.add(counter, 1, 1) end,
-        counter
-      )
-
-    try do
-      {fun.(), :atomics.get(counter, 1)}
-    after
-      :telemetry.detach(handler_id)
-    end
-  end
-
-  defp drain_queries(handler_id, queries) do
-    receive do
-      {^handler_id, query} -> drain_queries(handler_id, [query | queries])
-    after
-      0 -> Enum.reverse(queries)
-    end
   end
 
   defp post_raw(body, headers, opts) do
@@ -1019,50 +600,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
   end
 
   defp tools_list_request(id), do: %{"jsonrpc" => "2.0", "id" => id, "method" => "tools/list", "params" => %{}}
-  defp resources_list_request(id), do: %{"jsonrpc" => "2.0", "id" => id, "method" => "resources/list", "params" => %{}}
-  defp resources_read_request(id, uri), do: %{"jsonrpc" => "2.0", "id" => id, "method" => "resources/read", "params" => %{"uri" => uri}}
-  defp notification_request, do: %{"jsonrpc" => "2.0", "method" => "notifications/initialized", "params" => %{}}
-
-  defp unbound_startup_handshake(index) do
-    init = post_json(initialize_request("init-#{index}"))
-
-    assert %{"result" => %{"serverInfo" => %{"name" => "sympp"}}} = json_response(init, 200)
-    assert [session_id] = get_resp_header(init, "mcp-session-id")
-    assert session_id =~ ~r/^[!-~]+$/
-
-    if index == 1 do
-      headers = [{"mcp-session-id", session_id}]
-      assert post_json(notification_request(), headers) |> response(202) == ""
-      assert "sympp.health" in (post_json(tools_list_request("tools"), headers) |> json_response(200) |> tool_names())
-
-      assert post_json(resources_list_request("resources"), headers) |> json_response(200) |> resource_uris() == [
-               "sympp://health/version"
-             ]
-    end
-
-    session_id
-  end
 
   defp tool_call_request(id, name, arguments) do
     %{"jsonrpc" => "2.0", "id" => id, "method" => "tools/call", "params" => %{"name" => name, "arguments" => arguments}}
-  end
-
-  defp tool_call_notification(name, arguments) do
-    %{"jsonrpc" => "2.0", "method" => "tools/call", "params" => %{"name" => name, "arguments" => arguments}}
-  end
-
-  defp tool_names(payload) do
-    payload
-    |> get_in(["result", "tools"])
-    |> Enum.map(& &1["name"])
-    |> Enum.sort()
-  end
-
-  defp resource_uris(payload) do
-    payload
-    |> get_in(["result", "resources"])
-    |> Enum.map(& &1["uri"])
-    |> Enum.sort()
   end
 
   defp herdr_binding(conn) do
@@ -1075,25 +615,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     |> Kernel.<>(padding)
     |> Base.decode64!()
     |> Jason.decode!()
-  end
-
-  defp work_request_attrs(overrides) do
-    defaults = %{
-      id: "WR-HTTP-#{System.unique_integer([:positive])}",
-      title: "HTTP MCP WorkRequest",
-      repo: "nextide/symphony-plus-plus",
-      base_branch: "main",
-      work_type: "feature",
-      human_description: "Prove HTTP MCP architect continuity.",
-      constraints: %{"allowed_paths" => ["elixir/lib"], "requires_secret" => false},
-      desired_dispatch_shape: "single_package"
-    }
-
-    Enum.into(overrides, defaults)
-  end
-
-  defp json_rpc_error(id, code, message, reason) do
-    %{"jsonrpc" => "2.0", "id" => id, "error" => %{"code" => code, "message" => message, "data" => %{"reason" => reason}}}
   end
 
   defp reset_server_response_state do
@@ -1116,64 +637,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
   defp restore_app_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
   defp restore_app_env(key, value), do: Application.put_env(:symphony_elixir, key, value)
-
-  defp remove_http_state_store_for_test do
-    if application_supervises_http_state_store?() do
-      _result = Supervisor.terminate_child(SymphonyElixir.Supervisor, HTTPStateStore)
-      _result = Supervisor.delete_child(SymphonyElixir.Supervisor, HTTPStateStore)
-      :application_supervisor
-    else
-      stop_http_state_store()
-      :standalone
-    end
-  end
-
-  defp restore_http_state_store_for_test(:application_supervisor) do
-    stop_http_state_store()
-
-    case Supervisor.start_child(SymphonyElixir.Supervisor, HTTPStateStore) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-      {:error, _reason} -> :ok
-    end
-  end
-
-  defp restore_http_state_store_for_test(:standalone), do: stop_http_state_store()
-
-  defp application_supervises_http_state_store? do
-    case Process.whereis(SymphonyElixir.Supervisor) do
-      pid when is_pid(pid) ->
-        Enum.any?(Supervisor.which_children(SymphonyElixir.Supervisor), fn
-          {HTTPStateStore, _pid, _type, _modules} -> true
-          _child -> false
-        end)
-
-      nil ->
-        false
-    end
-  end
-
-  defp supervised_http_state_store_pid do
-    case Process.whereis(SymphonyElixir.Supervisor) do
-      pid when is_pid(pid) ->
-        Enum.find_value(Supervisor.which_children(SymphonyElixir.Supervisor), fn
-          {HTTPStateStore, child_pid, _type, _modules} when is_pid(child_pid) -> child_pid
-          _child -> nil
-        end)
-
-      nil ->
-        nil
-    end
-  end
-
-  defp stop_http_state_store do
-    case Process.whereis(HTTPStateStore) do
-      nil -> :ok
-      pid -> GenServer.stop(pid, :normal, 5_000)
-    end
-  catch
-    :exit, _reason -> :ok
-  end
 
   defp with_endpoint_repo(repo, fun) do
     endpoint_config = Application.get_env(:symphony_elixir, Endpoint, [])

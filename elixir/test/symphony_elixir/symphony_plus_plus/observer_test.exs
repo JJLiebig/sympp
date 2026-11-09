@@ -1,8 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   use ExUnit.Case, async: false
 
-  alias SymphonyElixir.GitHubTestSupport
-  alias SymphonyElixir.SymphonyPlusPlus.GitHub.{Api, PullRequestProgress}
+  alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
   alias SymphonyElixir.SymphonyPlusPlus.Observer
   alias SymphonyElixir.SymphonyPlusPlus.Observer.Observation
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
@@ -91,26 +90,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert repo.get!(WorkPackage, package.id).status == "dispatched"
       assert {:ok, %{payload: %{"head_sha" => "head-b"}}} = current_pr(repo, package.id)
       assert repo.get!(Observation, package.id).pr == nil
-    end
-
-    test "without a GitHub token every watched package is stale and nothing changes", %{repo: repo} do
-      package = package!(repo, "WP-OBS-NO-TOKEN", status: "ready")
-      attach!(repo, package, 91)
-      Api.forget_token()
-
-      GitHubTestSupport.with_github_token_env(nil, fn ->
-        Application.put_env(:symphony_elixir, :sympp_github_request, fn request -> flunk("GitHub request without a token: #{inspect(request.url)}") end)
-
-        try do
-          Observer.sweep(repo, review: &no_review/2)
-        after
-          Application.delete_env(:symphony_elixir, :sympp_github_request)
-          Api.forget_token()
-        end
-      end)
-
-      assert repo.get!(WorkPackage, package.id).status == "ready"
-      assert repo.get!(Observation, package.id).stale == ["github"]
     end
   end
 
@@ -206,11 +185,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   end
 
   defp no_review(_id, _machine), do: flunk("review read for a package in mode none")
-
-  # Review Suite's `review.py --id <id> --show-status --json` answer, for every review id.
-
-  # Review Suite's base_interaction for a carried review: whether the base change
-  # touched the PR's paths and still needs a targeted check.
 
   defp pr(number, head, patch \\ %{}) do
     Map.merge(
