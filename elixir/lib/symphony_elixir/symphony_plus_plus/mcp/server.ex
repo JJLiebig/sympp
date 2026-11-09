@@ -17,7 +17,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       local_operator_tool_arguments: 2,
       optional_list_argument: 2,
       optional_object_argument: 2,
-      optional_string_argument: 2,
       optional_string_argument: 3,
       required_argument: 2,
       solo_tool_arguments: 2
@@ -49,7 +48,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
@@ -459,30 +457,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp run("summarize_failed_mcp_calls", _arguments, _terminal, %__MODULE__{config: config}),
     do: {:ok, ToolResult.tool_result(LocalTrustedTools.failed_call_summary(config))}
 
-  defp run("record_work_request_operator_decision", arguments, terminal, %__MODULE__{config: config}) do
-    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, decision} <- required_argument(arguments, "decision"),
-         {:ok, rationale} <- required_argument(arguments, "rationale"),
-         {:ok, scope_impact} <- required_argument(arguments, "scope_impact"),
-         {:ok, created_by} <- optional_string_argument(arguments, "created_by", terminal.display_address),
-         {:ok, source_id} <- optional_string_argument(arguments, "source_id"),
-         {:ok, work_request} <- WorkRequestService.get(config.repo, work_request_id),
-         {:ok, decision_record} <-
-           WorkRequestService.record_decision(config.repo, work_request.id, operator_decision_attrs(decision, rationale, scope_impact, created_by, source_id)) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
-         "decision_log_entry" => WorkRequestPayloads.decision_log_entry(decision_record),
-         "provenance" => operator_note_provenance(created_by, source_id)
-       })}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "record_work_request_operator_decision", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("record_work_request_operator_decision")
-      {:error, :work_request_archived} -> tool_error(:work_request_archived, "record_work_request_operator_decision")
-      {:error, _reason} -> service_error("record_work_request_operator_decision")
-    end
-  end
-
   defp tool_arguments(name, params) when name in @bootstrap_tools, do: bootstrap_tool_arguments(params, name)
   defp tool_arguments(name, params) when name in @local_operator_tools, do: local_operator_tool_arguments(params, name)
   defp tool_arguments(name, params), do: architect_tool_arguments(params, name)
@@ -590,25 +564,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp create_work_request_error(reason),
     do: {:error, -32_602, "Invalid params", %{"tool" => "create_work_request", "reason" => reason_text(reason)}}
-
-  defp operator_decision_attrs(decision, rationale, scope_impact, created_by, source_id) do
-    %{
-      "source_type" => "operator",
-      "decision" => Redactor.redact_text(decision),
-      "rationale" => Redactor.redact_text(rationale),
-      "scope_impact" => Redactor.redact_text(scope_impact),
-      "created_by" => Redactor.redact_text(created_by)
-    }
-    |> optional_put("source_id", Redactor.redact_text(source_id))
-  end
-
-  defp operator_note_provenance(created_by, source_id) do
-    %{"source_type" => "operator", "created_by" => Redactor.redact_text(created_by)}
-    |> optional_put("source_id", Redactor.redact_text(source_id))
-  end
-
-  defp optional_put(attrs, _key, nil), do: attrs
-  defp optional_put(attrs, key, value), do: Map.put(attrs, key, value)
 
   defp prepare_repository(repo, resource) do
     case Repository.ensure_migrated(repo) do

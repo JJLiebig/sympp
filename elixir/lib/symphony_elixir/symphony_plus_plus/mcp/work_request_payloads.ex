@@ -378,7 +378,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
       "inserted_at" => timestamp(decision.inserted_at),
       "updated_at" => timestamp(decision.updated_at)
     }
+    |> Map.merge(decision_review(decision))
   end
+
+  # Only flagged decisions carry the operator's review.
+  defp decision_review(%DecisionLogEntry{flagged: true} = decision) do
+    %{
+      "flagged" => true,
+      "review_state" => decision.review_state,
+      "feedback" => Redactor.redact_text(decision.feedback),
+      "undelivered_reason" => decision.undelivered_reason
+    }
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
+  defp decision_review(%DecisionLogEntry{}), do: %{}
 
   @spec work_package(WorkPackage.t()) :: map()
   def work_package(%WorkPackage{} = work_package) do

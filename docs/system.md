@@ -72,6 +72,14 @@ decision in the same step. An ask on a package is withdrawn when the package
 ends; archiving or completing the WorkRequest withdraws all of its open asks.
 Asks never block planning, dispatch or a phase.
 
+A chief or architect that makes an in-scope product call itself records it with
+`record_decision(flag: true)`; any Herdr terminal may. The decision starts
+`recorded` and waits on the board. The operator acknowledges it or sends
+feedback over HTTP, and the factory types `Decision feedback: <text>` into the
+recording terminal through the same delivery as answers. Feedback that can't be
+typed stays on the decision, marked undelivered with its reason, until the
+operator dismisses the marker.
+
 A declared review requirement identifies a provider and optional arguments,
 such as `review-suite` with its selected mode. It can also name another plugin
 or a human process. Results remain with the provider and worker handoff;

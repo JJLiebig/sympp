@@ -16,6 +16,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixirWeb.Endpoint
   alias SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions
@@ -550,6 +551,54 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     end
   end
 
+  @doc "Operator acknowledges a flagged decision: recorded -> acknowledged."
+  @spec operator_ack_decision(Conn.t(), map()) :: Conn.t()
+  def operator_ack_decision(conn, params), do: send_local_operator_response(conn, :decision_review, Target.new(:decision), :operator_ack_decision, &ack_decision_response(&1, conn, params))
+
+  @spec herdr_ack_decision(Conn.t(), map()) :: Conn.t()
+  def herdr_ack_decision(conn, params), do: send_native_operator_response(conn, :decision_review, Target.new(:decision), :operator_ack_decision, &ack_decision_response(&1, conn, params))
+
+  @doc "Operator feedback on a flagged decision: recorded -> feedback, typed into the recording terminal."
+  @spec operator_feedback_decision(Conn.t(), map()) :: Conn.t()
+  def operator_feedback_decision(conn, params),
+    do: send_local_operator_response(conn, :decision_review, Target.new(:decision), :operator_feedback_decision, &feedback_decision_response(&1, conn, params))
+
+  @spec herdr_feedback_decision(Conn.t(), map()) :: Conn.t()
+  def herdr_feedback_decision(conn, params),
+    do: send_native_operator_response(conn, :decision_review, Target.new(:decision), :operator_feedback_decision, &feedback_decision_response(&1, conn, params))
+
+  @doc "Clears the undelivered marker on decision feedback; the feedback text stays."
+  @spec operator_dismiss_decision(Conn.t(), map()) :: Conn.t()
+  def operator_dismiss_decision(conn, params),
+    do: send_local_operator_response(conn, :decision_review, Target.new(:decision), :operator_dismiss_decision, &dismiss_decision_response(&1, conn, params))
+
+  @spec herdr_dismiss_decision(Conn.t(), map()) :: Conn.t()
+  def herdr_dismiss_decision(conn, params),
+    do: send_native_operator_response(conn, :decision_review, Target.new(:decision), :operator_dismiss_decision, &dismiss_decision_response(&1, conn, params))
+
+  defp ack_decision_response(repo, conn, %{"decision_id" => decision_id}) do
+    with {:ok, decision} <- DecisionFeedback.ack(repo, decision_id),
+         do: json(conn, decision_review_payload(decision, %{}))
+  end
+
+  # The feedback is stored, then typed into the recording terminal without
+  # being submitted; `delivery` says whether that reached it.
+  defp feedback_decision_response(repo, conn, %{"decision_id" => decision_id} = params) do
+    with {:ok, decision, delivery} <- DecisionFeedback.feedback(repo, decision_id, params["text"]),
+         do: json(conn, decision_review_payload(decision, %{delivery: delivery}))
+  end
+
+  defp dismiss_decision_response(repo, conn, %{"decision_id" => decision_id}) do
+    with {:ok, decision} <- DecisionFeedback.dismiss(repo, decision_id),
+         do: json(conn, decision_review_payload(decision, %{}))
+  end
+
+  defp decision_review_payload(decision, extra) do
+    %{decision_id: decision.id, work_request_id: decision.work_request_id, review_state: decision.review_state}
+    |> Map.merge(extra)
+    |> mutation_success_payload(%{work_request_id: decision.work_request_id})
+  end
+
   defp send_local_operator_response(conn, action, %Target{} = target, tool, fun)
        when is_atom(action) and is_atom(tool) and is_function(fun, 1) do
     if OfflineSandbox.enabled?() and tool == :operator_sync_github_prs do
@@ -732,6 +781,14 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp error_response(conn, :invalid_answer_choice), do: error_response(conn, 422, "invalid_answer_choice", "Answer choice is invalid")
   defp error_response(conn, :invalid_archive_after_days), do: error_response(conn, 422, "invalid_archive_after_days", "Archive cutoff is invalid")
   defp error_response(conn, :missing_answer), do: error_response(conn, 422, "missing_answer", "Answer is required")
+  defp error_response(conn, :missing_feedback), do: error_response(conn, 422, "missing_feedback", "Feedback text is required")
+
+  defp error_response(conn, {:decision_transition_refused, state, next_action}) do
+    conn
+    |> put_status(409)
+    |> json(%{error: %{code: "decision_transition_refused", message: "This decision is #{state}", state: state, next_action: next_action}})
+  end
+
   defp error_response(conn, :not_completed), do: error_response(conn, 422, "not_completed", "Only a done or unresolved WorkRequest can be archived")
 
   defp error_response(conn, :work_request_archived) do

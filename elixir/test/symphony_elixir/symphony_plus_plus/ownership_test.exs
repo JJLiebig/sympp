@@ -5,6 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
 
   alias SymphonyElixir.SymphonyPlusPlus.HerdrCore
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
 
   setup %{repo: repo} do
     work_request = create_work_request!(repo, %{"title" => "Ownership"})
@@ -139,7 +140,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
     assert error_reason(set_report(repo, "t5", work_request.id, "Ghost")) == "terminal_not_live"
   end
 
-  test "decisions stay open to any Herdr terminal on an owned WorkRequest", %{repo: repo, work_request: work_request} do
+  test "any Herdr terminal flags a decision on an owned WorkRequest, attributed to it", %{repo: repo, work_request: work_request} do
     own!(repo, work_request.id, "t1")
 
     response =
@@ -147,12 +148,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
         repo,
         "t7",
         "record_decision",
-        %{"work_request_id" => work_request.id, "decision" => "Ship it", "rationale" => "Product call", "scope_impact" => "none", "source_type" => "architect"},
+        %{"work_request_id" => work_request.id, "decision" => "Ship it", "rationale" => "Product call", "scope_impact" => "none", "source_type" => "architect", "flag" => true},
         labels: %{"sympp.role" => "chief", "sympp.domain" => "Kraken"}
       )
 
-    assert %{"result" => _} = response
+    assert %{"id" => id, "flagged" => true, "review_state" => "recorded", "created_by" => "testbox/t7"} =
+             get_in(response, ["result", "structuredContent", "decision_log_entry"])
+
+    # The recording terminal is stored by key, so feedback can be typed into it.
+    assert %DecisionLogEntry{recorded_by_terminal: key, recorded_by_address: "testbox/t7"} = repo.get!(DecisionLogEntry, id)
+    assert key == test_terminal("t7").key
     assert [%WorkedOn{display_address: "testbox/t1"}] = live_owner_rows(repo, work_request.id)
+
+    unflagged = mcp_tool(repo, "t7", "record_decision", %{"work_request_id" => work_request.id, "decision" => "Log it", "rationale" => "Note", "scope_impact" => "none", "source_type" => "architect"})
+    refute Map.has_key?(get_in(unflagged, ["result", "structuredContent", "decision_log_entry"]), "review_state")
   end
 
   test "starting a write takes ownership even when the write itself fails validation", %{repo: repo, work_request: work_request} do

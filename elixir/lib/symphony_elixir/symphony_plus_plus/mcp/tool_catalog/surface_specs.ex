@@ -66,10 +66,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
     }
   end
 
-  defp local_operator_tool_description("record_work_request_operator_decision") do
-    "Record a redacted local-operator decision on a WorkRequest by id. Any Herdr terminal may record one; ownership is not required."
-  end
-
   defp local_operator_tool_description("summarize_failed_mcp_calls") do
     "Summarize process-local redacted failed MCP call envelopes without exposing raw requests or durable history. Failures are counted only while the operator setting capture_failed_mcp_calls is on; capture_enabled reports it."
   end
@@ -117,7 +113,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
       "Resolve an open ask you asked, or one on a WorkRequest you own: to: answered records an answer you got in conversation; to: withdrawn takes it back. decision records a decision in the same step."
 
   defp architect_tool_description("record_decision"),
-    do: "Record a durable decision log entry on a scoped WorkRequest. source_type must be one of: #{Enum.join(DecisionLogEntry.source_types(), ", ")}."
+    do:
+      "Record a durable decision on a WorkRequest; any Herdr terminal may, without owning it. source_type must be one of: #{Enum.join(DecisionLogEntry.source_types(), ", ")}. flag: true asks the operator to review an in-scope product call; they acknowledge it or send feedback."
 
   defp architect_tool_description("edit_plan") do
     "Edit the plan of a WorkRequest you own in one atomic call: add_package (contract, optional group path such as \"Backend / Billing\", depends_on), update_package (expected_revision and a patch), set_dependency (from depends on to, optional candidate_head_sha) and remove_dependency. Any failing op rolls back the whole edit; the error names the op index, the state and the next action. Returns each op's result and the plan after the edit."
