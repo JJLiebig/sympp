@@ -45,6 +45,7 @@ export default class Preview extends Lens {
     if (CASE.pkg) this.pkgSel = CASE.pkg;
     if (CASE.review) this.review = CASE.review;
     if (CASE.expanded) this.expanded = new Set(CASE.expanded);
+    if (CASE.openTopics) this.openTopics = new Set(CASE.openTopics);
     if (CASE.feedback) for (const key of CASE.feedback) this.feedback[key] = { input: this.input("What should change, and why?", true), open: true, pending: false, error: null };
     if (CASE.answer) for (const key of CASE.answer) this.answers[key] = { input: this.input("Optional note", true), open: true, choice: CASE.choice ?? null, pending: false, error: null };
   }

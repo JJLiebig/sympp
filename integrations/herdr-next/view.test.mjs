@@ -45,6 +45,19 @@ test('the factory lists every ask with its answer in place, the decisions to rev
   assert.ok(at('decision-dec-share') < at('decision-dec-order') && at('decision-dec-order') < at('decision-dec-toast'), 'oldest decision first');
 });
 
+test("a factory topic opens in place to its tasks, each a compact line, while the row itself still opens the topic", skip, async (t) => {
+  const closed = await render(t, { props: { role: 'panel' }, width: 1400, board: 'busy' });
+  assert.ok(closed.has('topic-toggle-t-herdr') && closed.has('topic-toggle-t-tools') && !closed.has('topic-toggle-t-live'), 'a topic without tasks has no chevron');
+  assert.equal(closed.out.includes(':id[Str("ftask-'), false, 'closed until opened');
+  const open = await render(t, { props: { role: 'panel' }, width: 1400, board: 'busy', openTopics: ['t-herdr'] });
+  for (const id of ['ftask-wr-pr', 'fneeds-wr-pr', 'fstrip-wr-restore', 'ftask-wr-restore', 'phase-f-wr-recap', 'phase-f-wr-docs'])
+    assert.ok(open.has(id), id);
+  assert.equal(open.has('ftask-wr-cross') || open.has('ftask-wr-badges') || open.has('ftask-wr-old'), false, "other topics' work and settled work stay out");
+  assert.equal(open.has('phase-f-wr-restore'), false, 'an active task names no phase');
+  const at = (id) => open.out.indexOf(`:id[Str("${id}")]`);
+  assert.ok(at('topic-t-herdr') < at('ftask-wr-pr') && at('ftask-wr-pr') < at('ftask-wr-restore') && at('ftask-wr-restore') < at('topic-t-tools'), 'asking tasks first, under their topic');
+});
+
 test('a topic puts each ask first; tasks carry their name, phase and strip, with their decisions, then the small work', skip, async (t) => {
   const view = await render(t, { props: { role: 'panel' }, width: 1400, board: 'busy', path: { topic: 't-herdr' } });
   const at = (id) => view.out.indexOf(`:id[Str("${id}")]`);
