@@ -3,6 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
+  alias SymphonyElixir.SymphonyPlusPlus.Asks.Ask
   alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
@@ -20,7 +21,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
@@ -32,7 +32,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
@@ -136,9 +135,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
            work_packages = Enum.filter(all_work_packages, &MapSet.member?(visible_ids, &1.id)),
            {:ok, repo_identity_catalog} <-
              operator_signal_repo_identity_catalog(repo, opts, work_packages),
-           {:ok, contexts} <- card_contexts_for_packages(repo, work_packages, repo_identity_catalog, opts),
-           {:ok, active_blocking_edges} <-
-             operator_signal_blocking_edges(repo, contexts, all_work_packages) do
+           {:ok, contexts} <- card_contexts_for_packages(repo, work_packages, repo_identity_catalog, opts) do
+        active_blocking_edges = active_blocking_edges_from_card_contexts(contexts)
+
         signals =
           contexts
           |> Enum.map(&compact_operator_work_package_signal(&1.card))
@@ -147,10 +146,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
         {:ok, %{work_packages: signals, active_blocking_edges: active_blocking_edges}}
       end
     end)
-  end
-
-  defp operator_signal_blocking_edges(repo, contexts, all_work_packages) do
-    active_blocking_edges_from_card_contexts(repo, contexts, all_work_packages)
   end
 
   defp operator_signal_work_packages(repo, opts) do
@@ -430,7 +425,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
            lineage: OperationalProjection.package_lineage(repo, work_package_id),
            summary: summary,
            plan: Enum.map(state.plan_nodes, &plan_node/1),
-           findings: Enum.map(state.findings, &finding/1),
            progress: Enum.map(state.progress_events, &progress_event/1),
            artifacts: Enum.map(state.artifacts, &artifact/1),
            blockers: blockers,
@@ -460,9 +454,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   defp card_context(repo, %WorkPackage{} = work_package, lineage, repo_identity_catalog) do
     with {:ok, status_summary} <- PlanningRepository.get_status_summary(repo, work_package.id),
          {:ok, progress_events} <- PlanningRepository.list_progress_events(repo, work_package.id),
-         {:ok, readiness_collections} <- readiness_collections(repo, work_package),
+         {:ok, artifacts} <- readiness_artifacts(repo, work_package),
          {:ok, agent_runs} <- AgentRunRepository.list_for_work_package(repo, work_package.id) do
-      %{artifacts: artifacts, findings: findings} = readiness_collections
       activity_context = WorkPackageActivity.project_context(agent_runs, progress_events, work_package)
 
       {:ok,
@@ -471,8 +464,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
          progress_events: progress_events,
          artifacts: artifacts,
          artifact_count: status_summary.artifact_count,
-         findings: findings,
-         finding_count: status_summary.finding_count,
          agent_runs: agent_runs,
          lineage: lineage,
          worker_signal: activity_context.worker_signal
@@ -484,7 +475,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     plan_nodes = context.plan_nodes
     progress_events = context.progress_events
     artifacts = context.artifacts
-    findings = context.findings
     agent_runs = context.agent_runs
     lineage = context.lineage
     blockers = OperationalProjection.blockers(progress_events)
@@ -492,7 +482,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     metadata = MetadataProjection.metadata(progress_events)
 
     readiness_context =
-      OperationalProjection.readiness_context(repo, work_package, plan_nodes, progress_events, artifacts, findings)
+      OperationalProjection.readiness_context(repo, work_package, plan_nodes, progress_events, artifacts)
 
     operational_state =
       OperationalProjection.work_package_operational_state(work_package, %{
@@ -528,7 +518,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
           active_blocker_count: Enum.count(blockers, & &1.active),
           active_blockers: active_blockers(blockers),
           artifact_count: context.artifact_count,
-          finding_count: context.finding_count,
           plan: OperationalProjection.plan_summary(plan_nodes),
           metadata: metadata,
           lineage: lineage,
@@ -539,13 +528,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
         }
         |> put_repo_identity_fields(repo_identity_catalog, work_package.repo)
     }
-  end
-
-  defp readiness_collections(repo, %WorkPackage{} = work_package) do
-    with {:ok, artifacts} <- readiness_artifacts(repo, work_package),
-         {:ok, findings} <- readiness_findings(repo, work_package) do
-      {:ok, %{artifacts: artifacts, findings: findings}}
-    end
   end
 
   defp readiness_artifacts(repo, %WorkPackage{status: status} = work_package) when status in @ready_statuses do
@@ -563,12 +545,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   defp artifact_backed_readiness_gate_required?(%WorkPackage{} = work_package) do
     merge_required?(work_package)
   end
-
-  defp readiness_findings(repo, %WorkPackage{status: status, id: work_package_id}) when status in @ready_statuses do
-    PlanningRepository.list_findings(repo, work_package_id)
-  end
-
-  defp readiness_findings(_repo, %WorkPackage{}), do: {:ok, []}
 
   @spec work_package_detail(WorkPackage.t()) :: map()
   def work_package_detail(%WorkPackage{} = work_package) do
@@ -629,7 +605,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
         total_count: length(source_work_packages)
       }
 
-      maybe_put_active_blocking_edges(repo, board, contexts, opts)
+      maybe_put_active_blocking_edges(board, contexts, opts)
     end
   end
 
@@ -748,18 +724,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     |> Enum.max_by(&timestamp_sort_value/1, fn -> nil end)
   end
 
-  defp maybe_put_active_blocking_edges(repo, board, contexts, opts) do
-    if Keyword.get(opts, :active_blocking_edges?, false) do
-      put_active_blocking_edges(repo, board, contexts)
-    else
-      {:ok, board}
-    end
-  end
-
-  defp put_active_blocking_edges(repo, board, contexts) do
-    with {:ok, active_blocking_edges} <- active_blocking_edges_from_card_contexts(repo, contexts) do
-      {:ok, Map.put(board, :active_blocking_edges, active_blocking_edges)}
-    end
+  defp maybe_put_active_blocking_edges(board, contexts, opts) do
+    if Keyword.get(opts, :active_blocking_edges?, false),
+      do: {:ok, Map.put(board, :active_blocking_edges, active_blocking_edges_from_card_contexts(contexts))},
+      else: {:ok, board}
   end
 
   defp build_phase_board(repo, phase_id, filters) do
@@ -858,94 +826,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
   defp card_context_projection(context, %WorkPackage{} = work_package) do
     artifacts = context.artifacts
-    findings = context.findings
 
     context
     |> Map.put(:artifact_count, length(artifacts))
-    |> Map.put(:finding_count, length(findings))
     |> Map.put(:artifacts, if(work_package.status in @ready_statuses or artifact_backed_readiness_gate_required?(work_package), do: artifacts, else: []))
-    |> Map.put(:findings, if(work_package.status in @ready_statuses, do: findings, else: []))
   end
 
-  defp active_blocking_edges_from_card_contexts(_repo, []), do: {:ok, []}
-
-  defp active_blocking_edges_from_card_contexts(repo, contexts) do
-    with {:ok, work_packages} <- WorkPackageRepository.list(repo) do
-      active_blocking_edges_from_card_contexts(repo, contexts, work_packages)
-    end
+  defp active_blocking_edges_from_card_contexts(contexts) do
+    contexts
+    |> Enum.flat_map(fn %{work_package: work_package, blockers: blockers} ->
+      blockers
+      |> Enum.filter(& &1.active)
+      |> Enum.map(&active_blocking_edge(&1, work_package))
+    end)
+    |> Enum.uniq_by(& &1.id)
+    |> sort_active_blocking_edges()
   end
-
-  defp active_blocking_edges_from_card_contexts(_repo, [], _all_work_packages), do: {:ok, []}
-
-  defp active_blocking_edges_from_card_contexts(repo, contexts, all_work_packages) do
-    context_edges =
-      contexts
-      |> Enum.flat_map(fn %{work_package: work_package, blockers: blockers} ->
-        blockers
-        |> Enum.filter(& &1.active)
-        |> Enum.map(&active_blocking_edge(&1, work_package))
-      end)
-
-    with {:ok, targeted_edges} <- targeted_active_blocking_edges(repo, contexts, all_work_packages) do
-      edges =
-        (context_edges ++ targeted_edges)
-        |> Enum.uniq_by(& &1.id)
-        |> sort_active_blocking_edges()
-
-      {:ok, edges}
-    end
-  end
-
-  defp targeted_active_blocking_edges(repo, contexts, all_work_packages) do
-    target_ids = Enum.map(contexts, & &1.work_package.id)
-
-    with {:ok, events} <-
-           PlanningRepository.list_progress_events_for_blockers_targeting_work_packages(
-             repo,
-             target_ids
-           ) do
-      targeted_active_blocking_edges(repo, events, MapSet.new(target_ids), all_work_packages)
-    end
-  end
-
-  defp targeted_active_blocking_edges(_repo, [], _target_ids, _all_work_packages), do: {:ok, []}
-
-  defp targeted_active_blocking_edges(_repo, events, target_ids, all_work_packages) do
-    work_packages_by_id = Map.new(all_work_packages, &{&1.id, &1})
-
-    edges =
-      events
-      |> Enum.group_by(& &1.work_package_id)
-      |> Enum.flat_map(&targeted_edges_for_owner(&1, work_packages_by_id, target_ids))
-
-    {:ok, edges}
-  end
-
-  defp targeted_edges_for_owner({owner_id, events}, work_packages_by_id, target_ids) do
-    case Map.get(work_packages_by_id, owner_id) do
-      %WorkPackage{} = owner ->
-        events
-        |> BlockerProjection.blockers()
-        |> Enum.filter(&targeted_active_blocker?(&1, target_ids))
-        |> Enum.map(&active_blocking_edge(&1, owner))
-
-      nil ->
-        []
-    end
-  end
-
-  defp targeted_active_blocker?(%{active: true, blocked_item: %{kind: "work_package", id: target_id}}, target_ids),
-    do: MapSet.member?(target_ids, target_id)
-
-  defp targeted_active_blocker?(_blocker, _target_ids), do: false
 
   defp active_blocking_edge(blocker, %WorkPackage{} = work_package) do
-    fallback_from = %{kind: "work_package", id: work_package.id}
-    from = blocker.blocked_by || fallback_from
-    to = blocker.blocked_item || %{kind: "work_package", id: work_package.id}
+    endpoint = %{kind: "work_package", id: work_package.id}
 
     blocker
-    |> build_active_blocking_edge(work_package, from, to)
+    |> build_active_blocking_edge(work_package, endpoint, endpoint)
     |> Map.put(:work_request_id, work_package.work_request_id)
     |> Map.put(:work_package_id, work_package.id)
   end
@@ -1108,7 +1010,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
     %{
       artifact_count: length(state.artifacts),
-      finding_count: length(state.findings),
       progress_event_count: length(state.progress_events),
       active_blocker_count: Enum.count(blockers, & &1.active),
       agent_run_count: length(agent_runs),
@@ -1130,7 +1031,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   @doc false
   @spec work_request_payload(
           WorkRequest.t(),
-          [ClarificationQuestion.t()],
+          [Ask.t()],
           [WorkPackage.t()],
           map(),
           map(),
@@ -1138,7 +1039,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
         ) :: map()
   def work_request_payload(
         %WorkRequest{} = work_request,
-        questions,
+        asks,
         work_packages,
         work_package_contexts,
         repo_identity_catalog,
@@ -1146,7 +1047,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       ) do
     WorkRequestCards.work_request_payload(
       work_request,
-      questions,
+      asks,
       work_packages,
       work_package_contexts,
       repo_identity_catalog,
@@ -1155,23 +1056,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   end
 
   @doc false
-  @spec clarification_question(ClarificationQuestion.t()) :: map()
-  def clarification_question(%ClarificationQuestion{} = question) do
+  @spec ask(Ask.t()) :: map()
+  def ask(%Ask{} = ask) do
     %{
-      id: question.id,
-      work_request_id: question.work_request_id,
-      sequence: question.sequence,
-      category: redacted_text(question.category),
-      question: redacted_text(question.question),
-      why_needed: redacted_text(question.why_needed),
-      decision_prompt: redacted_json(question.decision_prompt),
-      status: question.status,
-      asked_by_agent_run_id: question.asked_by_agent_run_id,
-      answer: redacted_text(question.answer),
-      answered_by: redacted_text(question.answered_by),
-      answered_at: timestamp(question.answered_at),
-      inserted_at: timestamp(question.inserted_at),
-      updated_at: timestamp(question.updated_at)
+      id: ask.id,
+      work_request_id: ask.work_request_id,
+      work_package_id: ask.work_package_id,
+      question: redacted_text(ask.question),
+      decision_prompt: redacted_json(ask.decision_prompt),
+      state: ask.state,
+      asked_by: ask.asked_by_address,
+      asked_at: timestamp(ask.inserted_at),
+      answer: redacted_text(ask.answer),
+      answered_by: redacted_text(ask.answered_by),
+      resolved_at: timestamp(ask.resolved_at),
+      delivered_at: timestamp(ask.delivered_at)
     }
   end
 
@@ -1320,7 +1219,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     progress_events_by_id = grouped_progress_events(repo, work_package_ids)
     plan_nodes_by_id = grouped_plan_nodes(repo, work_package_ids)
     artifacts_by_id = grouped_artifacts(repo, work_package_ids)
-    findings_by_id = grouped_findings(repo, work_package_ids)
     agent_runs_by_id = grouped_agent_runs(repo, work_package_ids)
     lineages_by_id = OperationalProjection.package_lineages(repo, work_packages)
 
@@ -1334,7 +1232,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       progress_events = Map.get(progress_events_by_id, work_package.id, [])
       plan_nodes = Map.get(plan_nodes_by_id, work_package.id, [])
       artifacts = Map.get(artifacts_by_id, work_package.id, [])
-      findings = Map.get(findings_by_id, work_package.id, [])
       agent_runs = Map.get(agent_runs_by_id, work_package.id, [])
       activity_context = WorkPackageActivity.project_context(agent_runs, progress_events, work_package)
 
@@ -1348,8 +1245,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
           work_package,
           plan_nodes,
           progress_events,
-          artifacts,
-          findings
+          artifacts
         )
 
       lineage = Map.get(lineages_by_id, work_package.id, OperationalProjection.empty_lineage(work_package.id))
@@ -1372,7 +1268,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
          plan_nodes: plan_nodes,
          progress_events: progress_events,
          artifacts: artifacts,
-         findings: findings,
          agent_runs: agent_runs,
          lineage: lineage,
          delivery_successor_ids: Map.get(delivery_successors_by_id, work_package.id, []),
@@ -1418,17 +1313,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     end)
   end
 
-  defp grouped_findings(repo, work_package_ids) do
-    chunked_records_by_work_package_id(work_package_ids, fn work_package_id_chunk ->
-      repo.all(
-        from(finding in Finding,
-          where: finding.work_package_id in ^work_package_id_chunk,
-          order_by: [asc: finding.work_package_id, asc: finding.sequence, asc: finding.inserted_at]
-        )
-      )
-    end)
-  end
-
   defp grouped_agent_runs(repo, work_package_ids) do
     chunked_records_by_work_package_id(work_package_ids, fn work_package_id_chunk ->
       repo.all(
@@ -1456,12 +1340,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   defp records_by_work_package_id(records), do: Enum.group_by(records, & &1.work_package_id)
 
   @doc false
-  @spec work_request_summary([ClarificationQuestion.t()], [DecisionLogEntry.t()], [WorkPackage.t()]) :: map()
-  def work_request_summary(questions, decisions, work_packages) do
+  @spec work_request_summary([Ask.t()], [DecisionLogEntry.t()], [WorkPackage.t()]) :: map()
+  def work_request_summary(asks, decisions, work_packages) do
     %{
-      open_question_count: Enum.count(questions, &(&1.status == "open")),
-      answered_question_count: Enum.count(questions, &(&1.status == "answered")),
-      closed_question_count: Enum.count(questions, &(&1.status == "closed")),
+      open_ask_count: Enum.count(asks, &(&1.state == "open")),
       decision_count: length(decisions),
       work_package_count: length(work_packages),
       planned_work_package_count: Enum.count(work_packages, &(&1.status == "planned")),
@@ -1471,12 +1353,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   end
 
   @doc false
-  @spec work_request_board_summary([ClarificationQuestion.t()], [WorkPackage.t()]) :: map()
-  def work_request_board_summary(questions, work_packages) do
+  @spec work_request_board_summary([Ask.t()], [WorkPackage.t()]) :: map()
+  def work_request_board_summary(asks, work_packages) do
     %{
-      open_question_count: Enum.count(questions, &(&1.status == "open")),
-      answered_question_count: Enum.count(questions, &(&1.status == "answered")),
-      closed_question_count: Enum.count(questions, &(&1.status == "closed")),
+      open_ask_count: Enum.count(asks, &(&1.state == "open")),
       work_package_count: length(work_packages),
       planned_work_package_count: Enum.count(work_packages, &(&1.status == "planned")),
       dispatched_work_package_count: Enum.count(work_packages, &(not is_nil(&1.dispatched_at))),
@@ -1493,17 +1373,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       position: plan_node.position,
       created_at: timestamp(plan_node.created_at),
       updated_at: timestamp(plan_node.updated_at)
-    }
-  end
-
-  defp finding(%Finding{} = finding) do
-    %{
-      id: finding.id,
-      title: redacted_text(finding.title),
-      body: redacted_text(finding.body),
-      severity: finding.severity,
-      sequence: finding.sequence,
-      created_at: timestamp(finding.created_at)
     }
   end
 

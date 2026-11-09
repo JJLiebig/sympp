@@ -26,8 +26,8 @@ domain with no registration call. Ordinary work needs no chief.
 Writes need a Herdr terminal; outside Herdr sympp is read-only
 (`read_only_outside_herdr`). When a chief creates a WorkRequest for an architect,
 pass `create_work_request(own: false)`; the architect's first plan write makes its
-terminal the owner. Recording decisions and asking or answering questions stay
-open to any Herdr terminal, and any chief or architect may end a package as
+terminal the owner. Recording decisions and opening asks stay open to any Herdr
+terminal (the asker or the owner resolves them), and any chief or architect may end a package as
 `finished`; other writes belong to the owning terminal.
 
 - Optionally attach a coordinator-owned [symphony-solo-session](../symphony-solo-session/procedure.md)
@@ -71,12 +71,13 @@ Worker prompts should include:
 ## Supervise
 
 For a WorkRequest your terminal owns, optionally publish a brief/ETA or parking
-reason with `set_report`, and raise an explicit human question with `ask_question`,
-at meaningful delivery milestones or road bumps; see the
+reason with `set_report` at meaningful delivery milestones or road bumps; see the
 [architect report procedure](../symphony-architect/procedure.md#guidance).
-Route decisions to the chief when present, otherwise the user; a conversational
-answer is enough to close the question. Do not create a WorkRequest solely
-for reporting, require worker receipts, or turn ordinary waits into escalation.
+A question only the human can answer goes through `ask`, never only in
+conversation prose; the operator's answer is typed into your terminal. When the
+human answers in conversation instead, record it with
+`resolve_ask(to: "answered")`. Do not create a WorkRequest solely for reporting,
+require worker receipts, or turn ordinary waits into escalation.
 
 As chief, interpret and apply existing user decisions, resolve scope conflicts,
 and give the final check on reviewer-driven expansion an architect is genuinely
@@ -94,8 +95,8 @@ recommendation, and the concrete question.
 - Do not take over worker implementation by default.
 - Answer architecture questions in the conversation; escalate human/product
   decisions to a chief when present, otherwise the user. Questions and ordinary
-  waits are not blockers. Only the architect or coordinating parent explicitly
-  declares/clears blockers for affected work after resolving or escalating it.
+  waits are not blockers. Only the architect or coordinating parent declares and
+  clears blockers for affected work, with `set_blocker`.
 - Optional Herdr/OSC observations augment last-known state. Missing observation
   means unknown; it never blocks work or authorizes takeover.
 - Treat review findings as hypotheses, not product decisions. Workers verify
@@ -117,5 +118,5 @@ recommendation, and the concrete question.
 - Merge only when authorized.
 - Summarize PRs/no-PR evidence and follow-ups.
 
-Human attention is **Needs you**, raised only by the chief or architect with one sentence stating the action: a human question or product/policy approval, access only the human can grant, or recovery exhausted after the system tried. Raise it with `ask_question`.
+Human attention is **Needs you**, raised only by the chief or architect with one sentence stating the action: a human question or product/policy approval, access only the human can grant, or recovery exhausted after the system tried. Raise it with `ask`.
 Read `read_work_request(view: "board")` for stale workers (`next_actor: architect`, `inspect_runtime`), blockers and validation evidence; handle silent workers, failing checks and quiet tasks before escalating exhausted recovery. Review rounds, running CI, dependencies, queues and worker-parent questions never need human attention by themselves.

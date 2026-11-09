@@ -1,17 +1,13 @@
 defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.DefaultClient
-  alias SymphonyElixir.SymphonyPlusPlus.HumanDecisionPrompt
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Blockers
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
 
   import Ecto.Query, only: [from: 2]
@@ -71,31 +67,20 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
   defp require_work_request_package(%WorkPackage{}), do: {:error, :work_request_package_required}
 
   @spec clear_work_package_blocker_for_local_operator(module(), String.t(), term(), map()) ::
-          {:ok, term()} | {:error, term()}
+          {:ok, map()} | {:error, term()}
   def clear_work_package_blocker_for_local_operator(repo, work_package_id, blocker_id, params) do
-    blocker_id = String.trim(to_string(blocker_id || ""))
+    summary =
+      case text_param(params, "resolution") do
+        nil -> "Cleared by the operator"
+        resolution -> "Cleared by the operator: " <> resolution
+      end
 
     with true <- valid_package_route_id?(work_package_id),
-         true <- blocker_id != "",
-         {:ok, _work_package} <- WorkPackageRepository.get(repo, work_package_id),
-         {:ok, progress_events} <- PlanningRepository.list_progress_events(repo, work_package_id),
-         {:ok, blocker} <- active_blocker(progress_events, blocker_id) do
-      PlanningRepository.append_progress_event(repo, %{
-        work_package_id: work_package_id,
-        summary: "Cleared blocker: #{blocker.summary || blocker.id}",
-        body: text_param(params, "resolution") || "Cleared by local operator from the blocker detail modal.",
-        status: "resolved",
-        idempotency_key: "local-operator-clear-blocker:#{work_package_id}:#{blocker.id}:#{blocker.event_id}",
-        payload: %{
-          type: "blocker",
-          source_tool: "resolve_blocker",
-          blocker_id: blocker.id,
-          resolution: text_param(params, "resolution") || "Cleared by local operator.",
-          active: false
-        }
-      })
+         {:ok, blocker, _how} <- Blockers.set(repo, nil, work_package_id, to_string(blocker_id || ""), false, summary) do
+      {:ok, blocker}
     else
       false -> {:error, :not_found}
+      {:error, reason} when reason in [:blocker_not_found, :invalid_blocker_id] -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -105,16 +90,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
   end
 
   defp valid_package_route_id?(_work_package_id), do: false
-
-  defp active_blocker(progress_events, blocker_id) do
-    progress_events
-    |> BlockerProjection.blockers()
-    |> Enum.find(&(&1.id == blocker_id and &1.active))
-    |> case do
-      nil -> {:error, :not_found}
-      blocker -> {:ok, blocker}
-    end
-  end
 
   defp append_hidden_work_package_id_for_local_operator(_repo, work_package_id)
        when not is_binary(work_package_id) or byte_size(work_package_id) == 0 do
@@ -203,40 +178,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
 
   defp normalize_local_operator_transaction_result({:ok, value}), do: {:ok, value}
   defp normalize_local_operator_transaction_result({:error, reason}), do: {:error, reason}
-
-  @spec scoped_question(module(), String.t(), String.t()) :: {:ok, ClarificationQuestion.t()} | {:error, term()}
-  def scoped_question(repo, work_request_id, question_id) when is_binary(work_request_id) and is_binary(question_id) do
-    with {:ok, work_request} <- WorkRequestService.get(repo, work_request_id),
-         :ok <- Phase.require_writable(work_request),
-         {:ok, questions} <- WorkRequestService.list_questions(repo, work_request_id) do
-      case Enum.find(questions, &(&1.id == question_id)) do
-        %ClarificationQuestion{} = question -> {:ok, question}
-        nil -> {:error, :not_found}
-      end
-    end
-  end
-
-  def scoped_question(_repo, _work_request_id, _question_id), do: {:error, :not_found}
-
-  @spec require_open_question(ClarificationQuestion.t()) :: :ok | {:error, atom()}
-  def require_open_question(%ClarificationQuestion{status: "open"}), do: :ok
-  def require_open_question(%ClarificationQuestion{status: "answered"}), do: {:error, :already_answered}
-  def require_open_question(%ClarificationQuestion{status: "closed"}), do: {:error, :already_closed}
-  def require_open_question(%ClarificationQuestion{}), do: {:error, :invalid_status}
-
-  @spec local_operator_question_answer_attrs(ClarificationQuestion.t(), map()) :: {:ok, map()} | {:error, atom()}
-  def local_operator_question_answer_attrs(%ClarificationQuestion{} = question, params) do
-    case HumanDecisionPrompt.answer_text_result(question.decision_prompt, params) do
-      {:ok, answer} ->
-        case String.trim(answer) do
-          "" -> {:error, :missing_answer}
-          answer -> {:ok, %{"answer" => answer, "answered_by" => @local_operator_actor}}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
 
   @spec text_param(map(), String.t(), term()) :: String.t() | term()
   def text_param(params, key, default \\ nil) do

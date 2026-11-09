@@ -72,11 +72,13 @@ type OperatorReport = {
   brief?: Written | null;
   eta?: Written | null;
   parking?: { reason?: string | null; parked_at?: string | null; resumed_at?: string | null } | null;
-  human_escalation?: { question?: string | null; raised_at?: string | null; resolved_at?: string | null } | null;
 };
+// A question for the operator: open until it is answered or withdrawn.
+type AskRecord = { id: string; question?: string | null; state?: string | null; asked_at?: string | null; resolved_at?: string | null };
 type Detail = {
   work_request: { id: string; title?: string | null; repo?: string | null; repo_display?: string | null; base_branch?: string | null; inserted_at?: string | null; completed_at?: string | null; phase?: string | null; operator_report?: OperatorReport | null; area_path?: string[] | null; default_branch?: string | null; deployments?: Deployments | null };
   work_packages?: Slice[];
+  asks?: AskRecord[];
 };
 // What the operator can change. A backend that lacks a setting leaves it out.
 export type Settings = {
@@ -125,7 +127,7 @@ function buildGoal(detail: Detail, history: Record<string, HistoryEvent[]>, now:
     closedAt: ms(request.completed_at),
     phase: request.phase ?? null,
     pkgs,
-    asks: asksOf(request.operator_report?.human_escalation, now),
+    asks: asksOf(detail.asks, now),
     report: reportOf(request.operator_report, now),
     groups: groupsOf(pkgs),
   };
@@ -145,10 +147,12 @@ export function groupsOf(pkgs: Pkg[]): Group[] {
   return [...groups.values()];
 }
 
-// Only an explicit escalation by the architect asks for the operator. An open question does not.
-function asksOf(escalation: OperatorReport["human_escalation"], now: number): Ask[] {
-  if (!escalation?.question) return [];
-  return [{ from: ms(escalation.raised_at) ?? now, to: ms(escalation.resolved_at) ?? Infinity, title: escalation.question }];
+// Asks are the only thing that needs the operator. Each one counts from when it was asked until it
+// was answered or withdrawn.
+function asksOf(asks: AskRecord[] | undefined, now: number): Ask[] {
+  return (asks ?? [])
+    .filter((ask) => ask.question)
+    .map((ask) => ({ from: ms(ask.asked_at) ?? now, to: ask.state === "open" ? Infinity : (ms(ask.resolved_at) ?? now), title: ask.question! }));
 }
 
 // The backend's operator-owned labels come first; the local mapping only files what they leave out.

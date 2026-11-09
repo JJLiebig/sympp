@@ -13,7 +13,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
 
   @spec blocker_event_payload?(map()) :: boolean()
   def blocker_event_payload?(payload) when is_map(payload) do
-    map_value(payload, :type) == "blocker" and map_value(payload, :source_tool) in ["report_blocker", "resolve_blocker"]
+    map_value(payload, :type) == "blocker" and map_value(payload, :source_tool) == "set_blocker"
   end
 
   @spec contexts(module(), [String.t()]) :: %{optional(String.t()) => map()}

@@ -3,7 +3,7 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  test "package evidence records the writing terminal and archived requests refuse writes", %{repo: repo} do
+  test "a blocker on a secondary-repo package records the writing terminal, and archived requests refuse it", %{repo: repo} do
     work_request =
       create_work_request!(repo,
         id: "WR-ARCH-DESCENDANT-PLANNING",
@@ -31,40 +31,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
     read_response = mcp_tool(repo, nil, "read_work_request", %{"work_request_id" => work_request.id, "view" => "package", "work_package_id" => package.id})
     assert [%{"title" => "Inspect descendant"}] = get_in(read_response, ["result", "structuredContent", "task_plan", "steps"])
 
-    finding_response =
-      mcp_tool(repo, "t1", "append_finding", %{
+    blocker_response =
+      mcp_tool(repo, "t1", "set_blocker", %{
         "work_package_id" => package.id,
-        "title" => "Secondary repository confirmed",
-        "body" => "The descendant remains inside the owned WorkRequest.",
-        "idempotency_key" => "architect-descendant-finding"
+        "blocker_id" => "secondary-access",
+        "active" => true,
+        "summary" => "Waiting for access to the secondary repository"
       })
 
-    assert get_in(finding_response, ["result", "structuredContent", "finding", "title"]) ==
-             "Secondary repository confirmed"
-
-    progress_response =
-      mcp_tool(repo, "t1", "append_progress", %{
-        "work_package_id" => package.id,
-        "summary" => "Descendant plan supervised",
-        "idempotency_key" => "architect-descendant-progress"
-      })
-
-    assert get_in(progress_response, ["result", "structuredContent", "progress_event", "status"]) == "recorded"
-
-    assert {:ok, [_finding]} = PlanningRepository.list_findings(repo, package.id)
-    assert {:ok, [progress]} = PlanningRepository.list_progress_events(repo, package.id)
-    assert {progress.actor_type, progress.actor_id} == {"architect", "testbox/t1"}
+    assert get_in(blocker_response, ["result", "structuredContent", "blocker", "active"]) == true
+    assert {:ok, [event]} = PlanningRepository.list_progress_events(repo, package.id)
+    assert {event.actor_type, event.actor_id} == {"architect", "testbox/t1"}
 
     work_request
     |> Ecto.Changeset.change(archived_at: DateTime.utc_now(:microsecond), archive_reason: "manual")
     |> repo.update!()
 
-    archived =
-      mcp_tool(repo, "t1", "append_progress", %{
-        "work_package_id" => package.id,
-        "summary" => "Late progress",
-        "idempotency_key" => "architect-archived-progress"
-      })
+    archived = mcp_tool(repo, "t1", "set_blocker", %{"work_package_id" => package.id, "blocker_id" => "secondary-access", "active" => false})
 
     assert get_in(archived, ["error", "data", "reason"]) == "work_request_archived"
     assert get_in(archived, ["error", "data", "recovery", "next_action"]) == "restore"

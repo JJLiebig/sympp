@@ -71,7 +71,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
       alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
       alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
       alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
-      alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
       alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
       alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
       alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
@@ -126,7 +125,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
         File.rm_rf(handoff_store_dir)
         repo.delete_all(Artifact)
         repo.delete_all(ProgressEvent)
-        repo.delete_all(Finding)
         repo.delete_all(PlanNode)
         repo.delete_all(SoloSessionEntry)
         repo.delete_all(SoloSession)

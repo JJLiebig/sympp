@@ -563,7 +563,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
       eligibility
       |> Map.put(:eligible, false)
       |> Map.update!(:reason_codes, &Enum.uniq(["active_blocker" | &1]))
-      |> Map.put(:next_action, "resolve_blocker")
+      |> Map.put(:next_action, "clear_blocker")
     else
       eligibility
     end

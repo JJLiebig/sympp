@@ -11,14 +11,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
 
   import Ecto.Query, only: [from: 2]
 
+  alias SymphonyElixir.SymphonyPlusPlus.Asks
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Blockers, WorkPackage}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase, as: WorkRequestPhase
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @planned "planned"
   @dispatched "dispatched"
@@ -104,44 +104,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
   end
 
   @doc """
-  Resolves the active blockers these packages raised against a package that has
-  since ended, whose WorkRequest the operator completed, or that no longer
-  exists. Restoring an archived WorkRequest uses it for blockers whose target
-  settled while their history was frozen.
-  """
-  @spec resolve_blockers_on_ended_targets(module(), [WorkPackage.t()]) :: :ok | {:error, term()}
-  def resolve_blockers_on_ended_targets(_repo, []), do: :ok
-
-  def resolve_blockers_on_ended_targets(repo, work_packages) when is_atom(repo) and is_list(work_packages) do
-    with {:ok, events} <- PlanningRepository.list_progress_events(repo, Enum.map(work_packages, & &1.id)) do
-      events
-      |> Enum.group_by(& &1.work_package_id)
-      |> Enum.flat_map(fn {owner_id, owner_events} -> Enum.map(BlockerProjection.blockers(owner_events), &{owner_id, &1}) end)
-      |> Enum.filter(fn {_owner_id, blocker} -> blocker.active and ended_target?(repo, blocker) end)
-      |> Enum.reduce_while(:ok, fn {owner_id, blocker}, :ok -> resolve_blocker(repo, owner_id, blocker, :ok) end)
-    end
-  end
-
-  defp ended_target?(repo, %{blocked_item: %{kind: "work_package", id: target_id}}) do
-    case repo.get(WorkPackage, target_id) do
-      %WorkPackage{} = target -> ended?(target) or operator_completed_request?(repo, target.work_request_id)
-      nil -> true
-    end
-  end
-
-  defp ended_target?(_repo, _blocker), do: false
-
-  defp operator_completed_request?(_repo, nil), do: false
-
-  defp operator_completed_request?(repo, work_request_id) do
-    match?(%WorkRequest{operator_completed_at: %DateTime{}}, repo.get(WorkRequest, work_request_id))
-  end
-
-  @doc """
   Terminal effects for packages that just ended: end their worked-on rows,
-  resolve the blockers on them (their own untargeted blockers and any blocker
-  that targets them) and queue their worktree cleanup. A blocker an ended package raised against another
-  package stays active, because it describes that other package.
+  clear their active blockers, withdraw the open asks that name them and queue
+  their worktree cleanup.
   """
   @spec apply_terminal_effects(module(), WorkPackage.t() | [WorkPackage.t()]) :: :ok | {:error, term()}
   def apply_terminal_effects(repo, %WorkPackage{} = work_package), do: apply_terminal_effects(repo, [work_package])
@@ -149,8 +114,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
 
   def apply_terminal_effects(repo, work_packages) when is_atom(repo) and is_list(work_packages) do
     Enum.each(work_packages, &Ownership.end_subject(repo, "work_package", &1.id))
+    work_package_ids = Enum.map(work_packages, & &1.id)
 
-    with :ok <- resolve_active_blockers(repo, Enum.map(work_packages, & &1.id)) do
+    with :ok <- clear_active_blockers(repo, work_package_ids),
+         :ok <- Asks.withdraw_for_packages(repo, work_package_ids) do
       WorktreeCleanupQueue.enqueue_terminal(repo, work_packages)
     end
   end
@@ -296,61 +263,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
 
   defp broadcast(result, _repo), do: result
 
-  defp resolve_active_blockers(repo, work_package_ids) do
-    with {:ok, owned_events} <- PlanningRepository.list_progress_events(repo, work_package_ids),
-         {:ok, targeting_events} <-
-           PlanningRepository.list_progress_events_for_blockers_targeting_work_packages(repo, work_package_ids) do
-      ended_ids = MapSet.new(work_package_ids)
-
-      (owned_events ++ targeting_events)
-      |> Enum.uniq_by(& &1.id)
+  # A blocker on an archived WorkRequest stays in its frozen history.
+  defp clear_active_blockers(repo, work_package_ids) do
+    with {:ok, events} <- PlanningRepository.list_progress_events(repo, work_package_ids) do
+      events
       |> Enum.group_by(& &1.work_package_id)
-      |> Enum.sort_by(fn {owner_id, _events} -> owner_id end)
-      |> Enum.reduce_while(:ok, &resolve_blocker_group(repo, ended_ids, &1, &2))
+      |> Enum.sort_by(fn {work_package_id, _events} -> work_package_id end)
+      |> Enum.flat_map(fn {work_package_id, events} -> events |> BlockerProjection.blockers() |> Enum.filter(& &1.active) |> Enum.map(&{work_package_id, &1}) end)
+      |> Enum.reduce_while(:ok, fn {work_package_id, blocker}, :ok -> clear_blocker(repo, work_package_id, blocker) end)
     end
   end
 
-  defp resolve_blocker_group(repo, ended_ids, {owner_id, events}, :ok) do
-    events
-    |> BlockerProjection.blockers()
-    |> Enum.filter(&ended_blocker?(&1, owner_id, ended_ids))
-    |> Enum.reduce_while(:ok, &resolve_blocker(repo, owner_id, &1, &2))
-    |> case do
-      :ok -> {:cont, :ok}
-      {:error, reason} -> {:halt, {:error, reason}}
-    end
-  end
-
-  defp ended_blocker?(%{active: true, blocked_item: %{kind: "work_package", id: target_id}}, _owner_id, ended_ids),
-    do: MapSet.member?(ended_ids, target_id)
-
-  defp ended_blocker?(blocker, owner_id, ended_ids), do: blocker.active and MapSet.member?(ended_ids, owner_id)
-
-  # A blocker raised from an archived WorkRequest stays in its frozen history;
-  # the package it blocked ends regardless.
-  defp resolve_blocker(repo, work_package_id, blocker, :ok) do
-    case WorkRequestPhase.require_writable_package(repo, work_package_id) do
-      :ok -> append_blocker_resolution(repo, work_package_id, blocker)
+  defp clear_blocker(repo, work_package_id, blocker) do
+    with :ok <- WorkRequestPhase.require_writable_package(repo, work_package_id),
+         {:ok, _blocker, :changed} <-
+           Blockers.append(repo, nil, work_package_id, blocker.id, false, "Cleared blocker when the package ended: #{blocker.summary || blocker.id}", nil) do
+      {:cont, :ok}
+    else
       {:error, :work_request_archived} -> {:cont, :ok}
-    end
-  end
-
-  defp append_blocker_resolution(repo, work_package_id, blocker) do
-    case PlanningRepository.append_progress_event(repo, %{
-           work_package_id: work_package_id,
-           summary: "Cleared blocker after terminal transition: #{blocker.summary || blocker.id}",
-           body: "The WorkPackage or its owning WorkRequest reached a terminal state.",
-           status: "resolved",
-           idempotency_key: "terminal-cleanup:#{work_package_id}:#{blocker.id}:#{blocker.event_id}",
-           payload: %{
-             type: "blocker",
-             source_tool: "resolve_blocker",
-             blocker_id: blocker.id,
-             resolution: "Owning work reached a terminal state.",
-             active: false
-           }
-         }) do
-      {:ok, _event} -> {:cont, :ok}
       {:error, reason} -> {:halt, {:error, reason}}
     end
   end

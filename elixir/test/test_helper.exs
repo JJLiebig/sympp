@@ -2,6 +2,8 @@ System.put_env("SYMPP_OPEN_DASHBOARD", "0")
 # Tests never read the machine's real herdr-core; a test that needs the factory
 # view sets :sympp_herdr_core to a function.
 Application.put_env(:symphony_elixir, :sympp_herdr_core, nil)
+# Tests never type into real terminals; a test that checks delivery sets a function.
+Application.put_env(:symphony_elixir, :sympp_herdr_send, nil)
 ExUnit.start()
 
 if System.get_env("SYMPHONY_RUN_LIVE_E2E") != "1" do

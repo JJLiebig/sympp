@@ -6,7 +6,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout
@@ -36,19 +35,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
 
   @spec update(Repository.repo(), String.t(), map()) :: {:ok, WorkRequest.t()} | {:error, error()}
   def update(repo, id, attrs), do: notify_dashboard(Repository.update(repo, id, attrs))
-
-  @spec ask_question(Repository.repo(), String.t(), map()) :: {:ok, ClarificationQuestion.t()} | {:error, error()}
-  def ask_question(repo, work_request_id, attrs), do: notify_dashboard(Repository.ask_question(repo, work_request_id, attrs))
-
-  @spec list_questions(Repository.repo(), String.t()) :: {:ok, [ClarificationQuestion.t()]} | {:error, error()}
-  def list_questions(repo, work_request_id), do: Repository.list_questions(repo, work_request_id)
-
-  @spec answer_question(Repository.repo(), String.t(), String.t(), map()) ::
-          {:ok, ClarificationQuestion.t()} | {:error, error()}
-  def answer_question(repo, id, current_status, attrs), do: notify_dashboard(Repository.answer_question(repo, id, current_status, attrs))
-
-  @spec close_question(Repository.repo(), String.t(), String.t()) :: {:ok, ClarificationQuestion.t()} | {:error, error()}
-  def close_question(repo, id, current_status), do: notify_dashboard(Repository.close_question(repo, id, current_status))
 
   @spec record_decision(Repository.repo(), String.t(), map()) :: {:ok, DecisionLogEntry.t()} | {:error, error()}
   def record_decision(repo, work_request_id, attrs), do: notify_dashboard(Repository.record_decision(repo, work_request_id, attrs))

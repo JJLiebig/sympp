@@ -25,9 +25,9 @@ test('dispatch hands off a real worktree, assignment and launch line, and a repl
   const factory = processes.factory();
   const client = await factory.client();
   const wp = await workPackage(client, repo.origin, 'feature/owned');
-  // The assignment carries prior evidence beyond the virtual document's 100-row cap.
-  for (let index = 1; index <= 101; index++) await client.call('append_finding', {
-    work_package_id: wp, title: `Prior finding ${index}`, body: `Prior evidence ${index}`, idempotency_key: `prior-${index}`,
+  // The assignment carries prior progress beyond the virtual document's 100-row cap.
+  for (let index = 1; index <= 101; index++) await client.call('set_blocker', {
+    work_package_id: wp, blocker_id: `prior-${index}`, active: true, summary: `Prior evidence ${index}`,
   });
   const args = { work_package_id: wp, review_mode: 'fast', target_repo_root: repo.checkout };
   const refused = await client.call('dispatch_work_package', { ...args, target_repo_root: foreign.checkout });

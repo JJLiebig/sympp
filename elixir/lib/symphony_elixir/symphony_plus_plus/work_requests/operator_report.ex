@@ -3,9 +3,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport do
   The architect's operator report, stored on `sympp_work_requests.report`.
 
   `set_report` patches `brief`, `eta` and `parking`; `null` clears a field.
-  Parking keeps its interval: clearing it records `resumed_at`. A
-  `pending_ask` carried over from the old human escalation is shown as
-  `human_escalation` until asks replace it.
+  Parking keeps its interval: clearing it records `resumed_at`. Questions for
+  the operator are asks, not part of the report.
   """
 
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
@@ -48,17 +47,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport do
   def public(report) when is_map(report) do
     report
     |> Map.take(@fields)
-    |> maybe_put_escalation(report["pending_ask"])
     |> case do
       empty when map_size(empty) == 0 -> nil
       public -> Redactor.redact_output(public)
     end
   end
-
-  defp maybe_put_escalation(report, %{"question" => question, "raised_at" => raised_at}),
-    do: Map.put(report, "human_escalation", %{"question" => question, "raised_at" => raised_at, "resolved_at" => nil})
-
-  defp maybe_put_escalation(report, _pending_ask), do: report
 
   defp apply_patch(report, patch, now) do
     patch

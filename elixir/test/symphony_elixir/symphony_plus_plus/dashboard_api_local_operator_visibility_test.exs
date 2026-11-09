@@ -12,7 +12,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Repo
@@ -21,7 +20,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -56,7 +54,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
     repo.delete_all(AgentRun)
     repo.delete_all(Artifact)
     repo.delete_all(ProgressEvent)
-    repo.delete_all(Finding)
     repo.delete_all(PlanNode)
     repo.delete_all(SoloSessionEntry)
     repo.delete_all(SoloSession)
@@ -64,7 +61,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
     repo.delete_all(WorkPackage)
     repo.delete_all(Phase)
     repo.delete_all(DecisionLogEntry)
-    repo.delete_all(ClarificationQuestion)
+    repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Asks.Ask)
     repo.delete_all(WorkRequest)
     repo.delete_all(OperatorSettings)
     :ok

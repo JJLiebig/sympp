@@ -6,7 +6,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
   alias Ecto.Adapters.SQL
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
+  alias SymphonyElixir.SymphonyPlusPlus.Asks
+  alias SymphonyElixir.SymphonyPlusPlus.Asks.Ask
   alias SymphonyElixir.SymphonyPlusPlus.OperationalLineage
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
@@ -15,7 +18,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryResolution
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.RepoScope
@@ -40,7 +42,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     repo.delete_all(WorkedOn)
     repo.delete_all(WorkPackageDelivery)
     repo.delete_all(WorkPackage)
-    repo.delete_all(ClarificationQuestion)
+    repo.delete_all(Ask)
     repo.delete_all(RepoScope)
     repo.delete_all(WorkRequest)
     :ok
@@ -93,11 +95,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:error, :id_already_exists} = Repository.create(repo, attrs)
   end
 
-  test "every phase row is reached, and open questions never change the phase", %{repo: repo} do
+  test "every phase row is reached, and open asks never change the phase", %{repo: repo} do
     phase = fn id -> phase!(repo, id) end
 
     assert {:ok, intake} = Repository.create(repo, attrs(id: "WR-PHASE-INTAKE"))
-    assert {:ok, _question} = Repository.ask_question(repo, intake.id, question_attrs(id: "WRQ-PHASE-INTAKE"))
+    open_ask!(repo, intake.id)
     assert phase.(intake.id) == "intake"
 
     planned = request_with_packages!(repo, "WR-PHASE-PLANNED", [:planned])
@@ -113,7 +115,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert phase.(ready.id) == "active"
 
     done = request_with_packages!(repo, "WR-PHASE-DONE", [:completed_no_pr, :pr_merged, :finished, :skipped])
-    assert {:ok, _question} = Repository.ask_question(repo, done.id, question_attrs(id: "WRQ-PHASE-DONE"))
+    open_ask!(repo, done.id)
     assert phase.(done.id) == "done"
 
     abandoned = request_with_packages!(repo, "WR-PHASE-ABANDONED", [:completed_no_pr, :abandoned])
@@ -141,13 +143,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
 
   test "writes to an archived WorkRequest are refused, nothing restores it implicitly, and restore does", %{repo: repo} do
     request = request_with_packages!(repo, "WR-ARCHIVED-WRITES", [:completed_no_pr])
-    assert {:ok, question} = Repository.ask_question(repo, request.id, question_attrs(id: "WRQ-BEFORE-ARCHIVE"))
+    ask = open_ask!(repo, request.id)
     assert {:ok, archived} = Service.archive(repo, request.id)
     [package] = repo.all(from(package in WorkPackage, where: package.work_request_id == ^request.id))
 
-    assert {:error, :work_request_archived} = Repository.ask_question(repo, request.id, question_attrs(id: "WRQ-ARCHIVED"))
+    assert {:error, :work_request_archived} = Asks.open(repo, terminal(), %{"work_request_id" => request.id, "question" => "Late?"})
     assert {:error, :work_request_archived} = Repository.record_decision(repo, request.id, decision_attrs(id: "WRD-ARCHIVED"))
-    assert {:error, :work_request_archived} = Repository.answer_question(repo, question.id, "open", %{answer: "Late.", answered_by: "operator"})
+    assert {:error, :work_request_archived} = Asks.answer_by_operator(repo, ask.id, %{"answer" => "Late."})
 
     assert {:error, :work_request_archived} =
              PlanningRepository.append_progress_event(repo, %{work_package_id: package.id, summary: "Late note", status: "recorded", idempotency_key: "late"})
@@ -156,7 +158,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:error, :work_request_archived} = Service.complete(repo, request.id)
     assert {:ok, ^archived} = Repository.get(repo, request.id)
     assert {:ok, [_only_package]} = Repository.list_work_packages(repo, request.id)
-    assert {:ok, [%ClarificationQuestion{status: "open"}]} = Repository.list_questions(repo, request.id)
+    # Archiving withdrew the open ask.
+    assert %Ask{state: "withdrawn", answered_by: "subject_ended"} = repo.get!(Ask, ask.id)
     assert {:ok, []} = Repository.list_decisions(repo, request.id)
 
     assert {:ok, restored} = Service.restore(repo, request.id)
@@ -182,10 +185,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert archived.archive_reason == "manual"
     assert {:ok, ^archived} = Service.archive(repo, unresolved.id)
 
-    assert {:ok, _question} = Repository.ask_question(repo, planned.id, question_attrs(id: "WRQ-ARCHIVE-PLANNED"))
+    ask = open_ask!(repo, planned.id)
     assert {:ok, completed} = Service.complete(repo, planned.id)
     assert %DateTime{} = completed.operator_completed_at
-    assert {:ok, [%ClarificationQuestion{status: "closed"}]} = Repository.list_questions(repo, planned.id)
+    assert %Ask{state: "withdrawn"} = repo.get!(Ask, ask.id)
     assert {:ok, again} = Service.complete(repo, planned.id)
     assert again.operator_completed_at == completed.operator_completed_at
     assert phase!(repo, planned.id) == "done"
@@ -522,14 +525,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     Enum.into(overrides, defaults)
   end
 
-  defp question_attrs(overrides) do
-    defaults = %{
-      category: "product",
-      question: "Is the WorkRequest done?",
-      why_needed: "Open human questions keep the WorkRequest visible."
-    }
+  defp terminal, do: Terminal.from_meta(%{"core_id" => "core-test", "terminal_id" => "t1"})
 
-    Enum.into(overrides, defaults)
+  defp open_ask!(repo, work_request_id) do
+    assert {:ok, ask} = Asks.open(repo, terminal(), %{"work_request_id" => work_request_id, "question" => "Is the WorkRequest done?"})
+    ask
   end
 
   defp decision_attrs(overrides) do

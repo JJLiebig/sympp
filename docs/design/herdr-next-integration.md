@@ -76,11 +76,9 @@ state only, in the web dashboard's visual language:
   red while its checks fail, still to come hollow). A word appears only when
   something went wrong: Checks failing, Stuck, Review round 3 or a long review,
   Deploy failed, Parked, No recent report.
-- **Asks first:** each outstanding ask from the board's `asks`, with one action:
-  Answer in place when it has an answer route, else the topic's chief (a peek
-  while it runs, otherwise Start chief). An unrecorded wait says its question
-  isn't recorded, and only when no real question exists. A board without
-  `asks` falls back to its escalations and open clarification questions.
+- **Asks first:** each open ask from the board's `asks`, with one action:
+  Answer in place through its answer route, else the topic's chief (a peek
+  while it runs, otherwise Start chief).
 - **Packages at work:** a row per package at work or waiting on the person, in
   planned order, with the dashboard's Build ─ PR ─ Checks ─ Review ─ Merge
   pipeline (work, then done without a PR); the PR step opens the pull request.

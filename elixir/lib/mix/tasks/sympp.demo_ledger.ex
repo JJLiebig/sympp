@@ -9,8 +9,8 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
 
   import Ecto.Query, only: [from: 2]
 
+  alias SymphonyElixir.SymphonyPlusPlus.Asks.Ask
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
@@ -23,7 +23,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -209,7 +208,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
     Repo.transaction(fn ->
       with {:ok, work_requests} <- seed_work_requests(),
            {:ok, work_packages} <- seed_work_packages(),
-           {:ok, _question} <- seed_human_decision_prompt(),
+           {:ok, _ask} <- seed_human_decision_prompt(),
            {:ok, _evidence} <- seed_work_package_evidence(),
            {:ok, _endings} <- work_packages |> Enum.map(&{&1.work_request_id, &1.id, seed_ending(&1.id)}) |> end_demo_packages(),
            {:ok, solo_sessions} <- seed_solo_sessions(),
@@ -551,13 +550,18 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   defp acceptance_criteria(title), do: ["Cockpit displays #{title}.", "Evidence remains synthetic and redacted."]
 
   defp seed_human_decision_prompt do
-    WorkRequestRepository.ask_question(Repo, "SYMPP-DEMO-WR-HUMAN", %{
-      id: "SYMPP-DEMO-WRQ-STRUCTURED",
-      category: "ownership",
-      question: "Which package should own the cockpit guidance rendering?",
-      why_needed: "The architect needs a bounded ownership call before slicing.",
-      decision_prompt: demo_work_request_decision_prompt()
-    })
+    now = DateTime.utc_now(:microsecond)
+
+    {:ok,
+     Repo.insert!(%Ask{
+       id: "SYMPP-DEMO-ASK-STRUCTURED",
+       work_request_id: "SYMPP-DEMO-WR-HUMAN",
+       question: "Which package should own the cockpit guidance rendering?",
+       decision_prompt: demo_work_request_decision_prompt(),
+       state: "open",
+       inserted_at: now,
+       updated_at: now
+     })}
   end
 
   defp demo_work_request_decision_prompt do
@@ -602,14 +606,12 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
        %{
          plan: [{"Verify board filters", "done"}, {"Capture detail screenshot", "pending"}],
          progress: [{"Implementation started", "running", %{"synthetic_demo" => true}}],
-         findings: [{"No secret material required", "info"}],
          artifacts: [{"Visual QA target", "/sympp/work-packages/SYMPP-DEMO-WP-ACTIVE"}]
        }},
       {"SYMPP-DEMO-WP-QUEUED",
        %{
          plan: [{"Dispatch contract approved", "done"}, {"Worker launch pending", "pending"}],
          progress: [{"Queued for worker", "ready_for_worker", %{"handoff" => "synthetic"}}],
-         findings: [{"Worker handoff intentionally synthetic", "info"}],
          artifacts: [{"Dispatch packet", "sympp://demo/worker-handoff"}]
        }},
       {"SYMPP-DEMO-WP-PLANNING",
@@ -620,15 +622,12 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
            {"Slice sequencing waits on handoff", "blocked",
             %{
               "type" => "blocker",
-              "source_tool" => "report_blocker",
+              "source_tool" => "set_blocker",
               "blocker_id" => "demo-slice-sequencing-dependency",
               "active" => true,
-              "blocked_by" => %{"kind" => "work_package", "id" => "SYMPP-DEMO-WP-QUEUED"},
-              "blocked_item" => %{"kind" => "work_package", "id" => "SYMPP-DEMO-WP-PLANNING"},
               "summary" => "Plan API bridge smoke coverage after the worker handoff package is ready."
             }}
          ],
-         findings: [{"API bridge path remains local-only", "info"}],
          artifacts: [{"Planning note", "docs/operations.md"}]
        }},
       {"SYMPP-DEMO-WP-REVIEW",
@@ -643,7 +642,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
               "head_sha" => "2222222222222222222222222222222222222222"
             }}
          ],
-         findings: [{"Copy needs operator confirmation", "medium"}],
          artifacts: [{"Review notes", "docs/operations.md"}]
        }},
       {"SYMPP-DEMO-WP-CI",
@@ -654,21 +652,18 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
            {"Dependency waiting on smoke coverage", "blocked",
             %{
               "type" => "blocker",
-              "source_tool" => "report_blocker",
+              "source_tool" => "set_blocker",
               "blocker_id" => "demo-ci-smoke-dependency",
               "active" => true,
-              "blocked_by" => %{"kind" => "work_package", "id" => "SYMPP-DEMO-WP-REVIEW"},
               "summary" => "Wait for API bridge smoke coverage before this package can clear CI."
             }}
          ],
-         findings: [{"No live secrets needed for CI demo", "info"}],
          artifacts: [{"CI preview", "https://example.invalid/symphony-plus-plus/actions/runs/303"}]
        }},
       {"SYMPP-DEMO-WP-READY",
        %{
          plan: [{"Acceptance complete", "done"}, {"Attach final PR evidence", "done"}],
          progress: [{"Ready for human merge", "ready", %{"head_sha" => "0000000000000000000000000000000000000000"}}],
-         findings: [{"Validation is synthetic", "info"}],
          artifacts: [{"PR preview", "https://example.invalid/symphony-plus-plus/pull/101"}]
        }},
       {"SYMPP-DEMO-WP-BLOCKED",
@@ -678,34 +673,30 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
            {"Product decision required", "blocked",
             %{
               "type" => "blocker",
-              "source_tool" => "report_blocker",
+              "source_tool" => "set_blocker",
               "blocker_id" => "demo-product-guidance",
               "active" => true,
               "summary" => "Choose the cockpit default grouping before implementation continues."
             }}
          ],
-         findings: [{"Default grouping remains undecided", "high"}],
          artifacts: [{"Guidance placeholder", "sympp://demo/product-guidance"}]
        }},
       {"SYMPP-DEMO-WP-MERGED",
        %{
          plan: [{"Cleanup merged", "done"}],
          progress: [{"Merged into main", "completed", %{"merged" => true}}],
-         findings: [{"No follow-up required", "info"}],
          artifacts: [{"Merge evidence", "https://example.invalid/symphony-plus-plus/pull/102"}]
        }},
       {"SYMPP-DEMO-WP-MERGED-DOCS",
        %{
          plan: [{"Docs merged", "done"}],
          progress: [{"Merged docs update", "completed", %{"merged" => true}}],
-         findings: [{"Operator docs match demo flow", "info"}],
          artifacts: [{"Docs PR", "https://example.invalid/symphony-plus-plus/pull/103"}]
        }},
       {"SYMPP-DEMO-WP-CLOSED-SPIKE",
        %{
          plan: [{"Duplicate spike closed", "done"}],
          progress: [{"Closed after duplicate detection", "completed", %{"closed" => true}}],
-         findings: [{"Covered by lifecycle package", "info"}],
          artifacts: [{"Closure note", "sympp://demo/closed-spike"}]
        }}
     ]
@@ -714,9 +705,8 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   defp append_evidence(work_package_id, evidence) do
     with {:ok, plan_nodes} <- append_plan_nodes(work_package_id, Map.fetch!(evidence, :plan)),
          {:ok, progress_events} <- append_progress_events(work_package_id, Map.fetch!(evidence, :progress)),
-         {:ok, findings} <- append_findings(work_package_id, Map.fetch!(evidence, :findings)),
          {:ok, artifacts} <- append_artifacts(work_package_id, Map.fetch!(evidence, :artifacts)) do
-      {:ok, plan_nodes ++ progress_events ++ findings ++ artifacts}
+      {:ok, plan_nodes ++ progress_events ++ artifacts}
     end
   end
 
@@ -746,21 +736,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
         status: status,
         idempotency_key: "#{work_package_id}:#{summary}",
         payload: payload
-      })
-    end)
-  end
-
-  defp append_findings(work_package_id, entries) do
-    entries
-    |> Enum.with_index(1)
-    |> insert_all(fn {{title, severity}, sequence} ->
-      PlanningRepository.append_finding(Repo, %{
-        id: evidence_id(work_package_id, "finding", sequence),
-        work_package_id: work_package_id,
-        title: title,
-        body: "Synthetic demo finding.",
-        severity: severity,
-        idempotency_key: "#{work_package_id}:#{title}"
       })
     end)
   end
@@ -818,11 +793,11 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
 
   defp normalize_demo_timestamps do
     Enum.each(
-      [WorkRequest, WorkPackage, ClarificationQuestion, SoloSession],
+      [WorkRequest, WorkPackage, Ask, SoloSession],
       fn schema -> Repo.update_all(schema, set: [inserted_at: @demo_now, updated_at: @demo_now]) end
     )
 
-    Enum.each([PlanNode, ProgressEvent, Finding, Artifact, DependencyEdge], &normalize_ordered_timestamps/1)
+    Enum.each([PlanNode, ProgressEvent, Artifact, DependencyEdge], &normalize_ordered_timestamps/1)
 
     Repo.update_all(
       WorkPackageDelivery,

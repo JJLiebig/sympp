@@ -7,7 +7,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
@@ -20,7 +19,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   @state_item_limit 100
 
   @type repo :: module()
-  @type planning_record :: PlanNode.t() | Finding.t() | ProgressEvent.t() | Artifact.t()
+  @type planning_record :: PlanNode.t() | ProgressEvent.t() | Artifact.t()
   @type error ::
           :idempotency_scope_conflict
           | :expired
@@ -53,11 +52,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
       :position,
       &PlanNode.create_changeset/1
     )
-  end
-
-  @spec append_finding(repo(), map()) :: {:ok, Finding.t()} | {:error, error()}
-  def append_finding(repo, attrs) when is_atom(repo) and is_map(attrs) do
-    insert_with_allocated_value(repo, drop_ordering(attrs, :sequence), Finding, :sequence, &Finding.create_changeset/1)
   end
 
   @spec append_progress_event(repo(), map()) :: {:ok, ProgressEvent.t()} | {:error, error()}
@@ -310,16 +304,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
     end)
   end
 
-  @spec list_findings(repo(), String.t()) :: {:ok, [Finding.t()]} | {:error, error()}
-  def list_findings(repo, work_package_id) when is_atom(repo) and is_binary(work_package_id) do
-    safe_all(repo, fn ->
-      from(finding in Finding,
-        where: finding.work_package_id == ^work_package_id,
-        order_by: [asc: finding.sequence, asc: finding.id]
-      )
-    end)
-  end
-
   @spec list_progress_events(repo(), String.t()) :: {:ok, [ProgressEvent.t()]} | {:error, error()}
   def list_progress_events(repo, work_package_id) when is_atom(repo) and is_binary(work_package_id) do
     safe_all(repo, fn ->
@@ -342,39 +326,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
         order_by: [asc: progress_event.work_package_id, asc: progress_event.sequence, asc: progress_event.id]
       )
     end)
-  end
-
-  @spec list_progress_events_for_blockers_targeting_work_package(repo(), String.t()) ::
-          {:ok, [ProgressEvent.t()]} | {:error, error()}
-  def list_progress_events_for_blockers_targeting_work_package(repo, work_package_id)
-      when is_atom(repo) and is_binary(work_package_id) do
-    list_progress_events_for_blockers_targeting_work_packages(repo, [work_package_id])
-  end
-
-  @spec list_progress_events_for_blockers_targeting_work_packages(repo(), [String.t()]) ::
-          {:ok, [ProgressEvent.t()]} | {:error, error()}
-  def list_progress_events_for_blockers_targeting_work_packages(_repo, []), do: {:ok, []}
-
-  def list_progress_events_for_blockers_targeting_work_packages(repo, work_package_ids)
-      when is_atom(repo) and is_list(work_package_ids) do
-    work_package_ids = Enum.uniq(work_package_ids)
-
-    with {:ok, owner_ids} <-
-           safe_all(repo, fn ->
-             from(progress_event in ProgressEvent,
-               where: fragment("json_extract(?, '$.blocked_item.kind') = ?", progress_event.payload, "work_package"),
-               where: fragment("json_extract(?, '$.blocked_item.id')", progress_event.payload) in ^work_package_ids,
-               select: progress_event.work_package_id,
-               distinct: true
-             )
-           end) do
-      safe_all(repo, fn ->
-        from(progress_event in ProgressEvent,
-          where: progress_event.work_package_id in ^owner_ids,
-          order_by: [asc: progress_event.work_package_id, asc: progress_event.sequence, asc: progress_event.id]
-        )
-      end)
-    end
   end
 
   @spec get_progress_event_by_idempotency_key(repo(), String.t(), String.t()) ::
@@ -454,7 +405,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
         %{
           work_package: work_package,
           plan_nodes: plan_nodes,
-          finding_count: count_records(repo, Finding, work_package_id),
           progress_event_count: count_records(repo, ProgressEvent, work_package_id),
           artifact_count: count_records(repo, Artifact, work_package_id)
         }
@@ -506,19 +456,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   defp load_state(repo, work_package_id, :full) do
     with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
          {:ok, plan_nodes} <- list_plan_nodes(repo, work_package_id),
-         {:ok, findings} <- list_findings(repo, work_package_id),
          {:ok, progress_events} <- list_progress_events(repo, work_package_id),
          {:ok, artifacts} <- list_artifacts(repo, work_package_id) do
       {:ok,
        %State{
          work_package: work_package,
          plan_nodes: plan_nodes,
-         findings: findings,
          progress_events: progress_events,
          artifacts: artifacts,
          plan_version_material: plan_nodes,
          plan_nodes_omitted_count: 0,
-         findings_omitted_count: 0,
          progress_events_omitted_count: 0,
          artifacts_omitted_count: 0
        }}
@@ -528,24 +475,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   defp load_state(repo, work_package_id, :bounded), do: load_state(repo, work_package_id, {:bounded, nil, nil})
 
   defp load_state(repo, id, {:bounded, document, before_sequence}) do
-    finding_cursor = if document == "findings.md", do: before_sequence
     progress_cursor = if document == "progress.md", do: before_sequence
     artifact_cursor = if document == "handoff.md", do: before_sequence
 
     with {:ok, work_package} <- WorkPackageRepository.get(repo, id),
          {plan_nodes, plan_nodes_omitted_count} <- list_plan_nodes_for_render(repo, id),
-         {findings, findings_omitted} <- list_history_for_render(repo, Finding, id, finding_cursor),
          {progress_events, progress_omitted} <- list_history_for_render(repo, ProgressEvent, id, progress_cursor),
          {artifacts, artifacts_omitted} <- list_history_for_render(repo, Artifact, id, artifact_cursor) do
       {:ok,
        %State{
          work_package: work_package,
          plan_nodes: plan_nodes,
-         findings: findings,
          progress_events: progress_events,
          artifacts: artifacts,
          plan_nodes_omitted_count: plan_nodes_omitted_count,
-         findings_omitted_count: findings_omitted,
          progress_events_omitted_count: progress_omitted,
          artifacts_omitted_count: artifacts_omitted
        }}
@@ -902,9 +845,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
 
   defp idempotency_constraint?(constraint) when is_binary(constraint) do
     constraint == "sympp_progress_events_work_package_idempotency_key_unique_index" or
-      (String.contains?(constraint, "sympp_progress_events") and String.contains?(constraint, "idempotency_key")) or
-      constraint == "sympp_findings_scoped_idempotency_key_unique_index" or
-      (String.contains?(constraint, "sympp_findings") and String.contains?(constraint, "idempotency_key"))
+      (String.contains?(constraint, "sympp_progress_events") and String.contains?(constraint, "idempotency_key"))
   end
 
   defp normalize_exqlite_error(error) do

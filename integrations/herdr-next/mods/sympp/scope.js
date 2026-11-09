@@ -7,7 +7,6 @@ import { NOWHERE, spaceRepo, spaceById } from "./levels.js";
 
 const LIVE = new Set(["build", "checks", "review", "merge"]);
 const keyOf = (value) => shortRepo(value ?? "").toLowerCase();
-const isOpen = (q) => q.status === "open";
 
 // Package progress carries no inferred human attention.
 export function packageEvidence(pkg, now, needsYou = false) {
@@ -50,32 +49,9 @@ export function reviewPhase(pkg) {
 // A package in Build that no worker has taken yet.
 export const unmanned = (pkg) => pkg.stage === "build" && pkg.dispatchedAt === null && !pkg.run && !pkg.activity.actor;
 
-// A question the panel can answer: the board's own route when it gives one.
-function answerable(job, ask) {
-  const known = job.questions.find((q) => q.id === ask.id);
-  return { key: `ask:${ask.id}`, id: ask.id, kind: "ask", jobId: job.id, pkgId: ask.pkgId, text: ask.text, prompt: known?.prompt ?? null, status: "open", route: ask.route };
-}
-
+// The job's open asks as the task rows show them; one with a route is answerable here.
 export function asksOf(job) {
-  if (Array.isArray(job.asks)) {
-    return job.asks.filter((ask) => ask.text?.trim()).map((ask) => ({
-      key: `ask:${ask.id}`, text: ask.text,
-      pkgId: ask.pkgId, question: ask.route ? answerable(job, ask) : null,
-    }));
-  }
-  const asks = [];
-  for (const need of job.needs) {
-    if (need.kind === "ask") asks.push({ key: need.key, text: need.text, question: null, pkgId: null });
-    else if (need.id) asks.push({ key: need.key, text: need.text, question: job.questions.find((q) => q.key === need.key) ?? null, pkgId: need.pkgId });
-  }
-  for (const q of job.questions.filter(isOpen)) asks.push({ key: q.key, text: q.text, question: q, pkgId: null });
-  const seen = new Set();
-  return asks.filter((ask) => {
-    const text = String(ask.text ?? "").trim().toLowerCase();
-    if (!text || seen.has(text)) return false;
-    seen.add(text);
-    return true;
-  });
+  return job.asks.map((ask) => ({ key: ask.key, text: ask.text, pkgId: ask.pkgId, question: ask.route ? ask : null }));
 }
 
 // The web board's strip: one box per package, run by the architect's top-level groups in their own

@@ -13,13 +13,13 @@ This guide describes implemented behavior. The approved beta direction is in
 
 | Entity | Purpose |
 |---|---|
-| WorkRequest | Product goal, repository, base branch, constraints, clarification, decisions, plan, and delivery state. |
+| WorkRequest | Product goal, repository, base branch, constraints, asks, decisions, plan, and delivery state. |
 | WorkPackage | Canonical bounded assignment from architect planning through worker execution and delivery. |
 | Solo Session | Optional persistent plans, progress, findings, decisions, blockers, and validation for ordinary single-agent work. |
 
 A WorkPackage owns its goal, file scope, delivery repository/base, acceptance
 criteria, optional validation/stop/review context, optional group path,
-worktree, branch, PR, progress, findings, readiness, blockers, and terminal
+worktree, branch, PR, progress, readiness, blockers, and terminal
 delivery evidence.
 Dispatch activates that record; it does not create a second execution record.
 
@@ -55,11 +55,20 @@ The owning architect can optionally set a goal brief, free-text ETA and parking
 reason with `set_report`; `null` clears a field. The report is stored on the
 WorkRequest, and the dashboard and `read_work_request` expose it as
 `work_request.operator_report` with server-written times. Partial edits preserve
-other fields; resuming parked work keeps the reason and its times. A human
-question the architect raised before reports moved stays visible as a pending
-question until answered. New human questions use `ask_question`. Reports neither
-create/clear blockers nor change the WorkRequest phase. There is no worker
-reporting cadence.
+other fields; resuming parked work keeps the reason and its times. Reports
+neither create/clear blockers nor change the WorkRequest phase. There is no
+worker reporting cadence.
+
+Asks are the only "Needs you". Any Herdr terminal opens one with `ask` on a
+WorkRequest, optionally naming a package and a decision prompt. An ask is
+`open` until it is `answered` or `withdrawn`. The operator answers on the board
+(HTTP), and the factory types `Answer: <answer>` into the asking terminal's
+input without submitting it; a terminal that has finished keeps the answer on
+the ask. The asker or the WorkRequest owner records an answer given in
+conversation, or withdraws the ask, with `resolve_ask`, optionally recording a
+decision in the same step. An ask on a package is withdrawn when the package
+ends; archiving or completing the WorkRequest withdraws all of its open asks.
+Asks never block planning, dispatch or a phase.
 
 A declared review requirement identifies a provider and optional arguments,
 such as `review-suite` with its selected mode. It can also name another plugin
@@ -149,8 +158,8 @@ old candidate, then select that successor and requalify affected wiring. Provide
 review results stay with their provider; input provenance is not a review receipt.
 
 A ready-for-merge package can acquire a new integration blocker without changing
-its readiness or reviewed evidence. The architect declares it with scoped
-`append_progress` and clears it with `resolve_blocker`, following the
+its readiness or reviewed evidence. The architect declares and clears it with
+`set_blocker`, following the
 [architect blocker procedure](../packages/sympp/skills/symphony-architect/SKILL.md#guidance).
 An active blocker makes the delivery board's `merge_eligibility.eligible` false.
 Workers route human decisions through the architect or chief.

@@ -30,20 +30,16 @@ test('native origins reject embedded credentials and paths, while dashboard link
   assert.equal(M.dashboardUrl('http://localhost:4000', 'http://user:private@localhost:4000/sympp'), 'http://localhost:4000/sympp');
 });
 
-test('open questions are answerable detail, while explicit escalation needs the operator', () => {
+test('open asks need the operator and answer through their own route', () => {
   const ordinary = detail('wr1', 'owner/web');
-  ordinary.clarification_questions = [{ id: 'q1', question: 'Which order?', status: 'open', decision_prompt: prompt }];
-  const escalated = detail('wr2', 'owner/api', [{ id: 'wp2', repo: 'owner/api' }]);
-  escalated.work_request.operator_report = { human_escalation: { question: 'Budget decision?', raised_at: '2026-10-25T12:30:00Z' } };
-  const [normal, urgent] = board([ordinary, escalated]).jobs;
-  assert.equal(normal.needs[0].text, "Which order?");
-  assert.equal(normal.questions[0].id, 'q1');
-  assert.deepEqual(C.answerBody(normal.questions[0], 'api_first', ''), { answer_choice: 'api_first' });
-  assert.equal(C.answerPath(normal.questions[0]), '/api/v1/sympp/herdr/work-requests/wr1/questions/q1/answer');
-  assert.equal(C.answerPath({ ...normal.questions[0], route: '/api/v1/sympp/herdr/work-requests/w/questions/q/answer' }), '/api/v1/sympp/herdr/work-requests/w/questions/q/answer', 'an ask the board routes answers through its own route');
-  assert.equal(urgent.needs.length, 1);
-  assert.equal(urgent.needs[0].id, undefined, 'escalation text must not become a postable question');
-  assert.equal(L.needsQueue([normal, urgent]).length, 2);
+  ordinary.asks = [{ id: 'ask-1', kind: 'ask', text: 'Which order?', work_package_id: null, decision_prompt: prompt, asked_at: '2026-10-25T12:30:00Z', answer_route: '/api/v1/sympp/herdr/asks/ask-1/answer' }];
+  const quiet = detail('wr2', 'owner/api', [{ id: 'wp2', repo: 'owner/api' }]);
+  const [asking, calm] = board([ordinary, quiet]).jobs;
+  assert.equal(asking.needs[0].text, 'Which order?');
+  assert.deepEqual(C.answerBody(asking.asks[0], 'api_first', ''), { answer_choice: 'api_first' });
+  assert.equal(asking.asks[0].route, '/api/v1/sympp/herdr/asks/ask-1/answer');
+  assert.equal(calm.needs.length, 0);
+  assert.equal(L.needsQueue([asking, calm]).length, 1);
 });
 
 const host = { node: 'C:\\Program Files\\nodejs\\node.exe', helper: 'C:\\Herdr Home\\tools\\sympp-herdr.js', session: 'scratch' };
@@ -191,8 +187,8 @@ test('native actions send JSON-only requests and surface persisted success or ac
     received.push({ method: req.method, url: req.url, headers: req.headers, body: JSON.parse(raw) });
     res.setHeader('content-type', 'application/json');
     if (received.length === 1) { res.statusCode = 201; res.end(JSON.stringify({ work_request: { work_request: { id: 'new-job' } } })); }
-    else if (received.length === 2) res.end(JSON.stringify({ question: { status: 'answered' } }));
-    else { res.statusCode = 409; res.end(JSON.stringify({ error: { code: 'already_answered', message: 'This question was answered. Refresh the job.' } })); }
+    else if (received.length === 2) res.end(JSON.stringify({ ok: true, ask_id: 'ask 1', delivery: { state: 'delivered' } }));
+    else { res.statusCode = 409; res.end(JSON.stringify({ error: { code: 'ask_not_open', message: 'This ask is already answered' } })); }
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -200,11 +196,11 @@ test('native actions send JSON-only requests and surface persisted success or ac
   const endpoint = `http://127.0.0.1:${server.address().port}`;
   const payload = await C.postAction(endpoint, '/api/v1/sympp/herdr/work-requests', C.requestBody({ title: ' New job ', repo: 'owner/repo', base_branch: 'main', human_description: 'A bounded change' }));
   assert.equal(payload.work_request.work_request.id, 'new-job');
-  const question = { kind: 'question', jobId: 'wr/1', id: 'q 1', prompt };
-  await C.postAction(endpoint, C.answerPath(question), C.answerBody(question, 'api_first', 'Include docs'));
-  await assert.rejects(C.postAction(endpoint, C.answerPath(question), { answer: 'stale' }), /This question was answered. Refresh the job/);
+  const ask = { kind: 'ask', id: 'ask 1', prompt, route: '/api/v1/sympp/herdr/asks/ask%201/answer' };
+  await C.postAction(endpoint, ask.route, C.answerBody(ask, 'api_first', 'Include docs'));
+  await assert.rejects(C.postAction(endpoint, ask.route, { answer: 'stale' }), /This ask is already answered/);
   assert.equal(received[0].body.title, 'New job');
-  assert.equal(received[1].url, '/api/v1/sympp/herdr/work-requests/wr%2F1/questions/q%201/answer');
+  assert.equal(received[1].url, '/api/v1/sympp/herdr/asks/ask%201/answer');
   assert.deepEqual(received[1].body, { answer_choice: 'api_first', answer_note: 'Include docs' });
   for (const req of received) {
     assert.equal(req.method, 'POST');

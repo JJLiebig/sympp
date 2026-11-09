@@ -2,7 +2,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
@@ -13,7 +12,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
   @virtual_files [
     "context.md",
     "task_plan.md",
-    "findings.md",
     "progress.md",
     "acceptance.md",
     "review.md",
@@ -40,7 +38,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
   @spec render_state(State.t(), String.t()) :: {:ok, String.t()} | {:error, :unknown_virtual_file}
   def render_state(%State{} = state, "context.md"), do: {:ok, context_markdown(state)}
   def render_state(%State{} = state, "task_plan.md"), do: {:ok, task_plan_markdown(state)}
-  def render_state(%State{} = state, "findings.md"), do: {:ok, findings_markdown(state)}
   def render_state(%State{} = state, "progress.md"), do: {:ok, progress_markdown(state)}
   def render_state(%State{} = state, "acceptance.md"), do: {:ok, acceptance_markdown(state)}
   def render_state(%State{} = state, "review.md"), do: {:ok, review_markdown(state)}
@@ -90,17 +87,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
       Enum.map(rendered_nodes, &plan_node_line/1)
     ]
     |> flatten_join()
-  end
-
-  defp findings_markdown(%State{findings: []}) do
-    flatten_join(["# Findings", "", "No findings recorded."])
-  end
-
-  defp findings_markdown(%State{findings: findings} = state) do
-    {rendered_findings, omitted_count} = capped_tail_items(findings, state.findings_omitted_count)
-
-    ["# Findings", "", omission_notice(omitted_count, "older findings"), Enum.map(rendered_findings, &finding_block/1)]
-    |> flatten_join(:tail)
   end
 
   defp progress_markdown(%State{progress_events: []}) do
@@ -156,9 +142,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
       "## Latest Progress",
       "",
       latest_progress_lines(state.progress_events),
-      "## Findings",
-      "",
-      finding_summary_lines(state),
       "## Artifacts",
       "",
       artifact_lines(state)
@@ -212,16 +195,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
     ["- #{checkbox} #{source_inline(plan_node.title)}#{suffix}", details]
   end
 
-  defp finding_block(%Finding{} = finding) do
-    [
-      "## #{timestamp(finding.created_at)} - #{source_inline(finding.title)}",
-      "",
-      "- Severity: `#{finding.severity}`",
-      "",
-      source_block(finding.body)
-    ]
-  end
-
   defp progress_block(%ProgressEvent{} = progress_event) do
     [
       "## #{timestamp(progress_event.created_at)} - #{source_inline(progress_event.summary)}",
@@ -268,19 +241,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
   end
 
   defp policy_key(%WorkPackage{kind: kind}), do: kind
-
-  defp finding_summary_lines(%State{findings: []}), do: ["No findings recorded."]
-
-  defp finding_summary_lines(%State{findings: findings} = state) do
-    {rendered_findings, omitted_count} = capped_tail_items(findings, state.findings_omitted_count)
-
-    [
-      omission_notice(omitted_count, "older findings"),
-      Enum.map(rendered_findings, fn finding ->
-        "- #{timestamp(finding.created_at)}: #{source_inline(finding.title)} (`#{finding.severity}`)"
-      end)
-    ]
-  end
 
   defp artifact_lines(%State{artifacts: []}), do: ["No artifacts recorded."]
 

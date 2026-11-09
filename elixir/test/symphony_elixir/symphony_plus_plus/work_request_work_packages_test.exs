@@ -22,12 +22,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
   end
 
   alias SymphonyElixir.SymphonyPlusPlus.CreateWork
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.{Artifact, Finding, PlanNode, ProgressEvent}
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.{Artifact, PlanNode, ProgressEvent}
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -43,10 +42,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
   setup %{repo: repo} do
     repo.delete_all(Artifact)
     repo.delete_all(ProgressEvent)
-    repo.delete_all(Finding)
     repo.delete_all(PlanNode)
     repo.delete_all(WorkPackageDelivery)
-    repo.delete_all(ClarificationQuestion)
+    repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Asks.Ask)
     repo.delete_all(WorkPackage)
     repo.delete_all(WorkRequest)
     :ok

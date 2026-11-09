@@ -20,21 +20,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   @solo_tools SoloTools.tool_names()
   @bootstrap_tools ["create_work_request"]
   @local_operator_tools ["record_work_request_operator_decision", "summarize_failed_mcp_calls"]
-  @blocker_closeout_decisions ["resolved", "still_active"]
   @architect_tools [
     "list_work_requests",
     "read_work_request",
-    "append_finding",
-    "append_progress",
-    "resolve_blocker",
+    "set_blocker",
     "sync_pr",
     "reconcile_work_request",
     "record_work_package_delivery",
     "set_report",
-    "ask_question",
-    "answer_question",
-    "answer_question_and_record_decision",
-    "close_question",
+    "ask",
+    "resolve_ask",
     "record_decision",
     "edit_plan",
     "skip_work_package",
@@ -53,11 +48,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "summarize_failed_mcp_calls"
   ]
   # Writes that take or confirm ownership of the target WorkRequest. Decisions,
-  # questions, WorkRequest creation and Solo stay open to any Herdr terminal.
+  # asks, WorkRequest creation and Solo stay open to any Herdr terminal.
   @owner_gated_tools [
-    "append_finding",
-    "append_progress",
-    "resolve_blocker",
+    "set_blocker",
     "sync_pr",
     "reconcile_work_request",
     "record_work_package_delivery",
@@ -87,9 +80,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   @spec local_operator_tools() :: [tool_name()]
   def local_operator_tools, do: @local_operator_tools
-
-  @spec blocker_closeout_decisions() :: [String.t()]
-  def blocker_closeout_decisions, do: @blocker_closeout_decisions
 
   @spec architect_tools() :: [tool_name()]
   def architect_tools, do: @architect_tools

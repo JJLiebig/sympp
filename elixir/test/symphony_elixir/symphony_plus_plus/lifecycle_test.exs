@@ -12,7 +12,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryResolution
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.WorkPackageFactory
 
@@ -94,53 +93,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     assert Repo.get!(WorkPackage, package.id).status == "ended"
   end
 
-  test "ending clears only the ended package's blocker residue", %{repo: repo, work_request: request} do
+  test "ending clears only the ended package's blockers", %{repo: repo, work_request: request} do
     package = package!(repo, request, "ready")
     sibling = package!(repo, request, "dispatched")
 
     blocker!(repo, package.id, "terminal-blocker")
     blocker!(repo, sibling.id, "nonterminal-blocker")
-    blocker!(repo, sibling.id, "terminal-target-blocker", %{kind: "work_package", id: package.id})
-    blocker!(repo, package.id, "sibling-target-blocker", %{kind: "work_package", id: sibling.id})
 
     assert {:ok, _delivery} = DeliveryCloseout.record(repo, request.id, package.id, ending("finished"))
 
-    assert WorkPackageActivity.context(repo, package.id).blocker_state.active_ids == ["sibling-target-blocker"]
+    assert WorkPackageActivity.context(repo, package.id).blocker_state.active_ids == []
     assert WorkPackageActivity.context(repo, sibling.id).blocker_state.active_ids == ["nonterminal-blocker"]
 
     event_count = repo.aggregate(ProgressEvent, :count, :id)
     assert :ok = Lifecycle.apply_terminal_effects(repo, Repo.get!(WorkPackage, package.id))
     assert repo.aggregate(ProgressEvent, :count, :id) == event_count
-  end
-
-  test "a blocker raised from an archived WorkRequest stays frozen, lets the blocked package end and resolves on restore", %{repo: repo, work_request: request} do
-    assert {:ok, other} =
-             WorkRequestRepository.create(repo, %{
-               title: "Archived source",
-               repo: "nextide/example",
-               base_branch: "main",
-               work_type: "feature",
-               human_description: "Source.",
-               desired_dispatch_shape: "single_package"
-             })
-
-    source = package!(repo, other, "dispatched")
-    target = package!(repo, request, "dispatched")
-    blocker!(repo, source.id, "cross-request-blocker", %{kind: "work_package", id: target.id})
-    repo.update!(Ecto.Changeset.change(repo.get!(WorkRequest, other.id), operator_completed_at: DateTime.utc_now(:microsecond), archived_at: DateTime.utc_now(:microsecond)))
-
-    assert {:ok, _delivery} = DeliveryCloseout.record(repo, request.id, target.id, ending("finished"))
-    assert repo.get!(WorkPackage, target.id).status == "ended"
-    assert WorkPackageActivity.context(repo, source.id).blocker_state.active_ids == ["cross-request-blocker"]
-
-    assert {:ok, _restored} = WorkRequestService.restore(repo, other.id)
-    assert WorkPackageActivity.context(repo, source.id).blocker_state.active_ids == []
-
-    # A target that was deleted while the source was archived counts as settled too.
-    blocker!(repo, source.id, "deleted-target-blocker", %{kind: "work_package", id: "WP-DELETED"})
-    assert {:ok, _archived} = WorkRequestService.archive(repo, other.id)
-    assert {:ok, _restored} = WorkRequestService.restore(repo, other.id)
-    assert WorkPackageActivity.context(repo, source.id).blocker_state.active_ids == []
   end
 
   test "qualification fails on each predicate that does not hold" do
@@ -238,10 +205,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     Map.merge(%{"outcome" => outcome, "idempotency_key" => "lifecycle-#{outcome}"}, Map.new(evidence, fn {key, value} -> {Atom.to_string(key), value} end))
   end
 
-  defp blocker!(repo, work_package_id, blocker_id, blocked_item \\ nil) do
-    payload =
-      %{type: "blocker", source_tool: "report_blocker", blocker_id: blocker_id, active: true}
-      |> then(&if(blocked_item, do: Map.put(&1, :blocked_item, blocked_item), else: &1))
+  defp blocker!(repo, work_package_id, blocker_id) do
+    payload = %{type: "blocker", source_tool: "set_blocker", blocker_id: blocker_id, active: true}
 
     assert {:ok, _event} =
              PlanningRepository.append_progress_event(repo, %{

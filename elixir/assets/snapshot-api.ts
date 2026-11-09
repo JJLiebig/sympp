@@ -146,7 +146,7 @@ const MUTATIONS: Array<[RegExp, Mutation]> = [
   [/^\/work-requests\/([^/]+)\/archive$/, archiveRequest],
   [/^\/work-requests\/([^/]+)\/delete$/, deleteRequest],
   [/^\/work-requests\/([^/]+)\/restore$/, restoreRequest],
-  [/^\/work-requests\/([^/]+)\/questions\/([^/]+)\/answer$/, answerQuestion],
+  [/^\/asks\/([^/]+)\/answer$/, answerAsk],
 ];
 
 async function handlePost(snapshot: Snapshot, route: string, req: IncomingMessage, res: ServerResponse, notify: () => void) {
@@ -155,7 +155,7 @@ async function handlePost(snapshot: Snapshot, route: string, req: IncomingMessag
   if (!mutation) return sendJson(res, 200, { ok: true, simulated: true, refresh: { dashboard: false } });
 
   const match = mutation[0].exec(route)!;
-  const payload = mutation[1](snapshot, decodeURIComponent(match[1]), { ...body, question_id: match[2] && decodeURIComponent(match[2]) });
+  const payload = mutation[1](snapshot, decodeURIComponent(match[1]), body);
   sendJson(res, 200, { ok: true, simulated: true, refresh: { dashboard: true }, ...payload });
   notify();
 }
@@ -196,11 +196,10 @@ function restoreRequest(snapshot: Snapshot, id: string) {
   return { work_request: { id, archived_at: null } };
 }
 
-function answerQuestion(snapshot: Snapshot, id: string, body: Json) {
-  const detail = (snapshot.hydrated.work_request_details ?? []).find((entry: Json) => entry.work_request?.id === id);
-  const question = (detail?.clarification_questions ?? []).find((entry: Json) => entry.id === body.question_id);
-  if (question) Object.assign(question, { status: "answered", answer: body.answer || body.answer_note || body.answer_choice, answered_by: "operator", answered_at: new Date().toISOString() });
-  return {};
+function answerAsk(snapshot: Snapshot, id: string, body: Json) {
+  const ask = (snapshot.hydrated.work_request_details ?? []).flatMap((detail: Json) => detail.asks ?? []).find((entry: Json) => entry.id === id);
+  if (ask) Object.assign(ask, { state: "answered", answer: body.answer || body.answer_note || body.answer_choice, answered_by: "operator", resolved_at: new Date().toISOString() });
+  return { ask_id: id, delivery: { state: "not_delivered", reason: "snapshot" } };
 }
 
 function requestRecords(snapshot: Snapshot, id: string): Json[] {

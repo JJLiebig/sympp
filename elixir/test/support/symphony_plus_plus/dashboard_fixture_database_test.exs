@@ -146,7 +146,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
 
     progress!(repo, successor.id, "PROGRESS-RECOVERY-BLOCKER", "Blocked on fictional schema", "blocked", 61, %{
       type: "blocker",
-      source_tool: "report_blocker",
+      source_tool: "set_blocker",
       blocker_id: "fixture-schema",
       active: true
     })

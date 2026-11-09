@@ -53,20 +53,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
                )
     end
 
-    assert {:ok, _question} = RequestRepository.ask_question(repo, request.id, work_request_question_attrs([]))
+    insert_ask!(repo, request.id)
 
     package = repo.update!(Ecto.Changeset.change(hd(packages), status: "dispatched"))
 
     for index <- 1..12 do
-      response =
-        mcp_tool(repo, architect, "append_progress", %{
-          "work_package_id" => package.id,
-          "summary" => "Validation checkpoint #{index}",
-          "body" => description(),
-          "idempotency_key" => "fixture-progress-#{index}"
-        })
-
-      refute response["error"]
+      assert {:ok, _event} =
+               PlanningRepository.append_progress_event(repo, %{
+                 work_package_id: package.id,
+                 summary: "Validation checkpoint #{index}",
+                 body: description(),
+                 status: "recorded",
+                 idempotency_key: "fixture-progress-#{index}"
+               })
     end
 
     reads = [
@@ -111,9 +110,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
     assert hd(summary["work_packages"])["next_action"] == "wait"
     assert List.last(summary["work_packages"])["next_action"] == "dispatch_work_package"
     refute Map.has_key?(hd(summary["work_packages"]), "goal")
-    assert length(summary["clarification_questions"]) == 1
+    assert length(summary["asks"]) == 1
     assert Enum.map(summary["decision_log_entries"], & &1["sequence"]) == Enum.to_list(12..16)
-    assert summary["omitted"] == %{"package_contracts" => 28, "resolved_questions" => 0, "older_decisions" => 11, "decision_details" => 16}
+    assert summary["omitted"] == %{"package_contracts" => 28, "resolved_asks" => 0, "older_decisions" => 11, "decision_details" => 16}
     assert {:ok, original} = WorkRequestPayloads.work_request_detail(repo, request, [])
     full = mcp_tool(repo, architect, "read_work_request", %{"work_request_id" => request.id, "detail" => "full"})["result"]["structuredContent"]
     assert Map.delete(full, "scope") == original
@@ -190,7 +189,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
     [
       "The operator can identify active, waiting and completed packages using current ledger evidence.",
       "The worker receives the complete allowed scope, acceptance outcomes, validation and stopping conditions.",
-      "Architecture reads preserve request identity, open questions, decisions, PR presence and next actions.",
+      "Architecture reads preserve request identity, open asks, decisions, PR presence and next actions.",
       "No production ledger, installed plugin cache, provider credentials or live terminal session is changed."
     ]
   end
