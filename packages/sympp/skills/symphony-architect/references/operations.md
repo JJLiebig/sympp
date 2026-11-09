@@ -19,25 +19,25 @@ a new one.
 Pass `work_request_id` to planning tools. Tools that also name a
 `work_package_id` may omit it and use that package's WorkRequest.
 
-`slice_work_request` atomically creates one or more planned canonical
-WorkPackages. The selected WorkRequest supplies the default primary delivery
-repo and target base branch. Pass the target base branch with a secondary
-  delivery repo. Package kind defaults to `standard_pr`; title, goal, owned
-  globs, and acceptance criteria remain explicit. Validation steps and stop
-  conditions are optional context.
-Assign `group_id` only when the WorkPackage belongs in a real Group; root-level
-WorkPackages need no synthetic wrapper Group.
+`edit_plan` applies its ops in order in one transaction. `add_package` creates
+a planned canonical WorkPackage. The selected WorkRequest supplies the default
+primary delivery repo and target base branch. Pass the target base branch with
+a secondary delivery repo. Package kind defaults to `standard_pr`; title, goal
+and acceptance criteria are explicit, and validation steps and stop conditions
+are lists (empty when there are none). Give a `key` to a package that later ops
+in the same call depend on.
 
-Use `update_work_package` with `expected_contract_revision` to edit a planned
-contract or move it between the WorkRequest root and an existing Group.
+Set `group` to a path such as `"Backend / Billing"` only when the package
+belongs to a real group; it is normalized to names separated by `" / "`.
+Renaming or moving a group means updating the `group` of its packages.
 
-Use `upsert_group` for create, rename, reparent, and reorder. `delete_group`
-ungroups its direct WorkPackages and child Groups into the deleted Group's
-parent and removes dependency intents that named it. Groups never need manual
-completion or blocker closeout.
+`update_package` edits a planned or dispatched contract with
+`expected_revision`; a stale revision fails with the current one. Pass
+`group: null` to ungroup a package. A ready contract is frozen: add a successor
+and end the ready package as `superseded`.
 
-Skip stale or superseded planned WorkPackages. The atomic planning call advances
-the WorkRequest to its planned state; there is no separate approval or finish step.
+Skip stale or superseded planned WorkPackages. The first `add_package` moves the
+WorkRequest to its planned phase; there is no separate approval or finish step.
 
 ## UI collaboration and candidates
 
@@ -48,8 +48,8 @@ does not determine role. Ordinary workers still own their review cycle.
 1. Record explicit human UX approval with `record_decision(source_type: "human")`
    or `answer_question_and_record_decision`. Capture behavior, states, acceptance
    and required data/API shape. Reference the returned decision ID in downstream
-   package contracts and dependency `decision_ref`; a prototype is not wired delivery.
-2. Use `slice_work_request` for bounded backend/API and wiring/review packages;
+   package contracts; a prototype is not wired delivery.
+2. Use `edit_plan` to add bounded backend/API and wiring/review packages;
    create all successors before retiring replaced scope. Keep approved UX intact
    while fixing technical defects. Route material intent changes to architect/human
    guidance; only affected work waits.
@@ -60,12 +60,12 @@ does not determine role. Ordinary workers still own their review cycle.
    who executes, not the contract or readiness. Do not leave two actors writing. A separate review package must
    name its implementation owner; already-ready changed work needs a successor.
 4. Verify the backend worker's exact-head checks and native review handoff, then
-   set `upsert_dependency(candidate_head_sha: "<40-character backend head>")`
-   with a concrete prerequisite WP and the wiring WP or Group as dependent.
-   The backend must be `ready` with current matching branch/PR head;
-   ready state alone is not qualification. `read_plan` exposes expanded constraints;
-   overlapping pinned/unpinned edges all apply. A prerequisite Group cannot name
-   one candidate. Across repositories use these explicit edges, not a Git branch stack.
+   add an `edit_plan` `set_dependency` op with `from` the wiring WP, `to` the
+   backend WP and `candidate_head_sha: "<40-character backend head>"`; one edit can
+   pin several dependents. The backend must be `ready` with current matching
+   branch/PR head; ready state alone is not qualification. The plan view exposes
+   each dependency's constraints. Across repositories use these explicit
+   dependencies, not a Git branch stack.
 5. Dispatch the wiring/review worker against that selection. Its native handoff
    names both backend pin and final UI head; record those consumed inputs with
    scoped `append_progress` dependency provenance before readiness (see the

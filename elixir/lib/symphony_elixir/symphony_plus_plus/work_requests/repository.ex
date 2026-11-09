@@ -3,7 +3,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
 
   alias Ecto.Changeset
   alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Node
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -282,17 +281,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     end
   end
 
-  @spec slice_work_request(repo(), String.t(), [map()]) ::
-          {:ok, %{work_request: WorkRequest.t(), work_packages: [WorkPackage.t()]}} | {:error, error()}
-  def slice_work_request(repo, work_request_id, package_attrs)
-      when is_atom(repo) and is_binary(work_request_id) and is_list(package_attrs) do
+  @doc """
+  Adds one planned WorkPackage at the end of the WorkRequest's sequence.
+  Joins the caller's transaction when there is one.
+  """
+  @spec add_work_package(repo(), String.t(), map()) :: {:ok, WorkPackage.t()} | {:error, error()}
+  def add_work_package(repo, work_request_id, attrs)
+      when is_atom(repo) and is_binary(work_request_id) and is_map(attrs) do
     repo.transaction(fn ->
       with {:ok, %WorkRequest{} = work_request} <- get(repo, work_request_id),
            :ok <- Phase.require_writable(work_request),
            :ok <- ensure_no_open_questions(repo, work_request.id),
-           :ok <- require_package_batch(package_attrs),
-           {:ok, work_packages} <- insert_work_package_batch(repo, work_request, package_attrs) do
-        %{work_request: work_request, work_packages: work_packages}
+           {:ok, attrs} <- work_package_attrs(repo, work_request, attrs, next_sequence(repo, WorkPackage, work_request.id)),
+           {:ok, work_package} <- attrs |> WorkPackage.create_changeset() |> repo.insert() do
+        work_package
       else
         {:error, reason} -> repo.rollback(reason)
       end
@@ -723,31 +725,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     end)
   end
 
-  defp require_package_batch([first | rest]) when is_map(first) do
-    if Enum.all?(rest, &is_map/1), do: :ok, else: {:error, :invalid_work_package}
-  end
-
-  defp require_package_batch(_packages), do: {:error, :invalid_work_package}
-
-  defp insert_work_package_batch(repo, %WorkRequest{} = work_request, package_attrs) do
-    first_sequence = next_sequence(repo, WorkPackage, work_request.id)
-
-    package_attrs
-    |> Enum.with_index(first_sequence)
-    |> Enum.reduce_while({:ok, []}, fn {attrs, sequence}, {:ok, packages} ->
-      with {:ok, attrs} <- work_package_attrs(repo, work_request, attrs, sequence),
-           {:ok, work_package} <- attrs |> WorkPackage.create_changeset() |> repo.insert() do
-        {:cont, {:ok, [work_package | packages]}}
-      else
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, packages} -> {:ok, Enum.reverse(packages)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
   defp work_package_attrs(repo, %WorkRequest{} = work_request, attrs, sequence) do
     attrs =
       attrs
@@ -771,8 +748,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       |> Map.put("contract_revision", 1)
 
     with :ok <- validate_executable_work_package_kind(attrs),
-         :ok <- WorkPackageDeliveryScope.validate(repo, work_request, attrs),
-         :ok <- validate_product_tree_node(repo, work_request.id, Map.get(attrs, "product_tree_node_id")) do
+         :ok <- WorkPackageDeliveryScope.validate(repo, work_request, attrs) do
       {:ok, attrs}
     end
   end
@@ -788,18 +764,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   defp validate_executable_work_package_kind(%{"kind" => kind}) do
     if kind in WorkPackage.kinds(), do: :ok, else: {:error, :invalid_work_package}
   end
-
-  defp validate_product_tree_node(_repo, _work_request_id, nil), do: :ok
-  defp validate_product_tree_node(_repo, _work_request_id, ""), do: :ok
-
-  defp validate_product_tree_node(repo, work_request_id, node_id) when is_binary(node_id) do
-    case repo.get(Node, node_id) do
-      %Node{work_request_id: ^work_request_id} -> :ok
-      _node -> {:error, :not_found}
-    end
-  end
-
-  defp validate_product_tree_node(_repo, _work_request_id, _node_id), do: {:error, :not_found}
 
   defp require_contract_revision(%WorkPackage{contract_revision: revision}, revision), do: :ok
   defp require_contract_revision(%WorkPackage{}, _expected_revision), do: {:error, :stale_status}
@@ -818,7 +782,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       |> normalize_keys()
       |> rename_key("review", "review_requirement")
       |> Map.take([
-        "product_tree_node_id",
+        "group",
         "kind",
         "title",
         "goal",
@@ -842,7 +806,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       |> Map.merge(attrs)
 
     with :ok <- validate_executable_work_package_kind(effective_contract),
-         :ok <- validate_product_tree_node(repo, work_package.work_request_id, Map.get(attrs, "product_tree_node_id")),
          {:ok, %WorkRequest{} = work_request} <- get(repo, work_package.work_request_id),
          :ok <- Phase.require_writable(work_request),
          :ok <- WorkPackageDeliveryScope.validate(repo, work_request, effective_contract) do

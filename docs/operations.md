@@ -65,8 +65,8 @@ for optional milestone updates and resolving answers given in the conversation.
 MCP `read_work_request` defaults to a compact overview: request description,
 open questions, package status/PR/next action, and five recent decision previews.
 Omission counts point to `detail: "full"` for complete contracts and history.
-`read_plan` uses the same detail option for package fields while retaining the
-execution graph and dependency evidence. Large progress documents summarize five
+Its `plan`, `board` and `package` views use the same detail option; the plan
+view keeps the execution graph and dependency evidence in both. Large progress documents summarize five
 recent events; request full detail with the same document/cursor to read their
 evidence bodies. Smaller reads retain their existing payloads. Herdr and the web
 board use their own HTTP projections and keep complete detail.
@@ -130,7 +130,7 @@ output.
 2. Give an architect the WorkRequest id; its first plan write makes its terminal
    the owner.
 3. Answer material clarification questions.
-4. Let the architect create optional Groups, WorkPackages, and dependencies.
+4. Let the architect plan WorkPackages, optional group paths and dependencies.
 5. Dispatch dependency-ready WorkPackages to isolated workers.
 6. Merge reviewed pull requests.
 7. Reconcile or record terminal delivery evidence.

@@ -60,17 +60,18 @@ $ExpectedReadCalls = @(
     allowedReasons = @("not_found")
   },
   @{
-    name = "read_plan"
+    name = "read_work_request"
     arguments = @{
       work_request_id = "WR-SMOKE-MISSING-READ"
-      view = "groups_with_work_package_refs"
+      view = "plan"
     }
     allowedReasons = @("not_found")
   },
   @{
-    name = "read_delivery_board"
+    name = "read_work_request"
     arguments = @{
       work_request_id = "WR-SMOKE-MISSING-READ"
+      view = "board"
     }
     allowedReasons = @("not_found")
   }

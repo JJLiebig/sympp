@@ -140,25 +140,11 @@ function buildJob(detail, now, runs) {
   const repo = request.repo_display || request.repo || "";
   const repoShort = shortRepo(repo);
   const area = Array.isArray(request.area_path) && request.area_path.length ? request.area_path : ["Unfiled", repoShort || "Unknown"];
-  const nodes = (detail.product_tree?.nodes ?? []).filter((node) => node?.id);
-  const groups = new Map(nodes.map((node) => [node.id, node.title || "Untitled"]));
-  const packages = (detail.work_packages ?? []).map((slice) => buildPackage(slice, groups, now, runs)).sort((a, b) => a.seq - b.seq);
-  // Each package's top-level group, the architect's phase, as the web board strips them.
-  const parents = new Map(nodes.map((node) => [node.id, node.parent_id ?? null]));
-  const rootOf = (id) => {
-    for (let at = id, seen = 0; at && seen <= parents.size; seen += 1) {
-      const up = parents.get(at);
-      if (!up || !parents.has(up)) return parents.has(at) ? at : null;
-      at = up;
-    }
-    return null;
-  };
-  const sliceNode = new Map((detail.work_packages ?? []).map((slice) => [slice.work_package_id || slice.id, slice.product_tree_node_id ?? null]));
-  for (const pkg of packages) pkg.phase = rootOf(sliceNode.get(pkg.id));
-  // In the architect's order; a board without positions keeps the order its packages are planned in.
-  const firstSeq = (id) => Math.min(Infinity, ...packages.filter((pkg) => pkg.phase === id).map((pkg) => pkg.seq));
-  const phases = nodes.filter((node) => !node.parent_id || !parents.has(node.parent_id))
-    .sort((a, b) => (a.position ?? Infinity) - (b.position ?? Infinity) || firstSeq(a.id) - firstSeq(b.id)).map((node) => node.id);
+  const packages = (detail.work_packages ?? []).map((slice) => buildPackage(slice, now, runs)).sort((a, b) => a.seq - b.seq);
+  // A package's group is a path such as "Backend / Billing"; its first segment is the architect's
+  // phase, as the web board strips them, in the order the planned packages first name them.
+  for (const pkg of packages) pkg.phase = pkg.group ? pkg.group.split(" / ")[0] : null;
+  const phases = [...new Set(packages.map((pkg) => pkg.phase).filter(Boolean))];
   const titles = new Map(packages.map((pkg) => [pkg.id, pkg.title]));
   for (const pkg of packages) pkg.after = pkg.unmet.map((id) => titles.get(id) ?? id);
   const questions = (detail.clarification_questions ?? []).filter((q) => q.id).map((q) => ({
@@ -230,7 +216,7 @@ function asksOf(list) {
   }));
 }
 
-function buildPackage(slice, groups, now, runs) {
+function buildPackage(slice, now, runs) {
   const board = slice.board_state ?? null;
   const pr = slice.pr_signal ?? {};
   const review = slice.review_signal ?? {};
@@ -246,7 +232,7 @@ function buildPackage(slice, groups, now, runs) {
     title: slice.title || slice.id,
     repo: slice.repo_display || slice.repo || null,
     seq: slice.sequence ?? 0,
-    group: groups.get(slice.product_tree_node_id) ?? null,
+    group: typeof slice.group === "string" && slice.group.trim() ? slice.group : null,
     stage,
     outcome,
     since: observed ?? ms(slice.dispatched_at) ?? ms(slice.inserted_at),

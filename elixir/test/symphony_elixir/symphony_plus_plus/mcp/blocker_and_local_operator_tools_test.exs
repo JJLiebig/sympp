@@ -81,7 +81,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerAndLocalOperatorToolsTest d
           "jsonrpc" => "2.0",
           "id" => "remote-work-request-read-denied",
           "method" => "tools/call",
-          "params" => %{"name" => "read_delivery_board", "arguments" => arguments}
+          "params" => %{"name" => "read_work_request", "arguments" => Map.put(arguments, "view", "board")}
         },
         local_mcp_server(remote_config, "remote-work-request-read-state")
       )

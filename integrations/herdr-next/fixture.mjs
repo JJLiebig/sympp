@@ -115,22 +115,18 @@ export function variantPayload(variant) {
   board.work_request_details.push(
     {
       work_request: { id: 'wr-restore', title: 'Restore sessions after a reboot', repo: 'owner/web', phase: 'active', inserted_at: at(2400) },
-      // The architect's groups: the web board strips each top-level one apart, nested ones inside it.
-      product_tree: { nodes: [
-        { id: 'n-core', title: 'Core', position: 0, parent_id: null }, { id: 'n-recover', title: 'Recovery', position: 1, parent_id: null },
-        { id: 'n-shell', title: 'Shell', position: 0, parent_id: 'n-recover' }, { id: 'n-polish', title: 'Polish', position: 2, parent_id: null },
-      ] },
+      // The architect's group paths: the web board strips each top-level group apart, nested ones inside it.
       work_packages: [
-        step('r-1', 'Session ledger', 1, 'done', 1500, { product_tree_node_id: 'n-core', repo: 'owner/api' }),
-        step('r-2', 'Holder adoption', 2, 'done', 1200, { product_tree_node_id: 'n-core', repo: 'owner/api' }),
-        step('r-3', 'Resume command table', 3, 'done', 700, { product_tree_node_id: 'n-core' }),
-        step('r-4', 'Recovery toast', 4, 'review', 50, { product_tree_node_id: 'n-recover', pr_signal: { status: 'open', number: 830, url: 'https://github.com/owner/web/pull/830', checks: { status: 'passing' } },
+        step('r-1', 'Session ledger', 1, 'done', 1500, { group: 'Core', repo: 'owner/api' }),
+        step('r-2', 'Holder adoption', 2, 'done', 1200, { group: 'Core', repo: 'owner/api' }),
+        step('r-3', 'Resume command table', 3, 'done', 700, { group: 'Core' }),
+        step('r-4', 'Recovery toast', 4, 'review', 50, { group: 'Recovery', pr_signal: { status: 'open', number: 830, url: 'https://github.com/owner/web/pull/830', checks: { status: 'passing' } },
           review_signal: { type: 'review_suite', mode: 'fast', status: 'in_progress', round: quiet ? 1 : 3, started_at: at(quiet ? 50 : 260), round_started_at: at(50), steps: reviewSteps('deep-signoff') } }),
-        step('r-5', 'Shell fallback', 5, 'checks', 35, { product_tree_node_id: 'n-shell', repo: 'owner/api', pr_signal: { status: 'open', number: 14, checks: { status: quiet ? 'pending' : 'failing' } } }),
-        step('r-6', 'Remote cores', 6, 'build', 25, { product_tree_node_id: 'n-recover', repo: 'owner/api' }),
-        step('r-7', 'Settings toggle', 7, 'merge', 10, { product_tree_node_id: 'n-polish', pr_signal: { status: 'open', number: 829, checks: { status: 'passing' } } }),
-        pkg('r-8', 'Docs and changelog', 8, { stage: 'queued', track: 'pr' }, { product_tree_node_id: 'n-polish', repo: 'owner/notes', dependency_signal: { unmet_work_package_ids: ['r-4'] } }),
-        pkg('r-9', 'Crash replay test', 9, { stage: 'queued', track: 'pr' }, { product_tree_node_id: 'n-polish' }),
+        step('r-5', 'Shell fallback', 5, 'checks', 35, { group: 'Recovery / Shell', repo: 'owner/api', pr_signal: { status: 'open', number: 14, checks: { status: quiet ? 'pending' : 'failing' } } }),
+        step('r-6', 'Remote cores', 6, 'build', 25, { group: 'Recovery', repo: 'owner/api' }),
+        step('r-7', 'Settings toggle', 7, 'merge', 10, { group: 'Polish', pr_signal: { status: 'open', number: 829, checks: { status: 'passing' } } }),
+        pkg('r-8', 'Docs and changelog', 8, { stage: 'queued', track: 'pr' }, { group: 'Polish', repo: 'owner/notes', dependency_signal: { unmet_work_package_ids: ['r-4'] } }),
+        pkg('r-9', 'Crash replay test', 9, { stage: 'queued', track: 'pr' }, { group: 'Polish' }),
       ],
     },
     {

@@ -36,7 +36,7 @@ export type PackageOperationalState = {
 export type WorkRequestPackage = {
   id: string;
   work_request_id: string;
-  product_tree_node_id?: string | null;
+  group?: string | null;
   sequence?: number;
   title?: string | null;
   repo?: string | null;

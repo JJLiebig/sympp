@@ -81,8 +81,13 @@ async function remoteArguments(body, factoryOwned) {
       if (!Object.hasOwn(args, "repo")) args.repo = await origin(process.cwd());
       if (Array.isArray(args.repo_scopes)) args.repo_scopes = await Promise.all(args.repo_scopes.map(repoObject));
     }
-    if (params.name === "slice_work_request" && Array.isArray(args.work_packages)) args.work_packages = await Promise.all(args.work_packages.map(repoObject));
-    if (params.name === "update_work_package") args.patch = await repoObject(args.patch);
+    if (params.name === "edit_plan" && Array.isArray(args.ops)) {
+      args.ops = await Promise.all(args.ops.map(async op => {
+        if (op?.op === "add_package") return repoObject(op);
+        if (op?.op === "update_package" && op.patch) return { ...op, patch: await repoObject(op.patch) };
+        return op;
+      }));
+    }
     if (params.name === "prepare_work_package_worktree") delete args.target_repo_root;
     return { ...payload, params: { ...params, arguments: args } };
   }

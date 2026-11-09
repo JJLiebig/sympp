@@ -197,7 +197,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
     %{
       id: work_package.id,
       work_request_id: work_package.work_request_id,
-      group_id: work_package.product_tree_node_id,
+      group: work_package.group,
       sequence: work_package.sequence,
       kind: work_package.kind,
       title: work_package.title,

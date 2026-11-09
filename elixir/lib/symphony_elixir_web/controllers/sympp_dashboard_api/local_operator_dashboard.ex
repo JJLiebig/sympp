@@ -204,7 +204,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
           :repo,
           :repo_display,
           :sequence,
-          :product_tree_node_id,
+          :group,
           :status,
           :raw_status,
           :dispatched_at,
@@ -256,8 +256,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
 
   defp native_product_tree(tree) do
     tree
-    |> Map.take([:nodes, :execution_graph])
-    |> Map.update!(:nodes, fn nodes -> Enum.map(nodes, &Map.take(&1, [:id, :title])) end)
+    |> Map.take([:execution_graph])
     |> Map.update!(:execution_graph, &Map.take(&1, [:effective_edges]))
   end
 
@@ -553,38 +552,20 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     end
   end
 
+  # A package needing attention marks itself and every group on its path, so
+  # the inspector opens the groups that lead to it. A group's id is its path.
   defp herdr_attention_keys(board_detail) do
-    package_keys =
-      board_detail.work_packages
-      |> Enum.filter(&((get_in(&1, [:operational_state, :attention_items]) || []) != []))
-      |> MapSet.new(&"work_package:#{&1.id}")
-
-    package_ids = MapSet.new(package_keys, &String.replace_prefix(&1, "work_package:", ""))
-
-    nodes = board_detail.product_tree.nodes
-    groups_by_id = Map.new(nodes, &{&1.id, &1})
-
-    group_ids =
-      nodes
-      |> Enum.filter(fn node -> Enum.any?(node.work_package_ids || [], &MapSet.member?(package_ids, &1)) end)
-      |> Enum.reduce(MapSet.new(), fn node, ids -> put_herdr_group_ancestry(ids, node.id, groups_by_id) end)
-
-    group_keys = MapSet.new(group_ids, &"group:#{&1}")
-
-    package_keys
-    |> MapSet.union(group_keys)
+    board_detail.work_packages
+    |> Enum.filter(&((get_in(&1, [:operational_state, :attention_items]) || []) != []))
+    |> Enum.flat_map(fn package -> ["work_package:#{package.id}" | Enum.map(group_path_prefixes(package[:group]), &"group:#{&1}")] end)
+    |> Enum.uniq()
     |> Enum.sort()
   end
 
-  defp put_herdr_group_ancestry(ids, nil, _groups_by_id), do: ids
-
-  defp put_herdr_group_ancestry(ids, group_id, groups_by_id) do
-    if MapSet.member?(ids, group_id) do
-      ids
-    else
-      node = Map.get(groups_by_id, group_id)
-      put_herdr_group_ancestry(MapSet.put(ids, group_id), node && node.parent_id, groups_by_id)
-    end
+  defp group_path_prefixes(path) do
+    path
+    |> WorkPackage.group_segments()
+    |> Enum.scan(&"#{&2} / #{&1}")
   end
 
   defp herdr_worker_sessions(work_packages, contexts) do

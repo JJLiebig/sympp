@@ -6,7 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.Sanitizer
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, DependencyInputs, ExecutionGraph, Node}
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, DependencyInputs, ExecutionGraph}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
@@ -27,7 +27,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
     product_trees_by_request = preloaded_product_trees(opts)
     missing_work_request_ids = Enum.reject(work_request_ids, &Map.has_key?(product_trees_by_request, &1))
 
-    nodes_by_request = execution_nodes_by_request(repo, missing_work_request_ids)
     edges_by_request = execution_edges_by_request(repo, missing_work_request_ids)
 
     deliveries_by_request =
@@ -40,12 +39,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
       deliveries = Map.get(deliveries_by_request, work_request.id, [])
 
       product_tree =
-        product_tree_for_request(
-          work_request.id,
-          product_trees_by_request,
-          nodes_by_request,
-          edges_by_request
-        )
+        product_tree_for_request(work_request.id, product_trees_by_request, edges_by_request)
 
       candidates? = Enum.any?(product_tree.dependency_edges, &(&1.candidate_head_sha || &1.selection_updated_at))
 
@@ -71,36 +65,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
     end
   end
 
-  defp product_tree_for_request(work_request_id, product_trees_by_request, nodes_by_request, edges_by_request) do
+  defp product_tree_for_request(work_request_id, product_trees_by_request, edges_by_request) do
     case Map.fetch(product_trees_by_request, work_request_id) do
       {:ok, {:ok, product_tree}} ->
         product_tree
 
       {:ok, {:error, _reason}} ->
-        %{nodes: [], dependency_edges: []}
+        %{dependency_edges: []}
 
       :error ->
-        %{
-          nodes: Map.get(nodes_by_request, work_request_id, []),
-          dependency_edges: Map.get(edges_by_request, work_request_id, [])
-        }
+        %{dependency_edges: Map.get(edges_by_request, work_request_id, [])}
     end
-  end
-
-  defp execution_nodes_by_request(_repo, []), do: %{}
-
-  defp execution_nodes_by_request(repo, work_request_ids) do
-    work_request_ids
-    |> Enum.chunk_every(@request_chunk_size)
-    |> Enum.flat_map(fn request_id_chunk ->
-      repo.all(
-        from(node in Node,
-          where: node.work_request_id in ^request_id_chunk,
-          order_by: [asc: node.work_request_id, asc: node.parent_id, asc: node.position, asc: node.created_at, asc: node.id]
-        )
-      )
-    end)
-    |> Enum.group_by(& &1.work_request_id)
   end
 
   defp execution_edges_by_request(_repo, []), do: %{}

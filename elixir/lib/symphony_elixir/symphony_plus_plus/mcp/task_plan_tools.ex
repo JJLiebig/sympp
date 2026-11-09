@@ -3,9 +3,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
 
   import Ecto.Query, only: [from: 2]
 
-  alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer, as: PlanningRenderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -18,23 +18,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
   @type repo :: module()
   @type result :: {:ok, map()} | {:tool_error, term()} | {:error, term()}
 
-  @doc "Reads one WorkPackage task plan by id."
-  @spec read_task_plan(repo(), String.t()) :: result()
-  def read_task_plan(repo, work_package_id) when is_binary(work_package_id), do: read_task_plan_for_package(repo, work_package_id)
-
-  defp read_task_plan_for_package(repo, work_package_id) do
+  @doc """
+  One WorkPackage's task plan for the package view: its version and up to
+  100 steps (`omitted_steps` counts the rest); with detail `full`, also the
+  rendered Markdown.
+  """
+  @spec task_plan(repo(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def task_plan(repo, work_package_id, detail) when is_binary(work_package_id) and detail in ["summary", "full"] do
     with {:ok, state} <- PlanningRepository.get_task_plan_render_state(repo, work_package_id),
-         {:ok, markdown} <- PlanningRenderer.render_state(state, "task_plan.md"),
-         uri = "sympp://work-packages/#{work_package_id}/task_plan.md",
-         version = plan_version(state.plan_version_material),
-         {:ok, virtual_payload} <- WorkerContext.virtual_file_payload(state, "task_plan.md", uri: uri, version: version) do
+         {:ok, text} <- task_plan_text(state, detail) do
       {:ok,
-       ToolResult.agent_tool_result(
-         Map.put(virtual_payload, "text", markdown),
-         fn -> WorkerContext.encode_tool_payload(virtual_payload) end
-       )}
+       %{"version" => plan_version(state.plan_version_material), "steps" => Enum.map(state.plan_nodes, &redacted_plan_node_payload/1)}
+       |> put_present("omitted_steps", if((state.plan_nodes_omitted_count || 0) > 0, do: state.plan_nodes_omitted_count))
+       |> put_present("text", text)}
     end
   end
+
+  defp redacted_plan_node_payload(%PlanNode{} = plan_node), do: Map.update!(plan_node_payload(plan_node), "title", &Redactor.redact_text/1)
+
+  defp put_present(payload, _key, nil), do: payload
+  defp put_present(payload, key, value), do: Map.put(payload, key, value)
+
+  defp task_plan_text(state, "full"), do: PlanningRenderer.render_state(state, "task_plan.md")
+  defp task_plan_text(_state, "summary"), do: {:ok, nil}
 
   @doc "Replaces task plan nodes of one WorkPackage, checking the expected plan version."
   @spec update_task_plan(repo(), String.t(), map()) :: result()

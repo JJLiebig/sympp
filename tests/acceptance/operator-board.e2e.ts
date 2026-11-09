@@ -16,12 +16,8 @@ test('operator sees dependency ordering, pending qualification and actual delive
     request = candidate.recorded.work_request_details.find((detail: any) => detail.work_request.title === 'Browser delivery').work_request.id;
   } else {
   request = await client.request('Browser delivery');
-  [first, second] = (await client.call('slice_work_request', {
-    work_packages: [contract('Service prerequisite'), contract('Dependent findings')],
-  })).work_package_ids;
-  await client.call('upsert_dependency', {
-    dependent: { kind: 'work_package', id: second }, prerequisite: { kind: 'work_package', id: first }, reason: 'The service must land first.',
-  });
+  [first, second] = (await client.addPackages([contract('Service prerequisite'), contract('Dependent findings')]));
+  await client.call('edit_plan', { ops: [{ op: 'set_dependency', from: second, to: first, reason: 'The service must land first.' }] });
   await client.reject('dispatch_work_package', { work_package_id: second }, 'unmet_work_package_dependencies');
   await candidate.capture('planned');
   }
@@ -90,9 +86,7 @@ test('operator sees dependency ordering, pending qualification and actual delive
   const reviewRepo = await repository(candidate.root, 'browser-review');
   const reviewClient = await candidate.factory!.client();
   const reviewing = await reviewClient.request('Provider-reported review wait', 'beta', reviewRepo.origin);
-  const [reviewWp] = (await reviewClient.call('slice_work_request', {
-    work_packages: [contract('Review provider findings', { review: { type: 'review-suite', args: { mode: 'fast' } } })],
-  })).work_package_ids;
+  const [reviewWp] = (await reviewClient.addPackages([contract('Review provider findings', { review: { type: 'review-suite', args: { mode: 'fast' } } })]));
   await reviewClient.call('dispatch_work_package', { work_package_id: reviewWp });
   const receipt = await installReviewProvider(candidate);
   const prepared = await reviewClient.call('prepare_work_package_worktree', { work_package_id: reviewWp, target_repo_root: reviewRepo.checkout });
@@ -112,7 +106,7 @@ test('operator sees dependency ordering, pending qualification and actual delive
 test('operator attention differs from explicit blockers and settings/archive actions persist', async ({ candidate, app, screen, browser }) => {
   const { client } = candidate;
   const request = await client.request('Operator choice');
-  const [wp] = (await client.call('slice_work_request', { work_packages: [contract('Bounded findings')] })).work_package_ids;
+  const [wp] = (await client.addPackages([contract('Bounded findings')]));
   await client.call('dispatch_work_package', { work_package_id: wp });
   const prematureArchive = await client.operator(`/api/v1/sympp/operator/work-requests/${request}/archive`, {});
   expect(prematureArchive.status).toBe(422);

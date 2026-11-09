@@ -15,7 +15,7 @@ export const initialize = {
 export const tool = (name: string, args: object = {}) => ({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } });
 
 export async function packages(architect: Client, titles: string[]) {
-  const ids = (await architect.call('slice_work_request', { work_packages: titles.map((title) => contract(title, { branch_pattern: 'feature/authority' })) })).work_package_ids;
+  const ids = await architect.addPackages(titles.map((title) => contract(title, { branch_pattern: 'feature/authority' })));
   for (const id of ids) await architect.call('dispatch_work_package', { work_package_id: id });
   return ids as string[];
 }

@@ -38,9 +38,7 @@ export function executionFrontierProjection(
   const seeds = frontierSeeds(graph.work_packages, liveSeeds, incoming, packages);
   const visible = frontierVisiblePackages(variant, seeds, incoming, outgoing);
   const visibleGroups = visibleGroupIds(graph, visible);
-  const endpointVisible = (endpoint: ExecutionGraphDependencyEndpoint) => endpoint.kind === "group"
-    ? visibleGroups.has(endpoint.id)
-    : visible.has(endpoint.id);
+  const endpointVisible = (endpoint: ExecutionGraphDependencyEndpoint) => visible.has(endpoint.id);
   const orderedIds = stablePackageIds(graph, packages);
   const hidden = hiddenPartitions(orderedIds, visible, seeds, incoming, outgoing);
   const model = {

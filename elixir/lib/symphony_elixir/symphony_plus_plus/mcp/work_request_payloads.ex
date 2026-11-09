@@ -4,7 +4,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, Node}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
@@ -213,7 +212,44 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
            "older_decisions" => max(length(decisions) - 5, 0),
            "decision_details" => length(decisions)
          },
-         "help" => "Use read_work_request with detail: full for all contracts, questions and decisions; read_plan for dependencies."
+         "help" => "Use read_work_request with detail: full for all contracts, questions and decisions; view: plan for dependencies."
+       }}
+    end
+  end
+
+  @doc """
+  One package of a WorkRequest: its contract, group path, revision, status,
+  next action, what it depends on and what depends on it. Summary keeps the
+  contract to title and goal; full adds the whole contract and board state.
+  """
+  @spec work_package_read(repo(), WorkRequest.t(), WorkPackage.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def work_package_read(repo, %WorkRequest{} = work_request, %WorkPackage{} = package, detail) do
+    with {:ok, work_request_payload} <- put_phase(work_request(work_request), repo, work_request),
+         {:ok, board} <- DeliveryBoard.project(repo, work_request.id),
+         {:ok, graph} <- ProductTree.execution_graph(repo, work_request.id) do
+      row = board |> delivery_board() |> Map.fetch!("work_packages") |> Enum.find(%{}, &(&1["id"] == package.id))
+
+      read =
+        if row == %{},
+          do: %{"next_action" => Lifecycle.next_action(package).action || "none"},
+          else: work_package_read_summary(row)
+
+      contract =
+        if detail == "full",
+          do: package |> work_package() |> Map.merge(plan_operational_work_package_fields(row)),
+          else: %{"id" => package.id, "title" => Redactor.redact_text(package.title), "goal" => Redactor.redact_text(package.goal)}
+
+      {:ok,
+       %{
+         "work_request" => Map.take(work_request_payload, ~w(id title phase next_action)),
+         "work_package" =>
+           contract
+           |> Map.merge(%{"group" => Redactor.redact_text(package.group), "status" => package.status, "revision" => package.contract_revision})
+           |> Map.merge(Map.take(read, ["next_action", "pr_url"]))
+           |> Map.merge(%{
+             "depends_on" => for(edge <- graph.effective_edges, edge.dependent_work_package_id == package.id, do: edge.prerequisite_work_package_id),
+             "dependents" => for(edge <- graph.effective_edges, edge.prerequisite_work_package_id == package.id, do: edge.dependent_work_package_id)
+           })
        }}
     end
   end
@@ -236,27 +272,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
 
   @spec plan_summary(map()) :: map()
   def plan_summary(payload) do
-    tree = payload["product_tree"]
-
-    tree = Enum.reduce(["work_packages", "work_package_refs"], tree, &compact_plan_packages/2)
+    plan = Map.update!(payload["plan"], "work_packages", &Enum.map(&1, fn package -> plan_package_summary(package) end))
 
     payload
     |> Map.put("work_request", Map.take(payload["work_request"], ~w(id title phase next_action)))
-    |> Map.put("product_tree", tree)
-    |> Map.put("omitted", %{"package_details" => length(Map.get(tree, "work_packages", Map.get(tree, "work_package_refs", [])))})
-    |> Map.put("help", "Use read_plan with detail: full and the same view for complete package details.")
-  end
-
-  defp compact_plan_packages(key, tree) do
-    case Map.fetch(tree, key) do
-      {:ok, packages} -> Map.put(tree, key, Enum.map(packages, &plan_package_summary/1))
-      :error -> tree
-    end
+    |> Map.put("plan", plan)
+    |> Map.put("omitted", %{"package_details" => length(plan["work_packages"])})
+    |> Map.put("help", "Use read_work_request with view: plan and detail: full for complete package contracts.")
   end
 
   defp plan_package_summary(package) do
     package
-    |> Map.take(~w(id title group_id sequence status attention_reason_codes))
+    |> Map.take(~w(id title group sequence status attention_reason_codes))
     |> Map.put("state", get_in(package, ["operational_state", "key"]))
   end
 
@@ -265,27 +292,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     if String.length(text) > limit, do: String.slice(text, 0, limit - 1) <> "…", else: text
   end
 
-  @spec work_request_product_tree(repo(), WorkRequest.t(), [WorkPackage.t()], map(), binary()) ::
-          {:ok, map()} | {:error, term()}
-  def work_request_product_tree(repo, %WorkRequest{} = work_request, work_packages, delivery_board, view) do
+  @doc """
+  The plan of a WorkRequest: its visible packages with their group paths and
+  operational state, dependency intents and the effective execution graph.
+  """
+  @spec work_request_plan(repo(), WorkRequest.t(), [WorkPackage.t()], map()) :: {:ok, map()} | {:error, term()}
+  def work_request_plan(repo, %WorkRequest{} = work_request, work_packages, delivery_board) do
     projection_work_package_payloads =
       delivery_board
       |> Map.fetch!(:work_packages)
       |> json_safe_payload()
       |> Enum.filter(&is_binary(get_in(&1, ["operational_state", "work_package_status"])))
-      |> merge_projection_group_ids(work_packages)
 
     visible_work_packages = visible_work_packages_from_projection(work_packages, projection_work_package_payloads)
-    work_package_payloads = product_tree_work_package_payloads(visible_work_packages, projection_work_package_payloads)
 
-    product_tree =
+    plan =
       repo
-      |> ProductTree.project(work_request.id, projection_work_package_payloads, product_tree_projection_opts(work_packages, projection_work_package_payloads))
-      |> public_product_tree()
-      |> product_tree_view_payload(work_package_payloads, view)
+      |> ProductTree.project(work_request.id, projection_work_package_payloads, visible_only?: true)
+      |> public_plan()
+      |> Map.put("work_packages", plan_work_package_payloads(visible_work_packages, projection_work_package_payloads))
 
     with {:ok, work_request_payload} <- put_phase(work_request(work_request), repo, work_request) do
-      {:ok, %{"work_request" => work_request_payload, "product_tree" => product_tree, "view" => view}}
+      {:ok, %{"work_request" => work_request_payload, "plan" => plan}}
     end
   end
 
@@ -368,7 +396,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     %{
       "id" => work_package.id,
       "work_request_id" => work_package.work_request_id,
-      "group_id" => work_package.product_tree_node_id,
+      "group" => Redactor.redact_text(work_package.group),
       "sequence" => work_package.sequence,
       "title" => Redactor.redact_text(work_package.title),
       "goal" => Redactor.redact_text(work_package.goal),
@@ -391,50 +419,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     |> Dashboard.put_attribution("dispatched_by", work_package.dispatched_by)
   end
 
-  @spec group(Node.t()) :: map()
-  def group(%Node{} = node) do
-    %{
-      "id" => node.id,
-      "work_request_id" => node.work_request_id,
-      "parent_group_id" => node.parent_id,
-      "title" => Redactor.redact_text(node.title),
-      "description" => Redactor.redact_text(node.description),
-      "kind" => Redactor.redact_text(node.node_kind),
-      "position" => node.position,
-      "created_by" => Redactor.redact_text(node.created_by),
-      "created_at" => timestamp(node.created_at),
-      "inserted_at" => timestamp(node.inserted_at),
-      "updated_at" => timestamp(node.updated_at)
-    }
-  end
+  @spec public_plan(map()) :: map()
+  def public_plan(projection) when is_map(projection) do
+    projection = json_safe_payload(projection)
 
-  @spec dependency_intent(DependencyEdge.t()) :: map()
-  def dependency_intent(%DependencyEdge{} = edge) do
-    {dependent, prerequisite} = dependency_endpoints(edge.kind, {edge.source_kind, edge.source_id}, {edge.target_kind, edge.target_id})
-
-    %{
-      "id" => edge.id,
-      "dependent" => dependency_endpoint_payload(dependent),
-      "prerequisite" => dependency_endpoint_payload(prerequisite),
-      "reason" => Redactor.redact_text(edge.reason),
-      "candidate_head_sha" => edge.candidate_head_sha,
-      "decision_ref" => Redactor.redact_output(edge.decision_ref),
-      "created_by" => Redactor.redact_text(edge.created_by),
-      "created_at" => timestamp(edge.created_at)
-    }
-  end
-
-  @spec public_product_tree(map()) :: map()
-  def public_product_tree(product_tree) when is_map(product_tree) do
-    product_tree = json_safe_payload(product_tree)
-
-    product_tree
-    |> Map.put("schema_version", "product_tree.v4")
-    |> Map.put("groups", Enum.map(Map.get(product_tree, "nodes", []), &public_group_payload/1))
-    |> Map.put("root_group_ids", Map.get(product_tree, "root_node_ids", []))
-    |> Map.put("dependency_intents", public_dependency_intents(Map.get(product_tree, "dependency_edges", [])))
-    |> Map.update("summary", %{}, &public_product_tree_summary/1)
-    |> Map.drop(["nodes", "root_node_ids", "dependency_edges"])
+    projection
+    |> Map.put("dependencies", public_dependencies(Map.get(projection, "dependency_edges", [])))
+    |> Map.drop(["dependency_edges", "memberships"])
   end
 
   @spec work_package_delivery(WorkPackageDelivery.t()) :: map()
@@ -494,72 +485,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     Enum.filter(work_packages, &MapSet.member?(visible_work_package_ids, &1.id))
   end
 
-  defp merge_projection_group_ids(projection_work_package_payloads, work_packages) do
-    group_ids_by_work_package_id = Map.new(work_packages, &{&1.id, &1.product_tree_node_id})
-
-    Enum.map(projection_work_package_payloads, fn payload ->
-      case Map.fetch(group_ids_by_work_package_id, map_get(payload, :id)) do
-        {:ok, group_id} -> Map.put(payload, "group_id", group_id)
-        :error -> payload
-      end
-    end)
-  end
-
-  defp product_tree_view_payload(product_tree, _work_package_payloads, "groups_only") do
-    product_tree
-    |> Map.put("groups", product_tree |> Map.get("groups", []) |> Enum.map(&group_only_payload/1))
-    |> Map.put("root_work_package_ids", [])
-    |> Map.put("dependency_intents", product_tree |> Map.get("dependency_intents", []) |> Enum.filter(&group_dependency?/1))
-    |> Map.put("execution_graph", omitted_execution_graph(Map.get(product_tree, "execution_graph", %{})))
-    |> Map.update("summary", %{"root_work_package_count" => 0}, &Map.put(&1, "root_work_package_count", 0))
-    |> Map.put("omitted_work_package_count", product_tree |> Map.get("summary", %{}) |> Map.get("work_package_count", 0))
-  end
-
-  defp product_tree_view_payload(product_tree, work_package_payloads, "groups_with_work_packages") do
-    Map.put(product_tree, "work_packages", work_package_payloads)
-  end
-
-  defp product_tree_view_payload(product_tree, work_package_payloads, "groups_with_work_package_refs") do
-    Map.put(product_tree, "work_package_refs", Enum.map(work_package_payloads, &product_tree_work_package_ref_payload/1))
-  end
-
-  defp product_tree_work_package_payloads(visible_work_packages, projection_work_package_payloads) do
+  defp plan_work_package_payloads(visible_work_packages, projection_work_package_payloads) do
     projection_work_package_payloads_by_id = Map.new(projection_work_package_payloads, &{map_get(&1, :id), &1})
 
     Enum.map(visible_work_packages, fn %WorkPackage{} = work_package ->
       work_package
       |> work_package()
-      |> Map.merge(product_tree_operational_work_package_fields(Map.get(projection_work_package_payloads_by_id, work_package.id, %{})))
+      |> Map.merge(plan_operational_work_package_fields(Map.get(projection_work_package_payloads_by_id, work_package.id, %{})))
     end)
   end
 
-  defp product_tree_projection_opts(work_packages, projection_work_package_payloads) do
-    all_ids = MapSet.new(work_packages, & &1.id)
-    visible_ids = MapSet.new(projection_work_package_payloads, &map_get(&1, :id))
-
-    [visible_only?: true, include_unowned_nodes?: MapSet.equal?(all_ids, visible_ids)]
-  end
-
-  defp product_tree_operational_work_package_fields(projection_work_package_payload) when is_map(projection_work_package_payload) do
+  defp plan_operational_work_package_fields(projection_work_package_payload) when is_map(projection_work_package_payload) do
     projection_work_package_payload
     |> Map.take(["raw_status", "delivery_outcome", "operational_state", "attention_reason_codes"])
     |> Map.put("status", map_get(projection_work_package_payload, :raw_status))
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
-  end
-
-  defp group_only_payload(group) when is_map(group) do
-    Map.drop(group, ["work_package_ids", "attention_count", "guidance_count", "blocker_count"])
-  end
-
-  defp group_dependency?(%{"dependent" => %{"kind" => "group"}, "prerequisite" => %{"kind" => "group"}}), do: true
-  defp group_dependency?(_dependency), do: false
-
-  defp product_tree_work_package_ref_payload(work_package) when is_map(work_package) do
-    work_package
-    |> Map.take(["id", "group_id", "sequence", "title", "status"])
-    |> Map.merge(product_tree_operational_work_package_fields(work_package))
-    |> Map.put("has_full_payload", false)
   end
 
   defp work_request_creator(%WorkRequest{} = work_request) do
@@ -598,66 +539,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     }
   end
 
-  defp public_group_payload(node) do
-    node
-    |> Map.take([
-      "id",
-      "title",
-      "description",
-      "position",
-      "metadata",
-      "created_by",
-      "created_at",
-      "updated_at",
-      "work_package_ids",
-      "work_package_count",
-      "attention_count",
-      "guidance_count",
-      "blocker_count"
-    ])
-    |> Map.put("parent_group_id", Map.get(node, "parent_id"))
-    |> Map.put("kind", Map.get(node, "node_kind"))
-    |> Map.put("child_group_count", Map.get(node, "child_node_count", 0))
-  end
-
-  defp public_dependency_intents(edges) do
+  # "from" depends on "to". Older ledgers may store the same dependency as
+  # "to blocks from".
+  defp public_dependencies(edges) do
     edges
     |> Enum.filter(&(Map.get(&1, "kind") in ["depends_on", "blocks"]))
     |> Enum.map(fn edge ->
-      source = Map.get(edge, "source", %{})
-      target = Map.get(edge, "target", %{})
-      {dependent, prerequisite} = dependency_endpoints(Map.get(edge, "kind"), endpoint_tuple(source), endpoint_tuple(target))
+      {from, to} = dependency_pair(Map.get(edge, "kind"), get_in(edge, ["source", "id"]), get_in(edge, ["target", "id"]))
 
       edge
-      |> Map.take(["id", "reason", "candidate_head_sha", "decision_ref", "created_by", "created_at"])
-      |> Map.put("dependent", dependency_endpoint_payload(dependent))
-      |> Map.put("prerequisite", dependency_endpoint_payload(prerequisite))
+      |> Map.take(["id", "reason", "candidate_head_sha", "created_by", "created_at"])
+      |> Map.merge(%{"from" => from, "to" => to})
     end)
   end
 
-  defp dependency_endpoints("blocks", source, target), do: {target, source}
-  defp dependency_endpoints(_kind, source, target), do: {source, target}
-
-  defp endpoint_tuple(endpoint), do: {Map.get(endpoint, "kind"), Map.get(endpoint, "id")}
-
-  defp dependency_endpoint_payload({"product_node", id}), do: %{"kind" => "group", "id" => id}
-  defp dependency_endpoint_payload({kind, id}), do: %{"kind" => kind, "id" => id}
-
-  defp public_product_tree_summary(summary) do
-    summary
-    |> Map.put("group_count", Map.get(summary, "node_count", 0))
-    |> Map.put("root_group_count", Map.get(summary, "root_node_count", 0))
-    |> Map.put("grouped_work_package_count", Map.get(summary, "node_work_package_count", 0))
-    |> Map.drop(["node_count", "root_node_count", "node_work_package_count"])
-  end
-
-  defp omitted_execution_graph(execution_graph) do
-    %{
-      "available" => Map.get(execution_graph, "available", false),
-      "cycle_count" => length(Map.get(execution_graph, "cycles", [])),
-      "omitted_work_package_count" => length(Map.get(execution_graph, "work_package_ids", []))
-    }
-  end
+  defp dependency_pair("blocks", source, target), do: {target, source}
+  defp dependency_pair(_kind, source, target), do: {source, target}
 
   defp timestamp(%DateTime{} = timestamp), do: DateTime.to_iso8601(timestamp)
 

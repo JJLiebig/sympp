@@ -54,7 +54,7 @@ type Slice = {
   sequence?: number;
   inserted_at?: string | null;
   dispatched_at?: string | null;
-  product_tree_node_id?: string | null;
+  group?: string | null;
   review?: { args?: { mode?: string | null } | null } | null;
   delivery?: { outcome?: string | null; legacy_status?: string | null; recorded_at?: string | null; pr_merged_at?: string | null } | null;
   operational_state?: { key?: string | null } | null;
@@ -77,7 +77,6 @@ type OperatorReport = {
 type Detail = {
   work_request: { id: string; title?: string | null; repo?: string | null; repo_display?: string | null; base_branch?: string | null; inserted_at?: string | null; completed_at?: string | null; phase?: string | null; operator_report?: OperatorReport | null; area_path?: string[] | null; default_branch?: string | null; deployments?: Deployments | null };
   work_packages?: Slice[];
-  product_tree?: { nodes?: Array<{ id: string; title?: string | null; position?: number; parent_id?: string | null }> } | null;
 };
 // What the operator can change. A backend that lacks a setting leaves it out.
 export type Settings = {
@@ -112,6 +111,8 @@ function buildGoal(detail: Detail, history: Record<string, HistoryEvent[]>, now:
   const repo = request.repo_display || request.repo || "";
   const area = areaOf(request.area_path, repo);
 
+  const pkgs = (detail.work_packages ?? []).map((slice) => ({ ...buildPkg(slice, history[slice.work_package_id || slice.id] ?? [], now), goalTitle: title, area }));
+
   return {
     id: request.id,
     title,
@@ -123,11 +124,25 @@ function buildGoal(detail: Detail, history: Record<string, HistoryEvent[]>, now:
     createdAt: ms(request.inserted_at) ?? now,
     closedAt: ms(request.completed_at),
     phase: request.phase ?? null,
-    pkgs: (detail.work_packages ?? []).map((slice) => ({ ...buildPkg(slice, history[slice.work_package_id || slice.id] ?? [], now), goalTitle: title, area })),
+    pkgs,
     asks: asksOf(request.operator_report?.human_escalation, now),
     report: reportOf(request.operator_report, now),
-    groups: [...(detail.product_tree?.nodes ?? [])].sort((left, right) => (left.position ?? 0) - (right.position ?? 0)).map((node) => ({ id: node.id, title: node.title || "Untitled", parentId: node.parent_id ?? null })),
+    groups: groupsOf(pkgs),
   };
+}
+
+// A package's group is a path such as "Backend / Billing". Every prefix is a group, nested under the
+// one before it, in the order the planned packages first name them.
+export function groupsOf(pkgs: Pkg[]): Group[] {
+  const groups = new Map<string, Group>();
+  for (const pkg of [...pkgs].sort((left, right) => left.seq - right.seq)) {
+    const names = pkg.groupId ? pkg.groupId.split(" / ") : [];
+    names.forEach((name, depth) => {
+      const id = names.slice(0, depth + 1).join(" / ");
+      if (!groups.has(id)) groups.set(id, { id, title: name, parentId: depth > 0 ? names.slice(0, depth).join(" / ") : null });
+    });
+  }
+  return [...groups.values()];
 }
 
 // Only an explicit escalation by the architect asks for the operator. An open question does not.
@@ -178,7 +193,7 @@ function blankPkg(slice: Slice, now: number): Pkg {
     seq: slice.sequence ?? 0,
     short: slice.kind === "investigation",
     reviewMode: slice.review?.args?.mode ?? null,
-    groupId: slice.product_tree_node_id ?? null,
+    groupId: slice.group ?? null,
     goalTitle: "",
     area: [],
     createdAt: ms(slice.inserted_at) ?? now,

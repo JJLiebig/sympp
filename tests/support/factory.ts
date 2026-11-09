@@ -60,7 +60,7 @@ export const herdr = (terminal: string, labels: Record<string, string> = {}) => 
 });
 
 // Writes that name only a WorkRequest; the client passes the request it works on.
-const requestScoped = new Set(['slice_work_request', 'upsert_group', 'delete_group', 'upsert_dependency', 'delete_dependency', 'read_delivery_board', 'reconcile_work_request', 'set_report']);
+const requestScoped = new Set(['edit_plan', 'reconcile_work_request', 'set_report']);
 
 export class Client {
   private sequence = 0;
@@ -163,6 +163,16 @@ export class Client {
     expect(response.error, `${name}: ${JSON.stringify(response.error)}`).toBeUndefined();
     expect(response.result.isError).not.toBe(true);
     return response.result.structuredContent;
+  }
+
+  // Adds packages with one edit_plan call and returns their ids in order.
+  async addPackages(contracts: object[], args: object = {}): Promise<string[]> {
+    const edited = await this.call('edit_plan', { ...args, ops: contracts.map((contract) => ({ op: 'add_package', ...contract })) });
+    return edited.applied.map((op: any) => op.work_package_id);
+  }
+
+  async board(workRequest = this.workRequest, detail = 'summary') {
+    return (await this.call('read_work_request', { work_request_id: workRequest, view: 'board', detail })).delivery_board;
   }
 
   async tool(name: string, args: object = {}) {

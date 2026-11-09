@@ -7,11 +7,11 @@
     "bytes": 2048
   },
   {
-    "operation": "read_plan",
+    "operation": "plan_view",
     "concurrency": 1,
     "p95": 230,
     "queries": 43,
-    "bytes": 27648
+    "bytes": 36864
   },
   {
     "operation": "read_work_request",
@@ -42,11 +42,11 @@
     "bytes": 2048
   },
   {
-    "operation": "read_plan",
+    "operation": "plan_view",
     "concurrency": 10,
     "p95": 1040,
     "queries": 43,
-    "bytes": 28672
+    "bytes": 37888
   },
   {
     "operation": "read_work_request",

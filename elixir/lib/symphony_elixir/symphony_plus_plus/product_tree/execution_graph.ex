@@ -56,8 +56,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
   end
 
   @spec evaluate(map(), [map() | struct()], [map() | struct()], map()) :: graph()
-  def evaluate(%{nodes: nodes, dependency_edges: dependency_edges}, work_packages, deliveries, context)
-      when is_list(nodes) and is_list(dependency_edges) and is_list(work_packages) and is_list(deliveries) do
+  def evaluate(%{dependency_edges: dependency_edges}, work_packages, deliveries, context)
+      when is_list(dependency_edges) and is_list(work_packages) and is_list(deliveries) do
     work_packages =
       work_packages
       |> Enum.map(&Map.put(&1, :status, value(&1, :status) || value(&1, :raw_status)))
@@ -65,12 +65,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
 
     work_package_ids = Enum.map(work_packages, &value(&1, :id))
     work_package_id_set = MapSet.new(work_package_ids)
-    hard_dependency_edges = Enum.filter(dependency_edges, &(value(&1, :kind) in @hard_edge_kinds))
-    group_members = group_members(nodes, work_packages, referenced_group_ids(hard_dependency_edges))
 
     effective_edges =
-      hard_dependency_edges
-      |> effective_edges(group_members)
+      dependency_edges
+      |> Enum.filter(&(value(&1, :kind) in @hard_edge_kinds))
+      |> effective_edges()
       |> Enum.filter(
         &(MapSet.member?(work_package_id_set, &1.prerequisite_work_package_id) and
             MapSet.member?(work_package_id_set, &1.dependent_work_package_id))
@@ -144,67 +143,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
     end
   end
 
-  defp group_members(nodes, work_packages, referenced_group_ids) do
-    direct_members = Enum.group_by(work_packages, &package_group_id/1, &value(&1, :id))
-    children = Enum.group_by(nodes, &value(&1, :parent_id), &value(&1, :id))
-
-    Map.new(referenced_group_ids, fn group_id ->
-      {group_id, descendant_members(group_id, children, direct_members, %{})}
-    end)
-  end
-
-  defp referenced_group_ids(dependency_edges) do
-    dependency_edges
-    |> Enum.flat_map(fn edge ->
-      [endpoint(edge, :source), endpoint(edge, :target)]
-    end)
-    |> Enum.flat_map(fn
-      {"product_node", id} when is_binary(id) -> [id]
-      _endpoint -> []
-    end)
-    |> MapSet.new()
-    |> MapSet.to_list()
-  end
-
-  defp package_group_id(work_package), do: value(work_package, :group_id) || value(work_package, :product_tree_node_id)
-
-  defp descendant_members(group_id, children, direct_members, visited) do
-    if Map.has_key?(visited, group_id) do
-      []
-    else
-      visited = Map.put(visited, group_id, true)
-
-      (Map.get(direct_members, group_id, []) ++
-         Enum.flat_map(Map.get(children, group_id, []), &descendant_members(&1, children, direct_members, visited)))
-      |> Enum.uniq()
-      |> Enum.sort()
-    end
-  end
-
-  defp effective_edges(dependency_edges, group_members) do
+  defp effective_edges(dependency_edges) do
     dependency_edges
     |> Enum.sort_by(&{value(&1, :created_at), value(&1, :id)})
     |> Enum.reduce(%{}, fn edge, acc ->
-      {prerequisite_endpoint, dependent_endpoint} =
+      {prerequisite_id, dependent_id} =
         case value(edge, :kind) do
-          "depends_on" -> {endpoint(edge, :target), endpoint(edge, :source)}
-          "blocks" -> {endpoint(edge, :source), endpoint(edge, :target)}
+          "depends_on" -> {value(edge, :target_id), value(edge, :source_id)}
+          "blocks" -> {value(edge, :source_id), value(edge, :target_id)}
         end
 
-      prerequisite_ids = expand_endpoint(prerequisite_endpoint, group_members)
-      dependent_ids = expand_endpoint(dependent_endpoint, group_members)
-      dependent_id_set = MapSet.new(dependent_ids)
-      shared_ids = MapSet.new(Enum.filter(prerequisite_ids, &MapSet.member?(dependent_id_set, &1)))
-
-      for prerequisite_id <- prerequisite_ids,
-          dependent_id <- dependent_ids,
-          not (MapSet.member?(shared_ids, prerequisite_id) and MapSet.member?(shared_ids, dependent_id)),
-          reduce: acc do
-        edges ->
-          Map.update(edges, {prerequisite_id, dependent_id}, [constraint(edge)], fn constraints ->
-            [constraint(edge) | constraints]
-          end)
-      end
+      Map.update(acc, {prerequisite_id, dependent_id}, [constraint(edge)], &[constraint(edge) | &1])
     end)
     |> Enum.map(fn {{prerequisite_id, dependent_id}, constraints} ->
       %{
@@ -218,11 +167,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
   end
 
   defp constraint(edge), do: %{dependency_id: value(edge, :id), candidate_head_sha: value(edge, :candidate_head_sha), selection_updated_at: value(edge, :selection_updated_at)}
-
-  defp endpoint(edge, side), do: {value(edge, String.to_atom("#{side}_kind")), value(edge, String.to_atom("#{side}_id"))}
-  defp expand_endpoint({"work_package", id}, _group_members), do: [id]
-  defp expand_endpoint({"product_node", id}, group_members), do: Map.get(group_members, id, [])
-  defp expand_endpoint(_endpoint, _group_members), do: []
 
   defp topology(work_package_ids, pairs) do
     graph = :digraph.new()

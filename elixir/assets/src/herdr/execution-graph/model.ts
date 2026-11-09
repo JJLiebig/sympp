@@ -1,6 +1,6 @@
 import type { PackageOperationalState, WorkPackageActivitySignal, WorkPackageDependencySignal, WorkPackageMergeEligibility, WorkPackagePrSignal, WorkPackageReviewSignal, WorkPackageWorkerSignal } from "../work-request";
 import { isFinishedBoardStatus } from "../operational-state";
-export type GraphEntityKind = "group" | "work_package";
+export type GraphEntityKind = "work_package";
 export type ExecutionGraphGroup = {
   id: string;
   parent_group_id?: string | null;

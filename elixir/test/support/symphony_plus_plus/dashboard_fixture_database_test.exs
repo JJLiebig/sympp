@@ -15,7 +15,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
   @timestamp_tables ~w(
     sympp_work_requests
     sympp_work_packages
-    sympp_product_tree_nodes
     sympp_product_tree_dependency_edges
     sympp_progress_events
     sympp_agent_runs
@@ -407,7 +406,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
         repo: Keyword.get(opts, :repo, work_request.repo),
         base_branch: Keyword.get(opts, :base_branch, work_request.base_branch),
         sequence: sequence,
-        product_tree_node_id: group_id,
+        group: group_id,
         branch_pattern: "feat/#{String.downcase(id)}",
         allowed_file_globs: ["fixture/**"],
         forbidden_file_globs: [],
@@ -422,20 +421,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
     work_package
   end
 
-  defp group!(repo, work_request_id, id, title, position) do
-    {:ok, node} =
-      ProductTreeRepository.create_node(repo, %{
-        id: id,
-        work_request_id: work_request_id,
-        title: title,
-        node_kind: "group",
-        position: position,
-        created_by: "fixture",
-        created_at: at(position)
-      })
-
-    node
-  end
+  # A group is a path on its packages; the fixture's group handle carries it.
+  defp group!(_repo, _work_request_id, _id, title, _position), do: %{id: title}
 
   defp depends_on!(repo, work_request_id, dependent_id, prerequisite_id, index) do
     {:ok, _edge} =

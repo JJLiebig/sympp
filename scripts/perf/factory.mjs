@@ -39,7 +39,7 @@ try {
       await call("initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "factory-perf", version: "1" } });
       return call;
     }));
-    for (const operation of ["list_work_requests", "read_plan", "read_work_request", "board", "dispatch_work_package"]) {
+    for (const operation of ["list_work_requests", "plan_view", "read_work_request", "board", "dispatch_work_package"]) {
       for (let round = 0; round < (concurrency === 1 ? 30 : 3); round++) {
         const results = await Promise.allSettled(clients.map(async (call) => {
           let metric;
@@ -57,7 +57,8 @@ try {
           } else {
             const args = operation === "list_work_requests" ? {} : { work_request_id: "WR-FIXTURE-FANOUT" };
             if (operation === "dispatch_work_package") args.work_package_id = `WP-PERF-${++dispatch}`;
-            metric = await call("tools/call", { name: operation, arguments: args });
+            if (operation === "plan_view") args.view = "plan";
+            metric = await call("tools/call", { name: operation === "plan_view" ? "read_work_request" : operation, arguments: args });
           }
           raw.push({ operation, concurrency, ...metric });
         }));
