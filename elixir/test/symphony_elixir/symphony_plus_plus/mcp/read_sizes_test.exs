@@ -108,7 +108,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
     assert summary["work_request"]["human_description"] == description()
     assert summary["work_request"]["phase"] == "active"
     assert length(summary["work_packages"]) == 28
-    assert hd(summary["work_packages"])["next_action"] == "wait"
+    # No worker terminal has been seen for the dispatched package yet.
+    assert hd(summary["work_packages"])["next_action"] == "run_launch_line"
     assert List.last(summary["work_packages"])["next_action"] == "dispatch_work_package"
     refute Map.has_key?(hd(summary["work_packages"]), "goal")
     assert length(summary["clarification_questions"]) == 1
@@ -150,7 +151,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
     repo.update!(Ecto.Changeset.change(Enum.at(packages, 1), status: "ended"))
     changed = mcp_tool(repo, architect, "read_work_request", %{"work_request_id" => request.id})["result"]["structuredContent"]
     assert hd(changed["work_packages"])["pr_url"] == "https://github.com/nextide/symphony-plus-plus/pull/123"
-    assert Enum.at(changed["work_packages"], 1)["next_action"] == "reconcile_work_request"
+    assert Enum.at(changed["work_packages"], 1)["next_action"] == "sync_pr"
     repo.update!(Ecto.Changeset.change(Enum.at(packages, 1), status: "dispatched"))
 
     assert {:ok, _delivery} =

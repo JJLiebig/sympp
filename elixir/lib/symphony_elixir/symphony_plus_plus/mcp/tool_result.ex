@@ -177,20 +177,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
   defp compact_tool_entry("audit_event", key, value),
     do: {key, compact_status_payload(value, ["id", "status", "summary", "idempotency_key"])}
 
-  defp compact_tool_entry("reconciliation", key, value) when is_map(value),
-    do:
-      {key,
-       compact_status_payload(value, [
-         "mode",
-         "applied?",
-         "changed?",
-         "proposed_count",
-         "applied_count",
-         "recorded_delivery_count",
-         "missing_delivery_count",
-         "results"
-       ])}
-
   defp compact_tool_entry(_name, key, value), do: {key, compact_tool_value(value)}
 
   defp compact_tool_value(%{} = value), do: compact_tool_payload_entries(value)

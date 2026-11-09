@@ -267,7 +267,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     }
   end
 
-  defp package_next_action("needs_closeout", _status), do: "reconcile_work_request"
+  # A merged PR the Observer could not record as delivered (its evidence is
+  # incomplete or doesn't match the package) needs the architect.
+  defp package_next_action("needs_closeout", _status), do: "sync_pr"
   defp package_next_action(_state, status), do: Lifecycle.next_action(status).action || "none"
 
   @spec plan_summary(map()) :: map()

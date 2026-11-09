@@ -6,6 +6,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.Sanitizer
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
+  alias SymphonyElixir.SymphonyPlusPlus.HerdrCore
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, DependencyInputs, ExecutionGraph}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -94,8 +96,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
     |> Enum.group_by(& &1.work_request_id)
   end
 
-  @spec pr(map(), map() | nil) :: map()
-  def pr(metadata, delivery \\ nil) do
+  @spec pr(map(), map() | nil, map() | nil) :: map()
+  def pr(metadata, delivery \\ nil, observed \\ nil) do
     case map_value(metadata, "pr") do
       nil ->
         %{status: "none"}
@@ -127,7 +129,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
             if(filled_string?(raw_head_sha) and filled_string?(raw_current_head_sha),
               do: PullRequest.head_sha_matches?(raw_head_sha, raw_current_head_sha)
             ),
-          checks: checks(map_value(pr, "check_summary"), map_value(pr, "checks_changed_at"))
+          checks: checks(map_value(pr, "check_summary"), map_value(pr, "checks_changed_at"), failing_checks(observed, raw_head_sha)),
+          github_review: github_review(observed, raw_head_sha)
         }
         |> reject_nil_values()
 
@@ -140,7 +143,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   @spec review(WorkPackage.t(), map()) :: map() | nil
   def review(work_package, metadata), do: review(work_package, metadata, nil)
 
+  @doc """
+  The review signal: the Review Suite cycle the Observer read by `review_id`
+  for packages dispatched with a review mode, else the contract's declared
+  review requirement.
+  """
   @spec review(WorkPackage.t(), map(), map() | nil) :: map() | nil
+  def review(%WorkPackage{review_mode: mode, review_id: review_id}, _metadata, observation) when mode in ["fast", "normal", "deep"] do
+    %{
+      type: "review-suite",
+      mode: mode,
+      status: map_value(observation, "status") || "pending",
+      evidence_id: review_id,
+      current: observation |> map_value("current") |> integer_value(),
+      total: observation |> map_value("total") |> integer_value(),
+      step: observation |> map_value("step") |> bounded_string(),
+      reviewed_head: observation |> map_value("reviewed_head") |> bounded_string(),
+      validation: observation |> map_value("validation") |> Sanitizer.redacted_json(),
+      provider_status: observation |> map_value("provider_status") |> bounded_string(),
+      next_action: observation |> map_value("next_action") |> bounded_string(),
+      round: observation |> map_value("round") |> integer_value(),
+      steps: map_value(observation, "steps"),
+      round_history: map_value(observation, "round_history"),
+      started_at: map_value(observation, "started_at"),
+      round_started_at: map_value(observation, "round_started_at"),
+      observed_at: map_value(observation, "observed_at"),
+      observation_state: review_observation_state(observation)
+    }
+    |> reject_nil_values()
+  end
+
   def review(%WorkPackage{review_requirement: nil}, _metadata, _observation), do: nil
 
   def review(%WorkPackage{review_requirement: requirement}, _metadata, observation) when is_map(requirement) do
@@ -250,9 +282,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   defp stage_timestamp(value), do: Sanitizer.timestamp(value)
 
   defp review_observation_state(nil), do: "unknown"
+  defp review_observation_state(%{"status" => "not_started"}), do: "current"
 
   defp review_observation_state(observation) do
     if map_value(observation, "provider_status") in ["stale", "invalidated", "head_changed_after_review"], do: "stale", else: "current"
+  end
+
+  @doc """
+  The package's worker terminal as the Observer recorded it: its address,
+  whether it is live or finished, and its working/idle state from the
+  factory's core.
+  """
+  @spec worker_terminal(WorkedOn.t() | nil) :: map() | nil
+  def worker_terminal(nil), do: nil
+
+  def worker_terminal(%WorkedOn{} = row) do
+    status =
+      case {row.state, Terminal.split_key(row.terminal_key)} do
+        {"live", {core_id, address}} -> HerdrCore.status_state(core_id, address)
+        {"live", :error} -> "unknown"
+        {state, _key} -> state
+      end
+
+    %{address: row.display_address, state: row.state, status: status}
   end
 
   @spec activity(WorkPackage.t(), map(), map(), [map()]) :: map()
@@ -319,11 +371,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
     unmet = Map.get(dependency, :unmet_work_package_ids, [])
     checks_failing? = get_in(summary, [:pr_signal, :checks, :status]) == "failing"
 
+    terminal = Map.get(summary, :worker_terminal)
+
     facts = %{
       dependencies_met?: unmet == [],
-      progress: progress(summary, worker),
-      attention?: checks_failing? or review[:status] == "inspection_needed",
-      worker_idle?: worker[:status] == "idle"
+      progress: progress(summary),
+      attention?: checks_failing? or review[:status] in ["inspection_needed", "failed"],
+      worker_idle?: match?(%{status: "idle"}, terminal)
     }
 
     %{action: action, actor: actor} = Lifecycle.next_action(work_package, facts)
@@ -333,13 +387,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
     {waiting_reason(work_package, summary, review, worker, eligibility, unmet, checks_failing?), actor, action}
   end
 
-  # Progress inside dispatched, from the signals observed today: a worker whose
-  # runtime went stale has exited; an open PR means review and CI are running.
-  defp progress(summary, worker) do
+  @doc """
+  Derived progress inside `dispatched`, from what the Observer saw: an open PR
+  means review and CI are running; otherwise the worker terminal is working
+  (`implementing`), has finished without a PR (`worker_exited`), or hasn't
+  been seen yet (`launching`). Workers on machines the factory's core can't
+  see stay `launching` until their PR appears.
+  """
+  @spec progress(map()) :: String.t()
+  def progress(summary) do
     cond do
-      worker[:status] == "stale" -> "worker_exited"
       get_in(summary, [:pr_signal, :status]) == "open" -> "review_ci"
-      true -> "implementing"
+      match?(%{state: "live"}, Map.get(summary, :worker_terminal)) -> "implementing"
+      match?(%{state: "finished"}, Map.get(summary, :worker_terminal)) -> "worker_exited"
+      true -> "launching"
     end
   end
 
@@ -349,6 +410,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
       unmet != [] -> "unmet_dependencies"
       get_in(summary, [:blocker_state, :active?]) -> "active_blocker"
       checks_failing? -> "validation_failed"
+      Lifecycle.dispatched?(work_package) and progress(summary) == "worker_exited" -> "worker_exited"
       true -> runtime_waiting_reason(work_package, review, worker)
     end
   end
@@ -356,6 +418,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   defp runtime_waiting_reason(work_package, review, worker) do
     cond do
       worker[:status] == "stale" -> "runtime_stale"
+      review[:status] == "failed" -> "review_findings"
       review[:status] == "inspection_needed" -> "review_head_changed"
       review[:next_action] == "wait" -> "review_in_progress"
       Lifecycle.ready?(work_package) -> "awaiting_integration"
@@ -476,18 +539,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   defp override_pr_status(signal, %{outcome: "pr_merged"}), do: %{signal | status: "merged"}
   defp override_pr_status(signal, _delivery), do: signal
 
-  defp checks(nil, _changed_at), do: nil
-  defp checks(value, _changed_at) when not is_map(value), do: %{status: "unavailable"}
+  defp checks(nil, _changed_at, _failing), do: nil
+  defp checks(value, _changed_at, _failing) when not is_map(value), do: %{status: "unavailable"}
 
-  defp checks(value, changed_at) do
+  defp checks(value, changed_at, failing) do
     %{
       status: value |> first_map_value(["conclusion", "state", "status"]) |> PullRequestProgress.check_status(),
       current: integer_value(first_map_value(value, ["current", "completed", "completed_count"])),
       total: integer_value(first_map_value(value, ["total", "total_count", "check_count"])),
+      failing: failing,
       changed_at: changed_at
     }
     |> reject_nil_values()
   end
+
+  # The Observer's detail read of failing check names, for the recorded head.
+  defp failing_checks(%{"head_sha" => head, "ci" => %{"failing" => [_ | _] = names}}, head), do: Enum.map(names, &bounded_string/1)
+  defp failing_checks(_observed, _head), do: nil
+
+  # The Review Suite GitHub step's receipt: a Codex review of the current head.
+  # It is shown only; it never stands in for the local review.
+  defp github_review(%{"github_review" => %{"commit" => head, "state" => state}}, head) when is_binary(head), do: bounded_string(state)
+  defp github_review(_observed, _head), do: nil
 
   defp dependency_input_status(work_package_id, unmet_ids, context) do
     activity = get_in(context, [:activity_contexts, work_package_id]) || WorkPackageActivity.empty_context()

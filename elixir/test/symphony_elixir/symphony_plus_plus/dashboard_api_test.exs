@@ -6,19 +6,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   import Phoenix.ConnTest
   import Plug.Conn, only: [put_req_header: 3]
 
-  alias SymphonyElixir.FakeAuthenticatedGitHubClient
-  alias SymphonyElixir.FakeGhCli
-  alias SymphonyElixir.FakeGitHubClient
-  alias SymphonyElixir.GitHubPullRequestFixtures
-  alias SymphonyElixir.GitHubTestSupport
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
-  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards
   alias SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
+  alias SymphonyElixir.SymphonyPlusPlus.Observer.Observation
   alias SymphonyElixir.SymphonyPlusPlus.OperationalLineage
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
   alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
@@ -1897,19 +1892,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
-  test "stale or idle workers route recovery to the architect while failing checks wait on an active worker" do
+  test "exited or idle workers route recovery to the architect while failing checks wait on an active worker" do
     alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals
     package = %SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage{status: "dispatched"}
-    stale = Signals.activity(package, %{worker_signal: %{status: "stale"}}, %{key: "dispatched"}, [])
-    assert stale["next_actor"] == "architect"
-    assert stale["next_action"] == "inspect_worker"
-    assert stale["waiting_reason"] == "runtime_stale"
+    unseen = Signals.activity(package, %{}, %{key: "dispatched"}, [])
+    assert {unseen["next_actor"], unseen["next_action"]} == {"architect", "run_launch_line"}
+    working = Signals.activity(package, %{worker_terminal: %{state: "live", status: "working"}}, %{key: "dispatched"}, [])
+    assert {working["next_actor"], working["next_action"]} == {"worker", "wait"}
+    exited = Signals.activity(package, %{worker_terminal: %{state: "finished", status: "finished"}}, %{key: "dispatched"}, [])
+    assert exited["next_actor"] == "architect"
+    assert exited["next_action"] == "inspect_worker"
+    assert exited["waiting_reason"] == "worker_exited"
     failing_pr = %{status: "open", checks: %{status: "failing"}}
-    failing = Signals.activity(package, %{pr_signal: failing_pr, worker_signal: %{status: "active"}}, %{key: "dispatched"}, [])
+    working_terminal = %{state: "live", status: "working"}
+    failing = Signals.activity(package, %{pr_signal: failing_pr, worker_terminal: working_terminal}, %{key: "dispatched"}, [])
     assert failing["next_actor"] == "worker"
     assert failing["next_action"] == "wait"
     assert failing["waiting_reason"] == "validation_failed"
-    unattended = Signals.activity(package, %{pr_signal: failing_pr, worker_signal: %{status: "idle"}}, %{key: "dispatched"}, [])
+    idle_terminal = %{state: "live", status: "idle"}
+    unattended = Signals.activity(package, %{pr_signal: failing_pr, worker_terminal: idle_terminal}, %{key: "dispatched"}, [])
     assert unattended["next_actor"] == "architect"
     assert unattended["next_action"] == "inspect_worker"
   end
@@ -2210,110 +2211,67 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
-  test "cold Herdr details refresh native review without board warmup", %{repo: repo} do
+  test "Herdr details show the Review Suite cycle the Observer read", %{repo: repo} do
     with_local_operator_endpoint(fn ->
-      work_request = create_work_request!(repo, id: "WR-HERDR-COLD-REVIEW")
-      root = Path.join(System.tmp_dir!(), "herdr-cold-review-#{System.unique_integer([:positive])}")
-      File.mkdir_p!(root)
-      on_exit(fn -> File.rm_rf!(root) end)
+      work_request = create_work_request!(repo, id: "WR-HERDR-OBSERVED-REVIEW")
 
       reviewing =
-        create_work_package!(repo,
-          id: "WP-HERDR-COLD-REVIEW",
-          work_request_id: work_request.id,
-          status: "dispatched",
-          worktree_path: root,
-          review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "fast", "base" => "origin/beta"}}
-        )
+        repo
+        |> create_work_package!(id: "WP-HERDR-OBSERVED-REVIEW", work_request_id: work_request.id, status: "dispatched")
+        |> Ecto.Changeset.change(review_mode: "fast", review_id: "rvw_observed01")
+        |> repo.update!()
 
-      script = Path.join(root, "review.py")
+      observed = %{
+        "evidence_id" => "rvw_observed01",
+        "status" => "in_progress",
+        "provider_status" => "running",
+        "round" => 3,
+        "current" => 2,
+        "total" => 3,
+        "step" => "correctness",
+        "next_action" => "wait",
+        "steps" => [%{"index" => 2, "name" => "correctness", "state" => "current"}],
+        "round_history" => [%{"number" => 3, "step" => "correctness", "status" => "running", "started_at" => "2026-10-01T09:00:00Z"}],
+        "round_started_at" => "2026-10-01T09:00:00Z",
+        "observed_at" => "2026-10-01T09:05:00Z"
+      }
 
-      File.write!(
-        script,
-        "import sys\nassert sys.argv[-2:] == ['--base', 'origin/beta']\nprint(" <>
-          Jason.encode!(
-            Jason.encode!(%{
-              review: "rvw_cold",
-              status: "running",
-              rounds: 3,
-              steps: [%{index: 2, name: "correctness", state: "current"}],
-              round_history: [
-                %{
-                  number: 3,
-                  round_id: "round_cold",
-                  lane: "local",
-                  step: "correctness",
-                  status: "running",
-                  outcome: nil,
-                  findings: nil,
-                  started_at: "2026-10-01T09:00:00Z",
-                  finished_at: nil
-                }
-              ],
-              next_action: "wait",
-              progress: "review 2/3 correctness"
-            })
-          ) <> ")\n"
-      )
+      repo.insert!(%Observation{work_package_id: reviewing.id, review: observed, stale: [], observed_at: DateTime.utc_now(:microsecond)})
 
-      observation = SymphonyElixir.SymphonyPlusPlus.ReviewObservation
-      assert observation.cached([reviewing]) == %{}
-      previous_script = :ets.lookup(observation, :review_suite_script)
-      true = :ets.insert(observation, {:review_suite_script, System.monotonic_time(:millisecond), {:ok, script}})
+      payload =
+        build_conn()
+        |> Map.put(:host, "localhost")
+        |> Map.put(:remote_ip, {127, 0, 0, 1})
+        |> get("/api/v1/sympp/herdr/work-requests/#{work_request.id}")
+        |> json_response(200)
 
-      try do
-        payload =
-          build_conn()
-          |> Map.put(:host, "localhost")
-          |> Map.put(:remote_ip, {127, 0, 0, 1})
-          |> get("/api/v1/sympp/herdr/work-requests/#{work_request.id}")
-          |> json_response(200)
+      packages = Map.new(payload["work_packages"], &{&1["id"], &1})
+      review = packages[reviewing.id]["review_signal"]
+      assert review["evidence_id"] == "rvw_observed01"
+      assert review["mode"] == "fast"
+      assert {review["current"], review["total"], review["round"]} == {2, 3, 3}
+      assert review["step"] == "correctness"
+      assert review["status"] == "in_progress"
+      assert review["observation_state"] == "current"
+      assert review["steps"] == [%{"index" => 2, "name" => "correctness", "state" => "current"}]
 
-        packages = Map.new(payload["work_packages"], &{&1["id"], &1})
-        review = packages[reviewing.id]["review_signal"]
-        assert review["evidence_id"] == "rvw_cold"
-        assert review["current"] == 2
-        assert review["step"] == "correctness"
-        assert review["next_action"] == "wait"
-        assert review["observation_state"] == "current"
-        assert review["round"] == 3
-        assert review["provider_status"] == "running"
-        assert review["status"] == "in_progress"
-        assert review["steps"] == [%{"index" => 2, "name" => "correctness", "state" => "current"}]
-        assert [%{"number" => 3, "round_id" => "round_cold", "finished_at" => nil}] = review["round_history"]
+      web_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/hydrated"), 200)
+      web_detail = Enum.find(web_payload["work_request_details"], &(&1["work_request"]["id"] == work_request.id))
+      assert Enum.find(web_detail["work_packages"], &(&1["id"] == reviewing.id))["review_signal"] == review
 
-        web_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/hydrated"), 200)
-        web_detail = Enum.find(web_payload["work_request_details"], &(&1["work_request"]["id"] == work_request.id))
-        web_review = Enum.find(web_detail["work_packages"], &(&1["id"] == reviewing.id))["review_signal"]
-        assert web_review == review
+      activity = packages[reviewing.id]["activity_signal"]
+      assert activity["stage"] == "reviewing"
+      assert activity["waiting_reason"] == "review_in_progress"
 
-        activity = packages[reviewing.id]["activity_signal"]
-        assert activity["stage"] == "reviewing"
-        assert activity["elapsed_seconds"] == nil
-        assert activity["waiting_reason"] == "review_in_progress"
-        assert activity["observed_at"] == review["observed_at"]
-        assert activity["next_action"] == "wait"
-
-        File.write!(
-          script,
-          "import sys\nassert sys.argv[-2:] == ['--base', 'origin/beta']\nprint(" <> Jason.encode!(Jason.encode!(%{review: "rvw_cold", status: "done", next_action: "none"})) <> ")\n"
-        )
-
-        :ets.delete(observation, {:observation, Path.expand(root), "origin/beta"})
-        assert {:ok, _ready} = Lifecycle.transition(repo, repo.get!(WorkPackage, reviewing.id), :qualify)
-        assert {:ok, ready_payload} = LocalOperatorDashboard.herdr_work_request_detail_payload(repo, work_request.id)
-        ready_package = Enum.find(ready_payload.work_packages, &(&1.id == reviewing.id))
-        refute Map.has_key?(ready_package.review_signal, "steps")
-        refute Map.has_key?(ready_package.review_signal, "round_history")
-        assert ready_package.review_signal["status"] == "passed"
-        ready_activity = ready_package.activity_signal
-        assert ready_activity["next_action"] == "merge_pr"
-        assert ready_activity["next_actor"] == "architect"
-      after
-        :ets.delete(observation, {:observation, Path.expand(root), "origin/beta"})
-        :ets.delete(observation, :review_suite_script)
-        :ets.insert(observation, previous_script)
-      end
+      # A package whose review host can't be read isn't merge eligible.
+      assert {:ok, _ready} = Lifecycle.transition(repo, repo.get!(WorkPackage, reviewing.id), :qualify)
+      repo.update!(Ecto.Changeset.change(repo.get!(Observation, reviewing.id), review: %{"status" => "passed", "done" => true}, stale: ["review"]))
+      assert {:ok, ready_payload} = LocalOperatorDashboard.herdr_work_request_detail_payload(repo, work_request.id)
+      ready_package = Enum.find(ready_payload.work_packages, &(&1.id == reviewing.id))
+      assert ready_package.review_signal["status"] == "passed"
+      assert "observation_stale" in ready_package.merge_eligibility["reason_codes"]
+      refute ready_package.merge_eligibility["eligible"]
+      assert ready_package.activity_signal["next_action"] == "wait"
     end)
   end
 
@@ -2488,177 +2446,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
         assert %{"error" => %{"code" => "unauthorized"}} = json_response(conn, 401)
         assert Plug.Conn.get_resp_header(conn, "access-control-allow-origin") == []
-      end)
-    end)
-  end
-
-  test "local operator can sync GitHub PR merge state and request dashboard refresh", %{repo: repo} do
-    with_local_operator_endpoint(fn ->
-      with_operator_github_client(fn ->
-        work_request = create_work_request!(repo, id: "WR-SYMPP-LOCAL-OPERATOR-GH-SYNC", repo: "nextide/repo")
-
-        work_package =
-          create_work_package!(repo,
-            id: "SYMPP-LOCAL-OPERATOR-GH-SYNC",
-            work_request_id: work_request.id,
-            kind: "hotfix",
-            repo: "nextide/repo",
-            status: "ready"
-          )
-
-        assert {:ok, _branch} =
-                 PlanningRepository.append_progress_event(repo, %{
-                   work_package_id: work_package.id,
-                   summary: "Branch attached",
-                   status: "branch_attached",
-                   payload: %{type: "branch", source_tool: "attach_branch", branch: "agent/#{work_package.id}", head_sha: "head-a"}
-                 })
-
-        assert {:ok, _pr} =
-                 PlanningRepository.append_progress_event(repo, %{
-                   work_package_id: work_package.id,
-                   summary: "PR attached",
-                   status: "pr_attached",
-                   payload: %{type: "pr", source_tool: "attach_pr", url: "https://github.com/nextide/repo/pull/22", head_sha: "head-a"}
-                 })
-
-        FakeGitHubClient.put_response("nextide/repo", 22, GitHubPullRequestFixtures.metadata(22, "head-a", merged?: true))
-
-        payload =
-          local_operator_conn()
-          |> post("/api/v1/sympp/operator/github/sync-prs", %{})
-          |> json_response(200)
-
-        assert payload["sync"]["merged_count"] == 1
-        assert payload["sync"]["dashboard_changed"] == true
-        assert [%{"work_package_id" => "SYMPP-LOCAL-OPERATOR-GH-SYNC", "status" => "merged"}] = payload["sync"]["results"]
-        refute Map.has_key?(payload, "dashboard")
-        assert get_in(payload, ["refresh", "dashboard"]) == true
-
-        assert {:ok, updated} = WorkPackageRepository.get(repo, work_package.id)
-        assert updated.status == "ended"
-        assert %WorkPackageDelivery{outcome: "pr_merged"} = repo.get_by(WorkPackageDelivery, work_package_id: work_package.id)
-      end)
-    end)
-  end
-
-  test "local operator GitHub sync skips dashboard refresh when no state changes" do
-    with_local_operator_endpoint(fn ->
-      with_operator_authenticated_github_client(fn ->
-        assert :ok = DashboardPubSub.subscribe()
-
-        payload =
-          local_operator_conn()
-          |> post("/api/v1/sympp/operator/github/sync-prs", %{mode: "auto"})
-          |> json_response(200)
-
-        assert payload["sync"]["total_count"] == 0
-        refute Map.has_key?(payload["sync"], "reason")
-        assert payload["sync"]["dashboard_changed"] == false
-        assert get_in(payload, ["refresh", "dashboard"]) == false
-        refute_receive :operator_dashboard_changed, 50
-      end)
-    end)
-  end
-
-  test "local operator auto GitHub sync uses gh CLI without token env", %{repo: repo} do
-    with_local_operator_endpoint(fn ->
-      with_operator_gh_cli_runner(fn ->
-        GitHubTestSupport.with_github_token_env(nil, fn ->
-          work_request = create_work_request!(repo, id: "WR-SYMPP-LOCAL-OPERATOR-GH-CLI-AUTO", repo: "nextide/repo")
-
-          work_package =
-            create_work_package!(repo,
-              id: "SYMPP-LOCAL-OPERATOR-GH-CLI-AUTO",
-              work_request_id: work_request.id,
-              kind: "hotfix",
-              repo: "nextide/repo",
-              status: "ready"
-            )
-
-          assert {:ok, _branch} =
-                   PlanningRepository.append_progress_event(repo, %{
-                     work_package_id: work_package.id,
-                     summary: "Branch attached",
-                     status: "branch_attached",
-                     payload: %{type: "branch", source_tool: "attach_branch", branch: "agent/#{work_package.id}", head_sha: "head-a"}
-                   })
-
-          assert {:ok, _pr} =
-                   PlanningRepository.append_progress_event(repo, %{
-                     work_package_id: work_package.id,
-                     summary: "PR attached",
-                     status: "pr_attached",
-                     payload: %{type: "pr", source_tool: "attach_pr", url: "https://github.com/nextide/repo/pull/23", head_sha: "head-a"}
-                   })
-
-          FakeGhCli.authenticate(:ok)
-          FakeGhCli.put_response("nextide/repo", 23, GitHubPullRequestFixtures.gh_view(23, "head-a", merged?: true))
-
-          payload =
-            local_operator_conn()
-            |> post("/api/v1/sympp/operator/github/sync-prs", %{mode: "auto"})
-            |> json_response(200)
-
-          assert payload["sync"]["merged_count"] == 1
-          assert [%{"work_package_id" => "SYMPP-LOCAL-OPERATOR-GH-CLI-AUTO", "status" => "merged"}] = payload["sync"]["results"]
-          refute Map.has_key?(payload, "dashboard")
-          assert get_in(payload, ["refresh", "dashboard"]) == true
-
-          assert {:ok, updated} = WorkPackageRepository.get(repo, work_package.id)
-          assert updated.status == "ended"
-
-          assert [
-                   %{args: ["auth", "status", "--hostname", "github.com"]},
-                   %{args: ["pr", "view", "23", "--repo", "nextide/repo", "--json", _fields]}
-                 ] = FakeGhCli.commands()
-        end)
-      end)
-    end)
-  end
-
-  test "local operator auto GitHub sync respects configured GitHub client", %{repo: repo} do
-    with_local_operator_endpoint(fn ->
-      with_operator_authenticated_github_client(fn ->
-        GitHubTestSupport.with_github_token_env(nil, fn ->
-          work_request = create_work_request!(repo, id: "WR-SYMPP-LOCAL-OPERATOR-GH-CONFIGURED-AUTO", repo: "nextide/repo")
-
-          work_package =
-            create_work_package!(repo,
-              id: "SYMPP-LOCAL-OPERATOR-GH-CONFIGURED-AUTO",
-              work_request_id: work_request.id,
-              kind: "hotfix",
-              repo: "nextide/repo",
-              status: "ready"
-            )
-
-          assert {:ok, _branch} =
-                   PlanningRepository.append_progress_event(repo, %{
-                     work_package_id: work_package.id,
-                     summary: "Branch attached",
-                     status: "branch_attached",
-                     payload: %{type: "branch", source_tool: "attach_branch", branch: "agent/#{work_package.id}", head_sha: "head-a"}
-                   })
-
-          assert {:ok, _pr} =
-                   PlanningRepository.append_progress_event(repo, %{
-                     work_package_id: work_package.id,
-                     summary: "PR attached",
-                     status: "pr_attached",
-                     payload: %{type: "pr", source_tool: "attach_pr", url: "https://github.com/nextide/repo/pull/25", head_sha: "head-a"}
-                   })
-
-          FakeGitHubClient.put_response("nextide/repo", 25, GitHubPullRequestFixtures.metadata(25, "head-a", merged?: true))
-
-          payload =
-            local_operator_conn()
-            |> post("/api/v1/sympp/operator/github/sync-prs", %{mode: "auto"})
-            |> json_response(200)
-
-          assert payload["sync"]["merged_count"] == 1
-          assert [%{"work_package_id" => "SYMPP-LOCAL-OPERATOR-GH-CONFIGURED-AUTO", "status" => "merged"}] = payload["sync"]["results"]
-          assert FakeGhCli.commands() == []
-        end)
       end)
     end)
   end
@@ -4045,64 +3832,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     |> Map.put(:host, "localhost")
     |> Map.put(:remote_ip, {127, 0, 0, 1})
     |> put_req_header("origin", origin)
-  end
-
-  defp with_operator_github_client(fun) when is_function(fun, 0) do
-    original = Application.get_env(:symphony_elixir, :sympp_github_client)
-    Application.put_env(:symphony_elixir, :sympp_github_client, FakeGitHubClient)
-
-    try do
-      fun.()
-    after
-      FakeGitHubClient.clear()
-
-      case original do
-        nil -> Application.delete_env(:symphony_elixir, :sympp_github_client)
-        value -> Application.put_env(:symphony_elixir, :sympp_github_client, value)
-      end
-    end
-  end
-
-  defp with_operator_authenticated_github_client(fun) when is_function(fun, 0) do
-    original = Application.get_env(:symphony_elixir, :sympp_github_client)
-    Application.put_env(:symphony_elixir, :sympp_github_client, FakeAuthenticatedGitHubClient)
-    FakeGhCli.clear()
-
-    try do
-      fun.()
-    after
-      FakeGitHubClient.clear()
-      FakeGhCli.clear()
-
-      case original do
-        nil -> Application.delete_env(:symphony_elixir, :sympp_github_client)
-        value -> Application.put_env(:symphony_elixir, :sympp_github_client, value)
-      end
-    end
-  end
-
-  defp with_operator_gh_cli_runner(fun) when is_function(fun, 0) do
-    original_client = Application.get_env(:symphony_elixir, :sympp_github_client)
-    original_runner = Application.get_env(:symphony_elixir, :sympp_gh_command_runner)
-
-    Application.delete_env(:symphony_elixir, :sympp_github_client)
-    Application.put_env(:symphony_elixir, :sympp_gh_command_runner, &FakeGhCli.run/3)
-
-    try do
-      fun.()
-    after
-      FakeGhCli.clear()
-
-      case original_client do
-        nil -> Application.delete_env(:symphony_elixir, :sympp_github_client)
-        value -> Application.put_env(:symphony_elixir, :sympp_github_client, value)
-      end
-
-      case original_runner do
-        nil -> Application.delete_env(:symphony_elixir, :sympp_gh_command_runner)
-        value -> Application.put_env(:symphony_elixir, :sympp_gh_command_runner, value)
-      end
-    end
   end
 
   defp with_static_dashboard_file(file_name, contents, fun) when is_function(fun, 0) do

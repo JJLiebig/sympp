@@ -180,6 +180,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
 
     original_client = Application.get_env(:symphony_elixir, :sympp_github_client)
     Application.put_env(:symphony_elixir, :sympp_github_client, FakeGitHubClient)
+    # The worker's Review Suite cycle, read by the review id dispatch minted.
+    {:ok, reviewed} = Agent.start_link(fn -> :unreachable end)
+    review_id = repo.get!(WorkPackage, approved_slice.id).review_id
+
+    Application.put_env(:symphony_elixir, :sympp_review_command, fn "python3", [_script, "--id", ^review_id, "--show-status", "--json"], _timeout ->
+      case Agent.get(reviewed, & &1) do
+        :unreachable -> :error
+        :not_started -> {:ok, {Jason.encode!(%{"error" => "unknown review cycle id: #{review_id}", "status" => "usage_error"}), 2}}
+        head -> {:ok, {Jason.encode!(%{"review" => review_id, "done" => true, "status" => "done", "head" => head}), 0}}
+      end
+    end)
 
     try do
       head = String.duplicate("a", 40)
@@ -217,6 +228,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
                  payload: %{blocker | active: false}
                })
 
+      # Review state that can't be read, or a review that isn't done for the
+      # head, holds the package; a review done for the head qualifies it.
+      unknown_review = mcp_tool(repo, "t1", "sync_pr", url_only)
+      assert get_in(unknown_review, ["result", "structuredContent", "work_package", "status"]) == "dispatched"
+      assert "review_unknown" in get_in(unknown_review, ["result", "structuredContent", "pr_sync", "readiness_reasons"])
+      assert get_in(unknown_review, ["result", "structuredContent", "pr_sync", "next_action"]) =~ "review state unknown: check "
+
+      Agent.update(reviewed, fn _state -> :not_started end)
+      not_started = mcp_tool(repo, "t1", "sync_pr", url_only)
+      assert get_in(not_started, ["result", "structuredContent", "work_package", "status"]) == "dispatched"
+      assert "review_not_done" in get_in(not_started, ["result", "structuredContent", "pr_sync", "readiness_reasons"])
+
+      Agent.update(reviewed, fn _state -> head end)
       accepted = mcp_tool(repo, "t1", "sync_pr", url_only)
       assert get_in(accepted, ["result", "structuredContent", "work_package", "status"]) == "ready"
 
@@ -224,6 +248,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       # a green sync of the current head qualifies it again.
       new_head = String.duplicate("d", 40)
       green = GitHubPullRequestFixtures.metadata(412, new_head, base_branch: anchor.base_branch)
+      Agent.update(reviewed, fn _state -> new_head end)
 
       for {metadata, reason} <- [
             {green, "head_changed"},
@@ -263,6 +288,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       assert repo.get_by!(WorkPackageDelivery, work_package_id: approved_slice.id).outcome == "pr_merged"
     after
       restore_app_env(:sympp_github_client, original_client)
+      Application.put_env(:symphony_elixir, :sympp_review_command, nil)
       FakeGitHubClient.clear()
     end
   end

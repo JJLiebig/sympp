@@ -6,9 +6,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
   alias SymphonyElixir.SymphonyPlusPlus.FactoryRepos
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
+  alias SymphonyElixir.SymphonyPlusPlus.Observer
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Policies.Templates
-  alias SymphonyElixir.SymphonyPlusPlus.ReviewObservation
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
@@ -348,7 +349,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
        progress_events: progress_events,
        activity_contexts: activity_contexts,
        metadata_contexts: preloaded_metadata_contexts,
-       review_observations: ReviewObservation.cached(Map.values(work_packages)),
+       observations: Observer.observations(repo, work_package_ids),
+       workers: Ownership.workers(repo, work_package_ids),
        hidden_work_package_ids: hidden_work_package_ids
      }}
   rescue
@@ -559,13 +561,44 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
         _unavailable -> %{eligible: false, reason_codes: ["dependencies_unavailable"]}
       end
 
-    if get_in(context, [:activity_contexts, work_package.id, :blocker_state, :active?]) == true do
-      eligibility
-      |> Map.put(:eligible, false)
-      |> Map.update!(:reason_codes, &Enum.uniq(["active_blocker" | &1]))
-      |> Map.put(:next_action, "resolve_blocker")
-    else
-      eligibility
+    cond do
+      get_in(context, [:activity_contexts, work_package.id, :blocker_state, :active?]) == true ->
+        eligibility
+        |> Map.put(:eligible, false)
+        |> Map.update!(:reason_codes, &Enum.uniq(["active_blocker" | &1]))
+        |> Map.put(:next_action, "resolve_blocker")
+
+      # A package whose GitHub or review state can't be read isn't merge
+      # eligible until the Observer reads it again.
+      observation_stale(context, work_package.id) != [] ->
+        eligibility
+        |> Map.put(:eligible, false)
+        |> Map.update!(:reason_codes, &Enum.uniq(["observation_stale" | &1]))
+        |> Map.put(:next_action, "wait")
+
+      true ->
+        eligibility
+    end
+  end
+
+  defp observation_stale(context, work_package_id) do
+    case get_in(context, [:observations, work_package_id]) do
+      %{stale: stale} when is_list(stale) -> stale
+      _none -> []
+    end
+  end
+
+  defp observed_review(context, work_package_id) do
+    case get_in(context, [:observations, work_package_id]) do
+      %{review: %{} = review} -> review
+      _none -> nil
+    end
+  end
+
+  defp observed_pr(context, work_package_id) do
+    case get_in(context, [:observations, work_package_id]) do
+      %{pr: %{} = pr} -> pr
+      _none -> nil
     end
   end
 
@@ -604,7 +637,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
           pr: pr_summary(legacy_pr_metadata(metadata), nil),
           dependency_signal: Signals.dependency(work_package, context),
           worker_signal: Map.get(activity, :worker_signal),
-          review_signal: Signals.review(work_package, metadata, Map.get(context.review_observations, work_package.id)),
+          worker_terminal: Signals.worker_terminal(Map.get(Map.get(context, :workers, %{}), work_package.id)),
+          observation_stale: observation_stale(context, work_package.id),
+          review_signal: Signals.review(work_package, metadata, observed_review(context, work_package.id)),
           blocker_state: Map.fetch!(activity, :blocker_state),
           runtime_state: Map.fetch!(activity, :runtime_state)
         }
@@ -664,8 +699,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
           pr: pr_summary(legacy_pr_metadata(metadata), delivery),
           worker_signal: Map.get(activity, :worker_signal),
           repo_signal: FactoryRepos.repo_signal(work_package.repo),
-          pr_signal: Signals.pr(metadata, delivery),
-          review_signal: Signals.review(work_package, metadata, Map.get(context.review_observations, work_package.id)),
+          pr_signal: Signals.pr(metadata, delivery, observed_pr(context, work_package.id)),
+          worker_terminal: Signals.worker_terminal(Map.get(Map.get(context, :workers, %{}), work_package.id)),
+          observation_stale: observation_stale(context, work_package.id),
+          review_signal: Signals.review(work_package, metadata, observed_review(context, work_package.id)),
           dependency_signal: Signals.dependency(work_package, context),
           blocker_state: Map.fetch!(activity, :blocker_state),
           runtime_state: Map.fetch!(activity, :runtime_state)

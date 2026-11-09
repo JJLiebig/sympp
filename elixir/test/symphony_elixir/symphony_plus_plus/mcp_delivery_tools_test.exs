@@ -10,7 +10,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -50,7 +49,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     :ok
   end
 
-  test "an ended plan with abandoned scope reads as unresolved everywhere and reconciliation keeps full evidence on demand", %{repo: repo} do
+  test "an ended plan with abandoned scope reads as unresolved everywhere", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-CLOSED-EXECUTION")
 
     read = fn tool, args ->
@@ -112,23 +111,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert native.work_request.phase == "unresolved"
     assert native.work_request.completed_at == nil
 
-    summary_response = mcp_tool(repo, "t1", "reconcile_work_request", %{"work_request_id" => work_request.id})
-    full_response = mcp_tool(repo, "t1", "reconcile_work_request", %{"work_request_id" => work_request.id, "detail" => "full"})
-    summary = get_in(summary_response, ["result", "structuredContent"])
-    full = get_in(full_response, ["result", "structuredContent"])
-    assert summary["reconciliation"]["results"] == []
-    assert summary["reconciliation"]["total_count"] == 25
-    assert summary["reconciliation"]["skipped_count"] == 25
-    assert summary["reconciliation"]["error_count"] == 0
-    assert length(full["reconciliation"]["results"]) == 25
-    assert length(full["delivery_board"]["work_packages"]) == 25
-    assert Map.delete(summary["reconciliation"], "results") == Map.delete(full["reconciliation"], "results")
-    assert Enum.count(full["reconciliation"]["results"], &(&1["reason"] == "already_closeout")) == 25
+    full = read.("read_work_request", %{"work_request_id" => work_request.id, "view" => "board", "detail" => "full"})
     assert get_in(full, ["delivery_board", "work_packages", Access.at(0), "delivery", "no_pr_evidence"]) == "Accepted investigation evidence."
-    IO.puts("25-package reconciliation JSON chars: rows_full=#{String.length(Jason.encode!(full["reconciliation"]))} rows_summary=#{String.length(Jason.encode!(summary["reconciliation"]))}")
-
-    invalid = mcp_tool(repo, "t1", "reconcile_work_request", %{"work_request_id" => work_request.id, "detail" => "invalid"})
-    assert invalid["error"]
   end
 
   test "any architect may finish another terminal's package, but only its owner records other endings", %{repo: repo} do
@@ -239,63 +223,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
              evidence_query_value
 
     assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
-  end
-
-  test "architect reconciles merged PR evidence into the ending record", %{repo: repo} do
-    {work_request, work_package, linked_package} =
-      linked_slice!(repo,
-        work_request_id: "WR-MCP-DELIVERY-RECONCILE-MERGED-STALE",
-        work_package_status: "ready"
-      )
-
-    terminal = "t1"
-
-    assert {:ok, _pr} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: linked_package.id,
-               summary: "Merged PR attached",
-               status: "pr_attached",
-               payload: %{
-                 type: "pr",
-                 source_tool: "attach_pr",
-                 url: "https://github.com/#{linked_package.repo}/pull/91",
-                 repository: linked_package.repo,
-                 number: 91,
-                 base_branch: linked_package.base_branch,
-                 head_sha: "head-dogfood",
-                 merged: true,
-                 merged_at: "2026-05-28T12:00:00Z",
-                 merge_commit_sha: "merge-91"
-               }
-             })
-
-    dry_run_response = reconcile_request(repo, terminal, %{"work_request_id" => work_request.id})
-    dry_run_payload = get_in(dry_run_response, ["result", "structuredContent", "reconciliation"])
-
-    assert dry_run_payload["mode"] == "dry_run"
-    assert dry_run_payload["proposed_count"] == 1
-
-    assert [
-             %{
-               "work_package_id" => proposed_slice_id,
-               "status" => "proposed",
-               "reason" => "github_pr_merged"
-             }
-           ] = dry_run_payload["results"]
-
-    assert proposed_slice_id == work_package.id
-    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
-
-    apply_response =
-      reconcile_request(repo, terminal, %{"work_request_id" => work_request.id, "apply" => true})
-
-    apply_payload = get_in(apply_response, ["result", "structuredContent"])
-
-    assert get_in(apply_payload, ["reconciliation", "mode"]) == "apply"
-    assert get_in(apply_payload, ["reconciliation", "applied_count"]) == 1
-    assert get_in(apply_payload, ["delivery_board", "counts", "delivered"]) == 1
-    refute Map.has_key?(apply_payload["delivery_board"], "work_packages")
-    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
   end
 
   test "architect abandons a no-code failed dispatch after its replacement is delivered, leaving other packages alone",
@@ -560,9 +487,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
   defp record_delivery(repo, terminal, arguments),
     do: mcp_tool(repo, terminal, "record_work_package_delivery", arguments)
-
-  defp reconcile_request(repo, terminal, arguments),
-    do: mcp_tool(repo, terminal, "reconcile_work_request", arguments)
 
   defp terminal(address), do: Terminal.from_meta(MCPHarness.herdr_meta(address))
 

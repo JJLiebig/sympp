@@ -2,7 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
-  alias SymphonyElixir.SymphonyPlusPlus.GitHub.{Client, DefaultClient, HttpClient, PullRequest}
+  alias SymphonyElixir.SymphonyPlusPlus.GitHub.{Client, DefaultClient, PullRequest}
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{PullRequestArtifact, PullRequestProgress}
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
@@ -19,25 +19,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
   @type repo :: module()
   @type result :: map()
 
-  @spec reconcile(repo(), keyword()) :: {:ok, map()} | {:error, term()}
-  def reconcile(repo, opts \\ []) when is_atom(repo) and is_list(opts) do
-    client = Keyword.get(opts, :client, github_client())
-    client_opts = Keyword.drop(opts, [:client])
-
-    with :ok <- OfflineSandbox.require_online(),
-         :ok <- validate_periodic_auth(client, opts),
-         {:ok, work_packages} <- WorkPackageRepository.list(repo) do
-      work_packages
-      |> Enum.filter(&merge_ready_candidate?/1)
-      |> Enum.flat_map(&reconcile_work_package_result(repo, &1, client, client_opts))
-      |> summary()
-      |> then(&{:ok, &1})
-    else
-      {:skip, reason} -> {:ok, skipped_summary(reason)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
   @spec reconcile_work_package(repo(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def reconcile_work_package(repo, work_package_id, opts \\ [])
       when is_atom(repo) and is_binary(work_package_id) and is_list(opts) do
@@ -53,23 +34,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
       else
         {:ok, error_result(work_package, %{}, :not_merge_ready)}
       end
-    end
-  end
-
-  defp reconcile_work_package_result(repo, work_package, client, client_opts) do
-    case reconcile_work_package(repo, work_package, client, client_opts) do
-      :ignore -> []
-      result -> [result]
-    end
-  end
-
-  defp reconcile_work_package(repo, %WorkPackage{} = work_package, client, client_opts) do
-    with {:ok, state} <- PlanningRepository.get_state(repo, work_package.id),
-         {:ok, pr_context} <- current_pr_context(state.progress_events) do
-      fetch_and_reconcile(repo, work_package, state.progress_events, pr_context, client, client_opts)
-    else
-      {:error, :missing_attached_pr} -> :ignore
-      {:error, reason} -> error_result(work_package, nil, reason)
     end
   end
 
@@ -183,10 +147,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
   end
 
   defp run_after_sync_write(snapshot_written?, callback) do
-    case callback.() do
-      result when is_map(result) -> maybe_mark_dashboard_changed(result, snapshot_written?)
-      {:ok, result} when is_map(result) -> {:ok, maybe_mark_dashboard_changed(result, snapshot_written?)}
-    end
+    {:ok, result} = callback.()
+    {:ok, maybe_mark_dashboard_changed(result, snapshot_written?)}
   end
 
   defp maybe_mark_dashboard_changed(result, snapshot_written?) when is_map(result) do
@@ -213,34 +175,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
 
   defp delivery_error_reason({:delivery_reconciliation_failed, reason}), do: error_reason(reason)
   defp delivery_error_reason(reason), do: error_reason(reason)
-
-  defp fetch_and_reconcile(repo, %WorkPackage{} = work_package, progress_events, pr_context, client, client_opts) do
-    with {:ok, metadata} <- Client.fetch_pull_request(client, pr_context.ref, client_opts),
-         {:ok, payload} <- PullRequest.metadata(metadata, pr_context.ref, nil) do
-      payload = Map.put(payload, "source_tool", "sync_pr")
-
-      after_sync_write(repo, work_package, payload, progress_events, fn ->
-        maybe_transition_merged(repo, work_package, payload, metadata)
-      end)
-    else
-      {:error, reason} -> error_result(work_package, pr_ref_payload(pr_context.ref), reason)
-    end
-  end
-
-  defp maybe_transition_merged(repo, %WorkPackage{} = work_package, payload, metadata) do
-    case merged_payload_validation(work_package, payload) do
-      :ok ->
-        transition = transition_merged(repo, work_package, payload, metadata)
-        {:ok, result} = reconcile_transition_delivery(repo, work_package, transition)
-        result
-
-      {:error, "pr_not_merged", _extras} ->
-        synced_result(work_package, payload, "pr_not_merged")
-
-      {:error, reason, extras} ->
-        skipped_result(work_package, payload, reason, extras)
-    end
-  end
 
   defp merged_payload_validation(%WorkPackage{} = work_package, payload) do
     cond do
@@ -399,12 +333,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
 
   defp repaired_pr_context(_progress_events, _payload), do: {:error, :missing_attached_pr}
 
-  defp synced_result(%WorkPackage{} = work_package, payload, reason) do
-    work_package
-    |> base_result(payload)
-    |> Map.merge(%{status: "synced", reason: reason, before_status: work_package.status, after_status: work_package.status})
-  end
-
   defp skipped_result(%WorkPackage{} = work_package, payload, reason, extras \\ []) do
     work_package
     |> base_result(payload)
@@ -415,7 +343,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
   defp error_result(%WorkPackage{} = work_package, payload, reason, dashboard_changed \\ false) do
     result =
       work_package
-      |> base_result(payload || %{})
+      |> base_result(payload)
       |> Map.merge(%{
         status: "error",
         reason: error_reason(reason),
@@ -438,41 +366,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
     }
   end
 
-  defp summary(results) do
-    dashboard_changed = Enum.any?(results, &Map.get(&1, :dashboard_changed, false))
-
-    %{
-      total_count: length(results),
-      synced_count: Enum.count(results, &(&1.status in ["synced", "skipped", "merged"])),
-      merged_count: Enum.count(results, &(&1.status == "merged")),
-      skipped_count: Enum.count(results, &(&1.status == "skipped")),
-      error_count: Enum.count(results, &(&1.status == "error")),
-      dashboard_changed: dashboard_changed,
-      results: results
-    }
-  end
-
-  defp skipped_summary(reason) do
-    %{
-      total_count: 0,
-      synced_count: 0,
-      merged_count: 0,
-      skipped_count: 0,
-      error_count: 0,
-      dashboard_changed: false,
-      reason: reason,
-      results: []
-    }
-  end
-
-  defp pr_ref_payload(ref) do
-    %{
-      "url" => ref.url,
-      "repository" => ref.repository,
-      "number" => ref.number
-    }
-  end
-
   defp metadata_idempotency_key(payload) do
     "operator:" <> Base.url_encode64(:erlang.term_to_binary(payload), padding: false)
   end
@@ -483,39 +376,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
   defp error_reason(reason), do: inspect(reason)
 
   defp stringify_keys(%{} = map), do: Map.new(map, fn {key, value} -> {to_string(key), value} end)
-
-  defp validate_periodic_auth(client, opts) do
-    if Keyword.get(opts, :require_authenticated_client?, false) do
-      validate_authenticated_client(client, opts)
-    else
-      :ok
-    end
-  end
-
-  defp validate_authenticated_client(client, opts) do
-    Code.ensure_loaded?(client)
-
-    cond do
-      function_exported?(client, :auth_status, 1) ->
-        case client.auth_status(opts) do
-          :ok -> :ok
-          {:error, reason} -> {:skip, periodic_auth_skip_reason(reason)}
-        end
-
-      function_exported?(client, :authenticated?, 0) ->
-        if client.authenticated?(), do: :ok, else: {:skip, periodic_auth_skip_reason(:github_token_required)}
-
-      true ->
-        {:skip, periodic_auth_skip_reason(:authenticated_client_required)}
-    end
-  end
-
-  defp periodic_auth_skip_reason(:github_token_required), do: "github_token_required_for_periodic_sync"
-  defp periodic_auth_skip_reason(:gh_unavailable), do: "gh_cli_unavailable_for_periodic_sync"
-  defp periodic_auth_skip_reason(:gh_unauthorized), do: "gh_cli_auth_required_for_periodic_sync"
-  defp periodic_auth_skip_reason(:github_cli_or_token_required), do: "github_cli_or_token_required_for_periodic_sync"
-  defp periodic_auth_skip_reason(:authenticated_client_required), do: "authenticated_client_required_for_periodic_sync"
-  defp periodic_auth_skip_reason(reason) when is_atom(reason), do: "#{reason}_for_periodic_sync"
 
   defp missing_base_branch?(%WorkPackage{base_branch: package_base_branch}, payload) do
     is_nil(clean_branch(package_base_branch)) or is_nil(clean_branch(payload["base_branch"]))
@@ -538,10 +398,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
   end
 
   defp clean_branch(_value), do: nil
-
-  defp github_client do
-    Application.get_env(:symphony_elixir, :sympp_github_client, HttpClient)
-  end
 
   defp terminal_github_client do
     Application.get_env(:symphony_elixir, :sympp_github_client, DefaultClient)

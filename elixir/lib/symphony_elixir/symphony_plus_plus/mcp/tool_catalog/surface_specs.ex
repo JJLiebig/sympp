@@ -101,9 +101,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
 
   defp architect_tool_description("sync_pr"),
     do:
-      "Fetch GitHub evidence for an explicit descendant WorkPackage; accept a normal PR handoff with url and head_sha, or reconcile an attached terminal PR. dependency_inputs records which prerequisite inputs the current PR head consumed."
-
-  defp architect_tool_description("reconcile_work_request"), do: "Dry-run or apply deterministic WorkRequest delivery closeout repairs from structured PR/GitHub evidence."
+      "The factory watches dispatched packages' PRs, CI, reviews and merges on its own. Use sync_pr to attach a PR it can't find (fork or upstream), to record which prerequisite inputs the current PR head consumed (dependency_inputs), or to refresh and qualify now."
 
   defp architect_tool_description("record_work_package_delivery") do
     "End a WorkPackage with its one ending record; replays with the same key are idempotent. Evidence depends on outcome: pr_merged needs PR evidence, completed_no_pr needs direct evidence, superseded needs a same-WorkRequest successor and reason, abandoned needs rationale; finished and skipped need none. Any chief or architect may record finished. Ending clears active blocker residue."

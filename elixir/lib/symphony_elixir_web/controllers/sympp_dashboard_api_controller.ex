@@ -8,8 +8,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   alias Plug.Conn
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
-  alias SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler
-  alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit.Target
   alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
@@ -323,19 +321,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     )
   end
 
-  @spec operator_sync_github_prs(Conn.t(), map()) :: Conn.t()
-  def operator_sync_github_prs(conn, params) do
-    send_local_operator_response(conn, :delivery_reconcile_apply, Target.new(:dashboard), :operator_sync_github_prs, fn repo ->
-      with {:ok, sync} <- MergeReconciler.reconcile(repo, LocalOperatorActions.github_sync_opts(params)) do
-        changed? = github_sync_changed?(sync)
-
-        conn
-        |> json(mutation_success_payload(%{sync: sync}, %{dashboard: changed?}))
-        |> Conn.put_private(:sympp_skip_dashboard_invalidation, not changed?)
-      end
-    end)
-  end
-
   @spec operator_solo_session_detail(Conn.t(), map()) :: Conn.t()
   def operator_solo_session_detail(conn, %{"solo_session_id" => solo_session_id}) do
     send_local_operator_response(conn, :dashboard_read, Target.new(:dashboard), :operator_solo_session_detail, fn repo ->
@@ -564,11 +549,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   defp send_local_operator_response(conn, action, %Target{} = target, tool, fun)
        when is_atom(action) and is_atom(tool) and is_function(fun, 1) do
-    if OfflineSandbox.enabled?() and tool == :operator_sync_github_prs do
-      conn |> put_status(403) |> json(%{error: "This action is unavailable in the offline beta sandbox."})
-    else
-      send_online_or_local_response(conn, action, target, tool, fun)
-    end
+    send_online_or_local_response(conn, action, target, tool, fun)
   end
 
   defp send_online_or_local_response(conn, action, target, tool_name, fun) do
@@ -727,10 +708,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     payload
     |> Map.put(:ok, true)
     |> Map.put(:refresh, Map.merge(%{dashboard: true}, refresh))
-  end
-
-  defp github_sync_changed?(sync) when is_map(sync) do
-    Map.get(sync, :dashboard_changed, false) == true
   end
 
   defp script_name_prefix(%Conn{script_name: []}), do: ""

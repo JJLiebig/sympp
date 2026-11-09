@@ -296,10 +296,20 @@ Use the [Linux service installer](../docs/linux-service.md) to build a release,
 keep the existing ledger, and serve authenticated clients on the private tailnet.
 The regular local cockpit and Windows launcher retain their current behavior.
 
-### Pending PR checks
+### Progress observation
 
-The factory rechecks reported pending PR checks every 60 seconds, even when a
-worker has stopped. It uses authenticated conditional requests for check runs
-and commit statuses, with ETags cached per PR and head. Unchanged responses do
-not write observations; completed checks stop polling. Without GitHub credentials
-the backstop skips the pass. Manual PR synchronization remains available.
+The factory watches dispatched packages without agent calls:
+
+- every 15 seconds it reads `hc ls --all` on the factory host to see worker
+  terminals start and finish;
+- every 60 seconds it reads every watched PR, and finds PRs on packages'
+  branches, in one batched GitHub GraphQL request per 25 PRs, and reads each
+  package's Review Suite cycle on the worker's machine (3 second limit);
+- it moves packages to `ready` and back, and records merges, from what it sees.
+
+It uses `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token` (read once) over HTTP.
+Background reads stop when less than 10% of the rate limit remains; a rate-limit
+refusal pauses them until GitHub's reset or `retry-after`, else backs off from
+30 seconds to 15 minutes. Without credentials, or when GitHub or a review host
+can't be reached, the affected packages are flagged `stale` and nothing changes.
+The last snapshot per package is stored, so a restart doesn't repeat transitions.

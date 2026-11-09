@@ -198,6 +198,88 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
     end
   end
 
+  @doc """
+  Applies one fresh view of the factory's core (the `Observer` calls this):
+
+    * a live worker terminal (labels `sympp.role=worker` and
+      `sympp.work_package_id`) whose package is in `work_package_ids` starts
+      working on that package, unless another live terminal already does;
+    * a live row whose terminal is on this core and is finished or no longer
+      listed ends (`terminal_finished`).
+
+  Rows of terminals on other cores are left alone: their liveness is unknown.
+  """
+  @spec observe_core(repo(), String.t(), String.t() | nil, %{String.t() => map()}, [String.t()]) :: :ok
+  def observe_core(repo, core_id, core_name, terminals, work_package_ids) when is_binary(core_id) and is_map(terminals) do
+    finished? = fn address -> not match?(%{"state" => "live"}, Map.get(terminals, address)) end
+
+    ended =
+      repo.all(from(worked_on in WorkedOn, where: worked_on.state == "live"))
+      |> Enum.filter(fn row -> match?({^core_id, _address}, Terminal.split_key(row.terminal_key)) and finished?.(elem(Terminal.split_key(row.terminal_key), 1)) end)
+      |> Enum.map(& &1.id)
+
+    if ended != [], do: finish_all(repo, from(worked_on in WorkedOn, where: worked_on.id in ^ended), "terminal_finished")
+
+    wanted = MapSet.new(work_package_ids)
+
+    for {address, %{"state" => "live", "labels" => %{"sympp.role" => "worker", "sympp.work_package_id" => package_id}}} <- terminals,
+        MapSet.member?(wanted, package_id) do
+      start_worker(repo, package_id, %Terminal{
+        key: Terminal.key(core_id, address),
+        core_id: core_id,
+        address: address,
+        display_address: if(is_binary(core_name) and core_name != "", do: core_name <> "/" <> address, else: address),
+        role: "worker"
+      })
+    end
+
+    :ok
+  end
+
+  defp start_worker(repo, package_id, %Terminal{} = terminal) do
+    case live_row(repo, "work_package", package_id) do
+      nil ->
+        row = %WorkedOn{
+          id: Id.random("wo"),
+          subject_kind: "work_package",
+          subject_id: package_id,
+          terminal_key: terminal.key,
+          display_address: terminal.display_address,
+          role: "worker",
+          state: "live",
+          started_at: DateTime.utc_now(:microsecond)
+        }
+
+        changeset = Ecto.Changeset.unique_constraint(Ecto.Changeset.change(row), [:subject_kind, :subject_id], name: :sympp_worked_on_one_live_per_subject_index)
+
+        case repo.insert(changeset) do
+          {:ok, _row} -> DashboardPubSub.broadcast_changed()
+          {:error, _conflict} -> :ok
+        end
+
+      %WorkedOn{} ->
+        :ok
+    end
+  end
+
+  @doc """
+  The latest worker row of each package (live first, else the most recently
+  finished), by package id.
+  """
+  @spec workers(repo(), [String.t()]) :: %{String.t() => WorkedOn.t()}
+  def workers(_repo, []), do: %{}
+
+  def workers(repo, work_package_ids) when is_list(work_package_ids) do
+    work_package_ids
+    |> Enum.uniq()
+    |> Enum.chunk_every(500)
+    |> Enum.flat_map(fn ids ->
+      repo.all(from(worked_on in WorkedOn, where: worked_on.subject_kind == "work_package" and worked_on.role == "worker" and worked_on.subject_id in ^ids))
+    end)
+    |> Enum.group_by(& &1.subject_id)
+    |> Map.new(fn {id, rows} -> {id, Enum.max_by(rows, &{&1.state == "live", DateTime.to_unix(&1.started_at, :microsecond)})} end)
+  end
+
   @doc "Live owners of WorkRequests, by WorkRequest id, as public payloads."
   @spec owners(repo(), [String.t()]) :: %{String.t() => owner()}
   def owners(_repo, []), do: %{}

@@ -3,13 +3,13 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
 
   alias Mix.Tasks.Sympp.Cockpit, as: CockpitTask
   alias Mix.Tasks.Sympp.OfflineMigrate
-  alias SymphonyElixir.SymphonyPlusPlus.GitHub.DefaultClient
+  alias SymphonyElixir.SymphonyPlusPlus.GitHub.{Api, DefaultClient}
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, Server, Stdio}
+  alias SymphonyElixir.SymphonyPlusPlus.Observer
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
-  alias SymphonyElixir.SymphonyPlusPlus.ReviewObservation
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
@@ -99,18 +99,14 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
         assert Req.post!(path <> "/archive", json: %{}, headers: browser_api_headers()).status == 200
         assert Req.post!(path <> "/delete", json: %{}, headers: browser_api_headers()).status == 200
         assert Repo.get(WorkRequest, request.id) == nil
-        assert Req.post!(origin <> "/api/v1/sympp/operator/github/sync-prs", json: %{}, headers: browser_api_headers()).status == 403
 
         server = Server.new(Config.default())
         response = Stdio.handle_payload(%{"jsonrpc" => "2.0", "id" => 1, "method" => "initialize"}, server)
         assert response["error"]["data"]["reason"] == "offline_sandbox"
 
-        package = %WorkPackage{id: "WP-OFFLINE", status: "dispatched", worktree_path: File.cwd!(), review_requirement: %{"type" => "review-suite"}}
-
-        assert ReviewObservation.observe([package],
-                 find_executable: fn _name -> "/unused/probe" end,
-                 runner: fn _, _, _, _ -> flunk("review probe") end
-               ) == %{}
+        # The Observer doesn't run offline, and its GitHub access refuses.
+        refute Process.whereis(Observer)
+        assert {:error, :offline} = Api.credential()
 
         assert RepoIdentity.local_git_origin_remote(File.cwd!()) == nil
         assert {:error, :offline_sandbox} = DefaultClient.auth_status()

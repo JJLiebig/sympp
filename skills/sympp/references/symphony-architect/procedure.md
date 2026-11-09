@@ -155,8 +155,6 @@ resolve the goal), `done`, or `archived`. Only the operator completes, archives
 or restores a WorkRequest; for `unresolved` tell the operator to complete or
 archive it. Writes to an archived WorkRequest fail with `next_action: restore`.
 
-`reconcile_work_request` returns counts plus proposed, applied and error rows by
-default. Use `detail: "full"` for every skipped row and nested delivery evidence.
 Update Skills and start fresh MCP sessions after upgrading this contract.
 
 Name repositories by git remote URL or `owner/name`, never a client checkout path.
@@ -211,20 +209,29 @@ user. Questions and ordinary waits are not blockers. No report cadence is requir
 
 ## Delivery Closeout
 
+The factory watches every dispatched package on its own. It sees the worker's
+terminal start and exit, finds the PR on the package's branch, reads CI and the
+Review Suite cycle by the package's review id, moves the package to `ready` when
+the PR is open and not a draft, CI is green, the review is done for the current
+head and dependency inputs are current, moves it back to `dispatched` when any of
+those turns false, and records `pr_merged` when GitHub reports the merge. Don't
+call `sync_pr` to make that happen. A package whose GitHub or review state can't
+be read is flagged `stale`: nothing changes, and it isn't merge eligible until
+the next read.
+
 After the worker returns, verify acceptance and the required native checks/review
-for the exact PR head once. Then call architect `sync_pr` with `work_package_id`,
-`url` (or `number` and `repository`) from the normal handoff. Optional `head_sha`
-must match when supplied. It fetches GitHub evidence and
-applies existing readiness and dependency gates without worker receipts.
-Readiness does not independently prove native checks/review passed; unknown provider
-fields stay unknown. Missing optional observations do not prevent this workflow.
-Once GitHub reports the attached PR merged, sync, reconciliation and periodic PR
-observation record `pr_merged` from its merge timestamp and commit without a head
-handoff or readiness transition. Pre-merge readiness and dependency gates still apply.
-For selected candidate inputs, pass the consumed inputs from the handoff as
-`sync_pr(dependency_inputs: [{dependency_id, prerequisite_work_package_id, candidate_head_sha}])`
-for the dependent's current head; a green PR can't prove which prerequisite head
-it consumed.
+for the exact PR head once. Use `sync_pr` only to:
+
+- attach a PR the factory can't find, such as one opened from a fork or in an
+  upstream repository: `work_package_id` plus `url` (or `number` and
+  `repository`); optional `head_sha` must match when supplied;
+- record which prerequisite inputs the dependent's current head consumed:
+  `sync_pr(dependency_inputs: [{dependency_id, prerequisite_work_package_id, candidate_head_sha}])`.
+  A green PR can't prove which prerequisite head it consumed, so this is never
+  inferred;
+- refresh and qualify now instead of waiting for the next check. When the review
+  state can't be read, the package stays `dispatched` and `next_action` names the
+  machine to check.
 
 Use `read_work_request(view: "board")` for lifecycle evidence.
 
@@ -234,17 +241,7 @@ checks/review and combined acceptance. Merge backend before wired UI. Board
 eligibility checks dependencies; it does not perform a GitHub merge or prove
 native checks/review. Recheck when a relevant head or selection changes.
 
-For merged PR evidence, use `reconcile_work_request` first, then
-`reconcile_work_request(apply: true)` when the proposed repair matches the
-delivery board. That path uses attached/synced PR evidence and avoids repeating
-PR URL or package facts. If you choose explicit PR closeout instead of
-`apply: true`, replay the dry-run result's `action` payload through
-`record_work_package_delivery`.
-
-A WorkPackage is `planned`, `dispatched`, `ready` or `ended`. `sync_pr` moves a
-dispatched package to `ready` when its PR is open and not a draft, CI is green
-for the current head and dependency inputs are current; any of those turning
-false moves it back to `dispatched` and lists the reasons. A ready contract is
+A WorkPackage is `planned`, `dispatched`, `ready` or `ended`. A ready contract is
 frozen: supersede it with a successor instead of editing it. An ended package
 has exactly one ending record, written by `record_work_package_delivery`
 (`skip_work_package` writes `skipped`). For explicit `pr_merged`,
@@ -257,8 +254,8 @@ Do not infer delivery from prose decisions or chat. Ending a package resolves it
 blockers and queues worktree cleanup; no separate worker or runtime step is needed.
 If package evidence is missing or ambiguous, do not record WorkRequest delivery
 closeout; repair evidence first.
-Record external GitHub merges truthfully even when out of order. Reconciliation
-does not erase merge history: route `delivery_order_violation` attention to
+Record external GitHub merges truthfully even when out of order. A recorded
+merge does not erase merge history: route `delivery_order_violation` attention to
 remediation, even if the backend later delivers.
 
 Retirement is not delivery. Create all replacement packages before retiring the
@@ -271,4 +268,4 @@ After required delivery and WR acceptance, optional sanity checks create follow-
 work; they are not another completion gate.
 
 Human attention is **Needs you**, raised only by the chief or architect with one sentence stating the action: a human question or product/policy approval, access only the human can grant, or recovery exhausted after the system tried. Raise it with `ask_question`.
-Read `read_work_request(view: "board")` for stale workers (`next_actor: architect`, `inspect_runtime`), blockers and validation evidence; handle silent workers, failing checks and quiet tasks before escalating exhausted recovery. Review rounds, running CI, dependencies, queues and worker-parent questions never need human attention by themselves.
+Read `read_work_request(view: "board")` for workers that need you (`next_actor: architect`: `run_launch_line` when no worker terminal has appeared, `inspect_worker` when it exited without a PR or sits idle with failing CI or review findings), blockers and validation evidence; handle silent workers, failing checks and quiet tasks before escalating exhausted recovery. Review rounds, running CI, dependencies, queues and worker-parent questions never need human attention by themselves.

@@ -2,7 +2,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
-  alias SymphonyElixir.SymphonyPlusPlus.GitHub.DefaultClient
   alias SymphonyElixir.SymphonyPlusPlus.HumanDecisionPrompt
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
@@ -252,14 +251,4 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
         to_string(value)
     end
   end
-
-  @spec github_sync_opts(map()) :: keyword()
-  def github_sync_opts(%{"mode" => "auto"}) do
-    [
-      client: Application.get_env(:symphony_elixir, :sympp_github_client, DefaultClient),
-      require_authenticated_client?: true
-    ]
-  end
-
-  def github_sync_opts(_params), do: []
 end

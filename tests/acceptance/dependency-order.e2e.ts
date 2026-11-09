@@ -86,14 +86,6 @@ test('candidate pins allow dispatch but current pins and dependent inputs gate m
   expect((await graph(architect, request)).effective_edges[0].constraints[0].candidate_state).toBe('stale_head');
   provider.set(201, pr(201, head('a')));
   await sync(architect, backend, 201, head('a'));
-  provider.set(201, pr(201, head('b')));
-  const observation = await architect.operator('/api/v1/sympp/operator/github/sync-prs', { mode: 'auto' });
-  expect(observation.status).toBe(200);
-  expect(observation.body.sync.results[0].reason).toBe('pr_not_merged');
-  await architect.reject('dispatch_work_package', { work_package_id: peer }, 'unmet_work_package_dependencies');
-  expect((await graph(architect, request)).effective_edges[0].constraints[0].candidate_state).toBe('stale_head');
-  provider.set(201, pr(201, head('a')));
-  await sync(architect, backend, 201, head('a'));
   expect((await architect.call('dispatch_work_package', { work_package_id: peer })).work_package.id).toBe(peer);
   provider.set(202, pr(202, head('c')));
   const staleInputs = await sync(architect, ui, 202, head('c'));
@@ -185,13 +177,8 @@ test('out-of-order automatic and manual closeout retain order violations through
       expect((await architect.call('record_work_package_delivery', action)).work_package_delivery.id).toBe(recorded.id);
     }
   }
-  const dry = await architect.call('reconcile_work_request', { work_request_id: request, recorded_by: 'acceptance-architect' });
-  expect(dry.reconciliation.proposed_count).toBe(0);
-  expect(dry.reconciliation.applied_count).toBe(0);
   expect((await row(architect, request, ui)).delivery_outcome).toBe('pr_merged');
   expect((await row(architect, request, replay)).work_package.blocker_state['active?']).toBe(false);
-  const applied = await architect.call('reconcile_work_request', { work_request_id: request, apply: true });
-  expect(applied.reconciliation.applied_count).toBe(0);
   const merged = await row(architect, request, ui);
   expect(merged.raw_status).toBe('ended');
   expect(merged.delivery_outcome).toBe('pr_merged');
@@ -203,6 +190,6 @@ test('out-of-order automatic and manual closeout retain order violations through
   const after = await row(architect, request, ui);
   expect(after.delivery).toEqual(merged.delivery);
   expect(after.merge_eligibility.reason_codes).toContain('delivery_order_violation');
-  expect((await architect.call('reconcile_work_request', { work_request_id: request, apply: true })).reconciliation.applied_count).toBe(0);
+  await architect.call('sync_pr', { work_package_id: ui });
   expect((await row(architect, request, ui)).delivery).toEqual(merged.delivery);
 });

@@ -28,7 +28,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "append_progress",
     "resolve_blocker",
     "sync_pr",
-    "reconcile_work_request",
     "record_work_package_delivery",
     "set_report",
     "ask_question",
@@ -59,7 +58,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "append_progress",
     "resolve_blocker",
     "sync_pr",
-    "reconcile_work_request",
     "record_work_package_delivery",
     "set_report",
     "edit_plan",
@@ -98,12 +96,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   def tool_access(name) when name in @read_tools, do: :read
   def tool_access(_name), do: :write
 
-  @doc """
-  Whether one call only reads. A reconcile without `apply: true` is a dry run
-  of a write tool and reads like any other read.
-  """
+  @doc "Whether one call only reads."
   @spec read_call?(tool_name(), map()) :: boolean()
-  def read_call?("reconcile_work_request", arguments) when is_map(arguments), do: Map.get(arguments, "apply") != true
   def read_call?(name, _arguments), do: tool_access(name) == :read
 
   @doc """

@@ -211,9 +211,8 @@ test('ordinary PR handoff observes pending qualification then reconciles an exac
   expect(Date.parse(delivered.delivery.pr_merged_at)).toBe(Date.parse(mergeTime));
   expect(await completion()).toBeTruthy();
   const revision = (await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision;
-  await architect.call('sync_pr', { work_package_id: wp });
-  const replay = await architect.call('reconcile_work_request', { work_request_id: request, apply: true });
-  expect(replay.reconciliation.applied_count).toBe(0);
+  const replay = await architect.call('sync_pr', { work_package_id: wp });
+  expect(replay.pr_sync.status).toBe('already_merged');
   expect((await row(architect, request, wp)).delivery).toEqual(delivered.delivery);
   expect((await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision).toEqual(revision);
   const calls = provider.calls.filter(({ argv }) => argv[0] === 'pr');
@@ -281,13 +280,10 @@ test('provider errors and incomplete or wrong-head evidence cannot complete a di
   await architect.reject('sync_pr', { work_package_id: wp, head_sha: head('a') }, 'provider_head_mismatch');
   expect((await row(architect, request, wp)).delivery_outcome).toBeNull();
   // GitHub's merge evidence closes the attached PR even when the handoff head is old.
-  const observed = await architect.operator('/api/v1/sympp/operator/github/sync-prs', { mode: 'auto' });
-  expect(observed.status).toBe(200);
-  expect(observed.body.sync.merged_count).toBe(1);
+  expect((await architect.call('sync_pr', { work_package_id: wp })).pr_sync.status).toBe('merged');
   expect((await row(architect, request, wp)).raw_status).toBe('ended');
   expect((await row(architect, request, wp)).delivery_outcome).toBe('pr_merged');
-  const replay = await architect.call('reconcile_work_request', { apply: true });
-  expect(replay.reconciliation.applied_count).toBe(0);
+  expect((await architect.call('sync_pr', { work_package_id: wp })).pr_sync.status).toBe('already_merged');
 });
 
 test('typed no-PR closeout resolves blockers once and terminal packages cannot reactivate', async ({ delivery: { factory } }) => {
@@ -335,7 +331,6 @@ test('typed no-PR closeout resolves blockers once and terminal packages cannot r
     work_package_id: wp, outcome: 'pr_merged', idempotency_key: 'flat-evidence', pr_url: prUrl(105), evidence: { pr_merged: mergedEvidence },
   }, 'unexpected_argument');
   await architect.call('append_progress', { work_package_id: remaining, summary: 'This prose says no PR is needed, but supplies no delivery evidence.', idempotency_key: 'prose-only' });
-  expect((await architect.call('reconcile_work_request', { work_request_id: request, apply: true })).reconciliation.applied_count).toBe(0);
   expect((await row(architect, request, remaining)).delivery_outcome).toBeNull();
   const result = await close(architect, wp);
   const scoped = await row(architect, request, wp);

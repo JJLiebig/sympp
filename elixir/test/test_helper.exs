@@ -1,7 +1,9 @@
 System.put_env("SYMPP_OPEN_DASHBOARD", "0")
-# Tests never read the machine's real herdr-core; a test that needs the factory
-# view sets :sympp_herdr_core to a function.
+# Tests never read the machine's real herdr-core, Review Suite state or GitHub
+# token; a test that needs one sets its source to a function.
 Application.put_env(:symphony_elixir, :sympp_herdr_core, nil)
+Application.put_env(:symphony_elixir, :sympp_review_command, nil)
+Application.put_env(:symphony_elixir, :sympp_gh_token_command, fn -> nil end)
 ExUnit.start()
 
 if System.get_env("SYMPHONY_RUN_LIVE_E2E") != "1" do
