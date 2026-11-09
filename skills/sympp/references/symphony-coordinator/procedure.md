@@ -30,12 +30,13 @@ terminal the owner. Recording decisions and opening asks stay open to any Herdr
 terminal (the asker or the owner resolves them), and any chief or architect may end a package as
 `finished`; other writes belong to the owning terminal.
 
-- Optionally attach a coordinator-owned [symphony-solo-session](../symphony-solo-session/procedure.md)
-  for parent planning through configured MCP tools. Do not share that session
-  with workers. Persistence is optional: ordinary delegation needs no sympp
-  backend when no ledger state is requested. Required ledger work needs MCP;
-  report missing tools and recover the connection instead of substituting CLI
-  business commands or private state files.
+- Persistence is optional: ordinary delegation needs no sympp backend when no
+  ledger state is requested. Required ledger work needs MCP; report missing
+  tools and recover the connection instead of substituting CLI business
+  commands or private state files.
+- Children you start that work on a branch or PR appear on the board as cards,
+  with their PR, CI and review. They need no setup and ask the operator with
+  `ask` without `work_request_id`.
 - Scout repo context before slicing.
 - Identify outcome, base branch, acceptance, owned/forbidden areas, optional
   validation and review context, risk, and any assigned size budget.

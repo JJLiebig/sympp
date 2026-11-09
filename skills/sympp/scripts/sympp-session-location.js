@@ -76,8 +76,8 @@ async function remoteArguments(body, factoryOwned) {
     const input = params?.arguments;
     if (payload?.method !== "tools/call" || !input || typeof input !== "object" || Array.isArray(input)) return payload;
     let args = { ...input };
-    if (["create_work_request", "solo_attach", "solo_list"].includes(params.name)) args = await repoObject(args);
     if (params.name === "create_work_request") {
+      args = await repoObject(args);
       if (!Object.hasOwn(args, "repo")) args.repo = await origin(process.cwd());
       if (Array.isArray(args.repo_scopes)) args.repo_scopes = await Promise.all(args.repo_scopes.map(repoObject));
     }

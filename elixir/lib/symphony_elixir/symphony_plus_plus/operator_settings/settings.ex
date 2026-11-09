@@ -40,7 +40,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings do
   @settings_id "local_operator"
   @default_work_request_archive_after_days 3
   @default_never_started_archive_after_days 30
-  @default_solo_session_delete_after_days 30
+  @default_card_retention_days 30
   @default_open_dashboard_on_boot true
   @default_capture_failed_mcp_calls false
   @max_work_request_archive_after_days 3650
@@ -50,7 +50,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings do
           id: String.t(),
           work_request_archive_after_days: pos_integer(),
           work_request_never_started_archive_after_days: pos_integer(),
-          solo_session_delete_after_days: pos_integer(),
+          card_retention_days: pos_integer(),
           open_dashboard_on_boot: boolean(),
           capture_failed_mcp_calls: boolean(),
           hidden_work_package_ids: [String.t()],
@@ -61,7 +61,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings do
   schema "sympp_operator_settings" do
     field(:work_request_archive_after_days, :integer, default: @default_work_request_archive_after_days)
     field(:work_request_never_started_archive_after_days, :integer, default: @default_never_started_archive_after_days)
-    field(:solo_session_delete_after_days, :integer, default: @default_solo_session_delete_after_days)
+    field(:card_retention_days, :integer, default: @default_card_retention_days)
     field(:open_dashboard_on_boot, :boolean, default: @default_open_dashboard_on_boot)
     field(:capture_failed_mcp_calls, :boolean, default: @default_capture_failed_mcp_calls)
     field(:hidden_work_package_ids, HiddenWorkPackageIdList, default: [])
@@ -75,8 +75,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings do
   @spec default_work_request_archive_after_days() :: pos_integer()
   def default_work_request_archive_after_days, do: @default_work_request_archive_after_days
 
-  @spec default_solo_session_delete_after_days() :: pos_integer()
-  def default_solo_session_delete_after_days, do: @default_solo_session_delete_after_days
+  @spec default_card_retention_days() :: pos_integer()
+  def default_card_retention_days, do: @default_card_retention_days
 
   @spec default_open_dashboard_on_boot() :: boolean()
   def default_open_dashboard_on_boot, do: @default_open_dashboard_on_boot
@@ -87,7 +87,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings do
       id: @settings_id,
       work_request_archive_after_days: @default_work_request_archive_after_days,
       work_request_never_started_archive_after_days: @default_never_started_archive_after_days,
-      solo_session_delete_after_days: @default_solo_session_delete_after_days,
+      card_retention_days: @default_card_retention_days,
       open_dashboard_on_boot: @default_open_dashboard_on_boot,
       capture_failed_mcp_calls: @default_capture_failed_mcp_calls,
       hidden_work_package_ids: []
@@ -112,7 +112,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings do
       :id,
       :work_request_archive_after_days,
       :work_request_never_started_archive_after_days,
-      :solo_session_delete_after_days,
+      :card_retention_days,
       :open_dashboard_on_boot,
       :capture_failed_mcp_calls,
       :hidden_work_package_ids
@@ -121,7 +121,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings do
       :id,
       :work_request_archive_after_days,
       :work_request_never_started_archive_after_days,
-      :solo_session_delete_after_days,
+      :card_retention_days,
       :open_dashboard_on_boot,
       :capture_failed_mcp_calls
     ])
@@ -129,7 +129,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings do
       greater_than_or_equal_to: 1,
       less_than_or_equal_to: @max_work_request_archive_after_days
     )
-    |> validate_number(:solo_session_delete_after_days,
+    |> validate_number(:card_retention_days,
       greater_than_or_equal_to: 1,
       less_than_or_equal_to: @max_work_request_archive_after_days
     )

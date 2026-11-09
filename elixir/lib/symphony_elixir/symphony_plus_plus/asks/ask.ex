@@ -1,8 +1,9 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.Asks.Ask do
   @moduledoc """
   One question for the operator on a WorkRequest, optionally naming one of its
-  packages. `asked_by_terminal` is the asking Herdr terminal's key (core id
-  plus address); asks carried over from older records have none.
+  packages, or on a card (`card_id`, no WorkRequest). `asked_by_terminal` is
+  the asking Herdr terminal's key (core id plus address); asks carried over
+  from older records have none.
   """
 
   use Ecto.Schema
@@ -16,6 +17,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks.Ask do
   schema "sympp_asks" do
     field(:work_request_id, :string)
     field(:work_package_id, :string)
+    field(:card_id, :string)
     field(:question, :string)
     field(:decision_prompt, :map)
     field(:state, :string)

@@ -5,7 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Config do
 
   @default_repo_root __DIR__ |> Path.join("../../../../..") |> Path.expand()
   @source_revision_key {__MODULE__, :source_revision}
-  @surface_profiles ~w(full architect coordinator solo)a
+  @surface_profiles ~w(full architect)a
 
   @enforce_keys [:mode, :repo, :version]
   defstruct [
@@ -27,7 +27,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Config do
           source_revision: String.t() | nil,
           database: String.t() | nil,
           repo_root: String.t() | nil,
-          surface_profile: :full | :architect | :coordinator | :solo,
+          surface_profile: :full | :architect,
           health_ledger_mode: :live | :configured_identity,
           local_daemon_trusted: boolean()
         }
@@ -87,7 +87,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Config do
   @spec usage() :: String.t()
   def usage do
     [
-      "Usage: mix sympp.mcp [--mode stdio] [--database <sqlite-path>] [--repo-root <path>] [--surface-profile <full|architect|coordinator|solo>]",
+      "Usage: mix sympp.mcp [--mode stdio] [--database <sqlite-path>] [--repo-root <path>] [--surface-profile <full|architect>]",
       Repo.default_database_help_text()
     ]
     |> Enum.join("\n")

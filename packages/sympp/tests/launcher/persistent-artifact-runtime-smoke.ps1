@@ -225,7 +225,7 @@ function Send-BridgeRequest($Process, $Request) {
   return $response
 }
 
-function Invoke-McpBridge([string]$FilePath, [string[]]$Arguments, [hashtable]$Environment, [switch]$CreateMarker, [string]$MarkerSessionId, [scriptblock]$OnAttached, [switch]$RecoverBackend) {
+function Invoke-McpBridge([string]$FilePath, [string[]]$Arguments, [hashtable]$Environment, [switch]$CreateMarker, [string]$MarkerWorkRequestId, [scriptblock]$OnAttached, [switch]$RecoverBackend) {
   Write-Host "MCP fixture: state=$($Environment.SYMPP_RUNTIME_FILE) create=$CreateMarker recover=$RecoverBackend"
   $process = Start-IsolatedProcess $FilePath $Arguments $Environment
   try {
@@ -250,26 +250,26 @@ function Invoke-McpBridge([string]$FilePath, [string[]]$Arguments, [hashtable]$E
       # Writes need a Herdr terminal. Outside Herdr the bridge forwards the request
       # unchanged, so the smoke asserts the terminal the bridge would send.
       $terminal = @{ herdr = @{ core_id = "artifact-smoke-core"; terminal_id = "t1" } }
-      $attached = Send-BridgeRequest $process @{ jsonrpc = "2.0"; id = 3; method = "tools/call"; params = @{ name = "solo_attach"; arguments = @{ repo = "fixture/packaged-ledger"; base_branch = "beta"; workspace_path = $tempRoot; caller_id = "artifact-smoke"; title = "Disposable persistence marker" }; _meta = $terminal } }
-      $MarkerSessionId = [string]$attached.result.structuredContent.solo_session.id
-      if (-not $MarkerSessionId) { throw "Missing marker session identity." }
-      [void](Send-BridgeRequest $process @{ jsonrpc = "2.0"; id = 4; method = "tools/call"; params = @{ name = "solo_append_progress"; arguments = @{ session_id = $MarkerSessionId; summary = "packaged database persistence marker"; idempotency_key = "artifact-persistence-marker" }; _meta = $terminal } })
+      $created = Send-BridgeRequest $process @{ jsonrpc = "2.0"; id = 3; method = "tools/call"; params = @{ name = "create_work_request"; arguments = @{ repo = "fixture/packaged-ledger"; base_branch = "beta"; title = "Disposable persistence marker"; request_kind = "feature"; description = "Packaged ledger persistence marker." }; _meta = $terminal } }
+      $MarkerWorkRequestId = [string]$created.result.structuredContent.work_request.id
+      if (-not $MarkerWorkRequestId) { throw "Missing marker WorkRequest identity." }
+      [void](Send-BridgeRequest $process @{ jsonrpc = "2.0"; id = 4; method = "tools/call"; params = @{ name = "record_decision"; arguments = @{ work_request_id = $MarkerWorkRequestId; source_type = "operator"; decision = "packaged database persistence marker"; rationale = "Persistence"; scope_impact = "None"; created_by = "artifact-smoke" }; _meta = $terminal } })
     }
     if ($RecoverBackend) {
       $ownedState = Get-Content -LiteralPath $Environment.SYMPP_RUNTIME_FILE -Raw | ConvertFrom-Json
       Stop-Process -Id ([int]$ownedState.backend.pid) -Force -ErrorAction Stop
       [void](Send-BridgeRequest $process @{ jsonrpc = "2.0"; id = 6; method = "tools/list"; params = @{} })
     }
-    if ($MarkerSessionId) {
-      $marker = Send-BridgeRequest $process @{ jsonrpc = "2.0"; id = 5; method = "tools/call"; params = @{ name = "solo_show"; arguments = @{ session_id = $MarkerSessionId } } }
-      if (@($marker.result.structuredContent.entries | Where-Object { $_.title -eq "packaged database persistence marker" }).Count -ne 1) { throw "MCP persistence marker was missing or duplicated." }
+    if ($MarkerWorkRequestId) {
+      $marker = Send-BridgeRequest $process @{ jsonrpc = "2.0"; id = 5; method = "tools/call"; params = @{ name = "read_work_request"; arguments = @{ work_request_id = $MarkerWorkRequestId; detail = "full" } } }
+      if (@($marker.result.structuredContent.decision_log_entries | Where-Object { $_.decision -eq "packaged database persistence marker" }).Count -ne 1) { throw "MCP persistence marker was missing or duplicated." }
     }
     $activeState = Get-Content -LiteralPath $Environment.SYMPP_RUNTIME_FILE -Raw | ConvertFrom-Json
     $activeBackend = Get-Process -Id ([int]$activeState.backend.pid) -ErrorAction Stop
     $activeBackendStartTicks = $activeBackend.StartTime.ToUniversalTime().Ticks
     $script:backendProcessId = $activeBackend.Id
     $script:backendStartTicks = $activeBackendStartTicks
-    if ($OnAttached) { & $OnAttached $activeState $MarkerSessionId }
+    if ($OnAttached) { & $OnAttached $activeState $MarkerWorkRequestId }
     $activeState = Get-Content -LiteralPath $Environment.SYMPP_RUNTIME_FILE -Raw | ConvertFrom-Json
     $activeBackend = Get-Process -Id ([int]$activeState.backend.pid) -ErrorAction Stop
     $activeBackendStartTicks = $activeBackend.StartTime.ToUniversalTime().Ticks
@@ -288,7 +288,7 @@ function Invoke-McpBridge([string]$FilePath, [string[]]$Arguments, [hashtable]$E
       backend_start_ticks = $activeBackendStartTicks
       runtime_mode = [string]$activeState.runtime_mode
       artifact_root = [string]$activeState.artifact.root
-      marker_session_id = $MarkerSessionId
+      marker_work_request_id = $MarkerWorkRequestId
     }
   } catch {
     $failure = $_.Exception.Message
@@ -441,7 +441,7 @@ try {
       foreach ($property in $claude.env.PSObject.Properties) { $environment[$property.Name] = [string]$property.Value }
     }
     $assertLedger = {
-      param($activeState, $sessionId)
+      param($activeState, $markerId)
       $readiness = Invoke-RestMethod ($activeState.backend.url + "/mcp/readiness")
       $actualPath = ([string]$readiness.ledger.identity.display_path).Replace('$HOME', $environment.USERPROFILE).Replace('/', '\')
       if ($readiness.ledger.identity.kind -ne "sqlite" -or [IO.Path]::GetFullPath($actualPath) -ine [IO.Path]::GetFullPath($database)) { throw "Packaged runtime ledger identity '$($readiness.ledger.identity.display_path)' did not match '$database'." }
@@ -449,9 +449,9 @@ try {
       if ($SkillsInstall -and ($activeState.plugin_root -ne $installedRoot -or (Test-Path (Join-Path $environment.USERPROFILE ".codex")))) { throw "Portable launch depended on a Codex cache or the source checkout." }
     }
     $first = Invoke-McpBridge $cmd $commandArgs $environment -CreateMarker -OnAttached {
-      param($activeState, $sessionId)
-      & $assertLedger $activeState $sessionId
-      $second = Invoke-McpBridge $cmd $commandArgs $environment -MarkerSessionId $sessionId -OnAttached $assertLedger
+      param($activeState, $markerId)
+      & $assertLedger $activeState $markerId
+      $second = Invoke-McpBridge $cmd $commandArgs $environment -MarkerWorkRequestId $markerId -OnAttached $assertLedger
       if ($second.backend_pid -ne $activeState.backend.pid) { throw "Warm client did not share the packaged backend." }
       if ($SkillsInstall) {
         $foreign = $environment.Clone()
@@ -490,13 +490,13 @@ try {
       $manifest = $candidateManifest
       $candidateManifest | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $floatingManifest
     }
-    $secondWave = Invoke-McpBridge $cmd $commandArgs $environment -MarkerSessionId $first.marker_session_id -RecoverBackend -OnAttached {
-      param($activeState, $sessionId)
-      & $assertLedger $activeState $sessionId
+    $secondWave = Invoke-McpBridge $cmd $commandArgs $environment -MarkerWorkRequestId $first.marker_work_request_id -RecoverBackend -OnAttached {
+      param($activeState, $markerId)
+      & $assertLedger $activeState $markerId
       if ($SkillsInstall) {
         Invoke-CheckoutInstallQualification $environment $process $candidateManifest
-        $persisted = Send-BridgeRequest $process @{ jsonrpc = '2.0'; id = 82; method = 'tools/call'; params = @{ name = 'solo_show'; arguments = @{ session_id = $sessionId } } }
-        if (@($persisted.result.structuredContent.entries | Where-Object title -eq 'packaged database persistence marker').Count -ne 1) {
+        $persisted = Send-BridgeRequest $process @{ jsonrpc = '2.0'; id = 82; method = 'tools/call'; params = @{ name = 'read_work_request'; arguments = @{ work_request_id = $markerId; detail = 'full' } } }
+        if (@($persisted.result.structuredContent.decision_log_entries | Where-Object decision -eq 'packaged database persistence marker').Count -ne 1) {
           throw 'Checkout install or rollback lost or duplicated the existing ledger marker.'
         }
       }

@@ -15,8 +15,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession
-  alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
@@ -55,8 +53,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
     repo.delete_all(Artifact)
     repo.delete_all(ProgressEvent)
     repo.delete_all(PlanNode)
-    repo.delete_all(SoloSessionEntry)
-    repo.delete_all(SoloSession)
+    repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Cards.Card)
     repo.delete_all(WorkPackageDelivery)
     repo.delete_all(WorkPackage)
     repo.delete_all(Phase)

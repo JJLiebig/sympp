@@ -1,8 +1,9 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AskTools do
   @moduledoc """
-  `ask` opens a "Needs you" ask for the operator; `resolve_ask` records a
-  conversational answer or withdraws one. Neither needs ownership: any Herdr
-  terminal may ask, and the asker or the WorkRequest owner may resolve.
+  `ask` opens a "Needs you" ask for the operator, on a WorkRequest or, without
+  one, on the caller's card; `resolve_ask` records a conversational answer or
+  withdraws one. Neither needs ownership: any Herdr terminal may ask, and the
+  asker or the WorkRequest owner may resolve.
   """
 
   alias SymphonyElixir.SymphonyPlusPlus.Asks
@@ -18,12 +19,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AskTools do
   def call("ask", %Config{} = config, %Terminal{} = terminal, arguments) do
     case Asks.open(config.repo, terminal, arguments) do
       {:ok, ask} ->
-        {:ok,
-         ToolResult.tool_result(%{
-           "ask" => Asks.public(ask),
-           "next_action" =>
-             "The operator answers on the board. The answer is typed into this terminal when it runs on the factory's machine; otherwise read it from the ask in read_work_request with detail: full. Withdraw it with resolve_ask if it stops mattering."
-         })}
+        {:ok, ToolResult.tool_result(%{"ask" => Asks.public(ask), "next_action" => ask_next_action(ask)})}
 
       {:error, reason} ->
         error("ask", reason)
@@ -43,6 +39,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AskTools do
         error("resolve_ask", reason)
     end
   end
+
+  defp ask_next_action(%{work_request_id: nil}),
+    do:
+      "The operator answers on the board; the answer is typed into this terminal. If it doesn't arrive, read it under caller.card in sympp.health. Withdraw it with resolve_ask if it stops mattering."
+
+  defp ask_next_action(_ask),
+    do:
+      "The operator answers on the board. The answer is typed into this terminal when it runs on the factory's machine; otherwise read it from the ask in read_work_request with detail: full. Withdraw it with resolve_ask if it stops mattering."
+
+  defp error(tool, :no_open_card),
+    do:
+      precondition(
+        tool,
+        "no_open_card",
+        "no_card",
+        "This terminal has no open card: it gets one once it works on a branch or PR as the child of a chief or architect, or with the label sympp.card=1. Otherwise ask on a WorkRequest with work_request_id."
+      )
+
+  defp error(tool, :missing_work_request_id),
+    do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => "missing_work_request_id", "next_action" => "Name the package's work_request_id."}}
+
+  defp error(tool, :decision_needs_work_request),
+    do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => "decision_needs_work_request", "next_action" => "Resolve a card's ask without a decision."}}
 
   defp error(tool, :not_found), do: {:error, -32_004, "Not found", %{"tool" => tool, "reason" => "not_found"}}
   defp error(tool, :work_request_archived), do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"phase" => "archived"})

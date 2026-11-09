@@ -78,7 +78,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.RetentionThrottle do
   defp cache_key(repo, %Settings{} = settings) do
     archive_days = settings.work_request_archive_after_days
     never_started_days = settings.work_request_never_started_archive_after_days
-    {__MODULE__, repo_key(repo), {archive_days, never_started_days, settings.solo_session_delete_after_days}}
+    {__MODULE__, repo_key(repo), {archive_days, never_started_days, settings.card_retention_days}}
   end
 
   defp repo_key(repo) do

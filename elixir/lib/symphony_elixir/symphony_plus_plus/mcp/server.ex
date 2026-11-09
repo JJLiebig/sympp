@@ -18,8 +18,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       optional_list_argument: 2,
       optional_object_argument: 2,
       optional_string_argument: 3,
-      required_argument: 2,
-      solo_tool_arguments: 2
+      required_argument: 2
     ]
 
   alias SymphonyElixir.SymphonyPlusPlus.HerdrCore
@@ -38,7 +37,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     LocalTrustedTools,
     Repository,
     Response,
-    SoloTools,
     Surface,
     ToolCatalog,
     ToolResult,
@@ -55,7 +53,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   @protocol_version "2025-03-26"
   @health_tool ToolCatalog.health_tool()
-  @solo_tools ToolCatalog.solo_tools()
   @bootstrap_tools ToolCatalog.bootstrap_tools()
   @local_operator_tools ToolCatalog.local_operator_tools()
   @work_request_tools ArchitectWorkRequestTools.tools()
@@ -336,14 +333,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp dispatch("resources/read", _params, _server), do: {:error, -32_602, "Invalid params", %{"reason" => "missing_resource_uri"}}
   defp dispatch(_method, _params, _server), do: {:error, -32_601, "Method not found", %{}}
 
-  # Solo tools keep their own transport rules until cards replace them.
-  defp call_tool(name, params, arguments, terminal, server) when name in @solo_tools do
-    with :ok <- require_write_identity(name, arguments, terminal),
-         {:ok, arguments} <- solo_tool_arguments(params, name) do
-      SoloTools.call(name, arguments, server.config, &tool_error/2)
-    end
-  end
-
   defp call_tool(name, params, arguments, terminal, %__MODULE__{config: config} = server) do
     with :ok <- LocalTrustedTools.authorize(server, name),
          :ok <- require_write_identity(name, arguments, terminal),
@@ -401,7 +390,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp ownership_result({:error, :not_found}, name), do: not_found_error(name)
 
-  defp ownership_result({:error, :work_request_archived}, name), do: tool_error(:work_request_archived, name)
+  defp ownership_result({:error, :work_request_archived}, name), do: archived_error(name)
 
   defp ownership_result({:error, :database_busy}, name),
     do: {:error, -32_000, "Ledger busy", %{"tool" => name, "reason" => "database_busy", "remediation" => "Another ledger writer held the lock. Retry the call."}}
@@ -436,7 +425,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
         not_found_error("set_report")
 
       {:error, :work_request_archived} ->
-        tool_error(:work_request_archived, "set_report")
+        archived_error("set_report")
 
       {:error, _reason} ->
         service_error("set_report")
@@ -572,14 +561,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp tool_error(:database_busy, tool), do: service_error(tool)
-  defp tool_error({:storage_failed, _reason}, tool), do: service_error(tool)
-  defp tool_error({:migration_failed, _reason}, tool), do: service_error(tool)
-
-  defp tool_error(:work_request_archived, tool),
-    do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"phase" => "archived"})
-
-  defp tool_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
+  defp archived_error(tool), do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"phase" => "archived"})
 
   defp not_found_error(tool), do: {:error, -32_004, "Not found", %{"tool" => tool, "reason" => "not_found"}}
   defp service_error(resource), do: {:error, -32_000, "Server error", %{"resource" => resource, "reason" => "ledger_unavailable"}}

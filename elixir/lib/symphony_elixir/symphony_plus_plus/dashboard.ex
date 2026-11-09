@@ -12,7 +12,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     MetadataProjection,
     OperationalProjection,
     Sanitizer,
-    SoloSessionProjection,
     WorkRequestCards,
     WorkRequestDetails
   }
@@ -27,7 +26,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
-  alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -218,7 +216,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       repo_values =
         Enum.map(work_packages, & &1.repo) ++
           Enum.map(work_requests, & &1.repo) ++
-          repo_values(repo, WorkRequest) ++ repo_values(repo, SoloSession)
+          repo_values(repo, WorkRequest)
 
       {:ok, build_repo_identity_catalog(repo_values, local_operator_trusted_repo_remotes(), local_path_remotes?: true)}
     end)
@@ -303,47 +301,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
          }}
       end
     end)
-  end
-
-  @spec solo_sessions(repo()) :: {:ok, map()} | {:error, dashboard_error()}
-  @spec solo_sessions(repo(), map()) :: {:ok, map()} | {:error, dashboard_error()}
-  def solo_sessions(repo, filters \\ %{}) when is_atom(repo) and is_map(filters) do
-    solo_sessions(repo, filters, [])
-  end
-
-  @spec solo_sessions(repo(), map(), keyword()) :: {:ok, map()} | {:error, dashboard_error()}
-  def solo_sessions(repo, filters, opts) when is_atom(repo) and is_map(filters) and is_list(opts) do
-    SoloSessionProjection.list(repo, filters, opts)
-  end
-
-  @spec solo_session_detail(repo(), String.t()) :: {:ok, map()} | {:error, dashboard_error()}
-  def solo_session_detail(repo, solo_session_id) when is_atom(repo) and is_binary(solo_session_id) do
-    solo_session_detail(repo, solo_session_id, [])
-  end
-
-  @spec solo_session_detail(repo(), String.t(), keyword()) :: {:ok, map()} | {:error, dashboard_error()}
-  def solo_session_detail(repo, solo_session_id, opts) when is_atom(repo) and is_binary(solo_session_id) and is_list(opts) do
-    SoloSessionProjection.detail(repo, solo_session_id, opts)
-  end
-
-  @spec solo_session_repos(repo()) :: {:ok, [String.t()]} | {:error, dashboard_error()}
-  def solo_session_repos(repo) when is_atom(repo) do
-    SoloSessionProjection.repos(repo)
-  end
-
-  @spec solo_session_streams(repo()) :: {:ok, [map()]} | {:error, dashboard_error()}
-  def solo_session_streams(repo) when is_atom(repo) do
-    solo_session_streams(repo, [])
-  end
-
-  @spec solo_session_streams(repo(), keyword()) :: {:ok, [map()]} | {:error, dashboard_error()}
-  def solo_session_streams(repo, opts) when is_atom(repo) and is_list(opts) do
-    SoloSessionProjection.streams(repo, opts)
-  end
-
-  @spec solo_session_count(repo()) :: {:ok, non_neg_integer()} | {:error, dashboard_error()}
-  def solo_session_count(repo) when is_atom(repo) do
-    SoloSessionProjection.count(repo)
   end
 
   defp put_repo_identity_fields(payload, repo_identity_catalog, repo_value) when is_map(payload) do
@@ -916,7 +873,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   end
 
   defp repo_identity_repo_values(repo) do
-    Enum.flat_map([WorkPackage, WorkRequest, SoloSession], &repo_values(repo, &1))
+    Enum.flat_map([WorkPackage, WorkRequest], &repo_values(repo, &1))
   end
 
   defp repo_values(repo, schema) do

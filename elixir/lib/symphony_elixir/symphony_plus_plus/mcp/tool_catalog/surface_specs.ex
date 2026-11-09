@@ -1,23 +1,22 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, SoloTools, ToolCatalog}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, ToolCatalog}
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
 
   @doc """
   Tools listed for a surface profile. `:full` lists everything; `:architect`
-  the WorkRequest tools; `:coordinator` and `:solo` health and Solo. Workers
-  get no tools: the bridge serves none in a `sympp.role=worker` terminal.
+  the WorkRequest tools. Workers get no tools: the bridge serves none in a
+  `sympp.role=worker` terminal.
   """
-  @spec startup_tool_specs(:full | :architect | :coordinator | :solo, Config.t()) :: [ToolCatalog.tool_spec()]
+  @spec startup_tool_specs(:full | :architect, Config.t()) :: [ToolCatalog.tool_spec()]
   def startup_tool_specs(profile, %Config{}) do
-    full = fn -> [health_tool_spec() | solo_tool_specs()] ++ [bootstrap_tool_spec("create_work_request") | architect_tool_specs()] end
+    architect = [health_tool_spec(), bootstrap_tool_spec("create_work_request")] ++ architect_tool_specs()
 
     case profile do
-      :architect -> [health_tool_spec(), bootstrap_tool_spec("create_work_request")] ++ architect_tool_specs()
-      profile when profile in [:coordinator, :solo] -> [health_tool_spec() | solo_tool_specs()]
-      :full -> full.() ++ local_operator_tool_specs()
+      :architect -> architect
+      :full -> architect ++ local_operator_tool_specs()
     end
     |> Enum.uniq_by(& &1["name"])
     |> Enum.map(&put_access_annotation/1)
@@ -27,7 +26,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp put_access_annotation(%{"name" => name} = spec),
     do: Map.put(spec, "annotations", %{"readOnlyHint" => ToolCatalog.tool_access(name) == :read})
 
-  defp solo_tool_specs, do: Enum.map(ToolCatalog.solo_tools(), &SoloTools.tool_spec/1)
   defp architect_tool_specs, do: Enum.map(ToolCatalog.architect_tools(), &architect_tool_spec/1)
 
   @spec lean_tool_specs([ToolCatalog.tool_spec()]) :: [ToolCatalog.tool_spec()]
@@ -104,7 +102,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
 
   defp architect_tool_description("ask"),
     do:
-      "Ask the operator a question: it shows as Needs you on the boards until it is answered or withdrawn. Optionally name a package and give a decision_prompt with options. The operator's answer is typed into your terminal without being submitted when it runs on the factory's machine; otherwise read it from the ask with read_work_request detail: full. Asks never block planning or dispatch, and an ask on a package is withdrawn when the package ends."
+      "Ask the operator a question: it shows as Needs you on the boards until it is answered or withdrawn. Without work_request_id it asks on your own card. Optionally name a package and give a decision_prompt with options. The operator's answer is typed into your terminal without being submitted when it runs on the factory's machine; otherwise read it from the ask with read_work_request detail: full. Asks never block planning or dispatch, and an ask on a package is withdrawn when the package ends."
 
   defp architect_tool_description("resolve_ask"),
     do:

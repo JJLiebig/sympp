@@ -12,7 +12,7 @@ const SUMMARY_KEYS = ["settings", "ledger", "work_requests", "generated_at", "li
 const DEFERRED_KEYS = ["work_packages", "active_blocking_edges", "work_request_details", "generated_at"];
 
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-type Snapshot = { dir: string; manifest: Json; hydrated: Json; archived: Json; solo: Json };
+type Snapshot = { dir: string; manifest: Json; hydrated: Json; archived: Json };
 type Mutation = (snapshot: Snapshot, id: string, body: Json) => Json;
 
 export function snapshotApi(): Plugin {
@@ -92,7 +92,7 @@ function loadSnapshot(dir: string): Snapshot {
   const hydrated = read("dashboard.hydrated.json");
   // A snapshot captured from an older backend lacks the newer setting; the sketch shows it at its default.
   hydrated.settings = { work_request_never_started_archive_after_days: 30, ...hydrated.settings };
-  return { dir, manifest: read("manifest.json"), hydrated, archived: read("dashboard.archived.json"), solo: read("dashboard.solo.json") };
+  return { dir, manifest: read("manifest.json"), hydrated, archived: read("dashboard.archived.json") };
 }
 
 function handleGet(snapshot: Snapshot, route: string, url: URL, req: IncomingMessage, res: ServerResponse, streams: Set<ServerResponse>) {
@@ -109,7 +109,6 @@ function readRoute(snapshot: Snapshot, route: string, surface: string | null): J
       return { apiBase: API_BASE, basePath: "", logoUrl: "/splusplus-logo.png", snapshot: { ...snapshot.manifest, simulated_writes: true } };
     case "/dashboard":
       if (surface === "archived") return snapshot.archived;
-      if (surface === "solo") return snapshot.solo;
       return { ...pick(hydrated, SUMMARY_KEYS), deferred: { dashboard_sections: true } };
     case "/dashboard/deferred":
       return { ...pick(hydrated, DEFERRED_KEYS), deferred: { dashboard_sections: false } };
@@ -121,7 +120,7 @@ function readRoute(snapshot: Snapshot, route: string, surface: string | null): J
 }
 
 function readEntity(snapshot: Snapshot, route: string): Json | null {
-  const match = /^\/(work-packages|work-requests|solo-sessions)\/([^/]+)$/.exec(route);
+  const match = /^\/(work-packages|work-requests)\/([^/]+)$/.exec(route);
   if (!match) return null;
 
   const id = decodeURIComponent(match[2]);
@@ -161,7 +160,7 @@ async function handlePost(snapshot: Snapshot, route: string, req: IncomingMessag
 }
 
 function changeSettings(snapshot: Snapshot, _id: string, body: Json) {
-  const changes = pick(body, ["work_request_archive_after_days", "work_request_never_started_archive_after_days", "solo_session_delete_after_days", "open_dashboard_on_boot", "capture_failed_mcp_calls"]);
+  const changes = pick(body, ["work_request_archive_after_days", "work_request_never_started_archive_after_days", "card_retention_days", "open_dashboard_on_boot", "capture_failed_mcp_calls"]);
   snapshot.hydrated.settings = { ...snapshot.hydrated.settings, ...changes };
   return { settings: snapshot.hydrated.settings };
 }

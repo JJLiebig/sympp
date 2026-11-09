@@ -4,12 +4,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   use ExUnit.Case, async: false
 
   import Phoenix.ConnTest
+  import Ecto.Query, only: [from: 2]
   import Plug.Conn, only: [put_req_header: 3]
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
   alias SymphonyElixir.SymphonyPlusPlus.Asks
   alias SymphonyElixir.SymphonyPlusPlus.Asks.Ask
+  alias SymphonyElixir.SymphonyPlusPlus.Cards
+  alias SymphonyElixir.SymphonyPlusPlus.Cards.Card
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
@@ -22,7 +25,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.RetentionThrottle
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
-  alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
@@ -32,9 +35,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Service, as: SoloSessionsService
-  alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession
-  alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -51,7 +51,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard
 
   @endpoint SymphonyElixirWeb.Endpoint
-  @repo_root Path.expand("../../../../", __DIR__)
 
   defmodule BusyRepo do
     @moduledoc false
@@ -174,8 +173,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     repo.delete_all(Artifact)
     repo.delete_all(ProgressEvent)
     repo.delete_all(PlanNode)
-    repo.delete_all(SoloSessionEntry)
-    repo.delete_all(SoloSession)
+    repo.delete_all(Card)
+    repo.delete_all(WorkedOn)
     repo.delete_all(WorkPackageDelivery)
     repo.delete_all(WorkPackage)
     repo.delete_all(WorkPackage)
@@ -1274,6 +1273,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                    )
                  )
 
+        # An owner-qualified record of the same repository.
+        assert {:ok, _qualified} =
+                 WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-REPO-IDENTITY-OWNER", repo: "JJLiebig/sympp", base_branch: "main"))
+
         assert {:ok, _work_request} =
                  WorkRequestRepository.create(repo, %{
                    title: "Operator intake",
@@ -1285,28 +1288,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                    desired_dispatch_shape: "architect_led_feature_branch"
                  })
 
-        assert {:ok, owner_session} =
-                 SoloSessionsService.create_or_attach_current(repo, %{
-                   repo: "JJLiebig/sympp",
-                   base_branch: "main",
-                   workspace_path: Path.join(@repo_root, "repo-identity-owner"),
-                   caller_id: "repo-identity-owner",
-                   title: "Owner scoped solo"
-                 })
-
-        assert {:ok, bare_session} =
-                 SoloSessionsService.create_or_attach_current(repo, %{
-                   repo: "sympp",
-                   base_branch: "main",
-                   workspace_path: Path.join(@repo_root, "repo-identity-bare"),
-                   caller_id: "repo-identity-bare",
-                   title: "Bare scoped solo"
-                 })
-
         payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard"), 200)
         deferred_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/deferred"), 200)
         archived_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard?surface=archived"), 200)
-        solo_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard?surface=solo"), 200)
 
         refute Enum.any?(deferred_payload["work_packages"], &(&1["id"] == work_package.id))
 
@@ -1317,34 +1301,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  deferred_payload["work_request_details"]
 
         refute Map.has_key?(payload, "archived_work_requests")
-        refute Map.has_key?(payload, "solo_sessions")
         refute Map.has_key?(payload, "work_request_details")
         refute Map.has_key?(payload, "board")
         assert payload["deferred"] == %{"dashboard_sections" => true}
         assert deferred_payload["deferred"] == %{"dashboard_sections" => false}
         assert archived_payload["archived_work_requests"] == %{"total_count" => 0, "work_requests" => []}
-
-        solo_sessions = solo_payload["solo_sessions"]["solo_sessions"]
-        assert Enum.map(solo_sessions, & &1["id"]) |> Enum.sort() == Enum.sort([owner_session.id, bare_session.id])
-        assert Enum.all?(solo_sessions, &(&1["repo_key"] == "sympp"))
-        assert Enum.all?(solo_sessions, &(&1["repo_display"] == "sympp"))
-        assert Enum.all?(solo_sessions, &(&1["repo_remote"] == "JJLiebig/sympp"))
-
-        assert {:ok, repo_identity_catalog} = Dashboard.local_operator_repo_identity_catalog(repo)
-        assert {:ok, streams} = Dashboard.solo_session_streams(repo, repo_identity_catalog: repo_identity_catalog)
-
-        assert [
-                 %{
-                   repo_key: "sympp",
-                   repo_display: "sympp",
-                   repo_remote: "JJLiebig/sympp",
-                   repo_aliases: ["JJLiebig/sympp", "sympp"],
-                   base_branch: "main",
-                   solo_session_count: 2
-                 } = stream
-               ] = streams
-
-        assert stream.repo == "sympp"
       end)
     end)
   end
@@ -1434,33 +1395,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                    desired_dispatch_shape: "architect_led_feature_branch"
                  })
 
-        assert {:ok, solo_session} =
-                 SoloSessionsService.create_or_attach_current(repo, %{
-                   repo: repo_path,
-                   base_branch: "main",
-                   workspace_path: Path.join(@repo_root, "repo-path-identity-solo"),
-                   caller_id: "repo-path-identity-solo",
-                   title: "Path scoped solo"
-                 })
-
         payload = local_operator_dashboard_payload()
         refute Enum.any?(payload["work_packages"], &(&1["id"] == work_package.id))
 
         assert [%{"repo" => ^repo_path, "repo_key" => "nextide-saas-live-chat", "repo_remote" => "JJLiebig/nextide-saas-live-chat"}] =
                  payload["work_requests"]["work_requests"]
 
-        solo_session_id = solo_session.id
-
-        assert [%{"id" => ^solo_session_id, "repo" => ^repo_path, "repo_key" => "nextide-saas-live-chat", "repo_remote" => "JJLiebig/nextide-saas-live-chat"}] =
-                 payload["solo_sessions"]["solo_sessions"]
-
         assert {:ok, persisted_package} = WorkPackageRepository.get(repo, work_package.id)
         assert {:ok, persisted_request} = WorkRequestRepository.get(repo, work_request.id)
-        assert {:ok, persisted_session} = SoloSessionsService.get(repo, solo_session.id)
 
         assert persisted_package.repo == repo_path
         assert persisted_request.repo == repo_path
-        assert persisted_session.repo == repo_path
       end)
     after
       File.rm_rf(repo_path)
@@ -1489,6 +1434,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                    )
                  )
 
+        # A local checkout of the same repository joins the same identity.
+        assert {:ok, _path_package} =
+                 WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-REPO-MIXED-PATH", repo: repo_path, base_branch: "main"))
+
         assert {:ok, work_request} =
                  WorkRequestRepository.create(repo, %{
                    title: "Mixed repo identity projection",
@@ -1498,15 +1447,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                    human_description: "Collapse raw remote, bare repo, and local path identities.",
                    constraints: %{},
                    desired_dispatch_shape: "architect_led_feature_branch"
-                 })
-
-        assert {:ok, solo_session} =
-                 SoloSessionsService.create_or_attach_current(repo, %{
-                   repo: repo_path,
-                   base_branch: "main",
-                   workspace_path: Path.join(@repo_root, "repo-mixed-identity-solo"),
-                   caller_id: "repo-mixed-identity-solo",
-                   title: "Path scoped solo"
                  })
 
         payload = local_operator_dashboard_payload()
@@ -1521,31 +1461,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         assert %{"work_request" => %{"repo" => ^bare_repo, "repo_key" => ^bare_repo, "repo_remote" => ^raw_remote}} =
                  work_request_detail(payload, work_request.id)
 
-        solo_session_id = solo_session.id
-
-        assert [%{"id" => ^solo_session_id, "repo" => ^repo_path, "repo_key" => ^bare_repo, "repo_remote" => ^raw_remote}] =
-                 payload["solo_sessions"]["solo_sessions"]
-
-        assert {:ok, repo_identity_catalog} = Dashboard.local_operator_repo_identity_catalog(repo)
-        assert {:ok, streams} = Dashboard.solo_session_streams(repo, repo_identity_catalog: repo_identity_catalog)
-
-        assert [
-                 %{
-                   repo: ^repo_path,
-                   repo_key: ^bare_repo,
-                   repo_remote: ^raw_remote,
-                   base_branch: "main",
-                   solo_session_count: 1
-                 }
-               ] = streams
-
         assert {:ok, persisted_package} = WorkPackageRepository.get(repo, work_package.id)
         assert {:ok, persisted_request} = WorkRequestRepository.get(repo, work_request.id)
-        assert {:ok, persisted_session} = SoloSessionsService.get(repo, solo_session.id)
 
         assert persisted_package.repo == raw_remote
         assert persisted_request.repo == bare_repo
-        assert persisted_session.repo == repo_path
       end)
     after
       File.rm_rf(repo_path)
@@ -1575,22 +1495,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  desired_dispatch_shape: "architect_led_feature_branch"
                })
 
-      assert {:ok, solo_session} =
-               SoloSessionsService.create_or_attach_current(repo, %{
-                 repo: "sympp",
-                 base_branch: "main",
-                 workspace_path: Path.join(@repo_root, "repo-detail-scoped-solo"),
-                 caller_id: "repo-detail-scoped-solo",
-                 title: "Scoped solo detail"
-               })
-
       assert {:ok, request_detail} = Dashboard.work_request_detail(repo, work_request.id)
       assert request_detail.work_request.repo_remote == nil
       assert request_detail.work_request.repo_aliases == ["sympp"]
-
-      assert {:ok, solo_detail} = Dashboard.solo_session_detail(repo, solo_session.id)
-      assert solo_detail.solo_session.repo_remote == nil
-      assert solo_detail.solo_session.repo_aliases == ["sympp"]
     end)
   end
 
@@ -2244,7 +2151,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         for path <- [
               "/api/v1/sympp/herdr/work-requests",
               "/api/v1/sympp/herdr/asks/missing/answer",
-              "/api/v1/sympp/herdr/decisions/missing/feedback"
+              "/api/v1/sympp/herdr/decisions/missing/feedback",
+              "/api/v1/sympp/herdr/cards/missing/dismiss"
             ] do
           mutation =
             native_operator_conn()
@@ -2261,7 +2169,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
             path <- [
               "/api/v1/sympp/herdr/work-requests",
               "/api/v1/sympp/herdr/asks/missing/answer",
-              "/api/v1/sympp/herdr/decisions/missing/feedback"
+              "/api/v1/sympp/herdr/decisions/missing/feedback",
+              "/api/v1/sympp/herdr/cards/missing/dismiss"
             ] do
           request =
             native_operator_conn()
@@ -2572,7 +2481,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       dashboard_payload = local_operator_dashboard_payload()
 
       assert dashboard_payload["settings"]["work_request_archive_after_days"] == 3
-      assert dashboard_payload["settings"]["solo_session_delete_after_days"] == 30
+      assert dashboard_payload["settings"]["card_retention_days"] == 30
       assert dashboard_payload["settings"]["open_dashboard_on_boot"] == true
       assert dashboard_payload["settings"]["capture_failed_mcp_calls"] == false
       refute Enum.any?(dashboard_payload["work_requests"]["work_requests"], &(&1["id"] == request.id))
@@ -2597,7 +2506,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         |> json_response(200)
 
       assert archive_payload["settings"]["work_request_archive_after_days"] == 1
-      assert archive_payload["settings"]["solo_session_delete_after_days"] == 30
+      assert archive_payload["settings"]["card_retention_days"] == 30
       assert archive_payload["settings"]["open_dashboard_on_boot"] == false
       assert archive_payload["settings"]["capture_failed_mcp_calls"] == true
       refute Map.has_key?(archive_payload, "dashboard")
@@ -2667,51 +2576,57 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
-  test "local operator retention archives and deletes Solo Sessions", %{repo: repo} do
+  test "the operator dismisses a card on the board or in the Herdr panel", %{repo: repo} do
     with_local_operator_endpoint(fn ->
-      assert {:ok, _settings} =
-               OperatorSettingsRepository.update(repo, %{
-                 "work_request_archive_after_days" => 1,
-                 "solo_session_delete_after_days" => 1
-               })
+      card = insert_card!(repo, "core/t1", "review_ci", nil, DateTime.utc_now(:microsecond))
 
-      stale_at = DateTime.add(DateTime.utc_now(:microsecond), -8 * 24 * 60 * 60, :second)
-      expired_at = DateTime.add(DateTime.utc_now(:microsecond), -15 * 24 * 60 * 60, :second)
-      retained_at = DateTime.add(DateTime.utc_now(:microsecond), -13 * 24 * 60 * 60, :second)
+      assert [%{"id" => card_id, "state" => "review_ci", "worked_on" => %{"address" => "core/t1"}}] =
+               native_operator_conn() |> get("/api/v1/sympp/herdr/dashboard") |> json_response(200) |> Map.fetch!("cards")
 
-      stale_active =
-        repo
-        |> create_solo_session!("solo-retention-stale-active")
-        |> set_solo_session_last_activity!(repo, stale_at)
+      assert card_id == card.id
 
-      old_archived = create_solo_session!(repo, "solo-retention-old-archived")
+      assert %{"ok" => true, "card_id" => ^card_id, "state" => "dismissed"} =
+               local_operator_conn() |> post("/api/v1/sympp/operator/cards/#{card_id}/dismiss") |> json_response(200)
 
-      assert {:ok, old_entry} = SoloSessionsService.append_progress(repo, old_archived.id, %{summary: "Old archived note"})
+      assert %{"ok" => true, "state" => "dismissed"} =
+               native_operator_conn() |> post("/api/v1/sympp/herdr/cards/#{card_id}/dismiss", "{}") |> json_response(200)
 
-      old_archived =
-        old_archived
-        |> archive_solo_session!(repo)
-        |> set_solo_session_last_activity!(repo, expired_at)
+      assert [%{"id" => ^card_id, "state" => "dismissed"}] = local_operator_dashboard_payload()["cards"]
+      assert %{"error" => %{"code" => "not_found"}} = local_operator_conn() |> post("/api/v1/sympp/operator/cards/missing/dismiss") |> json_response(404)
+    end)
+  end
 
-      recent_archived =
-        repo
-        |> create_solo_session!("solo-retention-recent-archived")
-        |> archive_solo_session!(repo)
-        |> set_solo_session_last_activity!(repo, retained_at)
+  test "ended cards drop off the board and the ledger after the card retention window", %{repo: repo} do
+    with_local_operator_endpoint(fn ->
+      assert {:ok, _settings} = OperatorSettingsRepository.update(repo, %{"card_retention_days" => 1})
+      # The factory's core reports these terminals finished.
+      Application.put_env(:symphony_elixir, :sympp_herdr_core, fn -> {:ok, %{core_id: "core", terminals: %{}}} end)
+      on_exit(fn -> Application.put_env(:symphony_elixir, :sympp_herdr_core, nil) end)
+
+      now = DateTime.utc_now(:microsecond)
+      long_ago = DateTime.add(now, -3 * 24 * 60 * 60, :second)
+      open = insert_card!(repo, "core/t1", "working", nil, long_ago)
+      expired = insert_card!(repo, "core/t2", "merged", long_ago, long_ago)
+      recent = insert_card!(repo, "core/t3", "done", now, now)
+
+      repo.insert!(%Ask{
+        id: "ask-expired-card",
+        card_id: expired.id,
+        question: "Old question",
+        state: "withdrawn",
+        inserted_at: long_ago,
+        updated_at: long_ago
+      })
+
+      assert Enum.map(local_operator_dashboard_payload()["cards"], & &1["id"]) == [open.id, recent.id]
 
       run_operator_retention(repo)
-      payload = local_operator_dashboard_payload()
 
-      solo_sessions = get_in(payload, ["solo_sessions", "solo_sessions"])
-      stale_active_card = Enum.find(solo_sessions, &(&1["id"] == stale_active.id))
-
-      assert stale_active_card["status"] == "archived"
-      assert {:error, :not_found} = SoloSessionsService.get(repo, old_archived.id)
-      refute Enum.any?(solo_sessions, &(&1["id"] == old_archived.id))
-      refute Enum.any?(repo.all(SoloSessionEntry), &(&1.id == old_entry.id))
-      assert Enum.any?(solo_sessions, &(&1["id"] == recent_archived.id and &1["status"] == "archived"))
-      assert payload["settings"]["work_request_archive_after_days"] == 1
-      assert payload["settings"]["solo_session_delete_after_days"] == 1
+      assert Enum.map(local_operator_dashboard_payload()["cards"], &{&1["id"], &1["state"]}) == [{open.id, "working"}, {recent.id, "done"}]
+      assert repo.get(Card, expired.id) == nil
+      assert repo.get(Ask, "ask-expired-card") == nil
+      refute repo.exists?(from(row in WorkedOn, where: row.subject_id == ^expired.id))
+      assert repo.exists?(from(row in WorkedOn, where: row.subject_id == ^recent.id))
     end)
   end
 
@@ -2720,7 +2635,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert {:ok, _settings} =
                OperatorSettingsRepository.update(repo, %{
                  "work_request_archive_after_days" => 1,
-                 "solo_session_delete_after_days" => 1
+                 "card_retention_days" => 1
                })
 
       stale_at = DateTime.add(DateTime.utc_now(:microsecond), -2 * 24 * 60 * 60, :second)
@@ -2798,37 +2713,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         assert {:ok, _settings} =
                  OperatorSettingsRepository.update(repo, %{
                    "work_request_archive_after_days" => 1,
-                   "solo_session_delete_after_days" => 1
+                   "card_retention_days" => 1
                  })
 
         stale_at = DateTime.add(DateTime.utc_now(:microsecond), -8 * 24 * 60 * 60, :second)
 
         first_request = create_completed_delivered_work_request!(repo, "WR-LOCAL-THROTTLE-FIRST", stale_at)
 
-        first_solo =
-          repo
-          |> create_solo_session!("solo-retention-throttle-first")
-          |> set_solo_session_last_activity!(repo, stale_at)
-
         run_operator_retention(repo)
         first_payload = local_operator_dashboard_payload()
 
         assert Enum.any?(first_payload["archived_work_requests"]["work_requests"], &(&1["id"] == first_request.id))
-        assert Enum.any?(first_payload["solo_sessions"]["solo_sessions"], &(&1["id"] == first_solo.id and &1["status"] == "archived"))
 
         second_request = create_completed_delivered_work_request!(repo, "WR-LOCAL-THROTTLE-SECOND", stale_at)
-
-        second_solo =
-          repo
-          |> create_solo_session!("solo-retention-throttle-second")
-          |> set_solo_session_last_activity!(repo, stale_at)
 
         run_operator_retention(repo)
         second_payload = local_operator_dashboard_payload()
 
         assert Enum.any?(second_payload["work_requests"]["work_requests"], &(&1["id"] == second_request.id))
         refute Enum.any?(second_payload["archived_work_requests"]["work_requests"], &(&1["id"] == second_request.id))
-        assert Enum.any?(second_payload["solo_sessions"]["solo_sessions"], &(&1["id"] == second_solo.id and &1["status"] == "active"))
       end)
     end)
   end
@@ -2839,7 +2742,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         assert {:ok, _settings} =
                  OperatorSettingsRepository.update(repo, %{
                    "work_request_archive_after_days" => 1,
-                   "solo_session_delete_after_days" => 1
+                   "card_retention_days" => 1
                  })
 
         stale_at = DateTime.add(DateTime.utc_now(:microsecond), -2 * 24 * 60 * 60, :second)
@@ -3500,28 +3403,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     |> repo.update!()
   end
 
-  defp create_solo_session!(repo, caller_id) do
-    assert {:ok, session} =
-             SoloSessionsService.create_or_attach_current(repo, %{
-               repo: "sympp",
-               base_branch: "main",
-               workspace_path: Path.join(@repo_root, "solo-retention-#{caller_id}"),
-               caller_id: caller_id,
-               title: caller_id
-             })
+  defp insert_card!(repo, terminal_key, state, ended_at, updated_at) do
+    card =
+      repo.insert!(%Card{
+        id: Cards.card_id(terminal_key),
+        terminal_key: terminal_key,
+        state: state,
+        title: terminal_key,
+        repository: "acme/app",
+        branch: "feature",
+        ended_at: ended_at,
+        observed_at: updated_at,
+        inserted_at: updated_at,
+        updated_at: updated_at
+      })
 
-    session
-  end
+    repo.insert!(%WorkedOn{
+      id: "wo-" <> card.id,
+      subject_kind: "card",
+      subject_id: card.id,
+      terminal_key: terminal_key,
+      display_address: terminal_key,
+      role: "card",
+      state: if(ended_at, do: "finished", else: "live"),
+      started_at: updated_at
+    })
 
-  defp archive_solo_session!(%SoloSession{} = session, repo) do
-    assert {:ok, archived} = SoloSessionsService.archive(repo, session.id, session.status)
-    archived
-  end
-
-  defp set_solo_session_last_activity!(%SoloSession{} = session, repo, %DateTime{} = timestamp) do
-    session
-    |> Ecto.Changeset.change(last_activity_at: timestamp, updated_at: timestamp)
-    |> repo.update!()
+    card
   end
 
   defp set_work_request_archived_at!(%WorkRequest{} = work_request, repo, %DateTime{} = timestamp) do
@@ -3837,12 +3745,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     initial = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard"), 200)
     deferred = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/deferred"), 200)
     archived = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard?surface=archived"), 200)
-    solo = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard?surface=solo"), 200)
 
     initial
     |> Map.merge(deferred)
     |> Map.merge(archived)
-    |> Map.merge(solo)
   end
 
   defp run_operator_retention(repo) do

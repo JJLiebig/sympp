@@ -1,15 +1,12 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{SoloTools, ToolCatalog, WorkPackageLaunch}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{ToolCatalog, WorkPackageLaunch}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{WorkPackage, WorkPackageDelivery}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{DecisionLogEntry, Phase, WorkRequest}
 
   @type tool_name :: String.t()
   @type input_schema :: map()
-
-  @spec solo_tool_input_schema(tool_name()) :: input_schema()
-  def solo_tool_input_schema(name), do: SoloTools.input_schema(name)
 
   @spec bootstrap_tool_input_schema(tool_name()) :: input_schema()
   def bootstrap_tool_input_schema("create_work_request") do
@@ -41,9 +38,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   @doc """
   The published input schema of an architect tool. A tool that names its
   WorkRequest only through `work_request_id` requires it; one that also takes
-  a required `work_package_id` may omit it.
+  a required `work_package_id` may omit it, and so may `ask`, which then asks
+  on the caller's card.
   """
   @spec architect_tool_input_schema(tool_name()) :: input_schema()
+  def architect_tool_input_schema("ask"), do: architect_schema("ask")
   def architect_tool_input_schema(name), do: name |> architect_schema() |> require_work_request_target()
 
   defp require_work_request_target(%{"properties" => %{"work_request_id" => _}, "required" => required} = schema) do
@@ -155,12 +154,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   defp architect_schema("ask") do
     schema(
       %{
-        "work_request_id" => string_schema(),
+        "work_request_id" => described_string_schema("The WorkRequest the ask is about. Leave it out to ask on your own card."),
         "work_package_id" => described_string_schema("Optional package the ask is about; the ask is withdrawn when that package ends."),
         "question" => markdown_string_schema("The question for the operator, in Markdown."),
         "decision_prompt" => decision_prompt_schema()
       },
-      ["work_request_id", "question"]
+      ["question"]
     )
   end
 

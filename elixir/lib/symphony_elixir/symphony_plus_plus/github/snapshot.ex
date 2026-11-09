@@ -2,11 +2,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
   @moduledoc """
   One batched GraphQL read of the PRs the Observer watches.
 
-  Each document aliases up to 25 entries. An entry is either a known PR
-  (`{:pr, owner, repo, number}`) or a branch whose PR isn't known yet
-  (`{:branch, owner, repo, branch, base}`); both kinds share a document. A
-  branch matches only a PR into `base` whose head lives in the same repository
-  owner, so a fork branch with the same name is never taken.
+  Each document aliases up to 25 entries. An entry is a known PR
+  (`{:pr, owner, repo, number}`), a package branch whose PR isn't known yet
+  (`{:branch, owner, repo, branch, base}`), or a card's branch, whose PR may
+  target any base (`{:head, owner, repo, branch}`); every kind shares a
+  document. A branch matches only a PR whose head lives in the same repository
+  owner, so a fork branch with the same name is never taken; a package branch
+  also needs the PR to target `base`.
 
   Per PR it reads state, merge evidence, head, draft flag, the head commit's
   check rollup and the last reviews (for the Codex receipt).
@@ -33,6 +35,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
   @type entry ::
           {:pr, String.t(), String.t(), pos_integer()}
           | {:branch, String.t(), String.t(), String.t(), String.t()}
+          | {:head, String.t(), String.t(), String.t()}
   @type result :: {:ok, map() | nil} | {:error, Api.error()}
 
   @doc """
@@ -96,6 +99,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
     {["$o#{index}: String!", "$r#{index}: String!", "$b#{index}: String!", "$t#{index}: String!"], selection, %{"o#{index}" => owner, "r#{index}" => repo, "b#{index}" => branch, "t#{index}" => base}}
   end
 
+  defp entry_document({:head, owner, repo, branch}, index) do
+    selection =
+      "e#{index}: repository(owner: $o#{index}, name: $r#{index}) { pullRequests(headRefName: $b#{index}, " <>
+        "first: 5, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { ...pr } } }"
+
+    {["$o#{index}: String!", "$r#{index}: String!", "$b#{index}: String!"], selection, %{"o#{index}" => owner, "r#{index}" => repo, "b#{index}" => branch}}
+  end
+
   @doc """
   The names of the failing checks on a head: a detail read (ETag-cached REST),
   made only when a head's rollup turns failing.
@@ -119,7 +130,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
   defp decode_entry({:pr, owner, repo, _number}, %{"pullRequest" => %{} = node}), do: {:ok, decode_pr(node, owner, repo)}
   defp decode_entry({:pr, _owner, _repo, _number}, %{"pullRequest" => nil}), do: {:ok, nil}
 
-  defp decode_entry({:branch, owner, repo, _branch, _base}, %{"pullRequests" => %{"nodes" => nodes}}) when is_list(nodes) do
+  defp decode_entry({:branch, owner, repo, _branch, _base}, %{"pullRequests" => %{"nodes" => nodes}}) when is_list(nodes), do: branch_pr(nodes, owner, repo)
+  defp decode_entry({:head, owner, repo, _branch}, %{"pullRequests" => %{"nodes" => nodes}}) when is_list(nodes), do: branch_pr(nodes, owner, repo)
+
+  # The repository itself is missing or not visible to this credential.
+  defp decode_entry(_entry, nil), do: {:error, :not_found}
+  defp decode_entry(_entry, _unusable), do: {:error, :request_failed}
+
+  # The branch's open PR if it has one, else its newest.
+  defp branch_pr(nodes, owner, repo) do
     nodes
     |> Enum.filter(&(is_map(&1) and same_owner?(get_in(&1, ["headRepositoryOwner", "login"]), owner)))
     |> Enum.map(&decode_pr(&1, owner, repo))
@@ -127,10 +146,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
     |> List.first()
     |> then(&{:ok, &1})
   end
-
-  # The repository itself is missing or not visible to this credential.
-  defp decode_entry(_entry, nil), do: {:error, :not_found}
-  defp decode_entry(_entry, _unusable), do: {:error, :request_failed}
 
   defp decode_pr(node, owner, repo) do
     merged? = node["merged"] == true

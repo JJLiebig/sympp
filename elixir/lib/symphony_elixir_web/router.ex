@@ -31,12 +31,14 @@ defmodule SymphonyElixirWeb.Router do
     post("/api/v1/sympp/herdr/decisions/:decision_id/ack", SymppDashboardApiController, :herdr_ack_decision)
     post("/api/v1/sympp/herdr/decisions/:decision_id/feedback", SymppDashboardApiController, :herdr_feedback_decision)
     post("/api/v1/sympp/herdr/decisions/:decision_id/dismiss", SymppDashboardApiController, :herdr_dismiss_decision)
+    post("/api/v1/sympp/herdr/cards/:card_id/dismiss", SymppDashboardApiController, :herdr_dismiss_card)
 
     match(:*, "/api/v1/sympp/herdr/work-requests", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/herdr/asks/:ask_id/answer", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/herdr/decisions/:decision_id/ack", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/herdr/decisions/:decision_id/feedback", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/herdr/decisions/:decision_id/dismiss", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/sympp/herdr/cards/:card_id/dismiss", ObservabilityApiController, :method_not_allowed)
   end
 
   scope "/", SymphonyElixirWeb do
@@ -54,7 +56,6 @@ defmodule SymphonyElixirWeb.Router do
     get("/api/v1/sympp/herdr/work-requests/:work_request_id", SymppDashboardApiController, :herdr_work_request_detail)
     post("/api/v1/sympp/operator/settings", SymppDashboardApiController, :operator_update_settings)
     get("/api/v1/sympp/operator/work-packages/:work_package_id", SymppDashboardApiController, :operator_package_detail)
-    get("/api/v1/sympp/operator/solo-sessions/:solo_session_id", SymppDashboardApiController, :operator_solo_session_detail)
     post("/api/v1/sympp/operator/work-requests", SymppDashboardApiController, :operator_create_work_request)
     get("/api/v1/sympp/operator/work-requests/:work_request_id", SymppDashboardApiController, :operator_work_request_detail)
     post("/api/v1/sympp/operator/work-requests/:work_request_id/complete", SymppDashboardApiController, :operator_complete_work_request)
@@ -69,6 +70,7 @@ defmodule SymphonyElixirWeb.Router do
     post("/api/v1/sympp/operator/decisions/:decision_id/ack", SymppDashboardApiController, :operator_ack_decision)
     post("/api/v1/sympp/operator/decisions/:decision_id/feedback", SymppDashboardApiController, :operator_feedback_decision)
     post("/api/v1/sympp/operator/decisions/:decision_id/dismiss", SymppDashboardApiController, :operator_dismiss_decision)
+    post("/api/v1/sympp/operator/cards/:card_id/dismiss", SymppDashboardApiController, :operator_dismiss_card)
   end
 
   scope "/", SymphonyElixirWeb do
@@ -94,8 +96,8 @@ defmodule SymphonyElixirWeb.Router do
     match(:*, "/api/v1/sympp/operator/decisions/:decision_id/ack", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/decisions/:decision_id/feedback", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/decisions/:decision_id/dismiss", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/sympp/operator/cards/:card_id/dismiss", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-packages/:work_package_id", ObservabilityApiController, :method_not_allowed)
-    match(:*, "/api/v1/sympp/operator/solo-sessions/:solo_session_id", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-requests", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-requests/:work_request_id", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-requests/:work_request_id/archive", ObservabilityApiController, :method_not_allowed)

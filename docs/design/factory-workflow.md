@@ -60,7 +60,8 @@ Chief / calling coordinator
 ```
 
 Use a WorkRequest/WorkPackage when delivery tracking is wanted. Ordinary
-coordinator work does not require persistence; Solo remains optional. Growing
+coordinator work does not require persistence; its children's branches and PRs
+show as cards without setup. Growing
 scope or unresolved product decisions return to the caller, who can introduce
 an architect. Do not force a large-work planning ceremony onto a one-PR fix.
 

@@ -52,7 +52,7 @@ test('demo CLI requires an explicit database and force before replacing selected
     expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'operator_marker'").all()).toEqual([]);
     // Preserve the raw-secret guard against actual persisted demo data and CLI output.
     for (const table of ['sympp_work_requests', 'sympp_work_packages', 'sympp_progress_events',
-      'sympp_asks', 'sympp_artifacts', 'sympp_solo_sessions', 'sympp_solo_session_entries']) {
+      'sympp_asks', 'sympp_artifacts']) {
       const text = JSON.stringify(db.prepare(`SELECT * FROM ${table}`).all());
       expect(/ghp_|bearer |api_key|access_token|secret_hash/i.test(text)).toBe(false);
     }

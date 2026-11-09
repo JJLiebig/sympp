@@ -6,16 +6,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   |---|---|---|---|
   | — | `open` | open | any Herdr terminal, attributed to it |
   | open | `answer` | answered | the operator over HTTP (the answer is delivered to the asking terminal), or the asker or WorkRequest owner recording a conversational answer |
-  | open | `withdraw` | withdrawn | the asker or WorkRequest owner; also automatic when the package it names ends or the WorkRequest is archived |
+  | open | `withdraw` | withdrawn | the asker or WorkRequest owner; also automatic when the package it names ends, the WorkRequest is archived or the card ends |
 
-  An answer or withdrawal may record one decision in the same transaction.
+  An ask's subject is a WorkRequest (optionally naming one of its packages)
+  or, without a WorkRequest, the asking terminal's open card. An answer or
+  withdrawal on a WorkRequest may record one decision in the same transaction.
   Asks never block planning, slicing or dispatch, and never change a phase.
   """
 
   import Ecto.Query, only: [from: 2]
 
   alias SymphonyElixir.SymphonyPlusPlus.Asks.Ask
-  alias SymphonyElixir.SymphonyPlusPlus.{DashboardPubSub, HerdrCore, HumanDecisionPrompt, Id, Ownership}
+  alias SymphonyElixir.SymphonyPlusPlus.{Cards, DashboardPubSub, HerdrCore, HumanDecisionPrompt, Id, Ownership}
+  alias SymphonyElixir.SymphonyPlusPlus.Cards.Card
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -25,7 +28,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   @type repo :: module()
   @type delivery :: %{required(String.t()) => String.t()}
 
-  @doc "Opens an ask on a WorkRequest, optionally naming one of its packages."
+  @doc """
+  Opens an ask on a WorkRequest, optionally naming one of its packages, or,
+  without a `work_request_id`, on the asking terminal's open card.
+  """
   @spec open(repo(), Terminal.t(), map()) :: {:ok, Ask.t()} | {:error, term()}
   def open(repo, %Terminal{} = terminal, attrs) when is_map(attrs) do
     with {:ok, question} <- text(attrs["question"], :invalid_question),
@@ -36,27 +42,37 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
     end
   end
 
+  defp insert(repo, terminal, nil, nil, question, prompt) do
+    case Cards.open_card(repo, terminal.key) do
+      %Card{id: card_id} -> {:ok, repo.insert!(%{new_ask(terminal, question, prompt) | card_id: card_id})}
+      nil -> {:error, :no_open_card}
+    end
+  end
+
+  defp insert(_repo, _terminal, nil, _work_package_id, _question, _prompt), do: {:error, :missing_work_request_id}
+
   defp insert(repo, terminal, work_request_id, work_package_id, question, prompt) do
     with {:ok, %WorkRequest{} = work_request} <- fetch(repo, WorkRequest, work_request_id),
          :ok <- Phase.require_writable(work_request),
          :ok <- require_not_completed(work_request),
          :ok <- require_open_package(repo, work_request.id, work_package_id) do
-      now = DateTime.utc_now(:microsecond)
-
-      {:ok,
-       repo.insert!(%Ask{
-         id: Id.random("ask"),
-         work_request_id: work_request.id,
-         work_package_id: work_package_id,
-         question: question,
-         decision_prompt: prompt,
-         state: "open",
-         asked_by_terminal: terminal.key,
-         asked_by_address: terminal.display_address,
-         inserted_at: now,
-         updated_at: now
-       })}
+      {:ok, repo.insert!(%{new_ask(terminal, question, prompt) | work_request_id: work_request.id, work_package_id: work_package_id})}
     end
+  end
+
+  defp new_ask(%Terminal{} = terminal, question, prompt) do
+    now = DateTime.utc_now(:microsecond)
+
+    %Ask{
+      id: Id.random("ask"),
+      question: question,
+      decision_prompt: prompt,
+      state: "open",
+      asked_by_terminal: terminal.key,
+      asked_by_address: terminal.display_address,
+      inserted_at: now,
+      updated_at: now
+    }
   end
 
   # Operator completion withdrew the WorkRequest's asks; it takes no new ones.
@@ -108,7 +124,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   defp require_asker_or_owner(repo, %Ask{} = ask, %Terminal{key: key}) do
     cond do
       ask.asked_by_terminal == key -> :ok
-      match?(%WorkedOn{terminal_key: ^key}, Ownership.owner(repo, ask.work_request_id)) -> :ok
+      is_binary(ask.work_request_id) and match?(%WorkedOn{terminal_key: ^key}, Ownership.owner(repo, ask.work_request_id)) -> :ok
       true -> {:error, {:not_asker_or_owner, ask}}
     end
   end
@@ -168,6 +184,42 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
     withdraw_all(repo, from(ask in Ask, where: ask.work_request_id in ^work_request_ids))
   end
 
+  @doc "Withdraws every open ask on cards that ended. Joins the caller's transaction."
+  @spec withdraw_for_cards(repo(), [String.t()]) :: :ok
+  def withdraw_for_cards(_repo, []), do: :ok
+  def withdraw_for_cards(repo, card_ids), do: withdraw_all(repo, from(ask in Ask, where: ask.card_id in ^card_ids))
+
+  @doc "Deletes the asks of cards being deleted. Joins the caller's transaction."
+  @spec delete_for_cards(repo(), [String.t()]) :: :ok
+  def delete_for_cards(_repo, []), do: :ok
+
+  def delete_for_cards(repo, card_ids) do
+    card_ids |> Enum.chunk_every(500) |> Enum.each(&repo.delete_all(from(ask in Ask, where: ask.card_id in ^&1)))
+  end
+
+  @doc "A card's ten newest open or answered asks."
+  @spec recent_by_card(repo(), String.t()) :: [Ask.t()]
+  def recent_by_card(repo, card_id) do
+    repo.all(
+      from(ask in Ask,
+        where: ask.card_id == ^card_id and ask.state in ["open", "answered"],
+        order_by: [desc: ask.inserted_at, desc: ask.id],
+        limit: 10
+      )
+    )
+  end
+
+  @doc "Open asks on these cards, newest first, keyed by card id."
+  @spec open_by_card(repo(), [String.t()]) :: %{String.t() => [Ask.t()]}
+  def open_by_card(_repo, []), do: %{}
+
+  def open_by_card(repo, card_ids) do
+    card_ids
+    |> Enum.chunk_every(500)
+    |> Enum.flat_map(&repo.all(from(ask in Ask, where: ask.card_id in ^&1 and ask.state == "open", order_by: [desc: ask.inserted_at, desc: ask.id])))
+    |> Enum.group_by(& &1.card_id)
+  end
+
   defp withdraw_all(repo, query) do
     now = DateTime.utc_now(:microsecond)
     repo.update_all(from(ask in query, where: ask.state == "open"), set: [state: "withdrawn", answered_by: "subject_ended", resolved_at: now, updated_at: now])
@@ -214,6 +266,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
       "id" => ask.id,
       "work_request_id" => ask.work_request_id,
       "work_package_id" => ask.work_package_id,
+      "card_id" => ask.card_id,
       "question" => Redactor.redact_text(ask.question),
       "decision_prompt" => Redactor.redact_output(ask.decision_prompt),
       "state" => ask.state,
@@ -233,6 +286,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   end
 
   defp record_decision(_repo, _ask, nil, _by), do: {:ok, nil}
+  # Decisions belong to WorkRequests; a card has none.
+  defp record_decision(_repo, %Ask{work_request_id: nil}, _decision, _by), do: {:error, :decision_needs_work_request}
 
   defp record_decision(repo, %Ask{} = ask, decision, by) when is_map(decision) do
     attrs =
@@ -247,12 +302,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
 
   defp fetch_open(repo, ask_id) do
     with {:ok, %Ask{} = ask} <- fetch(repo, Ask, ask_id),
-         :ok <- require_writable_request(repo, ask.work_request_id) do
+         :ok <- require_writable_subject(repo, ask) do
       if ask.state == "open", do: {:ok, ask}, else: {:error, {:ask_not_open, ask.state}}
     end
   end
 
-  defp require_writable_request(repo, work_request_id) do
+  # A card's asks are withdrawn when it ends, so an open one is writable.
+  defp require_writable_subject(_repo, %Ask{work_request_id: nil}), do: :ok
+
+  defp require_writable_subject(repo, %Ask{work_request_id: work_request_id}) do
     case repo.get(WorkRequest, work_request_id) do
       %WorkRequest{} = work_request -> Phase.require_writable(work_request)
       nil -> {:error, :not_found}

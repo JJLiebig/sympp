@@ -15,9 +15,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Repository, as: SoloSessionRepository
-  alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession
-  alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.WorkPackageFactory
@@ -28,7 +25,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
     start_supervised!({Repo, database: database_path, pool_size: 1})
     if Process.whereis(HTTPStateStore) == nil, do: start_supervised!(HTTPStateStore)
     assert :ok = WorkPackageRepository.migrate(Repo)
-    assert :ok = SoloSessionRepository.migrate(Repo)
 
     on_exit(fn -> File.rm(database_path) end)
 
@@ -39,8 +35,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
     reset_server_response_state()
     HTTPStateStore.reset!()
 
-    config.repo.delete_all(SoloSessionEntry)
-    config.repo.delete_all(SoloSession)
     config.repo.delete_all(OperatorSettings)
     config.repo.delete_all(WorkPackage)
     FailedCall.reset()
@@ -88,7 +82,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
     assert get_in(resources.response, ["result", "resources", Access.at(0), "uri"]) == "sympp://health/version"
     refute_receive {:live_handle_called, ^ref}
 
-    repo_backed = tool_call_request("repo-backed", "solo_list", %{})
+    repo_backed = tool_call_request("repo-backed", "list_work_requests", %{})
 
     assert {:error, :ledger_unavailable, ^repo_backed} =
              HTTPTransport.handle(config, repo_backed,

@@ -2,6 +2,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.Asks
+  alias SymphonyElixir.SymphonyPlusPlus.Cards
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
@@ -81,20 +82,22 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     with {:ok, execution_signals} <-
            Dashboard.operator_work_package_signals(repo, context.active_work_request_work_package_ids, opts),
          {:ok, work_request_details} <-
-           operator_work_request_board_details(repo, work_requests, context.repo_identity_catalog, board_detail_opts) do
+           operator_work_request_board_details(repo, work_requests, context.repo_identity_catalog, board_detail_opts),
+         {:ok, settings} <- OperatorSettingsRepository.get(repo) do
       {:ok,
        %{
          generated_at: DateTime.utc_now(:microsecond) |> DateTime.to_iso8601(),
          active_blocking_edges: execution_signals.active_blocking_edges,
          work_packages: execution_signals.work_packages,
          work_request_details: operator_board_labels(work_request_details, context, projection_context),
+         cards: Cards.list(repo, settings.card_retention_days),
          deferred: %{dashboard_sections: false}
        }}
     end
   end
 
   @spec operator_dashboard_surface_payload(module(), String.t()) :: {:ok, map()} | {:error, term()}
-  def operator_dashboard_surface_payload(repo, surface) when surface in ["archived", "solo"] do
+  def operator_dashboard_surface_payload(repo, surface) when surface in ["archived"] do
     with {:ok, repo_identity_catalog} <- Dashboard.local_operator_repo_identity_catalog(repo) do
       opts = [repo_identity_catalog: repo_identity_catalog]
       dashboard_surface_payload(repo, surface, opts)
@@ -104,12 +107,6 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   defp dashboard_surface_payload(repo, "archived", opts) do
     with {:ok, archived_work_requests} <- Dashboard.archived_work_requests(repo, opts) do
       {:ok, %{generated_at: timestamp(DateTime.utc_now(:microsecond)), archived_work_requests: archived_work_requests}}
-    end
-  end
-
-  defp dashboard_surface_payload(repo, "solo", opts) do
-    with {:ok, solo_sessions} <- Dashboard.solo_sessions(repo, %{}, opts) do
-      {:ok, %{generated_at: timestamp(DateTime.utc_now(:microsecond)), solo_sessions: solo_sessions}}
     end
   end
 
@@ -157,7 +154,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
       {:ok,
        active
        |> Map.put(:work_request_details, details)
-       |> Map.take([:generated_at, :work_request_details])
+       |> Map.take([:generated_at, :work_request_details, :cards])
        |> Map.put(:work_packages, Enum.map(active.work_packages, &Map.take(&1, [:id, :active_agent_run])))
        |> Map.put(:runtime, %{offline: OfflineSandbox.enabled?(), repos_root: SymphonyElixir.Config.factory_repos_root()})}
     end
@@ -659,7 +656,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     %{}
     |> put_settings_param(params, "work_request_archive_after_days")
     |> put_settings_param(params, "work_request_never_started_archive_after_days")
-    |> put_settings_param(params, "solo_session_delete_after_days")
+    |> put_settings_param(params, "card_retention_days")
     |> put_settings_param(params, "open_dashboard_on_boot")
     |> put_settings_param(params, "capture_failed_mcp_calls")
   end
@@ -685,7 +682,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     %{
       work_request_archive_after_days: settings.work_request_archive_after_days,
       work_request_never_started_archive_after_days: settings.work_request_never_started_archive_after_days,
-      solo_session_delete_after_days: settings.solo_session_delete_after_days,
+      card_retention_days: settings.card_retention_days,
       open_dashboard_on_boot: settings.open_dashboard_on_boot,
       capture_failed_mcp_calls: settings.capture_failed_mcp_calls,
       hidden_work_package_ids: Enum.uniq(settings.hidden_work_package_ids)

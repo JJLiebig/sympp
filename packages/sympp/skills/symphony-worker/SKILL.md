@@ -17,7 +17,11 @@ the review step, and carries the contract: goal, owned and forbidden paths,
 acceptance, validation, dependencies, prior progress and decisions, and stopping
 conditions. Read it before coding and stay inside that worktree and scope.
 
-Without a WorkPackage, the parent's task message is the assignment.
+Without a WorkPackage, the parent's task message is the assignment. When your
+parent is a chief or architect, or your terminal is labelled `sympp.card=1`, the
+factory shows your branch, PR, CI and review as a card on the board with no
+setup. A question only the operator can answer then goes through `ask` without
+`work_request_id`; the answer is typed into your terminal.
 
 ## Scope
 
