@@ -127,7 +127,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
     """
     # WorkPackage #{work_package.id}: #{Redactor.redact_text(work_package.title)}
 
-    #{building(work_package, assignment["parent_work_request"])}
+    #{building(assignment)}
 
     You are the worker for this sympp WorkPackage. Use the installed `sympp` skill and follow
     `references/symphony-worker/procedure.md` in it.
@@ -153,9 +153,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
   end
 
   # What the WorkRequest is building, in its title and the opening paragraph of
-  # its description, and where the package sits in its plan.
-  defp building(%WorkPackage{group: group}, parent) do
-    parent = parent || %{}
+  # its description, and where the package sits in its plan. Both come from the
+  # redacted assignment.
+  defp building(assignment) do
+    parent = assignment["parent_work_request"] || %{}
+    group = get_in(assignment, ["work_package", "group"])
     summary = [heading(parent["title"]), opening(parent["goal"])] |> Enum.reject(&(&1 == "")) |> Enum.join(" ")
     placement = if is_binary(group), do: "This package is in #{group}.", else: ""
 

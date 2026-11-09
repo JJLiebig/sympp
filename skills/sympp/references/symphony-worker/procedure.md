@@ -8,9 +8,10 @@ MCP calls: its terminal gets no sympp tools.
 
 A dispatched WorkPackage starts you in its worktree with one instruction: read
 the assignment file. Your assignment opens with what the WorkRequest is
-building and how your package fits into it. It names the branch, base and review step, and carries the
-contract: goal, owned and forbidden paths, acceptance, validation, dependencies
-and stop conditions. Stay inside that worktree and scope, and keep the PR small.
+building and how your package fits into it. It names the branch, base and
+review step, and carries the contract: goal, owned and forbidden paths,
+acceptance, validation, dependencies and stop conditions. Stay inside that
+worktree and scope, and keep the PR small.
 Branch from the base and target it; never merge or cherry-pick another unmerged
 branch. Once handed off, leave the branch alone unless your parent asks.
 

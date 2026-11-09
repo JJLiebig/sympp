@@ -309,7 +309,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeToolsLifecycleTest do
                    work_request_work_package_attrs(
                      id: id,
                      title: "Hand off #{branch}",
-                     group: "Backend / Intake",
+                     group: "Backend / Intake ghp_assignmentgroupsecret12345",
                      base_branch: "symphony-plus-plus/beta",
                      branch_pattern: branch
                    )
@@ -348,8 +348,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeToolsLifecycleTest do
     # It opens with what the WorkRequest is building and where the package sits.
     assert [_title, building] = Regex.run(~r/\A# WorkPackage [^\n]+\n\n(.+?)\n\nYou are the worker/s, assignment)
 
-    assert building ==
-             "## What we're building\n\n**Improve WorkRequest intake.** Operators file requests in one place.\n\nThis package is in Backend / Intake."
+    assert building =~
+             ~r/\A## What we're building\n\n\*\*Improve WorkRequest intake\.\*\* Operators file requests in one place\.\n\nThis package is in Backend \/ Intake \S+\.\z/
+
+    refute assignment =~ "ghp_assignmentgroupsecret12345"
 
     assert assignment =~ "--id #{review_id} --mode fast --cd #{worktree}"
     assert assignment =~ "start it again while it runs"
