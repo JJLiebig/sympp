@@ -114,15 +114,19 @@ class PruneTest(unittest.TestCase):
         manifest = {'source_revision': f'{0:040x}', 'artifacts': [
             {'source_revision': f'{1:040x}', 'archive': {
                 'url': f'https://example.com/sympp-runtime-{2:040x}-macos-arm64.zip'}}]}
-        deleted = prune.select_deletions(list(reversed(assets)), manifest)
+        deleted = prune.select_deletions(list(reversed(assets)), manifest, SHA)
         self.assertEqual({a['id'] for a in deleted}, set(range(30, 36)))
-        self.assertEqual(prune.select_deletions(self.assets()[-60:], {}), [])
+        self.assertEqual(prune.select_deletions(self.assets()[-60:], {}, SHA), [])
 
     def test_build_recency_uses_latest_asset_creation(self):
         assets = self.assets()
         assets[0]['created_at'] = '2026-12-01T00:00:00Z'
-        deleted = prune.select_deletions(assets, {})
+        deleted = prune.select_deletions(assets, {}, SHA)
         self.assertEqual({a['id'] // 10 for a in deleted}, {1, 2, 3, 4})
+
+    def test_retains_older_revision_being_republished(self):
+        deleted = prune.select_deletions(self.assets(), {}, f'{1:040x}')
+        self.assertEqual({a['id'] // 10 for a in deleted}, {0, 2, 3})
 
     def test_cli_paginates_protects_channel_logs_and_stops_on_delete_failure(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -149,7 +153,7 @@ else:
             (root / 'assets.json').write_text(json.dumps(pages))
             env = dict(os.environ, PATH=f'{root}:{os.environ["PATH"]}',
                        GITHUB_REPOSITORY='example/repo', RELEASE_TAG='test-runtime',
-                       RELEASE_CHANNEL='stable')
+                       RELEASE_CHANNEL='stable', GITHUB_SHA=SHA)
             for failure in [0, 1]:
                 (root / 'calls.jsonl').unlink(missing_ok=True)
                 result = subprocess.run(['python3', str(PRUNE_PATH)], cwd=root,

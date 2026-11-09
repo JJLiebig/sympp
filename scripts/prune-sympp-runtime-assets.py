@@ -24,14 +24,14 @@ def referenced_builds(value):
             yield match[1].lower()
 
 
-def select_deletions(assets, manifest):
+def select_deletions(assets, manifest, publishing_revision):
     builds = {}
     for asset in assets:
         match = ASSET.fullmatch(asset["name"])
         if match:
             builds.setdefault(match[1].lower(), []).append(asset)
     newest = sorted(builds, key=lambda sha: (max(a["created_at"] for a in builds[sha]), sha), reverse=True)
-    keep = set(newest[:10]) | set(referenced_builds(manifest))
+    keep = set(newest[:10]) | set(referenced_builds(manifest)) | {publishing_revision.lower()}
     return [asset for sha, group in builds.items() if sha not in keep for asset in group]
 
 
@@ -51,7 +51,7 @@ def main():
     manifest = json.loads(gh("release", "download", tag, "--repo", repo,
                              "--pattern", channel_name, "--output", "-")) if any(
                                  a["name"] == channel_name for a in assets) else {}
-    for asset in select_deletions(assets, manifest):
+    for asset in select_deletions(assets, manifest, os.environ["GITHUB_SHA"]):
         print(f'Deleting {asset["name"]} (asset {asset["id"]})', flush=True)
         subprocess.run(["gh", "api", "--method", "DELETE",
                         f'repos/{repo}/releases/assets/{asset["id"]}'], check=True)
