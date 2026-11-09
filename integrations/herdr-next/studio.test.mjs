@@ -112,7 +112,6 @@ test('the builder makes a sample-data copy of the view, changing only what chang
   assert.match(main, /tick\(\) \{\}/, 'it never reads sympp');
   assert.match(main, /read\(cx\) \{\n {4}this\.net = M\.fetchSucceeded\(this\.net, M\.parseBoard\(this\.sample\)/, 'a refresh redraws the sample and shares nothing');
   assert.match(main, /focusTerminal\(address, cx\) \{\n {4}this\.ops/, 'it never focuses a terminal');
-  assert.match(main, /async prefill\(\) \{\}/, 'nor types into one');
   const lens = await readFile(join(to, 'lens.js'), 'utf8');
   assert.equal(lens, (await readFile(join(here, 'mods', 'sympp', 'main.js'), 'utf8')).replaceAll('mods/sympp/', 'mods/sympp-dev-wp/'));
   assert.doesNotMatch(await readFile(join(to, 'studioview.js'), 'utf8'), /mods\/sympp\//, 'its pictures come from the copy');

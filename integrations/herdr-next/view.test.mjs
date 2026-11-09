@@ -76,7 +76,7 @@ test('a space shows only the tasks on its repository, drawn as its topic draws t
 test('a task shows its phase and owner, its packages at work under their groups with their progress, and folds ended and planned work', skip, async (t) => {
   for (const width of [1400, 700]) {
     const view = await render(t, { props: {}, width, board: 'busy', path: { topic: 't-herdr', job: 'wr-restore' }, pkg: 'r-4' });
-    for (const id of ['task-head', 'phase-wr-restore', 'owner-job-wr-restore', 'complete-wr-restore', 'archive-wr-restore', 'strip-wr-restore',
+    for (const id of ['task-head', 'phase-wr-restore', 'owner-job-wr-restore', 'complete-wr-restore', 'archive-wr-restore', 'delete-wr-restore', 'strip-wr-restore',
       'group-wr-restore-0-Recovery', 'group-wr-restore-1-Shell', 'group-wr-restore-0-Polish', 'pkg-r-4', 'pkg-r-5', 'pkg-r-6', 'pkg-r-7',
       'owner-pkg-r-4', 'fold-Landed:wr-restore', 'fold-Up next:wr-restore', 'pr-step-r-4', 'review-r-4'])
       assert.ok(view.has(id), `${id} at ${width}`);
@@ -99,7 +99,7 @@ test('Finish and Release appear only where they apply; an unresolved task names 
   assert.ok(recap.has('unresolved') && recap.text('XLSX export') && recap.text('abandoned') && recap.text('skipped'));
   assert.ok(recap.has('complete-wr-recap') && recap.has('archive-wr-recap') && recap.has('dismiss-feedback-dec-share'));
   const old = await render(t, { props: { role: 'panel' }, width: 1400, board: 'busy', path: { topic: 't-herdr', job: 'wr-old' } });
-  assert.ok(old.has('restore-wr-old') && !old.has('archive-wr-old') && !old.has('complete-wr-old'));
+  assert.ok(old.has('restore-wr-old') && old.has('delete-wr-old') && !old.has('archive-wr-old') && !old.has('complete-wr-old'));
 });
 
 test('an ask opens its answer form with the decision prompt, and a decision opens its feedback form', skip, async (t) => {
