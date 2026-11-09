@@ -6,6 +6,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
+  alias SymphonyElixir.SymphonyPlusPlus.Asks
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler
@@ -497,7 +498,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       work_package_target(work_package_id),
       :operator_clear_work_package_blocker,
       fn repo ->
-        with {:ok, event} <-
+        with {:ok, blocker} <-
                LocalOperatorActions.clear_work_package_blocker_for_local_operator(
                  repo,
                  work_package_id,
@@ -507,7 +508,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
           json(
             conn,
             mutation_success_payload(
-              %{progress_event: %{id: event.id, blocker_id: blocker_id}},
+              %{progress_event: %{id: blocker.event_id, blocker_id: blocker.id}},
               %{work_package_id: work_package_id}
             )
           )
@@ -531,34 +532,21 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     )
   end
 
-  @spec operator_answer_question(Conn.t(), map()) :: Conn.t()
-  def operator_answer_question(conn, %{"work_request_id" => work_request_id} = params) do
-    send_local_operator_response(
-      conn,
-      :question_answer,
-      work_request_target(work_request_id),
-      :operator_answer_question,
-      &answer_question_response(&1, conn, params)
-    )
+  @spec operator_answer_ask(Conn.t(), map()) :: Conn.t()
+  def operator_answer_ask(conn, params) do
+    send_local_operator_response(conn, :ask_answer, Target.new(:ask), :operator_answer_ask, &answer_ask_response(&1, conn, params))
   end
 
-  @spec herdr_answer_question(Conn.t(), map()) :: Conn.t()
-  def herdr_answer_question(conn, %{"work_request_id" => work_request_id} = params) do
-    send_native_operator_response(
-      conn,
-      :question_answer,
-      work_request_target(work_request_id),
-      :operator_answer_question,
-      &answer_question_response(&1, conn, params)
-    )
+  @spec herdr_answer_ask(Conn.t(), map()) :: Conn.t()
+  def herdr_answer_ask(conn, params) do
+    send_native_operator_response(conn, :ask_answer, Target.new(:ask), :operator_answer_ask, &answer_ask_response(&1, conn, params))
   end
 
-  defp answer_question_response(repo, conn, %{"work_request_id" => work_request_id, "question_id" => question_id} = params) do
-    with {:ok, question} <- LocalOperatorActions.scoped_question(repo, work_request_id, question_id),
-         :ok <- LocalOperatorActions.require_open_question(question),
-         {:ok, attrs} <- LocalOperatorActions.local_operator_question_answer_attrs(question, params),
-         {:ok, _answered} <- WorkRequestService.answer_question(repo, question.id, question.status, attrs) do
-      json(conn, mutation_success_payload(%{work_request_id: work_request_id, question_id: question.id}, %{work_request_id: work_request_id}))
+  # The answer is stored, then typed into the asking terminal without being
+  # submitted; `delivery` says whether that reached it.
+  defp answer_ask_response(repo, conn, %{"ask_id" => ask_id} = params) do
+    with {:ok, ask, delivery} <- Asks.answer_by_operator(repo, ask_id, params) do
+      json(conn, mutation_success_payload(%{ask_id: ask.id, work_request_id: ask.work_request_id, delivery: delivery}, %{work_request_id: ask.work_request_id}))
     end
   end
 
@@ -740,8 +728,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp error_response(conn, :unauthorized), do: error_response(conn, 401, "unauthorized", "Unauthorized")
   defp error_response(conn, :forbidden), do: error_response(conn, 403, "forbidden", "Forbidden")
   defp error_response(conn, :database_busy), do: error_response(conn, 503, "database_busy", "Dashboard ledger is busy")
-  defp error_response(conn, :already_answered), do: error_response(conn, 409, "already_answered", "Question is already answered")
-  defp error_response(conn, :already_closed), do: error_response(conn, 409, "already_closed", "Question is already closed")
+  defp error_response(conn, {:ask_not_open, state}), do: error_response(conn, 409, "ask_not_open", "This ask is already #{state}")
   defp error_response(conn, :invalid_answer_choice), do: error_response(conn, 422, "invalid_answer_choice", "Answer choice is invalid")
   defp error_response(conn, :invalid_archive_after_days), do: error_response(conn, 422, "invalid_archive_after_days", "Archive cutoff is invalid")
   defp error_response(conn, :missing_answer), do: error_response(conn, 422, "missing_answer", "Answer is required")
@@ -783,10 +770,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   defp error_response(conn, {:invalid_work_package_status, _status}) do
     error_response(conn, 422, "invalid_work_package_status", "WorkPackage is not ready for this action")
-  end
-
-  defp error_response(conn, :open_questions) do
-    error_response(conn, 409, "open_questions", "Answer or close the open questions before clearing human info")
   end
 
   defp error_response(conn, {:storage_failed, _reason}) do

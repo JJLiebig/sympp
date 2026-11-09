@@ -3,7 +3,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.Toon
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
@@ -92,17 +91,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
     {:ok, payload}
   end
 
-  def virtual_file_payload(%State{} = state, "findings.md", opts) do
-    payload =
-      state
-      |> base_payload("findings.md", opts)
-      |> Map.put("findings", Enum.map(state.findings, &finding_payload/1))
-      |> Map.put("omitted", %{"findings" => state.findings_omitted_count || 0})
-      |> put_continuation(state.findings, state.findings_omitted_count)
-
-    {:ok, payload}
-  end
-
   def virtual_file_payload(%State{} = state, "progress.md", opts) do
     payload =
       state
@@ -143,10 +131,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
       |> base_payload("handoff.md", opts)
       |> Map.put("acceptance", Enum.map(state.work_package.acceptance_criteria || [], &Redactor.redact_text/1))
       |> Map.put("latest_progress", state.progress_events |> Enum.take(-3) |> Enum.map(&progress_summary_payload/1))
-      |> Map.put("findings", Enum.map(state.findings, &finding_summary_payload/1))
       |> Map.put("artifacts", Enum.map(state.artifacts, &artifact_payload/1))
       |> Map.put("omitted", %{
-        "findings" => state.findings_omitted_count || 0,
         "progress_events" => state.progress_events_omitted_count || 0,
         "artifacts" => state.artifacts_omitted_count || 0
       })
@@ -195,29 +181,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
       "title" => Redactor.redact_text(plan_node.title),
       "status" => plan_node.status,
       "body" => Redactor.redact_text(plan_node.body)
-    }
-  end
-
-  defp finding_payload(%Finding{} = finding) do
-    %{
-      "id" => finding.id,
-      "sequence" => finding.sequence,
-      "idempotency_key" => idempotency_identity(finding.idempotency_key),
-      "title" => Redactor.redact_text(finding.title),
-      "severity" => Redactor.redact_text(finding.severity),
-      "body" => Redactor.redact_text(finding.body),
-      "created_at" => timestamp(finding.created_at)
-    }
-  end
-
-  defp finding_summary_payload(%Finding{} = finding) do
-    %{
-      "id" => finding.id,
-      "sequence" => finding.sequence,
-      "idempotency_key" => idempotency_identity(finding.idempotency_key),
-      "title" => Redactor.redact_text(finding.title),
-      "severity" => Redactor.redact_text(finding.severity),
-      "created_at" => timestamp(finding.created_at)
     }
   end
 

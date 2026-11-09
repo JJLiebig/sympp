@@ -85,22 +85,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
         base_branch: "symphony-plus-plus/beta"
       )
 
-    assert {:ok, _open_question} =
-             WorkRequestRepository.ask_question(repo, in_scope.id, work_request_question_attrs(id: "WRQ-MCP-WR-OPEN"))
+    base = ~U[2026-11-01 10:00:00.000000Z]
+    insert_ask!(repo, in_scope.id, id: "ask-mcp-wr-open", inserted_at: base, updated_at: base)
 
-    assert {:ok, answered_question} =
-             WorkRequestRepository.ask_question(repo, in_scope.id, work_request_question_attrs(id: "WRQ-MCP-WR-ANSWERED"))
+    insert_ask!(repo, in_scope.id,
+      id: "ask-mcp-wr-answered",
+      state: "answered",
+      answer: "Bearer raw-secret-value",
+      answered_by: "operator",
+      inserted_at: DateTime.add(base, 2),
+      updated_at: DateTime.add(base, 2)
+    )
 
-    assert {:ok, _answered} =
-             WorkRequestRepository.answer_question(repo, answered_question.id, "open", %{
-               answer: "Bearer raw-secret-value",
-               answered_by: "operator-1"
-             })
-
-    assert {:ok, closed_question} =
-             WorkRequestRepository.ask_question(repo, in_scope.id, work_request_question_attrs(id: "WRQ-MCP-WR-CLOSED"))
-
-    assert {:ok, _closed} = WorkRequestRepository.close_question(repo, closed_question.id, "open")
+    insert_ask!(repo, in_scope.id, id: "ask-mcp-wr-withdrawn", state: "withdrawn", inserted_at: DateTime.add(base, 1), updated_at: DateTime.add(base, 1))
 
     assert {:ok, _decision} =
              WorkRequestRepository.record_decision(
@@ -139,7 +136,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
              } = listed_work_request
            ] = list_payload["work_requests"]
 
-    refute Map.has_key?(listed_work_request, "open_question_count")
+    assert listed_work_request["open_asks"] == 1
     refute Map.has_key?(listed_work_request, "decision_count")
     refute Map.has_key?(listed_work_request, "work_package_count")
 
@@ -149,8 +146,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert read_payload["work_request"]["id"] == in_scope.id
     assert read_payload["work_request"]["constraints"]["safe"] == "visible"
     assert read_payload["work_request"]["constraints"]["token"] == "[REDACTED]"
-    assert Enum.map(read_payload["clarification_questions"], & &1["id"]) == ["WRQ-MCP-WR-OPEN", "WRQ-MCP-WR-ANSWERED", "WRQ-MCP-WR-CLOSED"]
-    assert Enum.at(read_payload["clarification_questions"], 1)["answer"] == "[REDACTED]"
+    # Open asks first, then newest first.
+    assert Enum.map(read_payload["asks"], & &1["id"]) == ["ask-mcp-wr-open", "ask-mcp-wr-answered", "ask-mcp-wr-withdrawn"]
+    assert Enum.at(read_payload["asks"], 1)["answer"] == "[REDACTED]"
     assert Enum.map(read_payload["decision_log_entries"], & &1["id"]) == ["WRD-MCP-WR-1"]
     assert Enum.at(read_payload["decision_log_entries"], 0)["decision"] =~ "[REDACTED]"
 
@@ -163,9 +161,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert Enum.at(read_payload["work_packages"], 0)["review"] == nil
 
     assert read_payload["summary"] == %{
-             "open_question_count" => 1,
-             "answered_question_count" => 1,
-             "closed_question_count" => 1,
+             "open_ask_count" => 1,
              "decision_count" => 1,
              "work_package_count" => 3,
              "planned_work_package_count" => 1,

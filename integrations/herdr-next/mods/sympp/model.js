@@ -147,24 +147,15 @@ function buildJob(detail, now, runs) {
   const phases = [...new Set(packages.map((pkg) => pkg.phase).filter(Boolean))];
   const titles = new Map(packages.map((pkg) => [pkg.id, pkg.title]));
   for (const pkg of packages) pkg.after = pkg.unmet.map((id) => titles.get(id) ?? id);
-  const questions = (detail.clarification_questions ?? []).filter((q) => q.id).map((q) => ({
-    key: `question:${q.id}`, id: q.id, kind: "question", jobId: request.id, pkgId: null,
-    text: q.question, context: q.why_needed, prompt: q.decision_prompt ?? null, status: q.status,
-    answer: q.answer, since: ms(q.inserted_at),
-  }));
-
   const report = reportOf(request.operator_report, now);
-  const escalation = request.operator_report?.human_escalation;
-  const ask = escalation?.question && !escalation.resolved_at ? { text: escalation.question, since: ms(escalation.raised_at) ?? now } : null;
-  const needs = ask ? [{ key: `${request.id}:ask`, kind: "ask", label: "Architect asks", text: ask.text, since: ask.since, raisedAt: ms(escalation.raised_at), jobId: request.id, pkgId: null }] : [];
+  const asks = asksOf(detail.asks, request.id);
 
   const live = packages.filter((pkg) => pkg.stage !== "queued" && pkg.stage !== "done");
   const done = packages.filter((pkg) => pkg.stage === "done");
   const queued = packages.filter((pkg) => pkg.stage === "queued");
   const createdAt = ms(request.inserted_at) ?? now;
   const closedAt = ms(request.completed_at);
-  const recordedAsks = asksOf(detail.asks);
-  const attention = recordedAsks === null ? [...needs, ...questions.filter((q) => q.status === "open").map((q) => ({ ...q, label: "Needs you" }))] : recordedAsks.map((a) => ({ ...a, key: `ask:${a.id}`, label: "Needs you", since: questions.find((q) => q.id === a.id)?.since ?? (a.kind === "architect" ? ms(escalation?.raised_at) : null), jobId: request.id }));
+  const attention = asks.map((ask) => ({ ...ask, label: "Needs you" }));
   const settled = ["done", "unresolved"].includes(request.phase) || (closedAt !== null && closedAt <= now) || (packages.length > 0 && done.length === packages.length && attention.length === 0);
   const job = {
     id: request.id,
@@ -179,9 +170,7 @@ function buildJob(detail, now, runs) {
     createdAt,
     closedAt,
     report,
-    ask,
-    questions,
-    needs: attention.filter((a) => a.text?.trim()),
+    needs: attention,
     architect: workedOnOf(request.worked_on),
     dispatchedBy: chiefOf(request.dispatched_by),
     packages,
@@ -193,8 +182,8 @@ function buildJob(detail, now, runs) {
     lastMoveAt: Math.max(createdAt, ...packages.map((pkg) => pkg.since ?? 0)),
     deployFailed: deployFailed(request.deployments),
     phases,
-    // The board's outstanding asks, when it reports them; null from a board that predates them.
-    asks: asksOf(detail.asks),
+    // The open asks, each answerable through its own route.
+    asks,
   };
   job.bumps = bumpsOf(job, now);
   job.verdict = verdictOf(job, now);
@@ -203,15 +192,20 @@ function buildJob(detail, now, runs) {
   return job;
 }
 
-// Each ask answers through its own native route; anything but a plain path on this factory is dropped,
-// so an answer can only go back to where the board came from.
-function asksOf(list) {
-  if (!Array.isArray(list)) return null;
-  return list.filter((ask) => ask && typeof ask.text === "string" && ask.text.trim() && (typeof ask.id === "string" || typeof ask.id === "number")).map((ask) => ({
-    id: String(ask.id),
-    kind: typeof ask.kind === "string" ? ask.kind : null,
-    text: typeof ask.text === "string" && ask.text.trim() ? ask.text.trim() : null,
+// The board's open asks, the only things that need the operator. Each answers through its own native
+// route; anything but a plain path on this factory is dropped, so an answer can only go back to where
+// the board came from.
+function asksOf(list, jobId) {
+  return (Array.isArray(list) ? list : []).filter((ask) => ask && typeof ask.text === "string" && ask.text.trim() && typeof ask.id === "string").map((ask) => ({
+    key: `ask:${ask.id}`,
+    id: ask.id,
+    kind: "ask",
+    jobId,
     pkgId: ask.work_package_id ?? null,
+    text: ask.text.trim(),
+    prompt: ask.decision_prompt ?? null,
+    status: "open",
+    since: ms(ask.asked_at),
     route: typeof ask.answer_route === "string" && /^\/[^/\\]/.test(ask.answer_route) ? ask.answer_route : null,
   }));
 }

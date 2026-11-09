@@ -9,7 +9,7 @@ the sympp bridge serves no tools, and the parent owns every ledger record.
 A dispatched WorkPackage starts you in its prepared worktree with one instruction:
 read the assignment file. It names the WorkPackage, the worktree, branch and base,
 the review step, and carries the contract: goal, owned and forbidden paths,
-acceptance, validation, dependencies, prior findings and decisions, and stopping
+acceptance, validation, dependencies, prior progress and decisions, and stopping
 conditions. Read it before coding and stay inside that worktree and scope.
 
 Without a WorkPackage, the parent's task message is the assignment.

@@ -290,15 +290,9 @@ export function followPath(target, jobs, desk, place) {
 // an offline copy never announces anything.
 export function newNeeds(previous, board) {
   const needs = board.jobs.flatMap((job) => job.needs.map((need) => ({ ...need, job })));
-  const seen = new Set(needs.map(occurrence));
+  const seen = new Set(needs.map((need) => need.key));
   if (previous === null || board.offline === true) return { seen, fresh: [] };
-  return { seen, fresh: needs.filter((need) => !previous.has(occurrence(need))) };
-}
-
-// An escalation raised again is a new occurrence under the same key; other needs keep their key
-// while their activity times move, so those times never make them new.
-function occurrence(need) {
-  return need.kind === "ask" && need.raisedAt ? `${need.key}@${need.raisedAt}` : need.key;
+  return { seen, fresh: needs.filter((need) => !previous.has(need.key)) };
 }
 
 // One toast per need: the same need raised again later is a new item.

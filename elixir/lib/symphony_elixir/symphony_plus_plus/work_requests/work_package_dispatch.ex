@@ -118,15 +118,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
   defp mint_review_id(_review_mode), do: "rvw_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
 
   @doc """
-  The redacted assignment a worker reads: package contract, context, prior
-  findings and progress. A product description or engineering scope that only
+  The redacted assignment a worker reads: package contract, context and prior
+  progress. A product description or engineering scope that only
   repeats the WorkRequest's or the package's goal is left out.
   """
   @spec assignment(module(), WorkPackage.t()) :: {:ok, map()} | {:error, term()}
   def assignment(repo, %WorkPackage{} = work_package) do
     with {:ok, state} <- PlanningRepository.get_state(repo, work_package.id),
          {:ok, context} <- WorkRequestPayloads.worker_context(repo, work_package, work_package),
-         {:ok, findings} <- WorkerContext.virtual_file_payload(state, "findings.md", []),
          {:ok, progress} <- WorkerContext.virtual_file_payload(state, "progress.md", []),
          {:ok, handoff} <- WorkerContext.virtual_file_payload(state, "handoff.md", []) do
       work_package_payload =
@@ -138,7 +137,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
       {:ok,
        context
        |> Map.merge(%{
-         "prior_findings" => findings,
          "prior_progress" => progress,
          "work_package" => work_package_payload,
          "delivery_context" => handoff

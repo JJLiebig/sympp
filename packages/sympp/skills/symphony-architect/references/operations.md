@@ -45,8 +45,8 @@ Use this lane when human UI iteration establishes product intent. Chief ownershi
 and a dedicated technical UI reviewer are optional; model/provider/host choice
 does not determine role. Ordinary workers still own their review cycle.
 
-1. Record explicit human UX approval with `record_decision(source_type: "human")`
-   or `answer_question_and_record_decision`. Capture behavior, states, acceptance
+1. Record explicit human UX approval with `record_decision(source_type: "human")`,
+   or with the `decision` of `resolve_ask` when it answers an ask. Capture behavior, states, acceptance
    and required data/API shape. Reference the returned decision ID in downstream
    package contracts; a prototype is not wired delivery.
 2. Use `edit_plan` to add bounded backend/API and wiring/review packages;

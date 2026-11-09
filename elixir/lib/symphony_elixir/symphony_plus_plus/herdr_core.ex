@@ -14,6 +14,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   @cache_key {__MODULE__, :snapshot}
   @cache_ms 15_000
   @command_timeout_ms 2_000
+  @send_timeout_ms 10_000
 
   @type view :: {:live, map()} | :finished | :unseen | :unknown
   @type snapshot :: %{
@@ -80,6 +81,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
         {:ok, host} = :inet.gethostname()
         to_string(host)
     end
+  end
+
+  @doc """
+  Pastes text into a terminal's input without pressing Enter (`hc send
+  --no-submit`), so the agent reads it on its next turn and a person can still
+  edit it. `target` is a terminal address, optionally `machine/address`.
+
+  The command is the `:sympp_herdr_send` application setting: `"hc"` (default),
+  another command path, `nil` to disable, or a two-arity function (tests).
+  """
+  @spec paste(String.t(), String.t()) :: :ok | :error
+  def paste(target, text) when is_binary(target) and is_binary(text) do
+    case Application.get_env(:symphony_elixir, :sympp_herdr_send, "hc") do
+      nil -> :error
+      fun when is_function(fun, 2) -> if fun.(target, text) == :ok, do: :ok, else: :error
+      command when is_binary(command) -> paste_with(System.find_executable(command), target, text)
+    end
+  end
+
+  defp paste_with(nil, _target, _text), do: :error
+
+  defp paste_with(path, target, text) do
+    task = Task.async(fn -> System.cmd(path, ["send", "--no-submit", "--raw", target, text], stderr_to_stdout: true) end)
+
+    case Task.yield(task, @send_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {_output, 0}} -> :ok
+      _failed -> :error
+    end
+  rescue
+    _error -> :error
   end
 
   @spec snapshot(boolean()) :: {:ok, snapshot()} | :unavailable

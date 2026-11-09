@@ -3,56 +3,89 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerAndLocalOperatorToolsTest do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard
 
-  test "architect resolve_blocker clears a package blocker", %{repo: repo} do
-    work_request =
-      create_work_request!(
-        repo,
-        id: "WR-MCP-ARCH-PACKAGE-SURFACES",
-        repo: "nextide/symphony-plus-plus",
-        base_branch: "main"
-      )
+  test "set_blocker declares, updates and clears a blocker on a package the caller owns", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-MCP-SET-BLOCKER", repo: "nextide/symphony-plus-plus", base_branch: "main")
 
     assert {:ok, work_package} =
              CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               work_request_work_package_attrs(id: "WRS-MCP-ARCH-PACKAGE-SURFACES", base_branch: work_request.base_branch)
+               work_request_work_package_attrs(id: "WRS-MCP-SET-BLOCKER", base_branch: work_request.base_branch)
              )
 
     work_package = repo.update!(Ecto.Changeset.change(work_package, status: "dispatched"))
+    set = fn terminal, arguments -> mcp_tool(repo, terminal, "set_blocker", Map.put(arguments, "work_package_id", work_package.id)) end
+    active_blockers = fn -> Enum.filter(Dashboard.OperationalProjection.blockers(progress_events!(repo, work_package.id)), & &1.active) end
 
-    assert {:ok, _blocker_event} =
-             PlanningRepository.append_audit_progress_event_for_work_package(repo, Actor.from_terminal(test_terminal("t1")), work_package.id, %{
-               "summary" => "Waiting for architect",
-               "idempotency_key" => "arch-policy-blocker",
-               "payload" => %{
-                 "type" => "blocker",
-                 "source_tool" => "report_blocker",
-                 "blocker_id" => "arch-policy-blocker",
-                 "active" => true
-               }
-             })
+    declared = set.("t1", %{"blocker_id" => "needs-key", "active" => true, "summary" => "Waiting for the staging key"})
+    assert %{"blocker" => %{"id" => "needs-key", "active" => true, "summary" => "Waiting for the staging key"}, "changed" => true} = get_in(declared, ["result", "structuredContent"])
+    assert [%{id: "needs-key"}] = active_blockers.()
 
-    resolve_blocker_response =
-      mcp_tool(repo, "t1", "resolve_blocker", %{
-        "work_package_id" => work_package.id,
-        "blocker_id" => "arch-policy-blocker",
-        "resolution" => "Architect supplied the missing decision.",
-        "summary" => "Cleared architect blocker",
-        "idempotency_key" => "arch-policy-blocker-resolved"
-      })
+    # Setting the state it already has changes nothing.
+    again = set.("t1", %{"blocker_id" => "needs-key", "active" => true, "summary" => "Waiting for the staging key"})
+    assert get_in(again, ["result", "structuredContent", "changed"]) == false
 
-    assert get_in(resolve_blocker_response, ["result", "structuredContent", "progress_event", "idempotency_key"]) ==
-             "resolve_blocker:#{work_package.id}:arch-policy-blocker-resolved"
+    updated = set.("t1", %{"blocker_id" => "needs-key", "active" => true, "summary" => "Waiting for the production key"})
+    assert get_in(updated, ["result", "structuredContent", "changed"]) == true
+    assert [%{summary: "Waiting for the production key"}] = active_blockers.()
 
-    resolve_event_id = get_in(resolve_blocker_response, ["result", "structuredContent", "progress_event", "id"])
-    refute Map.has_key?(get_in(resolve_blocker_response, ["result", "structuredContent", "progress_event"]), "payload")
-    event = repo.get!(ProgressEvent, resolve_event_id)
-    assert event.payload["active"] == false
+    missing_summary = set.("t1", %{"blocker_id" => "other", "active" => true})
+    assert get_in(missing_summary, ["error", "data", "reason"]) == "missing_summary"
+
+    # Another terminal does not own the WorkRequest.
+    foreign = set.("t2", %{"blocker_id" => "needs-key", "active" => false})
+    assert get_in(foreign, ["error", "data", "reason"]) == "owned_by_other_terminal"
+    assert [_still_active] = active_blockers.()
+
+    cleared = set.("t1", %{"blocker_id" => "needs-key", "active" => false})
+    assert get_in(cleared, ["result", "structuredContent", "blocker", "active"]) == false
+    assert active_blockers.() == []
+    event = repo.get_by!(ProgressEvent, work_package_id: work_package.id, status: "resolved")
     assert {event.actor_id, event.actor_type} == {"testbox/t1", "architect"}
-    assert repo.get!(WorkPackage, work_package.id).status == "dispatched"
+
+    assert get_in(set.("t1", %{"blocker_id" => "needs-key", "active" => false}), ["result", "structuredContent", "changed"]) == false
+    unknown = set.("t1", %{"blocker_id" => "never-declared", "active" => false})
+    assert get_in(unknown, ["error", "data", "reason"]) == "blocker_not_found"
+
+    assert get_in(set.("t1", %{"blocker_id" => "needs-key"}), ["error", "data", "reason"]) =~ "active"
+  end
+
+  test "ending a package clears its blockers and withdraws its asks; neither can be set on it afterwards", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-MCP-END-CLEARS", repo: "nextide/symphony-plus-plus", base_branch: "main")
+
+    assert {:ok, ending} =
+             CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_request_work_package_attrs(id: "WRS-MCP-END-CLEARS", base_branch: work_request.base_branch))
+
+    assert {:ok, sibling} =
+             CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_request_work_package_attrs(id: "WRS-MCP-END-SIBLING", base_branch: work_request.base_branch))
+
+    ending = repo.update!(Ecto.Changeset.change(ending, status: "dispatched"))
+
+    refute mcp_tool(repo, "t1", "set_blocker", %{"work_package_id" => ending.id, "blocker_id" => "b1", "active" => true, "summary" => "Blocked"})["error"]
+    package_ask = mcp_tool(repo, "t3", "ask", %{"work_request_id" => work_request.id, "work_package_id" => ending.id, "question" => "Keep this package?"})
+    package_ask_id = get_in(package_ask, ["result", "structuredContent", "ask", "id"])
+    sibling_ask = mcp_tool(repo, "t3", "ask", %{"work_request_id" => work_request.id, "work_package_id" => sibling.id, "question" => "And this one?"})
+    sibling_ask_id = get_in(sibling_ask, ["result", "structuredContent", "ask", "id"])
+
+    assert {:ok, _delivery} =
+             CanonicalWorkPackageFixtures.end_work_package(repo, work_request.id, ending.id, %{outcome: "abandoned", abandoned_rationale: "Rehomed."})
+
+    refute Enum.any?(Dashboard.OperationalProjection.blockers(progress_events!(repo, ending.id)), & &1.active)
+    assert %{state: "withdrawn", answered_by: "subject_ended"} = repo.get!(SymphonyElixir.SymphonyPlusPlus.Asks.Ask, package_ask_id)
+    assert %{state: "open"} = repo.get!(SymphonyElixir.SymphonyPlusPlus.Asks.Ask, sibling_ask_id)
+
+    refused_blocker = mcp_tool(repo, "t1", "set_blocker", %{"work_package_id" => ending.id, "blocker_id" => "b2", "active" => true, "summary" => "Late"})
+    assert get_in(refused_blocker, ["error", "data"]) |> Map.take(["reason", "state"]) == %{"reason" => "work_package_ended", "state" => "ended"}
+
+    refused_ask = mcp_tool(repo, "t3", "ask", %{"work_request_id" => work_request.id, "work_package_id" => ending.id, "question" => "Too late?"})
+    assert get_in(refused_ask, ["error", "data", "reason"]) == "work_package_ended"
+  end
+
+  defp progress_events!(repo, work_package_id) do
+    assert {:ok, events} = PlanningRepository.list_progress_events(repo, work_package_id)
+    events
   end
 
   test "HTTP WorkRequest reads require a trusted local connection with explicit state", %{repo: repo} do

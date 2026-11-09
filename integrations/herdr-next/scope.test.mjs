@@ -12,27 +12,16 @@ const jobOf = (payload, id) => jobsOf(payload).find((job) => job.id === id);
 const task = (payload, id) => S.taskOf(jobOf(payload, id), NOW);
 const words = (t) => t.issues.map((i) => i.text);
 
-test("the board's asks are answered through their own route, else through the chief, and an unrecorded wait stays silent", () => {
+test("the board's asks are answered through their own route on this factory", () => {
   const cross = task(variantPayload('busy'), 'wr-cross');
   assert.deepEqual(cross.asks.map((a) => [a.text, a.question?.route ?? null]), [
-    ['Ship tokens before the API?', null],
+    ['Ship tokens before the API?', '/api/v1/sympp/herdr/asks/ask-tokens/answer'],
   ]);
-  const pr = task(variantPayload('busy'), 'wr-pr');
-  assert.deepEqual(pr.asks.map((a) => a.text), ['Which order should the levels land in?'], 'an unrecorded wait is not repeated beside a real question');
   const payload = variantPayload('busy');
-  payload.work_request_details[0].asks = [{ id: 'w1', kind: 'human_wait', text: null, work_package_id: 'wp-review', answer_route: null }];
-  assert.deepEqual(task(payload, 'wr-pr').asks.map((a) => [a.text, a.unrecorded, a.question]), []);
-  payload.work_request_details[0].asks = [{ id: 'x', kind: 'clarification', text: 'Pick one?', work_package_id: null, answer_route: '//evil.example/answer' }];
+  payload.work_request_details[0].asks = [{ id: 'x', kind: 'ask', text: 'Pick one?', work_package_id: null, answer_route: '//evil.example/answer' }];
   assert.deepEqual(task(payload, 'wr-pr').asks.map((a) => [a.text, a.question]), [['Pick one?', null]], 'an answer never goes anywhere but this factory');
-  payload.work_request_details[0].asks = ['a', 'b'].map((id) => ({ id, kind: 'clarification', text: 'Ship it?', work_package_id: null, answer_route: `/api/v1/sympp/herdr/work-requests/wr-pr/questions/${id}/answer` }));
+  payload.work_request_details[0].asks = ['a', 'b'].map((id) => ({ id, kind: 'ask', text: 'Ship it?', work_package_id: null, answer_route: `/api/v1/sympp/herdr/asks/${id}/answer` }));
   assert.deepEqual(task(payload, 'wr-pr').asks.map((a) => a.question.route.split('/').at(-2)), ['a', 'b'], 'two asks that read alike are both answerable');
-});
-
-test('an older board still asks its open clarification questions and architect asks, each once', () => {
-  const pr = task(boardPayload(), 'wr-pr');
-  assert.deepEqual(pr.asks.map((a) => a.text), ['Which order should the levels land in?'], 'the question replaces the generic wait');
-  assert.equal(pr.asks[0].question.kind, 'question', 'and is answerable');
-  assert.deepEqual(task(boardPayload(), 'wr-cross').asks.map((a) => a.text), ['Ship tokens before the API?']);
 });
 
 test('what went wrong survives a question, and a quiet worker is named only when the board says so', () => {
@@ -115,11 +104,11 @@ test('a task shows its packages at work and the ones waiting on the person; land
 });
 
 
-test('a recorded question keeps landed work visible and keeps its age across polls', () => {
+test('an open ask keeps landed work visible and keeps its age across polls', () => {
   const payload = variantPayload('busy');
   const detail = payload.work_request_details[0];
   detail.work_packages = detail.work_packages.map((p) => ({ ...p, board_state: { stage: 'done', track: 'pr', delivered: true } }));
-  detail.clarification_questions[0].inserted_at = new Date(NOW - 3600e3).toISOString();
+  detail.asks[0].asked_at = new Date(NOW - 3600e3).toISOString();
   const before = jobOf(payload, 'wr-pr');
   payload.generated_at = new Date(NOW + 2 * 86400e3).toISOString();
   const after = jobOf(payload, 'wr-pr');

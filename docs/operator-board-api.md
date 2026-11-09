@@ -7,16 +7,12 @@ package/delivery signals and which terminal
 works on each request (`worked_on`, below).
 The normal standalone web board and its authorization are unchanged.
 
-Each `work_request_details[]` includes `asks`, the outstanding clarification and
-architect questions. Each ask has `{id, kind, text, work_package_id,
-answer_route}`. `kind` is `clarification` or `architect`; an `architect` ask is a
-pending architect question carried over in the request's operator report. IDs
-remain stable while the ask is open. Asks have
-`work_package_id: null`. `answer_route` is the existing native POST path,
-accepting `{answer: "..."}` and the other answer fields documented below. Only
-clarification questions are answerable there; architect escalations have
-`answer_route: null`. Send those to the topic's chief. Answered/resolved asks
-leave the list on the next read.
+Each `work_request_details[]` includes `asks`, the request's open asks: the
+only thing that needs the operator ("Needs you"). Each ask has `{id, kind: "ask",
+text, work_package_id, decision_prompt, asked_by, asked_at, answer_route}`.
+`work_package_id` names the package the ask is about, or is null.
+`answer_route` is the native POST path below. Answered and withdrawn asks leave
+the list on the next read.
 
 Package `activity_signal.observation_state` distinguishes `queued` (planned,
 created or prepared, without a current worker observation), `current` (current
@@ -51,7 +47,7 @@ ownership, audit or business state. Subscribe to
 
 `GET /api/v1/sympp/herdr/work-requests/:work_request_id` uses the same native
 read authority and never runs ledger migrations. It returns the request's
-clarification questions, packages, execution graph,
+asks, packages, execution graph,
 attention keys and current worker sessions. `decision_logs` contains every
 decision for that request, newest first, with the existing decision entry shape;
 `summary.decision_count` remains the total. Browser detail enrichment still
@@ -68,7 +64,7 @@ services, response shapes and dashboard invalidation as their operator siblings:
 | Route suffix under `/api/v1/sympp/herdr` | Input and result |
 | --- | --- |
 | `/work-requests` | Intake fields below; HTTP 201 with `{ok:true, work_request:<request detail>, refresh:{dashboard:true, work_request_id}}`. The new id is `work_request.work_request.id`. |
-| `/work-requests/:id/questions/:question_id/answer` | Answer fields below; HTTP 200 with `{ok:true, work_request_id, question_id, refresh:{dashboard:true, work_request_id}}`. |
+| `/asks/:ask_id/answer` | Answer fields below; HTTP 200 with `{ok:true, ask_id, work_request_id, delivery, refresh:{dashboard:true, work_request_id}}`. |
 
 Native human authority means a trusted direct local process, not an authenticated
 Herdr application identity. Requests require a loopback peer and local Host,
@@ -86,10 +82,11 @@ Optional fields use existing operator defaults: `work_type: "feature"`,
 `desired_dispatch_shape: "architect_led_feature_branch"` and `constraints: {}`. Intake creates the request with no
 owner and starts no agent. Unknown request fields are ignored.
 
-Read persisted questions from
-`work_request_details[].clarification_questions[]`: `id`, `work_request_id`,
-`question`, `why_needed`, `decision_prompt`, `status`, `answer`, `answered_by`
-and `answered_at`. Only `status: "open"` is answerable.
+Hydrated and detail reads list every ask in `work_request_details[].asks[]`:
+`id`, `work_request_id`, `work_package_id`, `question`, `decision_prompt`,
+`state` (`open`, `answered` or `withdrawn`), `asked_by`, `asked_at`, `answer`,
+`answered_by`, `resolved_at` and `delivered_at`. Only `state: "open"` is
+answerable.
 
 A structured `decision_prompt` has `tl_dr`, `details`, 1–4 `options` with `id`,
 `label` and `answer` (optional `description`, `pros` and `cons`), and an optional
@@ -97,13 +94,18 @@ A structured `decision_prompt` has `tl_dr`, `details`, 1–4 `options` with `id`
 `{"answer_choice":"<option id>","answer_note":"optional note"}`; a structured
 prompt does not accept `answer` alone. The custom choice `__custom_redirect__`
 requires a nonblank `answer_note`. Without a structured prompt, submit
-`{"answer":"the human's answer"}`. The backend records `local-operator` as the
-answer author; a successful answer does not automatically resume or unblock work.
+`{"answer":"the human's answer"}`. The backend records `operator` as the answer
+author, then types `Answer: <answer>` into the asking terminal's input without
+submitting it. `delivery` reports the outcome: `{state: "delivered", to}`, or
+`{state: "not_delivered", reason}` with `reason` `terminal_finished`,
+`terminal_unreachable` (the factory's own herdr-core doesn't see that terminal live; answers are not typed into other machines yet),
+`no_asking_terminal` or `send_failed`; the answer stays on the ask either way.
+An answer does not resume or unblock work by itself.
 
 Refetch the native board after success or its event-stream invalidation. Errors
 use `{error:{code,message}}`: malformed input/choice returns HTTP 422,
-absent/wrong-scope targets return HTTP 404, and an already answered/closed
-clarification question returns HTTP 409. No draft-edit, deletion, dispatch or
+absent targets return HTTP 404, and an ask that is no longer open returns HTTP
+409 `ask_not_open`. No draft-edit, deletion, dispatch or
 ownership mutation is exposed by these native routes.
 
 ## Hydrated board
@@ -274,8 +276,8 @@ These existing POST routes require local operator authorization:
 
 | Route suffix under `/api/v1/sympp/operator/work-requests/:id` | Preconditions and consequences |
 | --- | --- |
-| `/complete` | Operator override; no delivery or inactive-worker precondition. Sets `operator_completed_at`, so the phase is `done`; closes open questions, clears package blockers and queues terminal package worktree cleanup. Does not stop workers or merge PRs. Confirm the override when work is still running. An archived goal returns `work_request_archived` (409) with `next_action: "restore"`. |
-| `/archive` | Requires phase `done` or `unresolved`; otherwise returns `not_completed`. Hides the goal and queues terminal package worktree cleanup. History remains. Archiving again is a no-op. |
+| `/complete` | Operator override; no delivery or inactive-worker precondition. Sets `operator_completed_at`, so the phase is `done`; withdraws open asks, clears package blockers and queues terminal package worktree cleanup. Does not stop workers or merge PRs. Confirm the override when work is still running. An archived goal returns `work_request_archived` (409) with `next_action: "restore"`. |
+| `/archive` | Requires phase `done` or `unresolved`; otherwise returns `not_completed`. Hides the goal, withdraws its open asks and queues terminal package worktree cleanup. History remains. Archiving again is a no-op. |
 | `/delete` | Requires only that the goal exists; archive and completion are **not** backend prerequisites. Permanently removes the goal and dependent ledger history and ownership rows and queues linked worktree cleanup, including nonterminal packages. Confirm deletion and finish or stop active work first; it is not a safe unconditional one-click action. |
 | `/release` | Ends the goal's live ownership (`finish_reason: released_by_operator`) so another Herdr terminal's next owner-gated write takes it. Use it for an owner that crashed on a machine the factory can't see. HTTP 200 with `{ok:true, work_request_id, released:<worked_on>, refresh}`; a goal with no live owner returns `not_owned` (409). |
 | `/restore` | Requires an existing goal. Clears the archive and records `restored_at`, which starts a fresh retention window for both finished and never-started goals. Does not restore deleted worktrees or undo queued cleanup. |
@@ -286,6 +288,10 @@ watching it. The goal can complete; packages that depend on it stay blocked
 until their dependency is removed. Repeating the call returns the same result.
 A package that is still `planned` returns `ending_not_allowed`; one that already
 ended another way returns `already_ended` (409).
+
+`POST /api/v1/sympp/operator/asks/:id/answer` answers an open ask with the
+answer fields and `delivery` result described under
+[Native human actions](#native-human-actions).
 
 Worktree cleanup runs asynchronously and defers active workers while
 their package records exist. Deleting those records removes that activity check,

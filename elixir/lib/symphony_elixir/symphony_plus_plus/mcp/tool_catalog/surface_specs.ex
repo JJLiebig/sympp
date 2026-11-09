@@ -89,15 +89,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
 
   defp architect_tool_description("read_work_request"),
     do:
-      "Read one WorkRequest in a view: overview (default; phase, open questions, package next actions, recent decisions), plan (packages with group paths, dependencies, execution graph), board (delivery state and evidence) or package (one package's contract, revision, dependencies and task plan; needs work_package_id). detail: full returns complete payloads."
+      "Read one WorkRequest in a view: overview (default; phase, asks, package next actions, recent decisions), plan (packages with group paths, dependencies, execution graph), board (delivery state and evidence) or package (one package's contract, revision, dependencies and task plan; needs work_package_id). detail: full returns complete payloads."
 
-  defp architect_tool_description("append_finding"),
-    do: "Append idempotent finding evidence to an explicit descendant WorkPackage."
-
-  defp architect_tool_description("append_progress"),
-    do: "Append an idempotent progress event to an explicit descendant WorkPackage."
-
-  defp architect_tool_description("resolve_blocker"), do: "Resolve a blocker on a WorkPackage of a WorkRequest you own."
+  defp architect_tool_description("set_blocker"),
+    do:
+      "Declare (active: true, with a summary) or clear (active: false) a blocker on a package of a WorkRequest you own. Blockers are keyed by blocker_id; setting the state a blocker already has changes nothing. Ending a package clears its blockers."
 
   defp architect_tool_description("sync_pr"),
     do:
@@ -112,10 +108,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp architect_tool_description("set_report"),
     do: "Patch the operator report on a WorkRequest you own: brief, eta and parking. null clears a field; clearing parking records that work resumed."
 
-  defp architect_tool_description("ask_question"), do: "Add a clarification question to a scoped WorkRequest."
-  defp architect_tool_description("answer_question"), do: "Answer an open clarification question that belongs to a scoped WorkRequest."
-  defp architect_tool_description("answer_question_and_record_decision"), do: "Answer an open clarification question and atomically record the resulting WorkRequest decision."
-  defp architect_tool_description("close_question"), do: "Close an open clarification question that belongs to a scoped WorkRequest without recording an answer."
+  defp architect_tool_description("ask"),
+    do:
+      "Ask the operator a question: it shows as Needs you on the boards until it is answered or withdrawn. Optionally name a package and give a decision_prompt with options. The operator's answer is typed into your terminal without being submitted when it runs on the factory's machine; otherwise read it from the ask with read_work_request detail: full. Asks never block planning or dispatch, and an ask on a package is withdrawn when the package ends."
+
+  defp architect_tool_description("resolve_ask"),
+    do:
+      "Resolve an open ask you asked, or one on a WorkRequest you own: to: answered records an answer you got in conversation; to: withdrawn takes it back. decision records a decision in the same step."
 
   defp architect_tool_description("record_decision"),
     do: "Record a durable decision log entry on a scoped WorkRequest. source_type must be one of: #{Enum.join(DecisionLogEntry.source_types(), ", ")}."

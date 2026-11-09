@@ -74,19 +74,12 @@ test('skipping every planned package leaves the goal unfinished in persisted and
 test('a clarified request becomes a revised plan and a dispatched package', async ({ factory }) => {
   const architect = await factory.client();
   const id = await architect.request('Clarified planning');
-  const question = await architect.call('ask_question', {
-    work_request_id: id, category: 'scope', question: 'Which behavior should ship?',
-    why_needed: 'Agree on the bounded outcome before slicing.',
-  });
-  await architect.reject('edit_plan', { ops: [{ op: 'add_package', ...contract('Premature work') }] }, 'open_questions');
-  await architect.call('answer_question', {
-    work_request_id: id, question_id: question.clarification_question.id,
-    expected_question_status: 'open', answer: 'Ship the agreed behavior.', answered_by: 'human-operator',
-  });
+  const ask = (await architect.call('ask', { work_request_id: id, question: 'Which behavior should ship?' })).ask;
   expect((await architect.call('read_work_request', { detail: 'full', work_request_id: id })).work_request.phase).toBe('intake');
-
+  // An open ask never holds back planning.
   const [wp] = await architect.addPackages([contract('Agreed scope')]);
   expect((await architect.call('read_work_request', { work_request_id: id })).work_request.phase).toBe('planned');
+  await architect.call('resolve_ask', { ask_id: ask.id, to: 'answered', answer: 'Ship the agreed behavior.' });
   const before = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
   expect(before.work_packages).toHaveLength(1);
   const revision = before.work_packages[0].contract_revision;

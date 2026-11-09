@@ -8,7 +8,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDeliveryScope
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.RepoScope
@@ -34,16 +33,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   import Ecto.Query, only: [from: 2]
 
   @default_sequence_retry_attempts 200
-  @question_create_ignored_attrs [
-    "answer",
-    "answered_at",
-    "answered_by",
-    "created_at",
-    "inserted_at",
-    "sequence",
-    "status",
-    "updated_at"
-  ]
   @work_package_create_ignored_attrs [
     "created_at",
     "dispatched_at",
@@ -55,12 +44,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
 
   @type repo :: module()
   @type error ::
-          :already_answered
-          | :already_closed
-          | :database_busy
+          :database_busy
           | {:delivery_outcome_conflict, String.t()}
           | :no_work_packages
-          | :open_questions
           | :work_request_archived
           | :not_found
           | :invalid_work_package_id
@@ -207,53 +193,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  @spec ask_question(repo(), String.t(), map()) :: {:ok, ClarificationQuestion.t()} | {:error, error()}
-  def ask_question(repo, work_request_id, attrs)
-      when is_atom(repo) and is_binary(work_request_id) and is_map(attrs) do
-    attrs =
-      attrs
-      |> normalize_keys()
-      |> Map.drop(@question_create_ignored_attrs)
-      |> Map.put("work_request_id", work_request_id)
-      |> Map.put("status", "open")
-
-    with {:ok, %WorkRequest{}} <- get(repo, work_request_id) do
-      insert_with_sequence(repo, attrs, &next_question_sequence/2, &ClarificationQuestion.create_changeset/1)
-    end
-  end
-
-  @spec list_questions(repo(), String.t()) :: {:ok, [ClarificationQuestion.t()]} | {:error, error()}
-  def list_questions(repo, work_request_id) when is_atom(repo) and is_binary(work_request_id) do
-    questions =
-      repo.all(
-        from(question in ClarificationQuestion,
-          where: question.work_request_id == ^work_request_id,
-          order_by: [asc: question.sequence, asc: question.id]
-        )
-      )
-
-    {:ok, questions}
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  @spec answer_question(repo(), String.t(), String.t(), map()) :: {:ok, ClarificationQuestion.t()} | {:error, error()}
-  def answer_question(repo, id, current_status, attrs)
-      when is_atom(repo) and is_binary(id) and is_binary(current_status) and is_map(attrs) do
-    with :ok <- validate_question_status(current_status),
-         {:ok, answer} <- normalize_answer(attrs) do
-      answer_valid_question(repo, id, current_status, answer)
-    end
-  end
-
-  @spec close_question(repo(), String.t(), String.t()) :: {:ok, ClarificationQuestion.t()} | {:error, error()}
-  def close_question(repo, id, current_status)
-      when is_atom(repo) and is_binary(id) and is_binary(current_status) do
-    with :ok <- validate_question_status(current_status) do
-      close_valid_question(repo, id, current_status)
-    end
-  end
-
   @spec record_decision(repo(), String.t(), map()) :: {:ok, DecisionLogEntry.t()} | {:error, error()}
   def record_decision(repo, work_request_id, attrs)
       when is_atom(repo) and is_binary(work_request_id) and is_map(attrs) do
@@ -274,13 +213,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     end
   end
 
-  defp require_writable_question(repo, question_id) do
-    case repo.get(ClarificationQuestion, question_id) do
-      %ClarificationQuestion{work_request_id: work_request_id} -> require_writable_if_present(repo, work_request_id)
-      nil -> :ok
-    end
-  end
-
   @doc """
   Adds one planned WorkPackage at the end of the WorkRequest's sequence.
   Joins the caller's transaction when there is one.
@@ -291,7 +223,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     repo.transaction(fn ->
       with {:ok, %WorkRequest{} = work_request} <- get(repo, work_request_id),
            :ok <- Phase.require_writable(work_request),
-           :ok <- ensure_no_open_questions(repo, work_request.id),
            {:ok, attrs} <- work_package_attrs(repo, work_request, attrs, next_sequence(repo, WorkPackage, work_request.id)),
            {:ok, work_package} <- attrs |> WorkPackage.create_changeset() |> repo.insert() do
         work_package
@@ -433,30 +364,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     (Map.get(filters, "include_archived") || Map.get(filters, :include_archived)) in [true, "true", "1"]
   end
 
-  defp ensure_no_open_questions(repo, work_request_id) do
-    if open_questions?(repo, work_request_id) do
-      {:error, :open_questions}
-    else
-      :ok
-    end
-  end
-
-  defp validate_question_status(status) do
-    if status in ClarificationQuestion.statuses() do
-      :ok
-    else
-      {:error, :invalid_status}
-    end
-  end
-
-  defp open_questions?(repo, work_request_id) do
-    repo.exists?(
-      from(question in ClarificationQuestion,
-        where: question.work_request_id == ^work_request_id and question.status == "open"
-      )
-    )
-  end
-
   defp insert_with_sequence(repo, attrs, next_sequence, changeset_fun) do
     do_insert_with_sequence(repo, attrs, next_sequence, changeset_fun, sequence_retry_attempts())
   end
@@ -532,10 +439,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     |> max(0)
   end
 
-  defp next_question_sequence(repo, work_request_id) do
-    next_sequence(repo, ClarificationQuestion, work_request_id)
-  end
-
   defp next_decision_sequence(repo, work_request_id) do
     next_sequence(repo, DecisionLogEntry, work_request_id)
   end
@@ -550,90 +453,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       )
 
     (max_sequence || 0) + 1
-  end
-
-  defp normalize_answer(attrs) do
-    attrs =
-      attrs
-      |> normalize_keys()
-      |> put_new_value("answered_at", DateTime.utc_now(:microsecond))
-
-    attrs
-    |> ClarificationQuestion.answer_changeset()
-    |> Changeset.apply_action(:update)
-  end
-
-  defp answer_valid_question(repo, id, current_status, answer) do
-    now = DateTime.utc_now(:microsecond)
-
-    repo.transaction(fn ->
-      with {:error, reason} <- require_writable_question(repo, id), do: repo.rollback(reason)
-
-      id
-      |> answer_question_query(current_status)
-      |> repo.update_all(
-        set: [
-          status: "answered",
-          answer: answer.answer,
-          answered_by: answer.answered_by,
-          answered_at: answer.answered_at,
-          updated_at: now
-        ]
-      )
-      |> case do
-        {1, _rows} -> repo.get!(ClarificationQuestion, id)
-        {0, _rows} -> repo.rollback(question_terminal_error(repo, id, current_status))
-      end
-    end)
-    |> normalize_transaction_result()
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp close_valid_question(repo, id, current_status) do
-    now = DateTime.utc_now(:microsecond)
-
-    repo.transaction(fn ->
-      with {:error, reason} <- require_writable_question(repo, id), do: repo.rollback(reason)
-
-      id
-      |> close_question_query(current_status)
-      |> repo.update_all(set: [status: "closed", updated_at: now])
-      |> case do
-        {1, _rows} -> repo.get!(ClarificationQuestion, id)
-        {0, _rows} -> repo.rollback(question_terminal_error(repo, id, current_status))
-      end
-    end)
-    |> normalize_transaction_result()
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp answer_question_query(id, current_status) do
-    from(question in ClarificationQuestion,
-      where:
-        question.id == ^id and question.status == ^current_status and question.status == "open" and
-          is_nil(question.answer)
-    )
-  end
-
-  defp close_question_query(id, current_status) do
-    from(question in ClarificationQuestion,
-      where:
-        question.id == ^id and question.status == ^current_status and question.status == "open" and
-          is_nil(question.answer)
-    )
-  end
-
-  defp question_terminal_error(repo, id, current_status) do
-    case repo.get(ClarificationQuestion, id) do
-      nil -> :not_found
-      %ClarificationQuestion{status: "closed"} -> :already_closed
-      %ClarificationQuestion{status: "answered"} -> :already_answered
-      %ClarificationQuestion{answer: answer} when not is_nil(answer) -> :already_answered
-      %ClarificationQuestion{status: status} when status != current_status -> :stale_status
-      %ClarificationQuestion{} -> :stale_status
-    end
   end
 
   defp validate_work_package_delivery_scope(
@@ -981,28 +800,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     constraint in [
       "sympp_work_requests_id_unique_index",
       "sympp_work_requests_id_index",
-      "sympp_work_request_questions_id_unique_index",
-      "sympp_work_request_clarification_questions_id_index",
       "sympp_work_request_decision_logs_id_unique_index",
       "sympp_work_request_decision_logs_id_index",
       "sympp_work_packages_id_unique_index",
       "sympp_work_packages_id_index"
     ] or
       (String.contains?(constraint, "sympp_work_requests") and String.contains?(constraint, ".id")) or
-      (String.contains?(constraint, "sympp_work_request_clarification_questions") and
-         String.contains?(constraint, ".id")) or
       (String.contains?(constraint, "sympp_work_request_decision_logs") and String.contains?(constraint, ".id")) or
       (String.contains?(constraint, "sympp_work_packages") and String.contains?(constraint, ".id"))
   end
 
   defp sequence_constraint?(constraint) do
     constraint in [
-      "sympp_work_request_questions_work_request_sequence_unique_index",
       "sympp_work_request_decision_logs_work_request_sequence_unique_index",
       "sympp_work_packages_work_request_sequence_unique_index"
     ] or
-      (String.contains?(constraint, "sympp_work_request_clarification_questions") and
-         String.contains?(constraint, "sequence")) or
       (String.contains?(constraint, "sympp_work_request_decision_logs") and String.contains?(constraint, "sequence")) or
       (String.contains?(constraint, "sympp_work_packages") and String.contains?(constraint, "sequence"))
   end

@@ -3,7 +3,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments,
     only: [
-      optional_object_argument: 2,
       optional_string_argument: 2,
       optional_string_argument: 3,
       required_argument: 2
@@ -12,7 +11,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   import SymphonyElixir.SymphonyPlusPlus.MCP.Payloads, only: [json_safe_payload: 1]
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
-  alias SymphonyElixir.SymphonyPlusPlus.HumanDecisionPrompt
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
 
@@ -34,7 +32,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   @work_package_authoring_states ["planned", "dispatched"]
 
   @tools [
-    "ask_question",
     "record_decision",
     "edit_plan",
     "skip_work_package"
@@ -44,46 +41,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   def tools, do: @tools
 
   @spec call(String.t(), Config.t(), Terminal.t(), map()) :: {:ok, map()} | {:error, integer(), String.t(), map()}
-  def call("ask_question", %Config{} = config, _terminal, arguments) do
-    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, category} <- required_argument(arguments, "category"),
-         {:ok, question} <- required_argument(arguments, "question"),
-         {:ok, why_needed} <- required_argument(arguments, "why_needed"),
-         {:ok, decision_prompt} <- optional_decision_prompt_argument(arguments, "decision_prompt"),
-         {:ok, asked_by_agent_run_id} <- optional_string_argument(arguments, "asked_by_agent_run_id"),
-         {:ok, _work_request, _filters, scope} <- scoped_work_request(config.repo, work_request_id),
-         {:ok, question_record} <-
-           WorkRequestService.ask_question(
-             config.repo,
-             work_request_id,
-             optional_put(
-               %{
-                 "category" => category,
-                 "question" => question,
-                 "why_needed" => why_needed
-               },
-               "decision_prompt",
-               decision_prompt
-             )
-             |> optional_put("asked_by_agent_run_id", asked_by_agent_run_id)
-           ),
-         {:ok, updated_work_request} <- WorkRequestScope.scoped_work_request(config.repo, work_request_id) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
-         "clarification_question" => WorkRequestPayloads.clarification_question(question_record),
-         "scope" => scope,
-         "status" => %{
-           "question_status" => question_record.status
-         }
-       })}
-    else
-      {:tool_error, reason} -> invalid_params_error("ask_question", reason)
-      {:error, :not_found} -> not_found_error("ask_question")
-      {:error, reason} -> architect_error(reason, "ask_question")
-    end
-  end
-
   def call("record_decision", %Config{} = config, terminal, arguments) do
     with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, source_type} <- required_argument(arguments, "source_type"),
@@ -246,7 +203,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     do: {%{"state" => "ended", "current_revision" => revision}, "An ended package cannot change. Add a successor with edit_plan add_package."}
 
   defp op_error_details({:dependency_not_found, from, to}), do: {%{"from" => from, "to" => to}, "Nothing to remove: #{from} does not depend on #{to}."}
-  defp op_error_details(:open_questions), do: {%{}, "Answer or close the open clarification questions, then resend the edit."}
   defp op_error_details(:invalid_work_package), do: {%{"allowed_kinds" => WorkPackage.kinds()}, "Use an executable package kind."}
   defp op_error_details(:database_busy), do: {%{}, "Another write held the ledger. Resend the edit."}
   defp op_error_details(_reason), do: {%{}, "Fix the operation and resend the whole edit."}
@@ -361,15 +317,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   defp rollback_architect_transaction_result(_repo, {:ok, result}), do: result
   defp rollback_architect_transaction_result(repo, {:error, reason}), do: repo.rollback({:error, reason})
 
-  defp optional_decision_prompt_argument(arguments, key) do
-    with {:ok, prompt} <- optional_object_argument(arguments, key) do
-      case HumanDecisionPrompt.normalize(prompt) do
-        {:ok, normalized} -> {:ok, normalized}
-        {:error, reason} -> {:tool_error, "#{key} #{HumanDecisionPrompt.error_message(reason)}"}
-      end
-    end
-  end
-
   defp optional_put(attrs, _key, nil), do: attrs
   defp optional_put(attrs, key, value), do: Map.put(attrs, key, value)
 
@@ -425,15 +372,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   defp architect_error(:database_busy, tool), do: service_error(:database_busy, tool)
   defp architect_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp architect_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
-
-  defp architect_error(:open_questions, tool) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "open_questions",
-       "message" => "Answer or close all open clarification questions before adding WorkPackages."
-     }}
-  end
 
   defp architect_error(:work_request_archived, tool),
     do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"phase" => "archived"})

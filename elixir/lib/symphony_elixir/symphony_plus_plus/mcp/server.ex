@@ -29,6 +29,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     ArchitectDeliveryTools,
     ArchitectProductTreeTools,
     ArchitectWorkRequestTools,
+    AskTools,
     BlockerTools,
     Config,
     ErrorDetails,
@@ -36,7 +37,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     HandleStateStore,
     Health,
     LocalTrustedTools,
-    PackageTools,
     Repository,
     Response,
     SoloTools,
@@ -63,7 +63,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   @work_request_tools ArchitectWorkRequestTools.tools()
   @product_tree_tools ArchitectProductTreeTools.tools()
   @delivery_tools ArchitectDeliveryTools.tools()
-  @package_tools PackageTools.tools()
+  @ask_tools AskTools.tools()
   @version_resource "sympp://health/version"
 
   @enforce_keys [:config]
@@ -420,11 +420,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp run(name, arguments, terminal, %__MODULE__{config: config}) when name in @delivery_tools,
     do: ArchitectDeliveryTools.call(name, config, terminal, arguments)
 
-  defp run(name, arguments, terminal, %__MODULE__{config: config}) when name in @package_tools,
-    do: PackageTools.call(name, config, terminal, arguments)
+  defp run(name, arguments, terminal, %__MODULE__{config: config}) when name in @ask_tools,
+    do: AskTools.call(name, config, terminal, arguments)
 
-  defp run("resolve_blocker", arguments, terminal, %__MODULE__{config: config}),
-    do: BlockerTools.call("resolve_blocker", config, terminal, arguments)
+  defp run("set_blocker", arguments, terminal, %__MODULE__{config: config}),
+    do: BlockerTools.call("set_blocker", config, terminal, arguments)
 
   defp run("set_report", arguments, _terminal, %__MODULE__{config: config}) do
     case OperatorReport.set(config.repo, Map.fetch!(arguments, "work_request_id"), arguments) do

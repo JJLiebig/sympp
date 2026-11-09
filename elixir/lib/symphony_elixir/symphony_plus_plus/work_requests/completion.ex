@@ -14,13 +14,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   deletes archives older than the deletion window, except never-started ones.
   """
 
+  alias SymphonyElixir.SymphonyPlusPlus.Asks
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.NeverStartedRetention
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
@@ -49,8 +49,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   def default_archive_after_days, do: @default_archive_after_days
 
   @doc """
-  Operator completion. Closes open clarification questions, resolves package
-  blockers and queues cleanup of ended packages' worktrees. It does not stop
+  Operator completion. Withdraws open asks, resolves package blockers and
+  queues cleanup of ended packages' worktrees. It does not stop
   workers or merge PRs. Refused on an archived WorkRequest.
   """
   @spec complete(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, Repository.error() | :work_request_archived}
@@ -87,8 +87,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   end
 
   @doc """
-  Operator restore. Clears the archive, restarts the retention clocks and
-  resolves blockers whose target ended while the WorkRequest was archived.
+  Operator restore. Clears the archive and restarts the retention clocks.
   """
   @spec restore(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, Repository.error()}
   def restore(repo, work_request_id) when is_atom(repo) and is_binary(work_request_id) do
@@ -105,13 +104,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   end
 
   defp restore_archived(repo, %WorkRequest{} = work_request) do
-    with {:ok, restored} <-
-           work_request
-           |> Ecto.Changeset.change(archived_at: nil, archive_reason: nil, restored_at: DateTime.utc_now(:microsecond))
-           |> update_work_request(repo),
-         :ok <- Lifecycle.resolve_blockers_on_ended_targets(repo, linked_work_packages(repo, restored.id)) do
-      restored
-    else
+    work_request
+    |> Ecto.Changeset.change(archived_at: nil, archive_reason: nil, restored_at: DateTime.utc_now(:microsecond))
+    |> update_work_request(repo)
+    |> case do
+      {:ok, restored} -> restored
       {:error, reason} -> repo.rollback(reason)
     end
   end
@@ -168,16 +165,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   end
 
   defp clear_completed_attention(repo, work_request_id, work_packages) do
-    now = DateTime.utc_now(:microsecond)
-
-    repo.update_all(
-      from(question in ClarificationQuestion,
-        where: question.work_request_id == ^work_request_id and question.status == "open"
-      ),
-      set: [status: "closed", updated_at: now]
-    )
-
-    Lifecycle.apply_terminal_effects(repo, work_packages)
+    with :ok <- Asks.withdraw_for_work_requests(repo, [work_request_id]) do
+      Lifecycle.apply_terminal_effects(repo, work_packages)
+    end
   end
 
   # Every unarchived done WorkRequest, with the time its retention clock started.
@@ -277,8 +267,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
                from(work_request in WorkRequest, where: work_request.id == ^id and is_nil(work_request.archived_at)),
                set: [archived_at: now, archive_reason: archive_reason, updated_at: now]
              ),
-           # An archived WorkRequest has no live owner.
+           # An archived WorkRequest has no live owner and no open asks.
            :ok <- Ownership.end_subject(repo, "work_request", id),
+           :ok <- Asks.withdraw_for_work_requests(repo, [id]),
            :ok <- WorktreeCleanupQueue.enqueue_terminal(repo, linked_work_packages(repo, id)),
            {:ok, archived} <- Repository.get(repo, id) do
         archived

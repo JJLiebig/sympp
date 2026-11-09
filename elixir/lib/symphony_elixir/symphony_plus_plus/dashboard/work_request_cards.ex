@@ -1,6 +1,9 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
   @moduledoc false
 
+  alias SymphonyElixir.SymphonyPlusPlus.Asks
+  alias SymphonyElixir.SymphonyPlusPlus.Asks.Ask
+
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
     DeliveryWorkPackageProjection,
     OperationalProjection,
@@ -10,7 +13,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
@@ -58,8 +60,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
   def priority_cards(repo, work_requests, opts) do
     work_request_ids = Enum.map(work_requests, & &1.id)
 
-    with {:ok, question_context} <- question_context(repo, work_request_ids),
-         {:ok, work_packages} <- work_packages(repo, work_request_ids, opts),
+    open_asks = Asks.open_counts(repo, work_request_ids)
+
+    with {:ok, work_packages} <- work_packages(repo, work_request_ids, opts),
          {:ok, phases} <- Phase.load(repo, work_requests, work_packages) do
       work_packages_by_request = Enum.group_by(work_packages, & &1.work_request_id)
       work_package_counts = work_packages |> Enum.map(&{&1.work_request_id, &1.status}) |> status_counts()
@@ -70,8 +73,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
 
           {work_request.id,
            Map.merge(phase_fields(work_request, Map.fetch!(phases, work_request.id)), %{
-             open_question_count: status_count(question_context.counts, work_request.id, "open"),
-             answered_question_count: status_count(question_context.counts, work_request.id, "answered"),
+             open_ask_count: Map.get(open_asks, work_request.id, 0),
              work_package_count: length(request_work_packages),
              planned_work_package_count: Enum.count(request_work_packages, &(&1.status == "planned")),
              dispatched_work_package_count: Enum.count(request_work_packages, &(not is_nil(&1.dispatched_at))),
@@ -105,7 +107,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
 
   @spec work_request_payload(
           WorkRequest.t(),
-          [ClarificationQuestion.t()],
+          [Ask.t()],
           [WorkPackage.t()],
           map(),
           map(),
@@ -113,7 +115,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
         ) :: map()
   def work_request_payload(
         %WorkRequest{} = work_request,
-        _questions,
+        _asks,
         work_packages,
         work_package_contexts,
         repo_identity_catalog,
@@ -153,12 +155,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
   defp card_summaries(repo, work_requests, opts) do
     work_request_ids = Enum.map(work_requests, & &1.id)
 
-    with {:ok, question_context} <- question_context(repo, work_request_ids),
-         {:ok, decision_counts} <- decision_counts(repo, work_request_ids),
+    open_asks = Asks.open_counts(repo, work_request_ids)
+
+    with {:ok, decision_counts} <- decision_counts(repo, work_request_ids),
          {:ok, work_packages} <- work_packages(repo, work_request_ids),
          {:ok, phases} <- Phase.load(repo, work_requests, work_packages),
          {:ok, work_package_contexts} <- card_work_package_contexts(repo, work_packages, opts) do
-      question_counts = question_context.counts
       work_packages_by_request = Enum.group_by(work_packages, & &1.work_request_id)
 
       with {:ok, delivery_boards} <-
@@ -168,7 +170,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
         card_summaries(
           work_requests,
           phases,
-          question_counts,
+          open_asks,
           decision_counts,
           work_packages_by_request,
           work_package_contexts,
@@ -181,7 +183,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
   defp card_summaries(
          work_requests,
          phases,
-         question_counts,
+         open_asks,
          decision_counts,
          work_packages_by_request,
          work_package_contexts,
@@ -217,9 +219,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
 
         {work_request.id,
          Map.merge(phase_fields(work_request, phase), %{
-           open_question_count: status_count(question_counts, work_request.id, "open"),
-           answered_question_count: status_count(question_counts, work_request.id, "answered"),
-           closed_question_count: status_count(question_counts, work_request.id, "closed"),
+           open_ask_count: Map.get(open_asks, work_request.id, 0),
            decision_count: Map.get(decision_counts, work_request.id, 0),
            work_package_count: length(work_packages),
            planned_work_package_count: Enum.count(work_packages, &(&1.status == "planned")),
@@ -258,25 +258,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
 
       {work_request.id, visible_work_packages(work_packages, delivery_board)}
     end)
-  end
-
-  defp question_context(repo, work_request_ids) do
-    rows =
-      chunked_work_request_rows(work_request_ids, fn chunk ->
-        from(question in ClarificationQuestion,
-          where: question.work_request_id in ^chunk,
-          select: {question.work_request_id, question.status}
-        )
-        |> repo.all()
-      end)
-
-    counts =
-      rows
-      |> status_counts()
-
-    {:ok, %{counts: counts}}
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
   defp decision_counts(repo, work_request_ids) do

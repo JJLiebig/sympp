@@ -1,45 +1,45 @@
 import { expect } from 'e2e';
-import { contract, test, type Client } from '../support/factory.js';
+import { contract, nextTerminal, test, type Client } from '../support/factory.js';
 
 async function packageState(architect: Client, request: string, wp: string) {
   const board = await architect.call('read_work_request', { view: 'board', detail: 'full', work_request_id: request });
   return board.delivery_board.work_packages.find((entry: any) => entry.work_package.id === wp).work_package;
 }
 
-test('human answers retain decision provenance and stale replay cannot append a second decision', async ({ factory }) => {
+test('a conversational answer records its decision atomically and a resolved ask stays resolved', async ({ factory }) => {
   const architect = await factory.client();
   const id = await architect.request('Human decision');
-  const question = (await architect.call('ask_question', {
-    work_request_id: id, category: 'scope', question: 'Ship the bounded option?', why_needed: 'Human approval defines scope.',
+  const ask = (await architect.call('ask', {
+    work_request_id: id, question: 'Ship the bounded option?',
     decision_prompt: { tl_dr: 'Choose scope', details: 'Keep this delivery bounded.',
       options: [{ id: 'bounded', label: 'Bounded option', answer: 'Ship the bounded option.' }] },
-  })).clarification_question.id;
+  })).ask;
+  expect(ask.state).toBe('open');
+  expect(ask.asked_by).toBe(architect.address);
   const args = {
-    work_request_id: id, question_id: question, expected_question_status: 'open',
-    answer: 'Ship the bounded option.', answered_by: 'human-operator', source_type: 'human',
-    decision: 'Ship the bounded option.', rationale: 'It meets the agreed need.',
-    scope_impact: 'Defer adjacent behavior.', created_by: 'human-operator',
+    ask_id: ask.id, to: 'answered', answer: 'Ship the bounded option.',
+    decision: { source_type: 'human', decision: 'Ship the bounded option.', rationale: 'It meets the agreed need.', scope_impact: 'Defer adjacent behavior.' },
   };
-  const answer = await architect.call('answer_question_and_record_decision', args);
-  expect(answer.clarification_question.status).toBe('answered');
-  await architect.reject('answer_question_and_record_decision', args, 'already_answered');
+  const answer = await architect.call('resolve_ask', args);
+  expect(answer.ask.state).toBe('answered');
+  await architect.reject('resolve_ask', args, 'ask_not_open');
   const observer = await factory.client();
   const read = await observer.call('read_work_request', { detail: 'full', work_request_id: id });
   expect(read.decision_log_entries).toHaveLength(1);
   const decision = read.decision_log_entries[0];
   expect(decision.id).toBe(answer.decision_log_entry.id);
   expect(decision.source_type).toBe('human');
-  expect(decision.source_id).toBe(question);
-  expect(decision.created_by).toBe('human-operator');
-  expect(decision.decision).toBe(args.decision);
-  expect(decision.rationale).toBe(args.rationale);
-  expect(decision.scope_impact).toBe(args.scope_impact);
-  expect(read.clarification_questions[0].answer).toBe(args.answer);
+  expect(decision.source_id).toBe(ask.id);
+  expect(decision.created_by).toBe(architect.address);
+  expect(decision.decision).toBe(args.decision.decision);
+  expect(decision.rationale).toBe(args.decision.rationale);
+  expect(decision.scope_impact).toBe(args.decision.scope_impact);
+  expect(read.asks[0].answer).toBe(args.answer);
   expect(read.work_request.phase).toBe('intake');
   expect((await architect.addPackages([contract('Approved outcome', { goal: `Implement decision ${decision.id}` })]))).toHaveLength(1);
 });
 
-test('questions, operator reports and review waits preserve explicit package blockers and sibling state', async ({ factory }) => {
+test('asks and operator reports leave explicit package blockers and sibling state alone', async ({ factory }) => {
   const architect = await factory.client();
   const id = await architect.request('Decision versus blocker');
   const [affected, sibling] = await architect.addPackages([contract('Affected work'), contract('Sibling work')]);
@@ -48,56 +48,54 @@ test('questions, operator reports and review waits preserve explicit package blo
   const initial = await packageState(architect, id, affected);
   const siblingBefore = await packageState(architect, id, sibling);
   expect(initial.blocker_state['active?']).toBe(false);
-  const question = (await architect.call('ask_question', {
-    work_request_id: id, category: 'scope', question: 'Should we change the optional detail?', why_needed: 'A product decision can be answered while independent work continues.',
-  })).clarification_question.id;
+  const ask = (await architect.call('ask', {
+    work_request_id: id, work_package_id: affected, question: 'Should we change the optional detail?',
+  })).ask.id;
   await architect.call('set_report', { brief: 'Waiting for a human scope choice.', parking: { reason: 'Should the optional detail ship?' } });
   const parked = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
   expect(parked.work_request.operator_report.parking.reason).toBe('Should the optional detail ship?');
-  await architect.call('append_progress', {
-    work_package_id: affected, summary: 'Waiting for hosted review.', status: 'ci_waiting', idempotency_key: 'ordinary-wait',
-  });
   expect((await packageState(architect, id, affected)).blocker_state['active?']).toBe(false);
 
-  const declaration = {
-    work_package_id: affected, summary: 'Required schema is unavailable.', status: 'blocked', idempotency_key: 'schema-blocker',
-    payload: { type: 'blocker', active: true, blocker_id: 'schema' },
-  };
-  const first = await architect.call('append_progress', declaration);
-  const replay = await architect.call('append_progress', declaration);
-  expect(replay.progress_event.id).toBe(first.progress_event.id);
-  await architect.reject('append_progress', { ...declaration, summary: 'Replace the original history.' }, 'idempotency_conflict');
-  await architect.call('append_progress', {
-    ...declaration, summary: 'Required access is unavailable.', idempotency_key: 'access-blocker',
-    payload: { type: 'blocker', active: true, blocker_id: 'access' },
-  });
+  const declaration = { work_package_id: affected, blocker_id: 'schema', active: true, summary: 'Required schema is unavailable.' };
+  expect((await architect.call('set_blocker', declaration)).changed).toBe(true);
+  expect((await architect.call('set_blocker', declaration)).changed).toBe(false);
+  await architect.reject('set_blocker', { work_package_id: affected, blocker_id: 'schema-typo', active: false }, 'blocker_not_found');
+  await architect.call('set_blocker', { work_package_id: affected, blocker_id: 'access', active: true, summary: 'Required access is unavailable.' });
   expect((await packageState(architect, id, affected)).blocker_state['active?']).toBe(true);
-  const human = {
-    work_request_id: id, question_id: question, answer: 'Keep the optional detail deferred.',
-    source_type: 'human', decision: 'Defer the optional detail.', rationale: 'The current scope is sufficient.', scope_impact: 'No package changes.',
-  };
-  await architect.call('answer_question_and_record_decision', human);
+  await architect.call('resolve_ask', {
+    ask_id: ask, to: 'answered', answer: 'Keep the optional detail deferred.',
+    decision: { source_type: 'human', decision: 'Defer the optional detail.', rationale: 'The current scope is sufficient.', scope_impact: 'No package changes.' },
+  });
   await architect.call('set_report', { parking: null });
   expect((await packageState(architect, id, affected)).blocker_state['active?']).toBe(true);
 
-  const resolution = {
-    work_package_id: affected, blocker_id: 'schema', resolution: 'Schema supplied.',
-    summary: 'Schema prerequisite available.', idempotency_key: 'resolve-schema',
-  };
-  const resolved = await architect.call('resolve_blocker', resolution);
-  expect((await architect.call('resolve_blocker', resolution)).progress_event.id).toBe(resolved.progress_event.id);
-  // Reusing a resolution key cannot resolve a different blocker or replace history.
-  expect((await architect.call('resolve_blocker', { ...resolution, blocker_id: 'access' })).progress_event.id).toBe(resolved.progress_event.id);
+  const cleared = await architect.call('set_blocker', { work_package_id: affected, blocker_id: 'schema', active: false });
+  expect(cleared.blocker).toMatchObject({ id: 'schema', active: false });
+  expect((await architect.call('set_blocker', { work_package_id: affected, blocker_id: 'schema', active: false })).changed).toBe(false);
   expect((await packageState(architect, id, affected)).blocker_state['active?']).toBe(true);
-  await architect.call('resolve_blocker', {
-    ...resolution, blocker_id: 'access', resolution: 'Access supplied.', summary: 'Access prerequisite available.', idempotency_key: 'resolve-access',
-  });
+  await architect.call('set_blocker', { work_package_id: affected, blocker_id: 'access', active: false, summary: 'Access prerequisite available.' });
   expect((await packageState(architect, id, affected)).blocker_state['active?']).toBe(false);
   expect(await packageState(architect, id, sibling)).toEqual(siblingBefore);
   const report = (await architect.call('read_work_request', { detail: 'full', work_request_id: id })).work_request.operator_report;
   expect(report.brief.text).toBe('Waiting for a human scope choice.');
   expect(report.parking.reason).toBe('Should the optional detail ship?');
   expect(report.parking.resumed_at).toBeTruthy();
+});
+
+test('an ask on a package is withdrawn when the package ends, and only the asker or owner resolves an ask', async ({ factory }) => {
+  const architect = await factory.client();
+  const id = await architect.request('Package asks');
+  const [wp] = await architect.addPackages([contract('Package with a question')]);
+  const chief = await factory.client(nextTerminal(), { 'sympp.role': 'chief', 'sympp.domain': 'product' });
+  const onPackage = (await chief.call('ask', { work_request_id: id, work_package_id: wp, question: 'Is this package still wanted?' })).ask;
+  const onRequest = (await chief.call('ask', { work_request_id: id, question: 'Who signs off the release?' })).ask;
+  const stranger = await factory.client();
+  await stranger.reject('resolve_ask', { ask_id: onRequest.id, to: 'withdrawn' }, 'not_asker_or_owner');
+  expect((await architect.call('resolve_ask', { ask_id: onRequest.id, to: 'withdrawn' })).ask.state).toBe('withdrawn');
+  await architect.call('skip_work_package', { work_package_id: wp });
+  const read = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
+  expect(read.asks.find((entry: any) => entry.id === onPackage.id).state).toBe('withdrawn');
+  await chief.reject('ask', { work_request_id: id, work_package_id: wp, question: 'Too late?' }, 'work_package_ended');
 });
 
 test('human choice submission rejects unknown or empty redirects and preserves the selected answer', async ({ factory }) => {
@@ -111,18 +109,15 @@ test('human choice submission rejects unknown or empty redirects and preserves t
     { tl_dr: 'Missing options', details: 'A choice is required.' },
     { ...prompt, options: [{ id: '__custom_redirect__', label: 'Reserved id', answer: 'Invalid choice.' }] },
   ]) {
-    const response = await architect.rpc('tools/call', { name: 'ask_question', arguments: {
-      work_request_id: id, category: 'scope', question: 'Invalid question', why_needed: 'A complete choice is required.', decision_prompt: malformed,
-    } });
+    const response = await architect.rpc('tools/call', architect.toolParams('ask', { work_request_id: id, question: 'Invalid question', decision_prompt: malformed }));
     expect(response.error.code).toBe(-32602);
   }
-  expect((await architect.call('read_work_request', { detail: 'full', work_request_id: id })).clarification_questions).toEqual([]);
-  const ask = async (decision_prompt?: object) => (await architect.call('ask_question', {
-    work_request_id: id, category: 'scope', question: 'Which path should ship?', why_needed: 'Record the human choice.',
-    ...(decision_prompt ? { decision_prompt } : {}),
-  })).clarification_question.id;
-  const question = await ask(prompt);
-  const path = `/api/v1/sympp/operator/work-requests/${id}/questions/${question}/answer`;
+  expect((await architect.call('read_work_request', { detail: 'full', work_request_id: id })).asks).toEqual([]);
+  const ask = async (decision_prompt?: object) => (await architect.call('ask', {
+    work_request_id: id, question: 'Which path should ship?', ...(decision_prompt ? { decision_prompt } : {}),
+  })).ask.id;
+  const first = await ask(prompt);
+  const path = `/api/v1/sympp/operator/asks/${first}/answer`;
   for (const invalid of [
     { answer_choice: 'unknown' }, { answer_choice: '__custom_redirect__' }, { answer: 'Stale autofilled answer.' },
   ]) {
@@ -130,15 +125,16 @@ test('human choice submission rejects unknown or empty redirects and preserves t
     expect(rejected.status).toBe(422);
     expect((await architect.raw(invalid, {}, 'POST', path.replace('/operator/', '/herdr/'))).status).toBe(422);
     const current = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
-    expect(current.clarification_questions[0].status).toBe('open');
+    expect(current.asks[0].state).toBe('open');
     expect(current.decision_log_entries).toEqual([]);
   }
-  expect((await architect.operator(path, {
-    answer_choice: 'continue', answer_note: 'Keep the detail deferred.', answer: 'Stale autofilled answer.',
-  })).status).toBe(200);
+  const answered = await architect.operator(path, { answer_choice: 'continue', answer_note: 'Keep the detail deferred.', answer: 'Stale autofilled answer.' });
+  expect(answered.status).toBe(200);
+  // The answer is kept whether or not the asking terminal could be reached.
+  expect(answered.body.delivery.state).toMatch(/^(delivered|not_delivered)$/);
   const read = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
-  expect(read.clarification_questions[0].answer).toBe('Continue with the bounded path. Keep the detail deferred.');
-  expect(read.clarification_questions[0].answered_by).toBe('local-operator');
+  expect(read.asks[0].answer).toBe('Continue with the bounded path. Keep the detail deferred.');
+  expect(read.asks[0].answered_by).toBe('operator');
 
   const cases = [
     { prompt, input: { answer_choice: '__custom_redirect__', answer_note: 'Use a smaller path.' }, answer: 'Use a smaller path.' },
@@ -148,21 +144,20 @@ test('human choice submission rejects unknown or empty redirects and preserves t
   ];
   for (const choice of cases) {
     const q = await ask(choice.prompt);
-    const endpoint = `/api/v1/sympp/herdr/work-requests/${id}/questions/${q}/answer`;
+    const endpoint = `/api/v1/sympp/herdr/asks/${q}/answer`;
     if (!choice.prompt) expect((await architect.raw({ answer_choice: 'redirect' }, {}, 'POST', endpoint)).status).toBe(422);
-    const foreign = endpoint.replace(id, 'missing-request');
-    expect((await architect.raw(choice.input, {}, 'POST', foreign)).status).toBe(404);
+    expect((await architect.raw(choice.input, {}, 'POST', endpoint.replace(q, 'missing-ask'))).status).toBe(404);
     expect((await architect.raw(choice.input, {}, 'POST', endpoint)).status).toBe(200);
     expect((await architect.raw(choice.input, {}, 'POST', endpoint)).status).toBe(409);
     const result = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
-    expect(result.clarification_questions.find((entry: any) => entry.id === q).answer).toBe(choice.answer);
+    expect(result.asks.find((entry: any) => entry.id === q).answer).toBe(choice.answer);
     expect(result.work_request.phase).toBe('intake');
   }
-  const closed = await ask();
-  await architect.call('close_question', { work_request_id: id, question_id: closed });
-  expect((await architect.raw({ answer: 'Too late.' }, {}, 'POST', `/api/v1/sympp/herdr/work-requests/${id}/questions/${closed}/answer`)).status).toBe(409);
-  await architect.reject('answer_question', { work_request_id: id, question_id: closed, answer: 'Too late.' }, 'already_closed');
+  const withdrawn = await ask();
+  await architect.call('resolve_ask', { ask_id: withdrawn, to: 'withdrawn' });
+  expect((await architect.raw({ answer: 'Too late.' }, {}, 'POST', `/api/v1/sympp/herdr/asks/${withdrawn}/answer`)).status).toBe(409);
+  await architect.reject('resolve_ask', { ask_id: withdrawn, to: 'answered', answer: 'Too late.' }, 'ask_not_open');
   const final = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
-  expect(final.clarification_questions.find((entry: any) => entry.id === closed).answer).toBe(null);
+  expect(final.asks.find((entry: any) => entry.id === withdrawn).answer).toBeUndefined();
   expect(final.decision_log_entries).toEqual([]);
 });

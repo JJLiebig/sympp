@@ -901,8 +901,13 @@ export default class Lens extends View {
     const draft = this.answers[question.key];
     cx.spawn(async (cx) => {
       const submission = C.submitAction(draft,
-        async () => C.postAction(this.endpoint, C.answerPath(question), C.answerBody(question, draft.choice, draft.input.value()), this.request),
-        () => { draft.open = false; draft.saved = true; draft.input.set_value(""); this.retry(cx); });
+        async () => C.postAction(this.endpoint, question.route, C.answerBody(question, draft.choice, draft.input.value()), this.request),
+        (payload) => {
+          draft.open = false; draft.saved = true; draft.input.set_value("");
+          const note = C.undeliveredNote(payload);
+          if (note) notify({ title: "Answer not delivered", body: note, level: "warning" });
+          this.retry(cx);
+        });
       cx.notify();
       await submission;
       cx.notify();

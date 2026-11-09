@@ -28,7 +28,7 @@ test('native requests carry literal JSON and retain real success and error statu
   assert.equal(response.ok, true);
   assert.deepEqual(await response.json(), { runtime: { offline: false } });
   const body = { answer: '`$() "quotes"\n âa '.repeat(10000), extra: 'tolerated' };
-  await assert.rejects(postAction(origin, '/api/v1/sympp/herdr/work-requests/wr/questions/q/answer', body, request), /Choose a valid option/);
+  await assert.rejects(postAction(origin, '/api/v1/sympp/herdr/asks/ask-1/answer', body, request), /Choose a valid option/);
   assert.equal(received[1].body, JSON.stringify(body));
   assert.equal(received[1].headers['content-type'], 'application/json');
   assert.ok(received.every(req => req.headers.accept === 'application/json'));
