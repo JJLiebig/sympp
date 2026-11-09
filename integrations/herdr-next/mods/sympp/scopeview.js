@@ -265,34 +265,46 @@ function scopeRows(v, t, tasks, cards, key) {
 
 // ---------- Drill-in ----------
 
-// The web board's four-step track: the way travelled dim, the current step in its colour (red while
-// its checks fail), the way ahead faint.
-const TRACK = ["launching", "implementing", "review_ci", "ready"];
-function track(t, pkg) {
-  const at = TRACK.indexOf(pkg.stage);
-  const now = pkg.failed ? signal().fail : pkg.stage === "launching" ? signal().build : stageColor(t, pkg.stage);
-  return h_flex().flex_none().gap(2).items_center().children(TRACK.map((_, i) =>
-    div().w(7).h(3).rounded(1).bg(i < at ? tint(t.foreground, "55") : i === at ? now : tint(t.foreground, "1c"))));
+// The lifecycle in fixed slots, as on the web board: the stages behind plain, the current one bold
+// in its colour (red while its checks fail), the ones ahead dim. Narrow, only the current stage
+// shows, in the same place on every row. The Review slot names its mode on hover.
+const SLOT_TONE = ["build", "build", "checks", "review", "merge"];
+const SLOT_WIDTH = 46;
+function lifecycle(t, pkg, wide) {
+  const now = S.lifecycleSlot(pkg);
+  const mode = pkg.review.mode && pkg.review.mode !== "none" ? (pkg.review.mode === "base" ? "normal" : pkg.review.mode) : null;
+  return h_flex().flex_none().children(S.LIFECYCLE.map((label, i) => {
+    if (!wide && i !== now) return null;
+    const color = i < now ? t.muted : i === now ? (pkg.failed ? signal().fail : signal()[SLOT_TONE[i]]) : t.dim;
+    const slot = mono(11, color).w(SLOT_WIDTH).when(i === now, (el) => el.font_semibold()).child(label);
+    return i === S.REVIEW_SLOT && mode ? slot.id(`slot-review-${pkg.id}`).tooltip(`${mode} review`) : slot;
+  }).filter(Boolean));
 }
 
-// The fixed columns of a package's progress: the track, its step and time in it; Review Suite's mode
-// and state; the PR. An ended package says how it ended instead; a planned one what it waits on.
-function progress(v, t, pkg, now) {
+// Under review, the status reads in the review's state colour; otherwise it is the time in the stage.
+function statusTone(t, pkg) {
+  if (S.lifecycleSlot(pkg) !== S.REVIEW_SLOT) return t.dim;
+  const state = pkg.review.state;
+  return state === "running" ? signal().review : state === "findings" ? signal().checks : state === "done" ? tint(signal().merge, "cc") : t.dim;
+}
+
+// The fixed columns of a package's progress: its lifecycle, one right-aligned status, the PR. An
+// ended package says how it ended instead; a planned one what it waits on.
+function progress(v, t, pkg, now, wide) {
   const ended = pkg.stage === "ended";
   const planned = pkg.stage === "planned";
-  const label = ended ? M.ENDING_LABEL[pkg.ending] : planned ? (pkg.after.length ? `After ${pkg.after.join(", ")}` : "Planned") : M.STAGE_LABEL[pkg.stage];
-  const tone = ended ? (pkg.outcome === "dropped" ? t.dim : tint(signal().merge, "cc")) : planned ? t.dim : pkg.failed ? signal().fail : stageColor(t, pkg.stage);
-  const time = !ended && !planned && !pkg.untimed && pkg.since !== null ? M.span(now - pkg.since) : null;
-  const review = !planned ? S.reviewText(pkg.review) : null;
+  const live = !ended && !planned;
+  const label = ended ? M.ENDING_LABEL[pkg.ending] : planned ? (pkg.after.length ? `After ${pkg.after.join(", ")}` : "Planned") : null;
+  const tone = ended ? (pkg.outcome === "dropped" ? t.dim : tint(signal().merge, "cc")) : t.dim;
   const pr = pkg.pr.number ? Button.new(`pr-step-${pkg.id}`).flex_none().cursor_pointer().font_family(MONO).text_size(11).text_color(t.muted).underline()
     .hover((s) => s.text_color(t.foreground)).tooltip(`Open ${pkg.pr.repo && pkg.pr.repo !== pkg.repo ? pkg.pr.repo : "PR"} #${pkg.pr.number}`)
     .on_click((_e, cx) => { cx.stop_propagation(); if (pkg.pr.url) cx.open_url(pkg.pr.url); })
     .child(pkg.finishable ? `${M.shortRepo(pkg.pr.repo)}#${pkg.pr.number}` : `#${pkg.pr.number}`) : null;
   return h_flex().flex_1().min_w(0).gap(6).items_center()
-    .when(!ended && !planned, (el) => el.child(track(t, pkg)))
-    .child(mono(11, tone).font_semibold().when(!planned, (el) => el.w(ended ? 78 : 82)).when(planned, (el) => el.min_w(0).truncate()).child(label))
-    .when(!ended && !planned, (el) => el.child(mono(11, t.dim).w(42).child(time ?? "")))
-    .child(mono(11, pkg.review.state === "findings" ? signal().checks : t.dim).flex_1().min_w(0).truncate().child(review ?? ""))
+    .when(live, (el) => el.child(lifecycle(t, pkg, wide))
+      .child(h_flex().w(118).flex_none().justify_end().child(mono(11, statusTone(t, pkg)).child(S.lifecycleStatus(pkg, now)))))
+    .when(!live, (el) => el.child(mono(11, tone).font_semibold().when(ended, (x) => x.w(78)).when(planned, (x) => x.min_w(0).truncate()).child(label)))
+    .child(div().flex_1())
     .when(Boolean(pr), (el) => el.child(pr));
 }
 
@@ -329,7 +341,7 @@ function pkgRow(v, t, job, e, ctx, wide, odd, indent = 0) {
   const finish = pkg.finishable ? P.confirmButton(v, t, `finish-${pkg.id}`, "Finish", "Finish it?", `finish:${pkg.id}`,
     (cx) => v.operate(`finish:${pkg.id}`, `${C.OPERATOR}/work-packages/${encodeURIComponent(pkg.id)}/finish`, {}, cx)) : null;
   const finishError = v.ops[`finish:${pkg.id}`]?.error;
-  const columns = progress(v, t, pkg, ctx.now);
+  const columns = progress(v, t, pkg, ctx.now, wide);
   // A nested group indents only the name, so every column keeps its place.
   const named = h_flex().flex_1().min_w(0).gap(10).items_center().pl(indent).child(lead).child(name);
   const content = wide

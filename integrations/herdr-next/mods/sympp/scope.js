@@ -2,7 +2,7 @@
 // narrows the tasks to its repository. Health comes from one place, each package's own evidence, so a
 // task and its drill-in can never disagree. No GPUI or Herdr imports.
 
-import { shortRepo, LIVE_STAGES } from "./model.js";
+import { shortRepo, span, LIVE_STAGES } from "./model.js";
 import { NOWHERE, spaceRepo, spaceById } from "./levels.js";
 
 const keyOf = (value) => shortRepo(value ?? "").toLowerCase();
@@ -40,6 +40,28 @@ export function reviewText(review) {
   const round = review.round > 1 ? `round ${review.round}` : null;
   const state = review.state === "running" ? round ?? "running" : review.state === "findings" ? "findings" : review.state;
   return [review.mode, state].filter(Boolean).join(" · ");
+}
+
+// A live package's way from build to merge, as the web board draws it: Build until a PR opens;
+// Review/CI is Review once a review runs and Checks before it; Ready is Merge.
+export const LIFECYCLE = ["Build", "PR", "Checks", "Review", "Merge"];
+export const REVIEW_SLOT = 3;
+export function lifecycleSlot(pkg) {
+  if (pkg.stage === "ready") return 4;
+  if (pkg.stage === "review_ci") return pkg.review.mode && pkg.review.mode !== "none" && pkg.review.state ? REVIEW_SLOT : 2;
+  return pkg.pr.number ? 1 : 0;
+}
+
+// Normal is the default review mode, so only the others are named.
+const MODE_WORD = { deep: "deep ", fast: "fast " };
+
+// The status column: how long the package has been in its stage, or under review its round and how
+// long that round has run ("deep r6 · 26m").
+export function lifecycleStatus(pkg, now) {
+  if (lifecycleSlot(pkg) !== REVIEW_SLOT) return pkg.untimed || pkg.since === null ? "" : span(now - pkg.since);
+  const from = pkg.review.roundStartedAt ?? pkg.review.startedAt ?? (pkg.untimed ? null : pkg.since);
+  const round = `${MODE_WORD[pkg.review.mode] ?? ""}r${Math.max(1, pkg.review.round)}`;
+  return from === null ? round : `${round} · ${span(now - from)}`;
 }
 
 // A package dispatched whose worker terminal hasn't shown up yet.

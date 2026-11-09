@@ -49,6 +49,16 @@ test('a review reads as its mode and state in a word or two, and a package dispa
   assert.deepEqual(['s-3', 'r-6', 't-1'].map((id) => S.unmanned(pkgs[id])), [true, false, false]);
 });
 
+test('a live package reads as one of five lifecycle stages with its time, or under review its round, naming only a mode other than normal', () => {
+  const pkgs = Object.fromEntries(jobsOf(variantPayload('busy')).flatMap((job) => job.packages).map((p) => [p.id, p]));
+  const read = (pkg) => [S.LIFECYCLE[S.lifecycleSlot(pkg)], S.lifecycleStatus(pkg, NOW)];
+  assert.deepEqual(['s-3', 'n-1', 'r-4', 'r-5', 'r-7'].map((id) => read(pkgs[id])),
+    [['Build', '5m'], ['Checks', '15m'], ['Review', 'deep r3 · 50m'], ['Review', 'r2 · 35m'], ['Merge', '10m']]);
+  assert.equal(read({ ...pkgs['r-6'], pr: { ...pkgs['r-6'].pr, number: 9 } })[0], 'PR', 'an open PR before Review/CI');
+  const round = { ...pkgs['r-4'], review: { ...pkgs['r-4'].review, mode: 'fast', roundStartedAt: NOW - 4 * 60e3 } };
+  assert.equal(S.lifecycleStatus(round, NOW), 'fast r3 · 4m', "the time is the current round's");
+});
+
 test("a package's step comes from its status and derived progress, and only an open PR into another repository can be finished", () => {
   const pkgs = Object.fromEntries(jobsOf(variantPayload('busy')).flatMap((job) => job.packages).map((p) => [p.id, p]));
   assert.deepEqual(['k-1', 's-3', 'r-6', 'r-4', 'r-7', 'r-1', 'c-2'].map((id) => pkgs[id].stage), ['planned', 'launching', 'implementing', 'review_ci', 'ready', 'ended', 'ended']);

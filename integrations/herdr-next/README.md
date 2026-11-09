@@ -27,8 +27,10 @@ with the decision prompt's choices when there is one. A flagged decision takes
 **Ack** or **Feedback**; the factory types the feedback into the terminal that
 made the call, and **Focus chief** also opens that terminal. A task shows its
 phase and the terminal working on it, and its packages at work under their
-groups, through Launching ─ Implementing ─ Review/CI ─ Ready, with the PR's
-checks and the review's mode and state; landed and planned work is folded.
+groups, through Build, PR, Checks, Review and Merge in fixed columns, with the
+PR's checks and one status: the time in the stage, or under review the round and
+its time, naming the mode when it is deep or fast. Landed and planned work is
+folded.
 **Complete**, **Archive**, **Restore** and **Delete** act on the task, **Finish**
 ends a package whose PR goes into another repository, and **Release** frees a
 task from an owner that stopped answering. Click a terminal's address to focus
