@@ -35,7 +35,7 @@ A current calling agent can own small work without introducing another chief.
 Chief attribution comes from terminal labels: the board's chief launcher starts a
 chief terminal labelled `sympp.role=chief` and `sympp.domain=<topic>`, and the
 bridge forwards those labels with each call. There is no registration step; see
-the packaged [coordinator](../../packages/sympp/skills/symphony-coordinator/SKILL.md)
+the packaged [chief](../../packages/sympp/skills/symphony-chief/SKILL.md)
 procedure.
 
 The feature architect owns one substantial request: clarify intent, review the
@@ -99,7 +99,7 @@ another gate between merge and WR completion.
 
 1. The architect dispatches a UI collaborator in a Herdr pane. Human and
    collaborator iterate rapidly on realistic demo data to discover the UI/UX.
-   Follow the [worker UI collaboration procedure](../../packages/sympp/skills/symphony-worker/SKILL.md#ui-collaboration)
+   Follow the [worker UI collaboration procedure](../../packages/sympp/skills/symphony-worker/SKILL.md#ui-work)
    for preview publication, screenshot milestones and direct human feedback.
 2. The human approves and freezes UX intent. Record interaction behavior,
    states, acceptance, and required data/API shape. Prototype completion alone
@@ -153,7 +153,7 @@ must not authorize a worker takeover or imply delivery.
 ## Current Procedures
 
 The packaged
-[architect procedure](../../packages/sympp/skills/symphony-architect/references/operations.md#ui-collaboration-and-candidates)
+[architect procedure](../../packages/sympp/skills/symphony-architect/SKILL.md#deliver)
 owns durable approval, reviewer handoff, candidate selection, successor replacement
 and ordered merge. This contract is not a second agent checklist.
 Installed setup and recovery live in [Runtime](../runtime.md); the operator

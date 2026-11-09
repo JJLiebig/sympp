@@ -140,7 +140,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert callback_work_request_id == work_request.id
     assert callback_work_package_id == work_package.id
     assert attrs.outcome == "pr_merged"
-    refute Map.has_key?(attrs, "allow_active_blocker_closeout")
 
     assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
     assert WorkPackageActivity.context(repo, linked_package.id).blocker_state.active?

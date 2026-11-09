@@ -352,11 +352,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   defp allowed_close_outcomes("ended"), do: nil
   defp allowed_close_outcomes(status), do: Enum.filter(WorkPackageDelivery.close_outcomes(), &(status in Lifecycle.ending_sources(&1)))
 
-  defp architect_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
-  defp architect_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)
-  defp architect_error({:work_request_terminal, _terminal_state}, resource), do: auth_error(:forbidden, resource)
-  defp architect_error(:forbidden, resource), do: auth_error(:forbidden, resource)
-  defp architect_error({:service_unavailable, _reason} = reason, resource), do: auth_error(reason, resource)
   defp architect_error(:database_busy, tool), do: service_error(:database_busy, tool)
   defp architect_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp architect_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
@@ -369,17 +364,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   defp architect_error(reason, tool),
     do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
-
-  defp auth_error(:unauthorized, resource),
-    do: {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => "missing_session"}}
-
-  defp auth_error({:unauthorized, reason}, resource),
-    do: {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => reason_text(reason)}}
-
-  defp auth_error({:service_unavailable, reason}, resource), do: service_error(reason, resource)
-
-  defp auth_error(:forbidden, resource),
-    do: {:error, -32_003, "Forbidden", %{"resource" => resource, "reason" => "outside_session_scope"}}
 
   defp service_error(_reason, resource),
     do: {:error, -32_000, "Server error", %{"resource" => resource, "reason" => "ledger_unavailable"}}

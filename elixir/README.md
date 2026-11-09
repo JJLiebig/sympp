@@ -7,10 +7,9 @@ This directory contains the current Elixir/OTP implementation of Symphony, based
 > Symphony Elixir is prototype software intended for evaluation only and is presented as-is.
 > We recommend implementing your own hardened version based on `SPEC.md`.
 
-sympp worker MCP resources use one `text/vnd.toon` representation over both stdio and HTTP.
-Tool calls retain their JSON `structuredContent`; architect resources remain Markdown.
-`create_work_request` takes `description`, `creator_kind`, and `creator_name`; the former
-`human_description`, `created_by_kind`, and `created_by_name` argument aliases are removed.
+sympp MCP tool calls return JSON `structuredContent` plus compact TOON text over both stdio
+and HTTP. `create_work_request` takes `title`, `repo`, `base_branch`, `description` and
+`work_type`, with optional `constraints`, `desired_dispatch_shape` and `own`.
 
 Finished goals archive by default after 3 days (72 hours), on the next retention pass.
 The existing integer-day setting remains configurable; normal ledger migrations

@@ -20,7 +20,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryResolution
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.RepoScope
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -43,48 +42,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     repo.delete_all(WorkPackageDelivery)
     repo.delete_all(WorkPackage)
     repo.delete_all(Ask)
-    repo.delete_all(RepoScope)
     repo.delete_all(WorkRequest)
     :ok
-  end
-
-  test "primary repo updates preserve existing secondary repo scopes", %{repo: repo} do
-    assert {:ok, request} =
-             Repository.create(
-               repo,
-               attrs(
-                 id: "WR-MULTI-REPO-UPDATE",
-                 repo: "service-a",
-                 base_branch: "main",
-                 repo_scopes: [
-                   %{repo: "service-a", base_branch: "main"},
-                   %{repo: "service-b", base_branch: "release"}
-                 ]
-               )
-             )
-
-    assert {:ok, scopes} = Repository.list_repo_scopes(repo, request.id)
-    primary_scope = Enum.find(scopes, &(&1.repo == "service-a"))
-    repo.update!(Ecto.Changeset.change(primary_scope, base_branch: "origin/main", scope_key: "repo:service-a:origin/main"))
-
-    repo.insert!(%RepoScope{
-      id: "WR-MULTI-REPO-UPDATE-LEGACY-ALIAS",
-      work_request_id: request.id,
-      repo: "service-a",
-      base_branch: "refs/heads/main",
-      scope_key: "repo:service-a:refs/heads/main"
-    })
-
-    request = repo.update!(Ecto.Changeset.change(request, base_branch: "origin/main"))
-
-    assert {:ok, updated} =
-             Repository.update(repo, request.id, %{repo: "service-a-renamed", base_branch: "origin/main"})
-
-    assert updated.base_branch == "main"
-
-    assert {:ok, scopes} = Repository.list_repo_scopes(repo, request.id)
-    assert Enum.map(scopes, &{&1.repo, &1.base_branch}) == [{"service-a-renamed", "main"}, {"service-b", "release"}]
-    refute Enum.any?(scopes, &(&1.repo == "service-a"))
   end
 
   test "rejects duplicate caller-provided ids", %{repo: repo} do

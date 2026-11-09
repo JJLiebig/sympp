@@ -138,7 +138,7 @@ The terminal labels are `sympp.launch_id`, `sympp.provider`, `sympp.pid`,
 `sympp.core_id` and the target-local `sympp.receipt` path. Compare the live PID with
 `sympp.pid`; labels survive recovery to a shell. Labels never confer authority.
 
-UI workers follow the [UI collaboration procedure](../procedure.md#ui-collaboration)
+UI workers follow the [UI collaboration procedure](../packages/sympp/skills/symphony-worker/SKILL.md#ui-work)
 and publish `sympp.preview_url` on their own terminal. This worker-owned label
 is display-only: it is not a receipt field, process identity, ledger binding or
 permission to send input. The helper preserves it during launch reuse and PID

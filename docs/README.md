@@ -30,6 +30,7 @@ documents do not remain in the active documentation tree.
 - Install, connect, upgrade or recover: [Runtime](runtime.md)
 - [Linux factory service](linux-service.md): install an always-on factory and authenticate private-network clients.
 - Install portable Codex/Claude procedures: [Portable skills](portable-skills.md)
+- Launch ordinary agents in Herdr with the execution helper: [Herdr execution](herdr-execution.md)
 - Repair delivery state: [Delivery recovery](runbooks/delivery-recovery.md)
 - Respond to a permission or secret incident:
   [Security incident](runbooks/security-incident.md)

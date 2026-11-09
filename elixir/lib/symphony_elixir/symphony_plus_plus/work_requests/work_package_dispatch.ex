@@ -20,7 +20,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDeliveryScope
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -81,7 +80,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
   defp dispatch_package(repo, work_request, %WorkPackage{status: "planned"} = work_package, review_mode, opts) do
     with {:ok, execution_graph} <- ExecutionGraph.evaluate(repo, work_request.id),
          :ok <- ExecutionGraph.require_ready(execution_graph, work_package.id),
-         :ok <- validate_contract(repo, work_request, work_package),
+         :ok <- require_supported_branch_pattern(work_package.branch_pattern),
          {:ok, creation} <- CreateWork.activate(repo, work_package, broadcast?: false),
          {:ok, dispatched} <-
            creation.work_package
@@ -126,8 +125,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
   def assignment(repo, %WorkPackage{} = work_package) do
     with {:ok, state} <- PlanningRepository.get_state(repo, work_package.id),
          {:ok, context} <- WorkRequestPayloads.worker_context(repo, work_package, work_package),
-         {:ok, progress} <- WorkerContext.virtual_file_payload(state, "progress.md", []),
-         {:ok, handoff} <- WorkerContext.virtual_file_payload(state, "handoff.md", []) do
+         {:ok, progress} <- WorkerContext.virtual_file_payload(state, "progress.md"),
+         {:ok, handoff} <- WorkerContext.virtual_file_payload(state, "handoff.md") do
       work_package_payload =
         work_package
         |> WorkRequestPayloads.work_package()
@@ -167,11 +166,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
   end
 
   def error_message(reason), do: CreateWork.error_message(reason)
-
-  defp validate_contract(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package) do
-    with :ok <- require_supported_branch_pattern(work_package.branch_pattern),
-         do: WorkPackageDeliveryScope.validate(repo, work_request, work_package)
-  end
 
   defp require_supported_branch_pattern(branch_pattern) do
     case BranchPattern.validate(branch_pattern) do

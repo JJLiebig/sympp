@@ -12,7 +12,7 @@ test('dispatch and delivery board payload measurements for a 25-package request'
   ].join(' ').repeat(4);
   const created = await architect.call('create_work_request', {
     repo: 'example/service', base_branch: 'beta', title: 'Service rollout payload measurement',
-    description, request_kind: 'feature',
+    description, work_type: 'feature',
   });
   const request = created.work_request.id;
   architect.workRequest = request;
@@ -104,8 +104,9 @@ test('invalid batches are atomic and secondary delivery preserves repository and
   const invalid = { ...secondary };
   delete invalid.base_branch;
   const add = (...contracts: object[]) => ({ ops: contracts.map((item) => ({ op: 'add_package', ...item })) });
-  const scope = await architect.reject('edit_plan', add(contract('Valid prefix'), invalid), 'work_package_delivery_scope_out_of_scope');
+  const scope = await architect.reject('edit_plan', add(contract('Valid prefix'), invalid), 'invalid_work_package');
   expect(scope.op_index).toBe(1);
+  expect(JSON.stringify(scope)).toContain('base_branch');
   for (const required of ['title', 'goal', 'acceptance_criteria']) {
     const incomplete: Record<string, unknown> = contract('One omitted requirement');
     delete incomplete[required];
@@ -113,7 +114,6 @@ test('invalid batches are atomic and secondary delivery preserves repository and
     expect(refused.missing).toEqual([required]);
     expect((await architect.call('read_work_request', { detail: 'full', work_request_id: id })).work_packages).toEqual([]);
   }
-  await architect.reject('edit_plan', add(contract('Foreign branch', { repo: 'example/client', base_branch: 'foreign' })), 'work_package_delivery_scope_out_of_scope');
   for (const patch of [{ title: '' }, { goal: ' ' }, { acceptance_criteria: [null] }, { validation_steps: 'run checks' }, { stop_conditions: {} }]) {
     await architect.reject('edit_plan', add(contract('Invalid contract', patch)), 'incomplete_contract');
   }

@@ -187,7 +187,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
   end
 
   test "create_work_request owns by default and hands off with own: false", %{repo: repo} do
-    args = %{"repo" => "nextide/demo", "base_branch" => "main", "title" => "Owned", "request_kind" => "feature", "description" => "x"}
+    args = %{"repo" => "nextide/demo", "base_branch" => "main", "title" => "Owned", "work_type" => "feature", "description" => "x"}
 
     owned = mcp_tool(repo, "t1", "create_work_request", args, config: local_mcp_config(repo))
     assert %{"address" => "testbox/t1"} = get_in(owned, ["result", "structuredContent", "worked_on"])
@@ -199,7 +199,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
   end
 
   test "chief labels attribute new WorkRequests", %{repo: repo} do
-    args = %{"repo" => "nextide/demo", "base_branch" => "main", "title" => "From chief", "request_kind" => "feature", "description" => "x", "own" => false}
+    args = %{"repo" => "nextide/demo", "base_branch" => "main", "title" => "From chief", "work_type" => "feature", "description" => "x", "own" => false}
     response = mcp_tool(repo, "t3", "create_work_request", args, config: local_mcp_config(repo), labels: %{"sympp.role" => "chief", "sympp.domain" => "Kraken"})
 
     id = get_in(response, ["result", "structuredContent", "work_request", "id"])

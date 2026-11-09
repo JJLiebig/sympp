@@ -5,15 +5,15 @@ ledger, MCP tools, and dashboard connect WorkRequests, bounded WorkPackages,
 decisions, blockers, and GitHub delivery evidence.
 
 A human and agent can explore a problem before creating a WorkRequest. An
-architect then slices and oversees tracked delivery. Ordinary workers and
-coordinators also work without a backend; when a chief's or architect's child
+architect then slices and oversees tracked delivery. Ordinary workers also work
+without a backend; when a chief's or architect's child
 works on a branch or PR, the board shows it as a card with no setup. sympp does
 not own model accounts or terminal sessions.
 
 Ordinary workers receive an assignment, implement it, run required native checks
 and review, and return a PR or evidence. The architect coordinates ownership,
-dependencies, explicit blockers, readiness, and delivery; worker MCP calls and
-duplicate status/review reporting are optional.
+dependencies, explicit blockers, readiness, and delivery; workers make no sympp
+MCP calls.
 
 ## Install
 

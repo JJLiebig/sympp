@@ -11,7 +11,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
       "base_branch" => "main",
       "title" => "Denied WorkRequest",
       "description" => "This should not be created outside trusted local HTTP.",
-      "request_kind" => "investigation"
+      "work_type" => "investigation"
     }
 
     implicit_state_response =
@@ -184,11 +184,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
            } == counts_before
   end
 
-  test "WorkRequest list rejects repository scope arguments and unknown statuses", %{repo: repo} do
-    repo_argument_response = mcp_tool(repo, nil, "list_work_requests", %{"repo" => "nextide/other"})
-    assert get_in(repo_argument_response, ["error", "data", "code"]) == "unexpected_argument"
-    assert get_in(repo_argument_response, ["error", "data", "arguments"]) == ["repo"]
-
+  test "WorkRequest list rejects unknown arguments and phases", %{repo: repo} do
     branch_argument_response = mcp_tool(repo, nil, "list_work_requests", %{"base_branch" => "other"})
     assert get_in(branch_argument_response, ["error", "data", "code"]) == "unexpected_argument"
     assert get_in(branch_argument_response, ["error", "data", "arguments"]) == ["base_branch"]

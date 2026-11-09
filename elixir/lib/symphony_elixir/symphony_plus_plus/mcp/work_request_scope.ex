@@ -39,13 +39,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
   @spec scoped_work_request(repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, term()}
   def scoped_work_request(repo, work_request_id), do: WorkRequestService.get(repo, work_request_id)
 
-  @spec work_request_list_filters(filters(), String.t() | nil) :: filters()
-  def work_request_list_filters(filters, nil), do: filters
-  def work_request_list_filters(filters, phase), do: Map.put(filters, "phase", phase)
-
-  @spec work_request_repository_filters(filters()) :: map()
-  def work_request_repository_filters(filters), do: Map.take(filters, ["repo", "base_branch", "phase"])
-
   @spec scoped_delivery_board(repo(), WorkRequest.t(), [WorkPackage.t()], keyword()) :: term()
   def scoped_delivery_board(repo, %WorkRequest{} = work_request, work_packages, opts \\ []) when is_list(work_packages) do
     {visible_work_package_ids, work_package_contexts} =

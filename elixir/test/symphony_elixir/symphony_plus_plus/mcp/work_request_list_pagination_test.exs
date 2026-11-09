@@ -63,6 +63,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestListPaginationTest do
     assert length(queries) < 25
   end
 
+  test "list_work_requests filters by repo identity, whatever form either side names it in", %{repo: repo} do
+    by_url = create_work_request!(repo, id: "WR-MCP-REPO-URL", repo: "https://github.com/nextide/billing.git")
+    other = create_work_request!(repo, id: "WR-MCP-REPO-OTHER", repo: "nextide/other")
+    by_name = create_work_request!(repo, id: "WR-MCP-REPO-NAME", repo: "nextide/billing")
+
+    listed = fn arguments ->
+      repo
+      |> mcp_tool(nil, "list_work_requests", arguments)
+      |> get_in(["result", "structuredContent"])
+    end
+
+    for filter <- ["nextide/billing", "git@github.com:nextide/billing.git"] do
+      payload = listed.(%{"repo" => filter})
+      assert Enum.map(payload["work_requests"], & &1["id"]) == [by_url.id, by_name.id]
+      assert payload["filters"] == %{"repo" => filter}
+    end
+
+    first = listed.(%{"repo" => "nextide/billing", "limit" => 1})
+    assert Enum.map(first["work_requests"], & &1["id"]) == [by_url.id]
+    rest = listed.(%{"repo" => "nextide/billing", "limit" => 1, "cursor" => first["next_cursor"]})
+    assert Enum.map(rest["work_requests"], & &1["id"]) == [by_name.id]
+
+    assert Enum.map(listed.(%{"repo" => "nextide/other"})["work_requests"], & &1["id"]) == [other.id]
+  end
+
   defp drain_queries(queries) do
     receive do
       {:list_query, query} -> drain_queries([query | queries])

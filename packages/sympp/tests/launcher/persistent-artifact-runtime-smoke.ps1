@@ -250,7 +250,7 @@ function Invoke-McpBridge([string]$FilePath, [string[]]$Arguments, [hashtable]$E
       # Writes need a Herdr terminal. Outside Herdr the bridge forwards the request
       # unchanged, so the smoke asserts the terminal the bridge would send.
       $terminal = @{ herdr = @{ core_id = "artifact-smoke-core"; terminal_id = "t1" } }
-      $created = Send-BridgeRequest $process @{ jsonrpc = "2.0"; id = 3; method = "tools/call"; params = @{ name = "create_work_request"; arguments = @{ repo = "fixture/packaged-ledger"; base_branch = "beta"; title = "Disposable persistence marker"; request_kind = "feature"; description = "Packaged ledger persistence marker." }; _meta = $terminal } }
+      $created = Send-BridgeRequest $process @{ jsonrpc = "2.0"; id = 3; method = "tools/call"; params = @{ name = "create_work_request"; arguments = @{ repo = "fixture/packaged-ledger"; base_branch = "beta"; title = "Disposable persistence marker"; work_type = "feature"; description = "Packaged ledger persistence marker." }; _meta = $terminal } }
       $MarkerWorkRequestId = [string]$created.result.structuredContent.work_request.id
       if (-not $MarkerWorkRequestId) { throw "Missing marker WorkRequest identity." }
       [void](Send-BridgeRequest $process @{ jsonrpc = "2.0"; id = 4; method = "tools/call"; params = @{ name = "record_decision"; arguments = @{ work_request_id = $MarkerWorkRequestId; source_type = "operator"; decision = "packaged database persistence marker"; rationale = "Persistence"; scope_impact = "None"; created_by = "artifact-smoke" }; _meta = $terminal } })

@@ -79,7 +79,6 @@ async function remoteArguments(body, factoryOwned) {
     if (params.name === "create_work_request") {
       args = await repoObject(args);
       if (!Object.hasOwn(args, "repo")) args.repo = await origin(process.cwd());
-      if (Array.isArray(args.repo_scopes)) args.repo_scopes = await Promise.all(args.repo_scopes.map(repoObject));
     }
     if (params.name === "edit_plan" && Array.isArray(args.ops)) {
       args.ops = await Promise.all(args.ops.map(async op => {
