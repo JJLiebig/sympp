@@ -6,7 +6,9 @@ import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, Button } from "gpui-base";
 import * as M from "./model.js";
 import * as L from "./levels.js";
-import { CLEAR, EXPAND, icon, tint, button, iconButton, field, mark, presence, section } from "./ui.js";
+import { CLEAR, EXPAND, icon, button, iconButton, field, mark, presence, section, signal } from "./ui.js";
+import { askBlock, decisionBlock } from "./parts.js";
+import { compactTask } from "./scopeview.js";
 
 // ---------- Bar ----------
 
@@ -83,31 +85,30 @@ function reachable(v, t, el, key, open, label) {
     .on_click((_e, cx) => open(cx));
 }
 
-// A desk scopes its rows' keys, since the same need can sit on two chiefs' desks.
-function needRow(v, t, need, names, scope = "") {
+// An ask on the factory's list: where it comes from, what packages it frees, the question and its
+// answer form in place. Its task opens from the line above the question.
+function needRow(v, t, need, names) {
   const job = need.job;
-  const also = v.place.alsoIn(job).map((id) => names.get(id)).filter(Boolean);
-  const where = [job.title, names.get(v.place.home(job)), also.length ? `also in ${also.join(", ")}` : null].filter(Boolean).join(" · ");
-  const open = (cx) => v.openJob(job, { pkg: need.pkgId }, cx);
-  return reachable(v, t, v_flex().id(`need-${scope}${need.key}`).flex_none().px(14).py(11).gap(6), `need:${scope}${need.key}`, open, `${need.label}: ${need.text}. ${job.title}`)
-    .bg(tint(t.blocked, "12"))
-    .hover((s) => s.bg(tint(t.blocked, "1c")))
-    .child(h_flex().gap(8).items_center()
-      .child(mark(t, "needs_you"))
-      .child(div().text_size(11.5).font_semibold().text_color(t.blocked).child(need.label))
-      .child(div().flex_1())
-      .when(need.unblocks > 0, (el) => el.child(div().id(`unblocks-${need.key}`).flex_none().text_size(11).font_medium().text_color(t.foreground)
-        .tooltip("Packages waiting on this answer").child(`Unblocks ${need.unblocks}`))))
-    .child(div().w_full().text_size(13.5).text_color(t.foreground).child(need.text))
-    .child(div().w_full().truncate().text_size(11.5).text_color(t.muted).child(where));
+  const where = job ? [job.title, names.get(v.place.home(job)), need.unblocks > 0 ? `unblocks ${need.unblocks}` : null] : [need.card.task, names.get(v.place.home(need.card))];
+  return askBlock(v, t, need.ask, { where, id: need.key, open: job ? (cx) => v.openJob(job, { pkg: need.pkgId }, cx) : null });
 }
 
+// A topic: its mark, name, chief and counts; a click opens it. The chevron beside it opens its
+// tasks in place, each a compact line; a topic with none has no chevron.
 function topicRow(v, t, row, now) {
   const verdict = row.needs > 0 ? "needs_you" : row.moving > 0 ? "on_track" : "idle";
   const quiet = verdict === "idle" && !row.jobs.length;
+  const open = row.jobs.length > 0 && v.openTopics.has(row.id);
   const sub = [row.repos.join(", "), ...row.shared.map((s) => `shares ${s.count} ${s.count === 1 ? "job" : "jobs"} with ${s.name}`)].filter(Boolean).join(" · ");
-  return reachable(v, t, h_flex().id(`topic-${row.id}`).flex_none().px(12).py(9).gap(10).items_start(), `topic:${row.id}`, (cx) => v.openTopic(row.id, cx),
+  const toggle = row.jobs.length ? Button.new(`topic-toggle-${row.id}`).flex().flex_none().items_center().justify_center().size(18).mt(1).rounded(4).cursor_pointer()
+    .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).focus((s) => s.border(1).border_color(t.accent))
+    .accessibility_label(open ? `Hide ${row.name}'s tasks` : `Show ${row.name}'s tasks`).tooltip(open ? "Hide its tasks" : "Show its tasks")
+    .on_click((_e, cx) => { cx.stop_propagation(); v.toggleTopic(row.id, cx); })
+    .child(svg(icon(open ? "chevron-down" : "chevron-right")).size(11).flex_none()) : div().w(18).flex_none();
+  const tasks = open ? [...row.jobs].sort((a, b) => (b.needs.length > 0) - (a.needs.length > 0) || a.createdAt - b.createdAt) : [];
+  const head = reachable(v, t, h_flex().id(`topic-${row.id}`).flex_none().pl(6).pr(12).py(9).gap(8).items_start(), `topic:${row.id}`, (cx) => v.openTopic(row.id, cx),
     `${row.name}: ${row.needs} need you, ${row.moving} moving`)
+    .child(toggle)
     .child(div().pt(5).flex_none().child(mark(t, verdict)))
     .child(v_flex().flex_1().min_w(0).gap(3)
       .child(h_flex().gap(8).items_center()
@@ -118,6 +119,7 @@ function topicRow(v, t, row, now) {
         .when(row.moving > 0, (el) => el.child(div().flex_none().text_size(11.5).text_color(t.foreground).child(`${row.moving} moving`)))
         .when(quiet, (el) => el.child(div().flex_none().text_size(11.5).text_color(t.dim).child("Quiet"))))
       .when(Boolean(sub), (el) => el.child(div().truncate().text_size(11.5).text_color(t.muted).child(sub))));
+  return v_flex().id(`topic-group-${row.id}`).flex_none().child(head).children(tasks.map((job) => compactTask(v, t, job, now)));
 }
 
 
@@ -166,18 +168,19 @@ function columns(v, id, main, aside, asideWidth) {
     .child(scroll(v_flex().id(`${id}-aside`).w(asideWidth).flex_none().h_full().pb(24).children(aside.filter(Boolean))));
 }
 
-export function factoryLevel(v, t, jobs, rows, now) {
+export function factoryLevel(v, t, board, rows, now) {
   const names = new Map(rows.map((r) => [r.id, r.name]));
-  const needs = L.needsQueue(jobs);
-  const main = [section(t, "Needs you", needs.length || null, needs.length ? t.blocked : t.dim),
-    needs.length ? v_flex().id("needs-queue").gap(8).children(needs.map((need) => needRow(v, t, need, names)))
-      : div().px(4).text_size(12.5).text_color(t.muted).child("Nothing needs you.")];
+  const needs = L.needsQueue(board.jobs, board.cards);
+  const decisions = L.decisionQueue(board.jobs);
+  const main = [section(t, "Needs you", needs.length || null, needs.length ? signal().you : t.dim),
+    needs.length ? v_flex().id("needs-queue").px(4).children(needs.map((need) => needRow(v, t, need, names)))
+      : div().px(4).text_size(12.5).text_color(t.muted).child("Nothing needs you."),
+    decisions.length ? section(t, "Decisions to review", decisions.length) : null,
+    decisions.length ? v_flex().id("decision-queue").px(4).children(decisions.map((d) => decisionBlock(v, t, d,
+      { where: [d.job.title, names.get(v.place.home(d.job))], open: (cx) => v.openJob(d.job, {}, cx) }))) : null];
   const aside = [section(t, "Topics", null), v_flex().id("topic-rows").gap(2).children(rows.map((row) => topicRow(v, t, row, now)))];
   return columns(v, "factory", main, aside, 400);
 }
-
-
-
 
 export function intakeForm(v, t) {
   return v_flex().id("intake-form").flex_1().min_h(0).overflow_y_scrollbar().p(20).gap(18)

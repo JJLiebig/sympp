@@ -48,38 +48,6 @@ export function jobBindings(job, bindings) {
   return found.filter((b, i) => found.findIndex((other) => other.address === b.address && other.pkgId === b.pkgId) === i);
 }
 
-// Everyone sympp or a verified binding says takes part. sympp records no reviewer identity or claim
-// history, so the review provider is named by its type and mode only.
-export function participants(job, bindings, checks, now) {
-  const own = (pkgId) => bindingsFor(bindings, job.id, pkgId);
-  const architectBindings = own(null);
-  const people = [{
-    key: "architect", role: "Architect", subject: null,
-    provider: architectBindings[0]?.provider ?? null,
-    ...liveness(architectBindings, checks, job.architect, null, now),
-  }];
-  for (const pkg of job.packages) {
-    const mine = own(pkg.id);
-    const involved = mine.length || pkg.location || pkg.run || (pkg.stage !== "queued" && pkg.stage !== "done");
-    if (!involved) continue;
-    people.push({
-      key: `worker:${pkg.id}`, role: "Worker", subject: pkg.title, pkgId: pkg.id,
-      provider: mine[0]?.provider ?? null, name: pkg.activity.actor?.name ?? null,
-      attempt: pkg.run?.attempt ?? null,
-      ...liveness(mine, checks, pkg.location, pkg.run?.lastSeenAt ?? null, now),
-    });
-  }
-  const reviews = new Map();
-  for (const pkg of job.packages) {
-    if (!pkg.review.type) continue;
-    const key = `${pkg.review.type}:${pkg.review.mode ?? ""}`;
-    const entry = reviews.get(key) ?? { key: `review:${key}`, role: "Review", provider: [sentence(pkg.review.type), pkg.review.mode].filter(Boolean).join(" · "), reviewing: 0, state: "provider" };
-    if (pkg.stage === "review") entry.reviewing += 1;
-    reviews.set(key, entry);
-  }
-  return [...people, ...reviews.values()];
-}
-
 // ---------- Opening a job in its own tab ----------
 
 // The job's local space: one on this machine whose folder is one of the job's repositories,
@@ -99,9 +67,4 @@ export function jobTabArgs(given, job, spaceList) {
   const space = jobSpace(job, spaceList);
   const name = job.title.length > 32 ? `${job.title.slice(0, 31)}…` : job.title;
   return { name, ...(space ? { space: space.id } : {}), mod: "sympp", props: { ...rest, job: job.id } };
-}
-
-function sentence(code) {
-  const text = String(code).replace(/_/g, " ");
-  return text.charAt(0).toUpperCase() + text.slice(1);
 }
