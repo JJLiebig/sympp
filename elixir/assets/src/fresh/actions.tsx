@@ -119,7 +119,8 @@ export function ShelfCleanup({ at, views }: { at: number; views: GoalView[] }) {
   const [armed, setArmed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const stale = views.filter((view) => at - view.lastMoveAt > STALE_MS);
+  // A goal counts as old from its last package move or its completion, whichever came later.
+  const stale = views.filter((view) => at - Math.max(view.lastMoveAt, view.goal.completedAt ?? 0) > STALE_MS);
   const choices = [
     { key: "stale", label: `older than 30 days (${stale.length})`, picked: stale.length < views.length ? stale : [] },
     { key: "all", label: `all (${views.length})`, picked: views },

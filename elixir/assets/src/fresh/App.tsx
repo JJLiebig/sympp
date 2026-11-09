@@ -148,7 +148,7 @@ export function App() {
         <ActContext.Provider value={act}>
           <div className={`mx-auto ${current.width}`}>
             <NeedsYou asks={asks} at={at} board={data.board} onGoal={goToGoal} />
-            <Decisions at={at} board={data.board} decisions={data.board.decisions} onGoal={goToGoal} />
+            <Decisions at={at} board={data.board} decisions={data.board.decisions.filter((entry) => entry.at <= at)} onGoal={goToGoal} />
           </div>
           <SinceContext.Provider value={changes.notes}>
             <DensityContext.Provider value={density}>
