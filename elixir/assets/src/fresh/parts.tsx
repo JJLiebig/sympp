@@ -53,17 +53,18 @@ function slotOf(view: PkgView) {
 }
 
 // Stages behind are plain, the current one in its colour (red while its checks fail), the ones ahead faint.
-// Below 1280px only the current stage shows, in the same place on every row.
+// Below 1280px only the current stage shows, in the same place on every row. Screen readers hear only the current stage.
 export function Lifecycle({ view }: { view: PkgView }) {
   const now = slotOf(view);
   const mode = view.pkg.review?.mode;
   return (
     <span className="flex whitespace-nowrap font-mono text-[11px]">
+      <span className="sr-only">Stage: {LIFECYCLE[now].label}</span>
       {LIFECYCLE.map((slot, index) => {
         const tone = index < now ? "text-dim" : index === now ? `font-semibold ${view.failed ? "text-fail" : slot.tone}` : "text-faint";
         const title = index === REVIEW_SLOT && mode && mode !== "none" ? `${mode} review` : undefined;
         return (
-          <span key={slot.label} className={`w-12 shrink-0 ${tone} ${index === now ? "" : "hidden min-[1280px]:inline"}`} title={title}>
+          <span key={slot.label} aria-hidden className={`w-12 shrink-0 ${tone} ${index === now ? "" : "hidden min-[1280px]:inline"}`} title={title}>
             {slot.label}
           </span>
         );

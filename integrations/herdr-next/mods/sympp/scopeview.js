@@ -353,7 +353,7 @@ function pkgRow(v, t, job, e, ctx, wide, odd, indent = 0) {
   const row = h_flex().id(`pkg-${pkg.id}`).flex_none().px(10).py(wide ? 6 : 7).items_center().cursor_pointer().rounded(5)
     .bg(on ? tint(t.accent, "24") : odd ? tint(t.foreground, "07") : CLEAR).border(1).border_color(on ? tint(t.accent, focused ? "cc" : "80") : CLEAR)
     .hover((s) => s.bg(on ? tint(t.accent, "2e") : tint(t.foreground, "10")))
-    .accessibility_label(`${pkg.title}, ${pkg.stage === "ended" ? M.ENDING_LABEL[pkg.ending] : M.STAGE_LABEL[pkg.stage]}${e.needsYou ? ", waits on you" : ""}`)
+    .accessibility_label(`${pkg.title}, ${pkg.stage === "ended" ? M.ENDING_LABEL[pkg.ending] : quiet ? M.STAGE_LABEL[pkg.stage] : S.LIFECYCLE[S.lifecycleSlot(pkg)]}${e.needsYou ? ", waits on you" : ""}`)
     .on_click((_e, cx) => v.selectPackage(on ? null : pkg.id, cx))
     .child(content);
   const actions = on ? pkgActions(v, t, job, pkg, ctx) : null;
