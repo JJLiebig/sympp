@@ -28,6 +28,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.EditPlanTest do
     plan = read_plan(repo, work_request.id)
     assert [%{"from" => ^ui_id, "to" => ^api_id}] = plan["dependencies"]
     assert Enum.map(plan["work_packages"], &{&1["id"], &1["group"]}) == [{api_id, "Backend / Billing"}, {ui_id, "Frontend"}]
+
+    secret = edit_plan(repo, work_request.id, [add_op(title: "Token ghp_editplansecretvalue12345", group: "Ops / ghp_editplansecretvalue12345")])
+    refute inspect(secret) =~ "ghp_editplansecretvalue12345"
   end
 
   test "a failing op rolls back the whole edit and names its index, state and next action", %{repo: repo} do

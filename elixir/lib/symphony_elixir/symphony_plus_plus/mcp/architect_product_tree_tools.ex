@@ -14,6 +14,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.HumanDecisionPrompt
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     Config,
@@ -264,8 +265,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
         Enum.map(work_packages, fn package ->
           %{
             "id" => package.id,
-            "title" => package.title,
-            "group" => package.group,
+            "title" => Redactor.redact_text(package.title),
+            "group" => Redactor.redact_text(package.group),
             "status" => package.status,
             "revision" => package.contract_revision,
             "depends_on" => Map.get(depends_on, package.id, []),
