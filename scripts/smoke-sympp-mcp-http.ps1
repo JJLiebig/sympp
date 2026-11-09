@@ -1103,7 +1103,7 @@ function Invoke-BoundMcpSmoke($Config) {
     repo = "nextide/sympp-http-smoke"
     base_branch = "main"
     title = "HTTP smoke ownership"
-    request_kind = "investigation"
+    work_type = "investigation"
     description = "Created by the sympp HTTP smoke to check Herdr ownership."
   } $owner "create_work_request as a Herdr terminal"
   if (-not $create.ok) {

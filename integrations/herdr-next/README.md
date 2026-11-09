@@ -128,7 +128,7 @@ tab stays there until you choose **Move here** (or **Go to it**).
 The preview shows, in order:
 
 - **A web page** the worker published with `sympp.preview_url` on its terminal
-  (see the [worker UI collaboration procedure](../../packages/sympp/skills/symphony-worker/SKILL.md#ui-collaboration)),
+  (see the [worker UI collaboration procedure](../../packages/sympp/skills/symphony-worker/SKILL.md#ui-work)),
   as its address with **Open** (O or Enter) for the browser. Herdr mods cannot
   embed a browser; a rendered picture of the page is a later addition.
 - **The Herdr view itself** when the worker is local and its worktree changes
@@ -201,7 +201,7 @@ the request fail before its JSON can be parsed or shown, retaining the returned
 status for diagnosis.
 
 Agent navigation and execution still need Node.js and the separate
-[optional Herdr-next execution procedure](../../packages/sympp/skills/symphony-worker/references/herdr-execution.md).
+[optional Herdr-next execution guide](../../docs/herdr-execution.md).
 Fresh cross-provider handoffs carry a bounded task and evidence. Continuing an
 existing agent depends on its reported status and the core's supported send
 conditions; it is not a shared provider transcript.

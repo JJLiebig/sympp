@@ -5,10 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
 
   test "a blocker on a secondary-repo package records the writing terminal, and archived requests refuse it", %{repo: repo} do
     work_request =
-      create_work_request!(repo,
-        id: "WR-ARCH-DESCENDANT-PLANNING",
-        repo_scopes: [%{repo: "nextide/secondary-service", base_branch: "release"}]
-      )
+      create_work_request!(repo, id: "WR-ARCH-DESCENDANT-PLANNING")
 
     assert {:ok, package} =
              CanonicalWorkPackageFixtures.add_work_package(

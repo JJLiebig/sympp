@@ -259,9 +259,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
         "repo" => "nextide/example",
         "base_branch" => "main",
         "title" => "Concurrent dispatch",
-        "request_kind" => "docs",
+        "work_type" => "docs",
         "description" => "Dispatch independent packages together",
-        "workflow_mode" => "single_package"
+        "desired_dispatch_shape" => "single_package"
       })
 
     request_id = get_in(created, ["result", "structuredContent", "work_request", "id"])
@@ -353,7 +353,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
         "repo" => "nextide/example",
         "base_branch" => "main",
         "title" => "Binding",
-        "request_kind" => "docs",
+        "work_type" => "docs",
         "description" => "Label the owning pane"
       })
       |> with_terminal("t1")
@@ -803,12 +803,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       version_resource =
         post_json(resources_read_request("version", "sympp://health/version"), [{"mcp-session-id", session_id}])
 
-      protected_resource =
-        post_json(
-          resources_read_request("protected", "sympp://work-packages/SYMPP-MCP-HTTP/task_plan.md"),
-          [{"mcp-session-id", session_id}]
-        )
-
       unknown = post_json(tools_list_request("missing"), [{"mcp-session-id", "missing-session"}])
 
       assert "create_work_request" in tool_names(json_response(tools, 200))
@@ -818,7 +812,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       assert resource_uris(json_response(resources, 200)) == ["sympp://health/version"]
       assert get_in(json_response(health, 200), ["result", "structuredContent", "mode"]) == "http"
       assert get_in(json_response(version_resource, 200), ["result", "contents", Access.at(0), "uri"]) == "sympp://health/version"
-      assert json_response(protected_resource, 503) == json_rpc_error("protected", -32_000, "Server error", "ledger_unavailable")
       assert get_in(json_response(unknown, 404), ["error", "data", "reason"]) == "unknown_state_key"
     end)
   end
@@ -1167,7 +1160,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
   end
 
   defp work_request_arguments(repo, base_branch),
-    do: %{"repo" => repo, "base_branch" => base_branch, "title" => "Lazy repo write", "request_kind" => "feature", "description" => "First write through the HTTP endpoint."}
+    do: %{"repo" => repo, "base_branch" => base_branch, "title" => "Lazy repo write", "work_type" => "feature", "description" => "First write through the HTTP endpoint."}
 
   defp add_package_op(overrides), do: overrides |> WorkPackageFactory.attrs() |> Map.new(fn {key, value} -> {to_string(key), value} end) |> Map.put("op", "add_package")
 

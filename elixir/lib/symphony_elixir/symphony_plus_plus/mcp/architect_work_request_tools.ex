@@ -53,25 +53,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
 
   defp call_tool("list_work_requests", config, _terminal, arguments, _opts) do
     with {:ok, phase} <- optional_work_request_phase(arguments),
+         {:ok, repo_filter} <- optional_string_argument(arguments, "repo"),
          {:ok, pagination} <- list_pagination(arguments),
-         filters = WorkRequestScope.work_request_list_filters(%{}, phase),
-         {:ok, work_requests, next_cursor} <-
-           local_work_request_page(
-             config.repo,
-             WorkRequestScope.work_request_repository_filters(filters),
-             pagination
-           ),
+         filters = Map.reject(%{"phase" => phase, "repo" => repo_filter}, fn {_key, value} -> is_nil(value) end),
+         {:ok, work_requests, next_cursor} <- local_work_request_page(config.repo, filters, pagination),
          {:ok, cards} <- WorkRequestPayloads.work_request_cards(config.repo, work_requests) do
-      {:ok,
-       ToolResult.agent_tool_result(
-         work_request_list_payload(
-           cards,
-           %{"visibility" => "local_ledger"},
-           phase,
-           pagination.limit,
-           next_cursor
-         )
-       )}
+      {:ok, ToolResult.agent_tool_result(work_request_list_payload(cards, filters, pagination.limit, next_cursor))}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "list_work_requests", "reason" => reason}}
       {:error, reason} -> architect_error(reason, "list_work_requests")
@@ -378,12 +365,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   defp list_cursor_position(%WorkRequest{inserted_at: %DateTime{} = inserted_at, id: id}) when is_binary(id),
     do: {inserted_at, id}
 
-  defp work_request_list_payload(cards, scope, phase, limit, next_cursor) do
+  defp work_request_list_payload(cards, filters, limit, next_cursor) do
     %{
       "work_requests" => cards,
       "total_count" => length(cards),
-      "scope" => scope,
-      "filters" => WorkRequestPayloads.work_request_filter(phase),
+      "filters" => filters,
       "limit" => limit
     }
     |> maybe_put_next_cursor(next_cursor)
@@ -399,21 +385,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     end
   end
 
-  defp architect_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
-
-  defp architect_error({:unauthorized, {:work_request_terminal, terminal_state}}, resource) do
-    {:error, -32_001, "Unauthorized",
-     %{
-       "resource" => resource,
-       "reason" => "work_request_terminal",
-       "terminal_state" => reason_text(terminal_state)
-     }}
-  end
-
-  defp architect_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)
-  defp architect_error({:work_request_terminal, _terminal_state}, resource), do: auth_error(:forbidden, resource)
-  defp architect_error(:forbidden, resource), do: auth_error(:forbidden, resource)
-  defp architect_error({:service_unavailable, _reason} = reason, resource), do: auth_error(reason, resource)
   defp architect_error(:database_busy, tool), do: service_error(:database_busy, tool)
   defp architect_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp architect_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
@@ -491,20 +462,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
 
   defp invalid_params_error(tool, reason) do
     {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
-  end
-
-  defp auth_error(:unauthorized, resource) do
-    {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => "missing_session"}}
-  end
-
-  defp auth_error({:unauthorized, reason}, resource) do
-    {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => reason_text(reason)}}
-  end
-
-  defp auth_error({:service_unavailable, reason}, resource), do: service_error(reason, resource)
-
-  defp auth_error(:forbidden, resource) do
-    {:error, -32_003, "Forbidden", %{"resource" => resource, "reason" => "outside_session_scope"}}
   end
 
   defp service_error(_reason, resource) do

@@ -237,8 +237,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   end
 
   defp scenario_work_request_specs("multi-repo") do
-    repos = ~w(nextide/demo-contracts nextide/demo-api nextide/demo-web nextide/demo-worker)
-    [{"SYMPP-DEMO-WR-MULTI", "Fan out one release across repositories", hd(repos), repos}]
+    [{"SYMPP-DEMO-WR-MULTI", "Fan out one release across repositories", "nextide/demo-contracts"}]
   end
 
   defp scenario_work_request_specs("superseded"),
@@ -295,14 +294,9 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   defp scenario_delivery_specs(_scenario), do: []
 
   defp create_scenario_work_request({id, title, repo}) do
-    create_scenario_work_request({id, title, repo, [repo]})
-  end
-
-  defp create_scenario_work_request({id, title, repo, repos}) do
     id
     |> work_request_attrs(title, "feature", "architect_led_feature_branch")
     |> Map.put(:repo, repo)
-    |> Map.put(:repo_scopes, Enum.map(repos, &%{repo: &1, base_branch: @demo_base_branch}))
     |> then(&WorkRequestRepository.create(Repo, &1))
   end
 

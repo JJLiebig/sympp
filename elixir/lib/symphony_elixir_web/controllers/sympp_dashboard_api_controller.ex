@@ -786,7 +786,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp error_response(conn, :work_request_package_required),
     do: error_response(conn, 422, "work_request_package_required", "A WorkRequest WorkPackage is required")
 
-  defp error_response(conn, :active_blocker), do: error_response(conn, 412, "active_blocker", "Closeout is blocked by active blockers")
   defp error_response(conn, :active_runtime), do: error_response(conn, 412, "active_runtime", "Closeout is blocked by active worker state")
   defp error_response(conn, :stale_status), do: error_response(conn, 409, "stale_status", "WorkPackage status changed; refresh and retry")
   defp error_response(conn, :work_package_scope_mismatch), do: error_response(conn, :not_found)

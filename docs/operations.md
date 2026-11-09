@@ -58,7 +58,7 @@ returns it at `work_request_details[].work_request.operator_report`;
 report/field is absent information; a non-null resume time means that interval
 is closed. Questions for the operator are asks, which the board shows as Needs
 you; worker waits do not. Reports do not change blockers or completion. See the
-[architect procedure](../packages/sympp/skills/symphony-architect/SKILL.md#guidance)
+[architect procedure](../packages/sympp/skills/symphony-architect/SKILL.md#ask-and-report)
 for optional milestone updates and resolving answers given in the conversation.
 
 MCP `read_work_request` defaults to a compact overview: request description,
@@ -109,12 +109,11 @@ runtime freshness. Unknown timing and observations remain explicit.
 |---|---|
 | Implement one assigned package | [sympp worker](../skills/sympp/references/symphony-worker/procedure.md) |
 | Clarify and slice a WorkRequest | [sympp architect](../skills/sympp/references/symphony-architect/procedure.md) |
-| Coordinate ordinary repository work without required persistence | [sympp coordinator](../skills/sympp/references/symphony-coordinator/procedure.md) |
+| Turn an idea into a WorkRequest and settle product calls | [sympp chief](../skills/sympp/references/symphony-chief/procedure.md) |
 | Inspect human progress | Work board and Herdr execution inspector |
 
 All agent-facing sympp ledger reads and writes use configured MCP tools.
-Workers and coordinators may operate without a backend when persistence is not
-requested. Shell commands remain for installation, startup, diagnosis, upgrade,
+Workers given ordinary tasks need no backend. Shell commands remain for installation, startup, diagnosis, upgrade,
 and recovery; recover MCP before continuing required ledger work.
 
 The packaged skill is the procedure. Assignment text should contain only the

@@ -51,7 +51,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       )
 
     list_payload = get_in(list_response, ["result", "structuredContent"])
-    assert list_payload["scope"] == %{"visibility" => "local_ledger"}
     assert list_payload["filters"] == %{"phase" => "planned"}
     assert list_payload["total_count"] == 1
     assert [%{"id" => "WR-MCP-LOCAL-READ", "title" => listed_title} = listed] = list_payload["work_requests"]
@@ -293,7 +292,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
     end
   end
 
-  test "dispatch uses configured storage and rejects persisted delivery scope drift", %{repo: repo} do
+  test "dispatch uses configured storage", %{repo: repo} do
     anchor = %{repo: "nextide/symphony-plus-plus", base_branch: "symphony-plus-plus/beta"}
 
     in_scope =
@@ -362,36 +361,5 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
 
     blank_database_payload = get_in(blank_database_response, ["result", "structuredContent"])
     assert blank_database_payload["work_package"]["status"] == "dispatched"
-
-    delivery_base = "feature/integration-base"
-
-    assert {:ok, delivery_base_slice} =
-             CanonicalWorkPackageFixtures.add_work_package(
-               repo,
-               in_scope.id,
-               work_request_work_package_attrs(
-                 id: "WRS-MCP-WR-DISPATCH-DELIVERY-BASE",
-                 base_branch: delivery_base
-               )
-             )
-
-    assert {:ok, approved_delivery_base_slice} =
-             CanonicalWorkPackageFixtures.approve_work_package(repo, in_scope.id, delivery_base_slice.id, "planned")
-
-    delivery_base_response =
-      mcp_tool(repo, "t1", "dispatch_work_package", %{
-        "review_mode" => "none",
-        "work_request_id" => in_scope.id,
-        "work_package_id" => approved_delivery_base_slice.id
-      })
-
-    assert get_in(delivery_base_response, ["error", "code"]) == -32_602
-
-    assert get_in(delivery_base_response, ["error", "data", "code"]) ==
-             "work_package_delivery_scope_out_of_scope"
-
-    persisted_delivery_base = repo.get!(WorkPackage, approved_delivery_base_slice.id)
-    assert persisted_delivery_base.status == "planned"
-    assert persisted_delivery_base.dispatched_at == nil
   end
 end

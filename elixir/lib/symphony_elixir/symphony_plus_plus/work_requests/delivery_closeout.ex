@@ -34,7 +34,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
           Repository.error()
           | WorkPackageRepository.error()
           | PlanningRepository.error()
-          | :active_blocker
           | :active_runtime
           | :idempotency_key_conflict
           | :malformed_pr_evidence
@@ -77,13 +76,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
          {:ok, work_package} <-
            Repository.get_work_package(repo, work_request_id, work_package_id),
          {:ok, delivery} <- validate_delivery_input(work_request_id, work_package_id, attrs),
-         :ok <-
-           validate_pre_cleanup_closeout(
-             repo,
-             work_package,
-             delivery,
-             delivery_closeout_opts(attrs)
-           ),
+         :ok <- validate_pre_cleanup_closeout(repo, work_package, delivery),
          {:ok, delivery} <-
            Repository.record_work_package_delivery_in_transaction(
              repo,
@@ -91,9 +84,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
              work_package_id,
              attrs
            ),
-         closeout_opts = delivery_closeout_opts(attrs),
-         {:ok, {delivery, closeout_context}} <-
-           complete_closeout(repo, work_request, work_package, delivery, closeout_opts) do
+         {:ok, {delivery, closeout_context}} <- complete_closeout(repo, work_request, work_package, delivery) do
       {:ok, {delivery, work_package, closeout_context}}
     end
   rescue
@@ -129,35 +120,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     |> Ecto.Changeset.apply_action(:insert)
   end
 
-  defp validate_pre_cleanup_closeout(
-         repo,
-         %WorkPackage{} = work_package,
-         %WorkPackageDelivery{} = delivery,
-         opts
-       ) do
+  defp validate_pre_cleanup_closeout(repo, %WorkPackage{} = work_package, %WorkPackageDelivery{} = delivery) do
     case existing_delivery_state(repo, work_package, delivery) do
       :replayed_closeout ->
         :ok
 
       :new_or_unclosed_replay ->
-        validate_new_closeout_pre_cleanup(repo, work_package, delivery, opts)
+        validate_new_closeout_pre_cleanup(repo, work_package, delivery)
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp validate_new_closeout_pre_cleanup(
-         repo,
-         %WorkPackage{} = work_package,
-         %WorkPackageDelivery{} = delivery,
-         opts
-       ) do
+  defp validate_new_closeout_pre_cleanup(repo, %WorkPackage{} = work_package, %WorkPackageDelivery{} = delivery) do
     with :ok <- validate_ending_source(repo, work_package, delivery),
          :ok <- validate_delivery_scope(repo, work_package, delivery),
-         :ok <- validate_closeout_progress_slot(repo, work_package, delivery),
-         :ok <- validate_terminal_evidence(work_package, delivery) do
-      validate_linked_closeout_preconditions(repo, work_package, delivery, opts)
+         :ok <- validate_closeout_progress_slot(repo, work_package, delivery) do
+      validate_terminal_evidence(work_package, delivery)
     end
   end
 
@@ -253,43 +233,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     end)
   end
 
-  defp validate_linked_closeout_preconditions(
-         repo,
-         %WorkPackage{id: work_package_id},
-         %WorkPackageDelivery{} = delivery,
-         opts
-       ) do
-    case filled_string?(work_package_id) do
-      true ->
-        validate_work_package_closeout_preconditions(repo, work_package_id, delivery, opts)
-
-      false ->
-        :ok
-    end
-  end
-
-  defp validate_work_package_closeout_preconditions(
-         repo,
-         work_package_id,
-         %WorkPackageDelivery{} = delivery,
-         opts
-       ) do
-    context = WorkPackageActivity.context(repo, work_package_id)
-
-    validate_closeout_context(context, delivery, opts)
-  end
-
-  defp validate_closeout_context(context, delivery, opts) do
-    maybe_reject_active_blocker_context(context, allow_active_blockers?(delivery, opts))
-  end
-
-  defp allow_active_blockers?(%WorkPackageDelivery{outcome: outcome}, _opts)
-       when outcome in ["superseded", "abandoned", "skipped", "finished"],
-       do: true
-
-  defp allow_active_blockers?(%WorkPackageDelivery{}, opts),
-    do: Keyword.get(opts, :allow_active_blockers?, false)
-
   defp validate_terminal_evidence(
          %WorkPackage{id: work_package_id},
          %WorkPackageDelivery{outcome: "pr_merged"} = delivery
@@ -311,19 +254,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
 
   defp validate_terminal_evidence(%WorkPackage{}, %WorkPackageDelivery{}), do: :ok
 
-  defp complete_closeout(
-         repo,
-         %WorkRequest{} = work_request,
-         %WorkPackage{} = work_package,
-         %WorkPackageDelivery{} = delivery,
-         opts
-       ) do
+  defp complete_closeout(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, %WorkPackageDelivery{} = delivery) do
     case closeout_replay?(repo, work_package) do
       true ->
         refresh_replayed_closeout(repo, work_request, delivery)
 
       false ->
-        perform_closeout(repo, work_request, work_package, delivery, opts)
+        perform_closeout(repo, work_request, work_package, delivery)
     end
   end
 
@@ -346,7 +283,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   end
 
   defp replay_closeout_context(context, event) do
-    current = closeout_context(context, allow_active_blockers?: false)
+    current = closeout_context(context)
     recorded_reasons = List.wrap(map_value((event && event.payload) || %{}, :runtime_reason_codes_before_closeout))
 
     current
@@ -354,15 +291,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     |> Map.put(:defer_worktree_cleanup?, current.defer_worktree_cleanup?)
   end
 
-  defp perform_closeout(
-         repo,
-         %WorkRequest{} = work_request,
-         %WorkPackage{} = work_package,
-         %WorkPackageDelivery{} = delivery,
-         opts
-       ) do
-    with {:ok, closeout_context} <-
-           prepare_linked_closeout_context(repo, work_package, delivery, opts),
+  defp perform_closeout(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, %WorkPackageDelivery{} = delivery) do
+    with closeout_context = linked_closeout_context(repo, work_package),
          {:ok, closeout} <- close_work_package(repo, work_request, work_package, delivery),
          {:ok, _event} <-
            append_closeout_progress(
@@ -416,49 +346,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     end
   end
 
-  defp prepare_linked_closeout_context(
-         repo,
-         %WorkPackage{id: work_package_id},
-         %WorkPackageDelivery{} = delivery,
-         opts
-       ) do
-    case filled_string?(work_package_id) do
-      true -> prepare_work_package_closeout_context(repo, work_package_id, delivery, opts)
-      false -> {:ok, empty_closeout_context()}
-    end
+  defp linked_closeout_context(repo, %WorkPackage{id: work_package_id}) do
+    if filled_string?(work_package_id),
+      do: closeout_context(WorkPackageActivity.context(repo, work_package_id)),
+      else: closeout_context(WorkPackageActivity.empty_context())
   end
 
-  defp prepare_work_package_closeout_context(
-         repo,
-         work_package_id,
-         %WorkPackageDelivery{} = delivery,
-         opts
-       ) do
-    context = WorkPackageActivity.context(repo, work_package_id)
-    allow_active_blockers? = allow_active_blockers?(delivery, opts)
-
-    with :ok <- validate_closeout_context(context, delivery, opts) do
-      {:ok, closeout_context(context, allow_active_blockers?: allow_active_blockers?)}
-    end
-  end
-
-  defp maybe_reject_active_blocker_context(_context, true), do: :ok
-
-  defp maybe_reject_active_blocker_context(context, false) do
-    if get_in(context, [:blocker_state, :active?]) == true do
-      {:error, :active_blocker}
-    else
-      :ok
-    end
-  end
-
-  defp delivery_closeout_opts(_attrs), do: [allow_active_blockers?: true]
-
-  defp empty_closeout_context do
-    closeout_context(WorkPackageActivity.empty_context(), allow_active_blockers?: false)
-  end
-
-  defp closeout_context(context, opts) do
+  defp closeout_context(context) do
     runtime_reason_codes = List.wrap(get_in(context, [:runtime_state, :reason_codes]))
 
     %{
@@ -466,8 +360,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
       blocker_reason_codes: List.wrap(get_in(context, [:blocker_state, :reason_codes])),
       runtime_reason_codes: runtime_reason_codes,
       ignored_stale_agent_run_ids: List.wrap(get_in(context, [:runtime_state, :stale_agent_run_ids])),
-      defer_worktree_cleanup?: Enum.any?(runtime_reason_codes, &live_runtime_reason?/1),
-      allow_active_blockers?: Keyword.get(opts, :allow_active_blockers?, false)
+      defer_worktree_cleanup?: Enum.any?(runtime_reason_codes, &live_runtime_reason?/1)
     }
   end
 

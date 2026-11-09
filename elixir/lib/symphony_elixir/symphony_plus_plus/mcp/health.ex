@@ -13,7 +13,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer, as: PlanningRenderer
   alias SymphonyElixir.SymphonyPlusPlus.Repo
 
   @protocol_version "2025-03-26"
@@ -157,7 +156,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
   defp resource_contract_material do
     %{
       "list" => base_resource_specs(),
-      "templates" => work_package_resource_template_specs(),
       "read_payloads" => %{
         @version_resource => %{
           "fields" => [
@@ -168,10 +166,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
             "version"
           ],
           "mimeType" => "application/json"
-        },
-        "sympp://work-packages/{work_package_id}/{file_name}" => %{
-          "file_names" => PlanningRenderer.virtual_files(),
-          "mimeType" => "text/vnd.toon"
         }
       }
     }
@@ -629,15 +623,5 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
         "mimeType" => "application/json"
       }
     ]
-  end
-
-  defp work_package_resource_template_specs do
-    Enum.map(PlanningRenderer.virtual_files(), fn file_name ->
-      %{
-        "uri_template" => "sympp://work-packages/{work_package_id}/#{file_name}",
-        "name" => file_name,
-        "mimeType" => "text/vnd.toon"
-      }
-    end)
   end
 end

@@ -14,11 +14,10 @@ test("remote path requests become origin identities", async t => {
   execFileSync("git", ["-C", root, "remote", "add", "origin", "https://github.com/example/service.git"]);
   const env = { SYMPP_SERVER_URL: "http://100.123.207.19:19998", SYMPP_SERVER_NAME: "jjdev" };
   const call = args => JSON.stringify({ method: "tools/call", params: { name: "create_work_request", arguments: args } });
-  const input = call({ repo: root, repo_scopes: [{ repo: root }, { repo: "other/repo" }], constraints: { repo: "/deployment/path", review: { repos: ["/do-not-resolve"] } } });
+  const input = call({ repo: root, constraints: { repo: "/deployment/path", review: { repos: ["/do-not-resolve"] } } });
   const converted = JSON.parse(await remoteArguments(input, true)).params.arguments;
   assert.equal(converted.repo, "https://github.com/example/service.git");
   assert.equal(JSON.parse(await remoteArguments(call({ repo: path.relative(process.cwd(), root) }), true)).params.arguments.repo, converted.repo);
-  assert.deepEqual(converted.repo_scopes, [{ repo: converted.repo }, { repo: "other/repo" }]);
   assert.deepEqual(converted.constraints, JSON.parse(input).params.arguments.constraints);
   assert.equal(JSON.parse(await remoteArguments(call({ repo: 0 }), true)).params.arguments.repo, 0);
   const unknown = JSON.stringify({ method: "tools/call", params: { name: "sympp.health", arguments: { repo: "/unknown-field" } } });

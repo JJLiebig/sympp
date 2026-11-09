@@ -12,7 +12,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments,
     only: [
-      optional_list_argument: 2,
       optional_object_argument: 2,
       optional_string_argument: 3,
       required_argument: 2,
@@ -35,7 +34,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     LocalTrustedTools,
     Repository,
     Response,
-    Surface,
     ToolCatalog,
     ToolError,
     ToolResult,
@@ -57,6 +55,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   @delivery_tools ArchitectDeliveryTools.tools()
   @ask_tools AskTools.tools()
   @version_resource "sympp://health/version"
+  @version_resource_spec %{"uri" => @version_resource, "name" => "sympp version", "mimeType" => "application/json"}
 
   @enforce_keys [:config]
   defstruct [
@@ -298,22 +297,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp dispatch("tools/call", params, _server) when is_map(params), do: {:error, -32_602, "Invalid params", %{"reason" => "missing_tool_name"}}
   defp dispatch("tools/call", _params, _server), do: {:error, -32_602, "Invalid params", %{"reason" => "params_must_be_object"}}
 
-  defp dispatch("resources/list", params, _server) when is_map(params), do: {:ok, %{"resources" => Surface.resource_specs()}}
+  defp dispatch("resources/list", params, _server) when is_map(params), do: {:ok, %{"resources" => [@version_resource_spec]}}
   defp dispatch("resources/list", _params, _server), do: {:error, -32_602, "Invalid params", %{"reason" => "params_must_be_object"}}
 
   defp dispatch("resources/read", %{"uri" => @version_resource}, %__MODULE__{config: %Config{} = config}) do
     payload = %{"version" => config.version, "source" => Health.source_identity(config), "mode" => Atom.to_string(config.mode)}
     {:ok, Response.json_resource(@version_resource, payload)}
-  end
-
-  defp dispatch("resources/read", %{"uri" => "sympp://work-packages/" <> rest = uri}, %__MODULE__{config: config} = server) do
-    with :ok <- LocalTrustedTools.authorize(server, uri),
-         :ok <- prepare_repository(config.repo, uri) do
-      case Surface.work_package_resource_id(rest) do
-        {:ok, work_package_id, file_name} -> Surface.read_work_package_virtual_resource(config.repo, work_package_id, file_name, uri)
-        :error -> {:error, -32_602, "Invalid params", %{"resource" => uri, "reason" => "invalid_work_package_resource_uri"}}
-      end
-    end
   end
 
   defp dispatch("resources/read", %{"uri" => uri}, _server) when is_binary(uri), do: {:error, -32_601, "Method not found", %{"resource" => uri}}
@@ -480,27 +469,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     with {:ok, repo} <- required_argument(arguments, "repo"),
          {:ok, base_branch} <- required_argument(arguments, "base_branch"),
          {:ok, title} <- required_argument(arguments, "title"),
-         {:ok, request_kind} <- required_argument(arguments, "request_kind"),
+         {:ok, work_type} <- required_argument(arguments, "work_type"),
          {:ok, description} <- required_argument(arguments, "description"),
-         {:ok, workflow_mode} <- optional_string_argument(arguments, "workflow_mode", "architect_led_feature_branch"),
-         {:ok, repo_scopes} <- optional_list_argument(arguments, "repo_scopes"),
-         {:ok, constraints} <- optional_object_argument(arguments, "constraints"),
-         {:ok, creator_kind} <- optional_string_argument(arguments, "creator_kind", "agent"),
-         {:ok, creator_name} <- optional_string_argument(arguments, "creator_name", terminal.display_address),
-         {:ok, created_via} <- optional_string_argument(arguments, "created_via", "mcp") do
+         {:ok, dispatch_shape} <- optional_string_argument(arguments, "desired_dispatch_shape", "architect_led_feature_branch"),
+         {:ok, constraints} <- optional_object_argument(arguments, "constraints") do
       {:ok,
        %{
          "repo" => repo,
          "base_branch" => base_branch,
          "title" => title,
-         "work_type" => request_kind,
+         "work_type" => work_type,
          "human_description" => description,
-         "desired_dispatch_shape" => workflow_mode,
-         "repo_scopes" => repo_scopes || [],
+         "desired_dispatch_shape" => dispatch_shape,
          "constraints" => constraints || %{},
-         "creator_kind" => creator_kind,
-         "creator_name" => creator_name,
-         "created_via" => created_via,
+         "creator_kind" => "agent",
+         "creator_name" => terminal.display_address,
+         "created_via" => "mcp",
          "dispatched_by" => Terminal.attribution(terminal)
        }}
     end

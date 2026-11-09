@@ -44,12 +44,7 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
   expect((await fresh.rpc('initialize', initialize)).error.data.reason).toBe('already_initialized');
   expect((await fresh.call('sympp.health')).caller.owns).toEqual([]);
   const unboundResources = await fresh.rpc('resources/list');
-  expect(unboundResources.result.resources.every((entry: any) => entry.uri.startsWith('sympp://health/'))).toBe(true);
-  for (const uri of ['sympp://work-packages/', 'sympp://work-packages//task_plan.md', 'sympp://work-packages/missing/', 'sympp://work-packages/missing//task_plan.md', 'sympp://work-packages/missing/path/to/file.md']) {
-    const invalid = await fresh.rpc('resources/read', { uri });
-    expect(invalid.error.data.reason).toBe('invalid_work_package_resource_uri');
-    expect(invalid.error.code).toBe(-32602);
-  }
+  expect(unboundResources.result.resources.map((entry: any) => entry.uri)).toEqual(['sympp://health/version']);
   const id = await fresh.request('Trusted initialization');
   const [nativePackage] = await packages(fresh, ['Native board findings']);
   const nativePath = '/api/v1/sympp/herdr/dashboard';
@@ -311,12 +306,10 @@ test('package documents stay redacted and blocker history is attributed to the o
   // Blocker history is attributed to the terminal that wrote it.
   expect(audit.actor.id).toBe(architect.address);
   expect(history.some((entry: any) => entry.summary === 'Cannot forge audit identity')).toBe(false);
-  // Package documents are readable by every trusted caller and stay redacted.
+  // The package view is readable by every trusted caller and stays redacted.
   const reader = await factory.client(null);
-  for (const document of ['context.md', 'task_plan.md', 'progress.md', 'review.md']) {
-    const resource = await reader.rpc('resources/read', { uri: `sympp://work-packages/${wp}/${document}` });
-    expect(resource.result.contents[0].mimeType).toBe('text/vnd.toon');
-    const text = resource.result.contents[0].text;
+  const packageView = await reader.tool('read_work_request', { work_request_id: request, view: 'package', work_package_id: wp, detail: 'full' });
+  for (const text of [packageView.result.content[0].text, JSON.stringify(packageView.result.structuredContent)]) {
     for (const secret of ['sk-synthetic-progress-token', ...reviewValues]) expect(text).not.toContain(secret);
   }
   expect(redacted.result.content[0].text).not.toContain('sk-synthetic-progress-token');
@@ -515,8 +508,6 @@ test('architect descendant planning stays owned through terminal closeout and re
   const detail = await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`);
   expect(detail.blockers[0].id).toBe(blocker.id);
   expect(detail.progress[0].summary).toBe('Scoped evidence');
-  const uri = `sympp://work-packages/${wp}/progress.md`;
-  expect((await architect.rpc('resources/read', { uri })).result.contents[0].text).toContain('Scoped evidence');
   const foreign = await factory.client();
   const foreignRequest = await foreign.request('Other planning owner');
   const [otherWp] = await packages(foreign, ['Private foreign plan']);
@@ -530,7 +521,7 @@ test('architect descendant planning stays owned through terminal closeout and re
   expect((await architect.operator(`/api/v1/sympp/operator/work-requests/${request}/archive`, {})).status).toBe(200);
   // Archiving ends ownership; the archived request's evidence stays readable by id and refuses writes.
   expect((await architect.call('sympp.health')).caller.owns).toEqual([]);
-  expect((await architect.rpc('resources/read', { uri })).result.contents[0].text).toContain('Scoped evidence');
+  expect((await architect.call('read_work_request', { work_request_id: request, view: 'package', work_package_id: wp })).work_package.id).toBe(wp);
   await architect.reject('edit_plan', { work_request_id: request, ops: [{ op: 'add_package', ...contract('Archived scope') }] }, 'work_request_archived');
 });
 

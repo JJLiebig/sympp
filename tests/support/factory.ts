@@ -203,12 +203,11 @@ export class Client {
     return body;
   }
 
-  async request(title: string, baseBranch = 'beta', repo = 'example/service', extraScopes: object[] = []) {
+  async request(title: string, baseBranch = 'beta', repo = 'example/service') {
     const created = await this.call('create_work_request', {
       repo, base_branch: baseBranch, title,
       description: 'Synthetic acceptance request; no external work is executed.',
-      request_kind: 'feature',
-      repo_scopes: [{ repo: 'example/client', base_branch: 'integration' }, ...extraScopes],
+      work_type: 'feature',
     });
     expect(created.status).toBe('created');
     // Creating a WorkRequest makes this terminal its owner and its creator.

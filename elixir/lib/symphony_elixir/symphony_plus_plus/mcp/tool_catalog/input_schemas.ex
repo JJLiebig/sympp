@@ -34,19 +34,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "base_branch" => string_schema(),
         "title" => task_title_schema(),
         "description" => markdown_string_schema("WorkRequest human-facing description in Markdown."),
-        "request_kind" => string_enum_schema(WorkRequest.work_types()),
-        "workflow_mode" => string_enum_schema(WorkRequest.dispatch_shapes()),
-        "repo_scopes" => %{
-          "type" => "array",
-          "items" => %{"type" => "object", "additionalProperties" => false, "properties" => %{"repo" => string_schema(), "base_branch" => string_schema()}, "required" => ["repo"]}
-        },
+        "work_type" => string_enum_schema(WorkRequest.work_types()),
+        "desired_dispatch_shape" =>
+          WorkRequest.dispatch_shapes()
+          |> string_enum_schema()
+          |> Map.put("default", "architect_led_feature_branch"),
         "constraints" => object_schema(),
-        "own" => boolean_schema() |> Map.put("description", "Make the calling terminal the owner (default true). Pass false when handing the WorkRequest to an architect."),
-        "creator_kind" => string_enum_schema(WorkRequest.creator_kinds()),
-        "creator_name" => string_schema(),
-        "created_via" => string_schema()
+        "own" => boolean_schema() |> Map.put("description", "Make the calling terminal the owner (default true). Pass false when handing the WorkRequest to an architect.")
       },
-      ["base_branch", "title", "request_kind", "description"]
+      ["base_branch", "title", "work_type", "description"]
     )
   end
 
@@ -64,6 +60,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     schema(
       %{
         "phase" => string_enum_schema(Phase.phases()),
+        "repo" => described_string_schema("Only WorkRequests for this repo: git remote URL or owner/name."),
         "limit" => integer_schema() |> Map.merge(%{"minimum" => 1, "maximum" => 200, "description" => "Page size. Defaults to 50; values above 200 are rejected."}),
         "cursor" => described_string_schema("Opaque cursor returned by the previous list_work_requests page.")
       },

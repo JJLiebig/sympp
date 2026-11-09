@@ -174,10 +174,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     |> Dashboard.put_attribution("dispatched_by", work_request.dispatched_by)
   end
 
-  @spec work_request_filter(nil | binary()) :: map()
-  def work_request_filter(nil), do: %{}
-  def work_request_filter(phase), do: %{"phase" => phase}
-
   @spec work_request_detail(repo(), WorkRequest.t(), keyword()) :: {:ok, map()} | {:error, dashboard_error()}
   def work_request_detail(repo, %WorkRequest{} = work_request, _opts) do
     asks = Map.get(Asks.by_work_request(repo, [work_request.id]), work_request.id, [])

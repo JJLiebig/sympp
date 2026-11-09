@@ -3,8 +3,8 @@
 sympp is a local planning and orchestration cockpit. Humans see product
 progress while agents receive bounded assignments from the same ledger.
 Delivery tracking usually begins after a human and agent have agreed on a
-sufficiently concrete goal. Ordinary coordinators and workers can operate
-without a backend when persistent planning is not requested.
+sufficiently concrete goal. Workers given ordinary tasks can operate without a
+backend when persistent planning is not requested.
 
 This guide describes implemented behavior. The approved beta direction is in
 [Factory workflow](design/factory-workflow.md).
@@ -167,7 +167,7 @@ Set the pin to `null` to remove it.
 
 The architect records which backend selections the dependent's current PR head
 consumed with `sync_pr(dependency_inputs)`; a green PR can't prove it. The
-[architect procedure](../packages/sympp/skills/symphony-architect/references/operations.md#ui-collaboration-and-candidates)
+[architect procedure](../packages/sympp/skills/symphony-architect/SKILL.md#deliver)
 owns approval, selection, recording and review-owner handoff.
 
 Clearing a previously consumed pin also invalidates that input evidence. Once the
@@ -186,7 +186,7 @@ review results stay with their provider; input provenance is not a review receip
 A ready-for-merge package can acquire a new integration blocker without changing
 its readiness or reviewed evidence. The architect declares and clears it with
 `set_blocker`, following the
-[architect blocker procedure](../packages/sympp/skills/symphony-architect/SKILL.md#guidance).
+[architect blocker procedure](../packages/sympp/skills/symphony-architect/SKILL.md#ask-and-report).
 An active blocker makes the delivery board's `merge_eligibility.eligible` false.
 Workers route human decisions through the architect or chief.
 

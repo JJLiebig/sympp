@@ -36,8 +36,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
       create_work_request!(repo,
         id: "WR-MCP-WORKTREE-DELIVERY-BASE",
         repo: fixture.origin,
-        base_branch: "symphony-plus-plus/beta",
-        repo_scopes: [%{repo: fixture.origin, base_branch: delivery_base}]
+        base_branch: "symphony-plus-plus/beta"
       )
 
     package =

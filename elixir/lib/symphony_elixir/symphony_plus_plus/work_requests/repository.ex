@@ -2,16 +2,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   @moduledoc false
 
   alias Ecto.Changeset
-  alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDeliveryScope
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.RepoScope
+  alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @redacted_decision_fields ["decision", "rationale", "scope_impact", "created_by", "source_id"]
@@ -55,7 +53,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
           | :invalid_work_package_id
           | :id_already_exists
           | :invalid_status
-          | :work_package_delivery_scope_out_of_scope
           | :sequence_conflict
           | :stale_status
           | {:constraint_failed, String.t()}
@@ -75,19 +72,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   def create(repo, attrs) when is_atom(repo) and is_map(attrs) do
     attrs = normalize_keys(attrs)
 
-    repo.transaction(fn ->
-      with {:ok, work_request} <-
-             attrs
-             |> WorkRequest.create_changeset()
-             |> repo.insert()
-             |> normalize_insert_result(),
-           :ok <- replace_repo_scopes(repo, work_request, repo_scope_attrs(attrs, work_request)) do
-        work_request
-      else
-        {:error, reason} -> repo.rollback(reason)
-      end
-    end)
-    |> normalize_transaction_result()
+    attrs
+    |> WorkRequest.create_changeset()
+    |> repo.insert()
+    |> normalize_insert_result()
   rescue
     error in Ecto.ConstraintError -> normalize_constraint_error(error)
     error in Exqlite.Error -> normalize_exqlite_error(error)
@@ -109,7 +97,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     filters = normalize_keys(filters)
 
     repo.all(list_query(filters))
-    |> filter_phase(repo, Map.get(filters, "phase"))
+    |> filter_derived(repo, filters)
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
@@ -119,28 +107,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   def list_page(repo, filters, limit, cursor)
       when is_atom(repo) and (is_map(filters) or is_list(filters)) and is_integer(limit) and limit > 0 do
     filters = normalize_keys(filters)
-    collect_page(repo, list_query(filters), Map.get(filters, "phase"), limit, cursor, [])
+    collect_page(repo, list_query(filters), filters, limit, cursor, [])
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  # The phase is derived, so a phase filter reads further batches until the
-  # page is full or the ledger is exhausted.
-  defp collect_page(repo, query, phase, limit, cursor, collected) do
+  # The phase is derived and a repo matches by identity (owner/name or any
+  # remote URL of it), so these filters read further batches until the page is
+  # full or the ledger is exhausted.
+  defp collect_page(repo, query, filters, limit, cursor, collected) do
     batch = repo.all(from(work_request in page_after(query, cursor), limit: ^limit))
 
-    with {:ok, matching} <- filter_phase(batch, repo, phase) do
+    with {:ok, matching} <- filter_derived(batch, repo, filters) do
       collected = collected ++ matching
 
       cond do
         length(collected) >= limit -> {:ok, Enum.take(collected, limit)}
         length(batch) < limit -> {:ok, collected}
-        true -> collect_page(repo, query, phase, limit, cursor_after(List.last(batch)), collected)
+        true -> collect_page(repo, query, filters, limit, cursor_after(List.last(batch)), collected)
       end
     end
   end
 
   defp cursor_after(%WorkRequest{inserted_at: inserted_at, id: id}), do: {inserted_at, id}
+
+  defp filter_derived(work_requests, repo, filters) do
+    work_requests
+    |> filter_repo(Map.get(filters, "repo"))
+    |> filter_phase(repo, Map.get(filters, "phase"))
+  end
+
+  defp filter_repo(work_requests, repo) when is_binary(repo) and repo != "",
+    do: Enum.filter(work_requests, &RepoIdentity.scope_match?(repo, &1.repo))
+
+  defp filter_repo(work_requests, _repo), do: work_requests
 
   defp filter_phase(work_requests, _repo, phase) when phase in [nil, ""], do: {:ok, work_requests}
 
@@ -148,39 +148,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     with {:ok, summaries} <- Phase.load(repo, work_requests) do
       {:ok, Enum.filter(work_requests, &(summaries[&1.id].phase == phase))}
     end
-  end
-
-  @spec list_repo_scopes(repo(), String.t()) :: {:ok, [RepoScope.t()]} | {:error, error()}
-  def list_repo_scopes(repo, work_request_id) when is_atom(repo) and is_binary(work_request_id) do
-    repo_scopes =
-      repo.all(
-        from(scope in RepoScope,
-          where: scope.work_request_id == ^work_request_id,
-          order_by: [asc: scope.scope_key, asc: scope.id]
-        )
-      )
-
-    {:ok, repo_scopes}
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  @spec list_repo_scopes_by_work_request(repo(), [String.t()]) ::
-          {:ok, %{optional(String.t()) => [RepoScope.t()]}} | {:error, error()}
-  def list_repo_scopes_by_work_request(_repo, []), do: {:ok, %{}}
-
-  def list_repo_scopes_by_work_request(repo, work_request_ids) when is_atom(repo) and is_list(work_request_ids) do
-    repo_scopes =
-      repo.all(
-        from(scope in RepoScope,
-          where: scope.work_request_id in ^work_request_ids,
-          order_by: [asc: scope.work_request_id, asc: scope.scope_key, asc: scope.id]
-        )
-      )
-
-    {:ok, Enum.group_by(repo_scopes, & &1.work_request_id)}
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
   @spec update(repo(), String.t(), map()) :: {:ok, WorkRequest.t()} | {:error, error()}
@@ -231,7 +198,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     repo.transaction(fn ->
       with {:ok, %WorkRequest{} = work_request} <- get(repo, work_request_id),
            :ok <- Phase.require_writable(work_request),
-           {:ok, attrs} <- work_package_attrs(repo, work_request, attrs, next_sequence(repo, WorkPackage, work_request.id)),
+           {:ok, attrs} <- work_package_attrs(work_request, attrs, next_sequence(repo, WorkPackage, work_request.id)),
            {:ok, work_package} <- attrs |> WorkPackage.create_changeset() |> repo.insert() do
         work_package
       else
@@ -346,9 +313,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
 
       {"phase", "archived"}, query ->
         from(work_request in query, where: not is_nil(work_request.archived_at))
-
-      {"repo", repo}, query when is_binary(repo) and repo != "" ->
-        from(work_request in query, where: work_request.repo == ^repo)
 
       {"base_branch", base_branch}, query when is_binary(base_branch) and base_branch != "" ->
         from(work_request in query, where: work_request.base_branch == ^base_branch)
@@ -552,7 +516,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     end)
   end
 
-  defp work_package_attrs(repo, %WorkRequest{} = work_request, attrs, sequence) do
+  defp work_package_attrs(%WorkRequest{} = work_request, attrs, sequence) do
     attrs =
       attrs
       |> normalize_keys()
@@ -574,10 +538,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       |> Map.put("status", "planned")
       |> Map.put("contract_revision", 1)
 
-    with :ok <- validate_executable_work_package_kind(attrs),
-         :ok <- WorkPackageDeliveryScope.validate(repo, work_request, attrs) do
-      {:ok, attrs}
-    end
+    with :ok <- validate_executable_work_package_kind(attrs), do: {:ok, attrs}
   end
 
   defp put_primary_base_branch_default(attrs, %WorkRequest{} = work_request) do
@@ -634,8 +595,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
 
     with :ok <- validate_executable_work_package_kind(effective_contract),
          {:ok, %WorkRequest{} = work_request} <- get(repo, work_package.work_request_id),
-         :ok <- Phase.require_writable(work_request),
-         :ok <- WorkPackageDeliveryScope.validate(repo, work_request, effective_contract) do
+         :ok <- Phase.require_writable(work_request) do
       work_package
       |> WorkPackage.update_changeset(attrs)
       |> Ecto.Changeset.optimistic_lock(:status, fn current -> current end)
@@ -659,111 +619,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   end
 
   defp update_existing_work_request(repo, %WorkRequest{} = work_request, attrs) do
-    repo.transaction(fn ->
-      with {:ok, updated} <-
-             work_request
-             |> WorkRequest.update_changeset(attrs)
-             |> repo.update(),
-           :ok <- sync_repo_scopes_after_update(repo, work_request, updated, attrs) do
-        updated
-      else
-        {:error, reason} -> repo.rollback(reason)
-      end
-    end)
-    |> normalize_transaction_result()
+    work_request
+    |> WorkRequest.update_changeset(attrs)
+    |> repo.update()
   end
-
-  defp sync_repo_scopes_after_update(repo, %WorkRequest{} = previous, %WorkRequest{} = updated, attrs) do
-    cond do
-      Map.has_key?(attrs, "repo_scopes") ->
-        replace_repo_scopes(repo, updated, repo_scope_attrs(attrs, updated))
-
-      primary_repo_scope_sync_required?(attrs) ->
-        replace_primary_repo_scope(repo, previous, updated)
-
-      true ->
-        :ok
-    end
-  end
-
-  defp primary_repo_scope_sync_required?(attrs) do
-    Enum.any?(["repo", "base_branch"], &Map.has_key?(attrs, &1))
-  end
-
-  defp replace_repo_scopes(repo, %WorkRequest{} = work_request, repo_scope_attrs) do
-    repo.delete_all(from(scope in RepoScope, where: scope.work_request_id == ^work_request.id))
-
-    insert_repo_scopes(repo, repo_scope_attrs)
-  end
-
-  defp replace_primary_repo_scope(repo, %WorkRequest{} = previous, %WorkRequest{} = updated) do
-    previous_base_branches = BaseBranch.equivalent_refs(previous.base_branch)
-
-    scope_keys =
-      [primary_repo_scope_attrs(previous), primary_repo_scope_attrs(updated)]
-      |> Enum.reject(&is_nil/1)
-      |> Enum.map(&RepoScope.scope_key/1)
-      |> Enum.uniq()
-
-    repo.delete_all(
-      from(scope in RepoScope,
-        where: scope.work_request_id == ^updated.id,
-        where:
-          scope.scope_key in ^scope_keys or
-            (scope.repo == ^previous.repo and scope.base_branch in ^previous_base_branches)
-      )
-    )
-
-    case primary_repo_scope_attrs(updated) do
-      nil -> :ok
-      attrs -> insert_repo_scopes(repo, [attrs])
-    end
-  end
-
-  defp insert_repo_scopes(repo, repo_scope_attrs) do
-    Enum.reduce_while(repo_scope_attrs, :ok, fn attrs, :ok ->
-      case insert_repo_scope(repo, attrs) do
-        {:ok, %RepoScope{}} -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-  end
-
-  defp insert_repo_scope(repo, attrs) do
-    attrs
-    |> RepoScope.create_changeset()
-    |> repo.insert()
-  end
-
-  defp repo_scope_attrs(attrs, %WorkRequest{} = work_request) do
-    ([primary_repo_scope_attrs(work_request)] ++ explicit_repo_scopes(attrs, work_request.id))
-    |> Enum.reject(&is_nil/1)
-    |> Enum.map(&Map.put(&1, "work_request_id", work_request.id))
-    |> Enum.uniq_by(&RepoScope.scope_key/1)
-  end
-
-  defp primary_repo_scope_attrs(%WorkRequest{id: id, repo: repo, base_branch: base_branch})
-       when is_binary(id) and is_binary(repo) do
-    RepoScope.primary_attrs(id, repo, base_branch)
-  end
-
-  defp primary_repo_scope_attrs(%WorkRequest{}), do: nil
-
-  defp explicit_repo_scopes(%{"repo_scopes" => scopes}, work_request_id) when is_list(scopes) do
-    Enum.map(scopes, fn
-      %{} = scope ->
-        scope
-        |> normalize_keys()
-        |> Map.take(["repo", "base_branch"])
-        |> Map.put("work_request_id", work_request_id)
-
-      _scope ->
-        %{"work_request_id" => work_request_id}
-    end)
-  end
-
-  defp explicit_repo_scopes(%{"repo_scopes" => _scopes}, work_request_id), do: [%{"work_request_id" => work_request_id}]
-  defp explicit_repo_scopes(_attrs, _work_request_id), do: []
 
   defp normalize_insert_result({:ok, work_request}), do: {:ok, work_request}
 

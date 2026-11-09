@@ -328,11 +328,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
       Repo.put_dynamic_repo(pid)
       assert :ok = WorkPackageRepository.migrate(Repo)
 
-      assert {:ok, package} =
-               WorkPackageRepository.create(
-                 Repo,
-                 WorkPackageFactory.attrs(id: "SYMPP-P3-001", status: "dispatched")
-               )
+      work_request = create_work_request!(Repo, id: "WR-SYMPP-P3-001")
 
       input =
         [
@@ -340,8 +336,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
           Jason.encode!(%{
             "jsonrpc" => "2.0",
             "id" => 1,
-            "method" => "resources/read",
-            "params" => %{"uri" => "sympp://work-packages/#{package.id}/context.md"}
+            "method" => "tools/call",
+            "params" => %{"name" => "read_work_request", "arguments" => %{"work_request_id" => work_request.id}}
           })
         ]
         |> Enum.join("\n")
@@ -353,9 +349,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
         end)
 
       [_init_response, response] = decode_json_lines(output)
-      text = get_in(response, ["result", "contents", Access.at(0), "text"])
 
-      assert text =~ package.title
+      assert get_in(response, ["result", "structuredContent", "work_request", "title"]) == work_request.title
       assert Repo.get_dynamic_repo() == pid
     after
       Repo.put_dynamic_repo(original_repo)

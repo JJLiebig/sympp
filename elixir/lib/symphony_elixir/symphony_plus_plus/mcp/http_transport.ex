@@ -11,7 +11,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, FailedCall, HerdrBinding, HTTPStateStore}
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Server
 
-  @work_package_resource_prefix "sympp://work-packages/"
   @client_lock_key "__sympp_mcp_client_lock__"
   @current_state_key "__sympp_mcp_current_state__"
   @unbound_client_key "__sympp_mcp_unbound__"
@@ -203,18 +202,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
 
   defp repo_backed_followup?(payload, %Server{}), do: repo_backed_followup?(payload)
 
-  defp repo_backed_followup?(%{"method" => "resources/read", "params" => %{"uri" => uri}}), do: protected_resource_uri?(uri)
   # Health reads the live ledger only to list what a Herdr caller owns.
   defp repo_backed_followup?(%{"method" => "tools/call", "params" => %{"name" => "sympp.health", "_meta" => %{"herdr" => _}}}), do: true
   defp repo_backed_followup?(%{"method" => "tools/call", "params" => %{"name" => "sympp.health"}}), do: false
   defp repo_backed_followup?(%{"method" => "tools/call"}), do: true
   defp repo_backed_followup?(_payload), do: false
-
-  defp protected_resource_uri?(uri) when is_binary(uri) do
-    String.starts_with?(uri, @work_package_resource_prefix)
-  end
-
-  defp protected_resource_uri?(_uri), do: false
 
   defp normalize_client_key(client_key) when is_binary(client_key) do
     cond do

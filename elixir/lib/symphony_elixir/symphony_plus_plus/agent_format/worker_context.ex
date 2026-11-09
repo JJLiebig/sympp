@@ -3,7 +3,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.Toon
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
@@ -63,38 +62,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
     |> encode_agent_payload()
   end
 
-  @spec encode_virtual_file(State.t(), String.t(), keyword()) :: {:ok, String.t()} | {:error, :unknown_virtual_file}
-  def encode_virtual_file(%State{} = state, file_name, opts \\ []) when is_binary(file_name) do
-    with {:ok, payload} <- virtual_file_payload(state, file_name, opts) do
-      {:ok, encode_agent_payload(payload)}
-    end
-  end
-
-  @spec virtual_file_payload(State.t(), String.t(), keyword()) :: {:ok, map()} | {:error, :unknown_virtual_file}
-  def virtual_file_payload(%State{} = state, "context.md", opts) do
+  @doc "A package's progress or handoff for its assignment file."
+  @spec virtual_file_payload(State.t(), String.t()) :: {:ok, map()} | {:error, :unknown_virtual_file}
+  def virtual_file_payload(%State{} = state, "progress.md") do
     payload =
       state
-      |> base_payload("context.md", opts)
-      |> Map.put("work_package", work_package_context(state.work_package))
-      |> Map.merge(Keyword.get(opts, :worker_context, %{}))
-
-    {:ok, payload}
-  end
-
-  def virtual_file_payload(%State{} = state, "task_plan.md", opts) do
-    payload =
-      state
-      |> base_payload("task_plan.md", opts)
-      |> Map.put("plan_nodes", Enum.map(state.plan_nodes, &plan_node_payload/1))
-      |> Map.put("omitted", %{"plan_nodes" => state.plan_nodes_omitted_count || 0})
-
-    {:ok, payload}
-  end
-
-  def virtual_file_payload(%State{} = state, "progress.md", opts) do
-    payload =
-      state
-      |> base_payload("progress.md", opts)
+      |> base_payload("progress.md")
       |> Map.put("progress_events", Enum.map(state.progress_events, &progress_event_payload/1))
       |> Map.put("omitted", %{"progress_events" => state.progress_events_omitted_count || 0})
       |> put_continuation(state.progress_events, state.progress_events_omitted_count)
@@ -102,33 +75,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
     {:ok, payload}
   end
 
-  def virtual_file_payload(%State{} = state, "acceptance.md", opts) do
+  def virtual_file_payload(%State{} = state, "handoff.md") do
     payload =
       state
-      |> base_payload("acceptance.md", opts)
-      |> Map.put(
-        "acceptance",
-        Enum.map(state.work_package.acceptance_criteria || [], fn criterion ->
-          %{"source" => Redactor.redact_text(criterion)}
-        end)
-      )
-
-    {:ok, payload}
-  end
-
-  def virtual_file_payload(%State{} = state, "review.md", opts) do
-    payload =
-      state
-      |> base_payload("review.md", opts)
-      |> Map.put("review", review_payload(state))
-
-    {:ok, payload}
-  end
-
-  def virtual_file_payload(%State{} = state, "handoff.md", opts) do
-    payload =
-      state
-      |> base_payload("handoff.md", opts)
+      |> base_payload("handoff.md")
       |> Map.put("acceptance", Enum.map(state.work_package.acceptance_criteria || [], &Redactor.redact_text/1))
       |> Map.put("latest_progress", state.progress_events |> Enum.take(-3) |> Enum.map(&progress_summary_payload/1))
       |> Map.put("artifacts", Enum.map(state.artifacts, &artifact_payload/1))
@@ -141,46 +91,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
     {:ok, payload}
   end
 
-  def virtual_file_payload(%State{}, _file_name, _opts), do: {:error, :unknown_virtual_file}
+  def virtual_file_payload(%State{}, _file_name), do: {:error, :unknown_virtual_file}
 
-  defp base_payload(%State{work_package: %WorkPackage{} = work_package}, file_name, opts) do
+  defp base_payload(%State{work_package: %WorkPackage{} = work_package}, file_name) do
     %{
       "file" => file_name,
       "work_package_id" => work_package.id,
       "title" => Redactor.redact_text(work_package.title),
       "status" => work_package.status
-    }
-    |> put_optional("uri", Keyword.get(opts, :uri))
-  end
-
-  defp work_package_context(%WorkPackage{} = work_package) do
-    %{
-      "id" => work_package.id,
-      "kind" => work_package.kind,
-      "policy_template" => policy_key(work_package),
-      "status" => work_package.status,
-      "repo" => Redactor.redact_text(work_package.repo),
-      "base_branch" => Redactor.redact_text(work_package.base_branch),
-      "branch_pattern" => Redactor.redact_text(work_package.branch_pattern),
-      "allowed_file_globs" => Enum.map(work_package.allowed_file_globs || [], &Redactor.redact_text/1),
-      "parent_id" => Redactor.redact_text(work_package.parent_id),
-      "owner_id" => Redactor.redact_text(work_package.owner_id),
-      "product_description" => Redactor.redact_text(work_package.product_description),
-      "engineering_scope" => Redactor.redact_text(work_package.engineering_scope),
-      "review" => agent_safe(work_package.review_requirement)
-    }
-  end
-
-  defp review_payload(%State{work_package: work_package}) do
-    %{"requirement" => agent_safe(work_package.review_requirement)}
-  end
-
-  defp plan_node_payload(%PlanNode{} = plan_node) do
-    %{
-      "id" => plan_node.id,
-      "title" => Redactor.redact_text(plan_node.title),
-      "status" => plan_node.status,
-      "body" => Redactor.redact_text(plan_node.body)
     }
   end
 
@@ -342,15 +260,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
     ArgumentError ->
       Toon.encode(%{"format" => "compact_json_fallback", "json" => Jason.encode!(payload)})
   end
-
-  defp policy_key(%WorkPackage{policy_template: policy_template}) when is_binary(policy_template) and policy_template != "" do
-    policy_template
-  end
-
-  defp policy_key(%WorkPackage{kind: kind}), do: kind
-
-  defp put_optional(payload, _key, nil), do: payload
-  defp put_optional(payload, key, value), do: Map.put(payload, key, value)
 
   defp timestamp(%DateTime{} = timestamp), do: DateTime.to_iso8601(timestamp)
   defp timestamp(nil), do: nil

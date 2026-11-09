@@ -11,7 +11,7 @@ test('competing terminals end with one owner, Release hands over and ownership s
   const chief = await factory.client(nextTerminal(), { 'sympp.role': 'chief', 'sympp.domain': 'Acceptance' });
   const created = await chief.call('create_work_request', {
     repo: 'example/service', base_branch: 'beta', title: 'Contended request', description,
-    request_kind: 'feature', own: false,
+    work_type: 'feature', own: false,
   });
   const request = created.work_request.id;
   expect(created.worked_on).toBeUndefined();
@@ -52,7 +52,7 @@ test('competing terminals end with one owner, Release hands over and ownership s
   expect((await outside.call('sympp.health')).caller.access).toBe('read_only');
   expect((await outside.call('read_work_request', { detail: 'full', work_request_id: request })).work_request.id).toBe(request);
   await outside.reject('set_report', { work_request_id: request, brief: 'Outside' }, 'read_only_outside_herdr');
-  await outside.reject('create_work_request', { repo: 'example/service', base_branch: 'beta', title: 'Outside goal', description, request_kind: 'feature' }, 'read_only_outside_herdr');
+  await outside.reject('create_work_request', { repo: 'example/service', base_branch: 'beta', title: 'Outside goal', description, work_type: 'feature' }, 'read_only_outside_herdr');
 
   // The board shows who works on the request; operator Release hands it over.
   const board = await winner.inspect('/api/v1/sympp/operator/dashboard/hydrated');
@@ -171,12 +171,12 @@ test('STDIO initialization serves trusted local reads, refuses writes outside He
   expect(health.ledger.identity.source).toBe('explicit');
   expect(health.caller.access).toBe('read_only');
   const peer = processes.stdio('stdio-peer', { database: factory.database });
-  const createArgs = { repo: 'example/service', base_branch: 'beta', title: 'STDIO goal', request_kind: 'feature', description: 'Created over STDIO.' };
+  const createArgs = { repo: 'example/service', base_branch: 'beta', title: 'STDIO goal', work_type: 'feature', description: 'Created over STDIO.' };
   expect((await peer.rawRequest('tools/call', { name: 'create_work_request', arguments: createArgs })).error.data.reason).toBe('server_not_initialized');
   await peer.request('initialize', initialize);
   expect((await peer.request('tools/call', { name: 'read_work_request', arguments: { detail: 'full', work_request_id: request } })).structuredContent.work_request.id).toBe(request);
-  const resource = await peer.request('resources/read', { uri: `sympp://work-packages/${wp}/task_plan.md` });
-  expect(resource.contents[0].mimeType).toBe('text/vnd.toon');
+  const packageView = await peer.request('tools/call', { name: 'read_work_request', arguments: { work_request_id: request, view: 'package', work_package_id: wp } });
+  expect(packageView.structuredContent.work_package.id).toBe(wp);
   expect((await peer.rawRequest('tools/call', { name: 'create_work_request', arguments: createArgs })).error.data.code).toBe('read_only_outside_herdr');
   const meta = { herdr: herdr('t-stdio') };
   const created = (await peer.request('tools/call', { name: 'create_work_request', arguments: createArgs, _meta: meta })).structuredContent;
