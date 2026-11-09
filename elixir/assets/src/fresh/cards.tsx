@@ -57,7 +57,7 @@ function CardRow({ at, card }: { at: number; card: Card & { state: Shown } }) {
       </span>
       <CiCell ci={card.ci} stale={card.stale.includes("github")} />
       <ReviewCell review={card.review} />
-      <PrLink pr={card.pr} repo={card.repo} />
+      <PrLink pr={card.pr} repos={[card.repo.toLowerCase()]} />
       <span className={`whitespace-nowrap font-mono text-[11px] font-semibold ${meta.tone}`} title={`${meta.label} for ${span(at - card.since)}`}>
         {meta.label}
       </span>

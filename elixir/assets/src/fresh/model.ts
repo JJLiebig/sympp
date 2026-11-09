@@ -29,7 +29,8 @@ export type Pkg = {
   // A path such as "Backend / Billing": the first part is the phase, the rest nests beneath it.
   group: string | null;
   goalTitle: string;
-  goalRepo: string;
+  // Every name the goal's repository goes by, lowercased: display name, owner/name, remote and aliases.
+  goalRepos: string[];
   area: string[];
   createdAt: number;
   segs: Seg[];
@@ -104,7 +105,7 @@ export type OperatorReport = { brief?: Written | null; eta?: Written | null; par
 export type Prompt = { tl_dr?: string | null; details?: string | null; custom_redirect_label?: string | null; options?: Array<{ id: string; label?: string | null; answer?: string | null; description?: string | null; pros?: string[] | null; cons?: string[] | null }> | null };
 export type AskEntry = { id: string; work_request_id?: string | null; work_package_id?: string | null; card_id?: string | null; question?: string | null; decision_prompt?: Prompt | null; state?: string | null; asked_by?: string | null; asked_at?: string | null; resolved_at?: string | null };
 export type DecisionEntry = { id: string; work_request_id: string; decision?: string | null; rationale?: string | null; recorded_by?: string | null; created_at?: string | null; review_state?: string | null; feedback?: string | null; undelivered_reason?: string | null };
-export type Request = { id: string; title?: string | null; phase?: string | null; repo?: string | null; repo_display?: string | null; base_branch?: string | null; inserted_at?: string | null; completed_at?: string | null; operator_completed_at?: string | null; archived_at?: string | null; worked_on?: Owned | null; operator_report?: OperatorReport | null; area_path?: string[] | null; default_branch?: string | null; deployments?: Deployments | null };
+export type Request = { id: string; title?: string | null; phase?: string | null; repo?: string | null; repo_display?: string | null; repo_key?: string | null; repo_remote?: string | null; repo_aliases?: string[] | null; base_branch?: string | null; inserted_at?: string | null; completed_at?: string | null; operator_completed_at?: string | null; archived_at?: string | null; worked_on?: Owned | null; operator_report?: OperatorReport | null; area_path?: string[] | null; default_branch?: string | null; deployments?: Deployments | null };
 export type Detail = { work_request: Request; work_packages?: Slice[]; asks?: AskEntry[]; decisions_to_review?: DecisionEntry[] };
 export type CardEntry = { id: string; state?: string | null; title?: string | null; worked_on?: Owned | null; repository?: string | null; branch?: string | null; pr?: { repository?: string | null; number?: number | null; url?: string | null; state?: string | null; ci?: { status?: string | null } | null } | null; review?: { state?: string | null; status?: string | null } | null; stale?: string[] | null; asks?: AskEntry[] | null; since?: string | null; ended_at?: string | null; updated_at?: string | null };
 // What the operator can change. A backend that lacks a setting leaves it out.
@@ -182,10 +183,16 @@ function buildGoal(detail: Detail, history: Record<string, HistoryEvent[]>, now:
     phase: PHASES.find((phase) => phase === request.phase) ?? "intake",
     completedAt: ms(request.completed_at),
     archivedAt: ms(request.archived_at),
-    pkgs: (detail.work_packages ?? []).map((slice) => ({ ...buildPkg(slice, history[slice.work_package_id || slice.id] ?? [], now), goalTitle: title, goalRepo: repo, area })),
+    pkgs: (detail.work_packages ?? []).map((slice) => ({ ...buildPkg(slice, history[slice.work_package_id || slice.id] ?? [], now), goalTitle: title, goalRepos: reposOf(request), area })),
     owner: ownerOf(request.worked_on),
     report: reportOf(request.operator_report, now),
   };
+}
+
+// A display name can be a bare repository name, so a PR's owner/name is compared against every identity.
+function reposOf(request: Request) {
+  const names = [request.repo, request.repo_display, request.repo_key, request.repo_remote, ...(request.repo_aliases ?? [])];
+  return [...new Set(names.filter((name): name is string => Boolean(name)).map((name) => name.toLowerCase()))];
 }
 
 function ownerOf(owned: Owned | null | undefined): Terminal | null {
@@ -322,7 +329,7 @@ function blankPkg(slice: Slice, now: number): Pkg {
     seq: slice.sequence ?? 0,
     group: slice.group || null,
     goalTitle: "",
-    goalRepo: "",
+    goalRepos: [],
     area: [],
     createdAt: ms(slice.inserted_at) ?? now,
     segs: [],
@@ -548,7 +555,12 @@ function isLiveAt(pkg: Pkg, at: number) {
 
 // A PR to another repository than the goal's waits on someone else, such as upstream maintainers.
 export function waitsOnOthers(pkg: Pkg) {
-  return pkg.outcome === null && pkg.pr !== null && pkg.pr.open && pkg.pr.repo !== "" && pkg.pr.repo !== pkg.goalRepo;
+  return pkg.outcome === null && pkg.pr !== null && pkg.pr.open && !inRepos(pkg.pr.repo, pkg.goalRepos);
+}
+
+// Whether a PR's repository is one of these; a PR that names no repository is taken to be in it.
+export function inRepos(repo: string, repos: string[]) {
+  return repo === "" || repos.includes(repo.toLowerCase());
 }
 
 export function span(msValue: number) {

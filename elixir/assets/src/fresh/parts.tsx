@@ -2,7 +2,7 @@ import { Check, CircleDashed, ScanSearch, X } from "lucide-react";
 
 import { GoalActions, ShelfCleanup } from "./actions";
 import { areaLabel } from "./areas";
-import { deployAt, span, type Ci, type DeployStep, type Goal, type GoalView, type Outcome, type Pr, type PkgView, type Review, type Stage } from "./model";
+import { deployAt, inRepos, span, type Ci, type DeployStep, type Goal, type GoalView, type Outcome, type Pr, type PkgView, type Review, type Stage } from "./model";
 import { POP, useFlash } from "./motion";
 
 // `pip` is the small square that stands for a package in a strip of dots; `bar` is its step on the track.
@@ -108,9 +108,9 @@ export function ReviewCell({ review }: { review: Review | null }) {
 }
 
 // A PR in the goal's own repository is its number; one elsewhere also names where it waits.
-export function PrLink({ pr, repo }: { pr: Pr | null; repo: string }) {
+export function PrLink({ pr, repos }: { pr: Pr | null; repos: string[] }) {
   if (!pr) return <span />;
-  const name = pr.repo && pr.repo !== repo ? `${pr.repo}#${pr.number}` : `#${pr.number}`;
+  const name = inRepos(pr.repo, repos) ? `#${pr.number}` : `${pr.repo}#${pr.number}`;
   return (
     <a className="truncate font-mono text-[11px] text-dim underline decoration-dotted underline-offset-2 hover:text-ink" href={pr.url} rel="noreferrer" target="_blank" title={`Open PR ${pr.repo}#${pr.number}`}>
       {name}

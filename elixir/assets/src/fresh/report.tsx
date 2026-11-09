@@ -375,7 +375,7 @@ export function PkgLine({ at, view }: { at: number; view: PkgView }) {
       <StageSteps view={view} />
       <StageLabel view={view} />
       <StageTime at={at} view={view} />
-      <PrLink pr={pkg.pr} repo={pkg.goalRepo} />
+      <PrLink pr={pkg.pr} repos={pkg.goalRepos} />
       <Owner owner={pkg.owner} />
       {waitsOnOthers(pkg) ? <ActButton action={{ kind: "finish", pkgId: pkg.id }} confirm="Finish?" label="Finish" tone="text-ink" /> : <span />}
     </div>
@@ -392,7 +392,7 @@ function RestLine({ pkg }: { pkg: Pkg }) {
       <span />
       {/* The outcome starts where the stage would: the steps column where it shows, the stage column otherwise. */}
       <span className={`col-span-2 truncate font-mono text-[11px] min-[1280px]:col-span-3 ${outcome?.tone ?? "text-faint"}`}>{outcome?.label ?? "Planned"}</span>
-      <PrLink pr={pkg.pr} repo={pkg.goalRepo} />
+      <PrLink pr={pkg.pr} repos={pkg.goalRepos} />
       <span />
       <span />
     </div>

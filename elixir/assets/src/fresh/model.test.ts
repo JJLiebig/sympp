@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { applyDemo, demoLedger } from "./mock";
-import { buildBoard, openAt, unresolvedPkgs, viewAt, type Hydrated } from "./model";
+import { buildBoard, openAt, unresolvedPkgs, viewAt, waitsOnOthers, type Hydrated } from "./model";
 import { refusalText } from "./operator";
 
 const NOW = Date.parse("2026-11-09T12:00:00Z");
@@ -71,6 +71,12 @@ describe("an unresolved goal", () => {
     const board = read({ work_request_details: [{ work_request: { id: "wr", phase: "unresolved" }, work_packages: [ended("a", "superseded", "b"), ended("b", "skipped"), ended("c", "pr_merged")] }] });
     const [view] = viewAt(board, NOW);
     expect(unresolvedPkgs(view).map((pkg) => pkg.id)).toEqual(["a"]);
+  });
+
+  it("offers Finish only for a PR into another repository than the goal's, whatever name the goal shows", () => {
+    const pkg = (id: string, repository: string) => ({ id, status: "ready", pr_signal: { status: "open", number: 1, url: "u", repository } });
+    const board = read({ work_request_details: [{ work_request: { id: "wr", phase: "active", repo: "acme/sympp", repo_display: "sympp", repo_aliases: ["acme/sympp"] }, work_packages: [pkg("own", "Acme/Sympp"), pkg("upstream", "openai/symphony")] }] });
+    expect(viewAt(board, NOW)[0].live.filter((view) => waitsOnOthers(view.pkg)).map((view) => view.pkg.id)).toEqual(["upstream"]);
   });
 
   it("does not show a review of an older head as done", () => {
