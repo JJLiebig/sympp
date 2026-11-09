@@ -66,7 +66,8 @@ function DecisionItem({ at, board, decision, onGoal }: { at: number; board: Boar
       </div>
       {undelivered ? <Undelivered decision={decision} failure={failure} onDismiss={() => void dismiss()} /> : null}
       {!undelivered && !writing ? <Reactions decision={decision} onFeedback={() => setWriting(true)} /> : null}
-      {writing ? <FeedbackForm decision={decision} onCancel={() => setWriting(false)} /> : null}
+      {/* Feedback that could not be delivered comes back as the Undelivered notice, which replaces the form. */}
+      {writing && !undelivered ? <FeedbackForm decision={decision} onCancel={() => setWriting(false)} /> : null}
     </li>
   );
 }
