@@ -1151,7 +1151,7 @@ export default class Lens extends View {
     if (this.level !== "factory") return this.root(t, Lv.scopeLevel(this, t, { board, desk, path, bindings, terminals: terminals(), now }));
     const top = [O.levelBar(this, t, trail, { now, needs })];
     if (this.intake) return this.root(t, [...top, O.intakeForm(this, t)]);
-    const rows = L.factoryRows(board.jobs, desk, this.place).map((row) => ({ ...row, chiefs: this.chiefsOf(row, board, desk, bindings, now) }));
+    const rows = L.factoryRows(board.jobs, desk, this.place, board.cards).map((row) => ({ ...row, chiefs: this.chiefsOf(row, board, desk, bindings, now) }));
     this.watch("factory", rows.flatMap((row) => row.chiefs.flatMap((c) => c.agent.bindings)));
     return this.root(t, [...top, O.factoryLevel(this, t, board, rows, now)]);
   }

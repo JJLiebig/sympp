@@ -110,7 +110,8 @@ export function decisionQueue(jobs) {
 }
 
 // One row per Herdr topic, then unsorted spaces and work without a space when either has anything.
-export function factoryRows(jobs, desk, place) {
+// A card's asks count where the card lives.
+export function factoryRows(jobs, desk, place, cards = []) {
   const open = jobs.filter((job) => job.state !== "settled");
   const names = new Map(desk.map((t) => [t.id, t.name]));
   return desk.map((topic) => {
@@ -124,7 +125,7 @@ export function factoryRows(jobs, desk, place) {
     return {
       ...topic,
       jobs: own,
-      needs: own.reduce((n, job) => n + job.needs.length, 0),
+      needs: own.reduce((n, job) => n + job.needs.length, 0) + cards.filter((card) => place.home(card) === topic.id).reduce((n, card) => n + card.needs.length, 0),
       moving: own.reduce((n, job) => n + job.counts.live, 0),
       repos: [...new Set(own.flatMap((job) => job.repos.map(shortRepo)).filter(Boolean))],
       shared: [...shared].map(([name, count]) => ({ name, count })),

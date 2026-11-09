@@ -3,7 +3,7 @@
 // board in fixture.mjs, with no sympp reads or writes, as its own mod; its actions change the sample
 // in memory only. The studio runs it from the worker's worktree and again on every save, so the
 // copy follows the work in progress.
-//   node integrations/herdr-next/preview.mjs --to <herdr home>/mods/sympp-dev-<name> [--base <ref>]
+//   node integrations/herdr-next/preview.mjs --to <herdr home>/mods/sympp-dev-<name> [--base <ref>] [--board busy|quiet] [--panel]
 // With --base the first copy waits until the view differs from that ref (committed or not), exiting
 // 3 until then; an existing copy is always rebuilt, so reverted edits show too. It writes only into a mods/sympp-dev-* folder and only files whose contents changed.
 import { mkdir, readFile, readdir, writeFile, rm } from 'node:fs/promises';
@@ -97,10 +97,11 @@ export function viewChanged(root, base) {
 }
 
 // Writes the copy into `to`, changing only what differs, and removes files the view no longer has.
-export async function buildPreview(to, root = resolve(here, '../..')) {
+// --board picks a fuller sample board, and --panel draws it as the narrow panel does.
+export async function buildPreview(to, root = resolve(here, '../..'), spec = {}) {
   const name = basename(to);
   if (!name.startsWith(PREFIX)) throw new Error(`The preview folder must be named ${PREFIX}<name>.`);
-  const files = await previewFiles(name, root);
+  const files = await previewFiles(name, root, spec);
   await mkdir(to, { recursive: true });
   const before = await readdir(to);
   let written = 0;
@@ -115,7 +116,7 @@ export async function buildPreview(to, root = resolve(here, '../..')) {
 }
 
 async function main() {
-  const { values } = parseArgs({ options: { to: { type: 'string' }, base: { type: 'string' } } });
+  const { values } = parseArgs({ options: { to: { type: 'string' }, base: { type: 'string' }, board: { type: 'string' }, panel: { type: 'boolean' } } });
   if (!values.to) throw new Error('--to <herdr home>/mods/sympp-dev-<name> is required');
   const root = resolve(here, '../..');
   const to = resolve(values.to);
@@ -123,7 +124,8 @@ async function main() {
     process.stdout.write(`${JSON.stringify({ state: 'unchanged' })}\n`);
     return 3;
   }
-  const built = await buildPreview(to, root);
+  const spec = { ...(values.board ? { board: values.board } : {}), ...(values.panel ? { props: { role: 'panel' } } : {}) };
+  const built = await buildPreview(to, root, spec);
   process.stdout.write(`${JSON.stringify({ state: 'built', ...built })}\n`);
   return 0;
 }
