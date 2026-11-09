@@ -1,5 +1,5 @@
 {
-  "mcp_contract_fingerprint": "1c7c72cc477cd315ef3b56a66e3344daecc7d421e16aa3d424d24e4afa67777f",
+  "mcp_contract_fingerprint": "a362778159c9d6c1bc14b2753e65ff6e20c8af4e66f81ef49fd7326763990688",
   "tool_sets": {
     "owner_gated_tools": [
       "append_finding",
@@ -9,12 +9,7 @@
       "reconcile_work_request",
       "record_work_package_delivery",
       "set_report",
-      "slice_work_request",
-      "update_work_package",
-      "upsert_group",
-      "delete_group",
-      "upsert_dependency",
-      "delete_dependency",
+      "edit_plan",
       "skip_work_package",
       "dispatch_work_package"
     ],
@@ -24,9 +19,6 @@
       "solo_list",
       "list_work_requests",
       "read_work_request",
-      "read_plan",
-      "read_delivery_board",
-      "read_task_plan",
       "summarize_failed_mcp_calls"
     ],
     "tools": [
@@ -48,9 +40,6 @@
       "create_work_request",
       "list_work_requests",
       "read_work_request",
-      "read_plan",
-      "read_delivery_board",
-      "read_task_plan",
       "append_finding",
       "append_progress",
       "resolve_blocker",
@@ -63,12 +52,7 @@
       "answer_question_and_record_decision",
       "close_question",
       "record_decision",
-      "slice_work_request",
-      "update_work_package",
-      "upsert_group",
-      "delete_group",
-      "upsert_dependency",
-      "delete_dependency",
+      "edit_plan",
       "skip_work_package",
       "dispatch_work_package",
       "record_work_request_operator_decision",

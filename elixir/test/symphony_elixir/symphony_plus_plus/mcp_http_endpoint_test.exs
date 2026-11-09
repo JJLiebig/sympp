@@ -270,15 +270,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     assert is_binary(request_id), inspect(created)
 
     sliced =
-      terminal_call(headers, "t1", "slice_work_request", %{
+      terminal_call(headers, "t1", "edit_plan", %{
         "work_request_id" => request_id,
-        "work_packages" =>
+        "ops" =>
           Enum.map(1..11, fn n ->
-            WorkPackageFactory.attrs(goal: "Deliver package #{n}", allowed_file_globs: ["docs/**"], validation_steps: [], stop_conditions: [])
+            add_package_op(goal: "Deliver package #{n}", allowed_file_globs: ["docs/**"], validation_steps: [], stop_conditions: [])
           end)
       })
 
-    [blocked_id | package_ids] = get_in(sliced, ["result", "structuredContent", "work_package_ids"])
+    [blocked_id | package_ids] = added_package_ids(sliced)
     assert length(package_ids) == 10
 
     # Each agent restart or reconnect in the owning terminal opens its own MCP session.
@@ -382,12 +382,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
     # A write naming only the package binds the terminal to the package's WorkRequest.
     sliced =
-      terminal_call(headers, "t1", "slice_work_request", %{
+      terminal_call(headers, "t1", "edit_plan", %{
         "work_request_id" => request_id,
-        "work_packages" => [WorkPackageFactory.attrs(goal: "Bind by package", allowed_file_globs: ["docs/**"], validation_steps: [], stop_conditions: [])]
+        "ops" => [add_package_op(goal: "Bind by package", allowed_file_globs: ["docs/**"], validation_steps: [], stop_conditions: [])]
       })
 
-    [package_id] = get_in(sliced, ["result", "structuredContent", "work_package_ids"])
+    [package_id] = added_package_ids(sliced)
 
     progress =
       tool_call_request("progress", "append_progress", %{"work_package_id" => package_id, "summary" => "Started", "idempotency_key" => "bind-1"})
@@ -1219,4 +1219,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     File.mkdir_p!(path)
     path
   end
+
+  defp add_package_op(overrides), do: overrides |> WorkPackageFactory.attrs() |> Map.new(fn {key, value} -> {to_string(key), value} end) |> Map.put("op", "add_package")
+
+  defp added_package_ids(response), do: Enum.map(get_in(response, ["result", "structuredContent", "applied"]) || [], & &1["work_package_id"])
 end

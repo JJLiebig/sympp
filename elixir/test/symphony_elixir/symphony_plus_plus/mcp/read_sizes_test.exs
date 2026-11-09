@@ -70,21 +70,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
     end
 
     reads = [
-      {"read_work_request", %{"work_request_id" => request.id}},
-      {"list_work_requests", %{}},
-      {"read_plan", %{"work_request_id" => request.id}},
-      {"read_task_plan", %{"work_package_id" => package.id}},
-      {"read_delivery_board", %{"work_request_id" => request.id}}
+      {"overview", "read_work_request", %{"work_request_id" => request.id}},
+      {"list", "list_work_requests", %{}},
+      {"plan", "read_work_request", %{"work_request_id" => request.id, "view" => "plan"}},
+      {"package", "read_work_request", %{"work_request_id" => request.id, "view" => "package", "work_package_id" => package.id}},
+      {"board", "read_work_request", %{"work_request_id" => request.id, "view" => "board"}}
     ]
 
     sizes =
-      for {name, arguments} <- reads do
+      for {label, name, arguments} <- reads do
         response = mcp_tool(repo, nil, name, arguments)
         refute response["error"], inspect(response["error"])
         result = response["result"]
 
         full =
-          if name in ~w(read_work_request read_plan) do
+          if label in ~w(overview plan package) do
             full_response = mcp_tool(repo, nil, name, Map.put(arguments, "detail", "full"))
             refute full_response["error"]
             full_response["result"]
@@ -93,7 +93,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
           end
 
         %{
-          tool: name,
+          tool: label,
           after: measure(result),
           before: measure(full)
         }
@@ -126,14 +126,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadSizesTest do
 
     assert local["result"]["structuredContent"]["work_packages"] == summary["work_packages"]
 
-    plan = mcp_tool(repo, architect, "read_plan", %{"work_request_id" => request.id})["result"]["structuredContent"]
-    full_plan = mcp_tool(repo, architect, "read_plan", %{"work_request_id" => request.id, "detail" => "full"})["result"]["structuredContent"]
-    assert plan["product_tree"]["execution_graph"] == full_plan["product_tree"]["execution_graph"]
-    assert length(plan["product_tree"]["work_package_refs"]) == 28
-    assert full_plan["product_tree"]["work_package_refs"] |> hd() |> Map.has_key?("operational_state")
-    refute plan["product_tree"]["work_package_refs"] |> hd() |> Map.has_key?("operational_state")
+    plan = mcp_tool(repo, architect, "read_work_request", %{"work_request_id" => request.id, "view" => "plan"})["result"]["structuredContent"]
+    full_plan = mcp_tool(repo, architect, "read_work_request", %{"work_request_id" => request.id, "view" => "plan", "detail" => "full"})["result"]["structuredContent"]
+    assert plan["plan"]["execution_graph"] == full_plan["plan"]["execution_graph"]
+    assert length(plan["plan"]["work_packages"]) == 28
+    assert full_plan["plan"]["work_packages"] |> hd() |> Map.has_key?("operational_state")
+    refute plan["plan"]["work_packages"] |> hd() |> Map.has_key?("operational_state")
 
-    for {tool, arguments} <- reads, tool in ~w(read_work_request read_plan) do
+    for {label, tool, arguments} <- reads, label in ~w(overview plan package) do
       invalid = mcp_tool(repo, nil, tool, Map.put(arguments, "detail", "invalid"))
       assert get_in(invalid, ["error", "data", "reason"]) == "invalid_detail"
     end

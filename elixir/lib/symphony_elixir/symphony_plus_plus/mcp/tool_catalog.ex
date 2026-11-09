@@ -24,9 +24,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   @architect_tools [
     "list_work_requests",
     "read_work_request",
-    "read_plan",
-    "read_delivery_board",
-    "read_task_plan",
     "append_finding",
     "append_progress",
     "resolve_blocker",
@@ -39,26 +36,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "answer_question_and_record_decision",
     "close_question",
     "record_decision",
-    "slice_work_request",
-    "update_work_package",
-    "upsert_group",
-    "delete_group",
-    "upsert_dependency",
-    "delete_dependency",
+    "edit_plan",
     "skip_work_package",
     "dispatch_work_package"
   ]
   @known_tools Enum.uniq([@health_tool] ++ @solo_tools ++ @bootstrap_tools ++ @local_operator_tools ++ @architect_tools)
-  @work_request_product_tree_views ["groups_only", "groups_with_work_package_refs", "groups_with_work_packages"]
+  @work_request_views ["overview", "plan", "board", "package"]
   # Every tool is a write unless listed here. Writes need a Herdr terminal
   # identity; the same split drives the MCP readOnlyHint annotation.
   @read_tools [
     @health_tool,
     "list_work_requests",
     "read_work_request",
-    "read_plan",
-    "read_delivery_board",
-    "read_task_plan",
     "solo_list",
     "solo_show",
     "summarize_failed_mcp_calls"
@@ -73,12 +62,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "reconcile_work_request",
     "record_work_package_delivery",
     "set_report",
-    "slice_work_request",
-    "update_work_package",
-    "upsert_group",
-    "delete_group",
-    "upsert_dependency",
-    "delete_dependency",
+    "edit_plan",
     "skip_work_package",
     "dispatch_work_package"
   ]
@@ -136,8 +120,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   @spec known_tools() :: [tool_name()]
   def known_tools, do: @known_tools
 
-  @spec work_request_product_tree_views() :: [String.t()]
-  def work_request_product_tree_views, do: @work_request_product_tree_views
+  @spec work_request_views() :: [String.t()]
+  def work_request_views, do: @work_request_views
 
   @spec solo_tool_input_schema(tool_name()) :: input_schema()
   defdelegate solo_tool_input_schema(name), to: InputSchemas

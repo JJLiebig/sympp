@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PackageTools do
   @moduledoc """
-  Owner-gated writes and reads on one WorkPackage, named by `work_package_id`:
-  task plan reads, findings and progress. The server
+  Owner-gated writes on one WorkPackage, named by `work_package_id`: findings
+  and progress. The server
   checks that the caller owns the package's WorkRequest before these run.
   """
 
@@ -16,7 +16,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PackageTools do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     Config,
     ProgressEvents,
-    TaskPlanTools,
     ToolResult,
     Writer
   }
@@ -25,7 +24,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PackageTools do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
 
   @tools [
-    "read_task_plan",
     "append_finding",
     "append_progress"
   ]
@@ -37,16 +35,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PackageTools do
   def tools, do: @tools
 
   @spec call(String.t(), Config.t(), Terminal.t() | nil, map()) :: result()
-  def call("read_task_plan", %Config{} = config, _terminal, arguments) do
-    with {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
-         {:ok, result} <- TaskPlanTools.read_task_plan(config.repo, work_package_id) do
-      {:ok, result}
-    else
-      {:tool_error, reason} -> invalid_params_error("read_task_plan", reason)
-      {:error, reason} -> worker_error(reason, "read_task_plan")
-    end
-  end
-
   def call(name, %Config{} = config, %Terminal{} = terminal, arguments) when name in @tools do
     case required_argument(arguments, "work_package_id") do
       {:ok, work_package_id} -> write(name, config.repo, Writer.new(terminal, work_package_id), arguments)

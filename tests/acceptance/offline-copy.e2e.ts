@@ -12,9 +12,7 @@ if (process.env.SYMPP_OFFLINE_ACCEPTANCE === '1') {
     const source = copy.start('online-home');
     const architect = await source.client();
     const request = await architect.request('Synthetic online snapshot');
-    const [wp] = (await architect.call('slice_work_request', {
-      work_packages: [contract('Persisted snapshot package')],
-    })).work_package_ids;
+    const [wp] = (await architect.addPackages([contract('Persisted snapshot package')]));
     const before = await architect.call('read_work_request', { detail: 'full', work_request_id: request });
     const sourceBoard = await architect.raw(null, {}, 'GET', '/api/v1/sympp/herdr/dashboard');
     expect(sourceBoard.status).toBe(200);

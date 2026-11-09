@@ -5,7 +5,7 @@ board does not reflect the real terminal outcome.
 
 ## Merged Pull Request
 
-1. Read `read_delivery_board`.
+1. Read `read_work_request` with `view: "board"`.
 2. Run `reconcile_work_request` as a dry run.
 3. Verify the proposed package, pull request URL, merge timestamp, and merge
    commit against GitHub.

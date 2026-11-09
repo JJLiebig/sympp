@@ -11,7 +11,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyEdge do
   @primary_key {:id, :string, autogenerate: false}
   @foreign_key_type :string
 
-  @ref_kinds ["product_node", "work_package"]
+  @ref_kinds ["work_package"]
   @edge_kinds ["depends_on", "blocks", "enables", "validates", "replaces", "supersedes", "recut_from", "related"]
   @hard_edge_kinds ["depends_on", "blocks"]
 
@@ -67,8 +67,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyEdge do
 
   @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
   def update_changeset(%__MODULE__{} = edge, attrs) do
+    attrs = Attrs.normalize_keys(attrs)
+
     edge
-    |> changeset(attrs |> Attrs.normalize_keys() |> redact_attrs())
+    |> changeset(attrs |> redact_attrs() |> Map.take(Map.keys(attrs)))
   end
 
   defp changeset(edge, attrs) do
@@ -102,7 +104,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyEdge do
     |> validate_inclusion(:kind, @edge_kinds)
     |> validate_format(:candidate_head_sha, ~r/\A[0-9a-fA-F]{40}\z/)
     |> validate_candidate_prerequisite()
-    |> validate_hard_edge_context()
     |> validate_not_self_edge()
     |> stamp_selection_change()
     |> foreign_key_constraint(:work_request_id)
@@ -121,10 +122,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyEdge do
 
   defp validate_candidate_prerequisite(changeset) do
     kind = get_field(changeset, :kind)
-    prerequisite_kind = get_field(changeset, if(kind == "blocks", do: :source_kind, else: :target_kind))
 
-    if get_field(changeset, :candidate_head_sha) && (kind not in @hard_edge_kinds or prerequisite_kind != "work_package") do
-      add_error(changeset, :candidate_head_sha, "requires one concrete prerequisite WorkPackage")
+    if get_field(changeset, :candidate_head_sha) && kind not in @hard_edge_kinds do
+      add_error(changeset, :candidate_head_sha, "requires a hard dependency")
     else
       changeset
     end
@@ -137,24 +137,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyEdge do
     |> Map.update("decision_ref", nil, &(Redactor.redact(&1) |> Redactor.json_safe()))
   end
 
-  defp validate_hard_edge_context(changeset) do
-    kind = get_field(changeset, :kind)
-    reason = get_field(changeset, :reason)
-    decision_ref = get_field(changeset, :decision_ref)
-
-    if kind in @hard_edge_kinds and blank?(reason) and blank?(decision_ref) do
-      add_error(changeset, :kind, "hard dependency edges require a reason or decision reference")
-    else
-      changeset
-    end
-  end
-
   defp validate_not_self_edge(changeset) do
     source = {get_field(changeset, :source_kind), get_field(changeset, :source_id)}
     target = {get_field(changeset, :target_kind), get_field(changeset, :target_id)}
 
     if source == target, do: add_error(changeset, :target_id, "cannot point at the same item"), else: changeset
   end
-
-  defp blank?(value), do: value in [nil, "", %{}]
 end

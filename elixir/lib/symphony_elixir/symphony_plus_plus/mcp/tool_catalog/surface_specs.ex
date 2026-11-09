@@ -88,13 +88,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp architect_tool_description("list_work_requests"), do: "List WorkRequests in the ledger, newest first."
 
   defp architect_tool_description("read_work_request"),
-    do: "Read a compact WorkRequest overview: status, description, open questions, package next actions and recent decisions. Use detail: full for all contracts and history."
-
-  defp architect_tool_description("read_plan"),
-    do: "Read the scoped execution graph, Groups and package references. Use detail: full with the desired view for complete package payloads."
-
-  defp architect_tool_description("read_task_plan"),
-    do: "Read the task plan for an explicit descendant WorkPackage."
+    do:
+      "Read one WorkRequest in a view: overview (default; phase, open questions, package next actions, recent decisions), plan (packages with group paths, dependencies, execution graph), board (delivery state and evidence) or package (one package's contract, revision, dependencies and task plan; needs work_package_id). detail: full returns complete payloads."
 
   defp architect_tool_description("append_finding"),
     do: "Append idempotent finding evidence to an explicit descendant WorkPackage."
@@ -103,8 +98,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
     do: "Append an idempotent progress event to an explicit descendant WorkPackage."
 
   defp architect_tool_description("resolve_blocker"), do: "Resolve a blocker on a WorkPackage of a WorkRequest you own."
-
-  defp architect_tool_description("read_delivery_board"), do: "Read a compact scoped WorkRequest delivery board; detail: full includes complete package and closeout evidence."
 
   defp architect_tool_description("sync_pr"),
     do:
@@ -127,20 +120,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp architect_tool_description("record_decision"),
     do: "Record a durable decision log entry on a scoped WorkRequest. source_type must be one of: #{Enum.join(DecisionLogEntry.source_types(), ", ")}."
 
-  defp architect_tool_description("slice_work_request"), do: "Atomically slice a WorkRequest you own into canonical WorkPackages."
-  defp architect_tool_description("update_work_package"), do: "Update one canonical WorkPackage contract using its optimistic contract revision."
-
-  defp architect_tool_description("upsert_group") do
-    "Create, rename, reparent, or reorder an optional Group inside a WorkRequest you own. Groups organize WorkPackages and have no lifecycle."
+  defp architect_tool_description("edit_plan") do
+    "Edit the plan of a WorkRequest you own in one atomic call: add_package (contract, optional group path such as \"Backend / Billing\", depends_on), update_package (expected_revision and a patch), set_dependency (from depends on to, optional candidate_head_sha) and remove_dependency. Any failing op rolls back the whole edit; the error names the op index, the state and the next action. Returns each op's result and the plan after the edit."
   end
 
-  defp architect_tool_description("delete_group"),
-    do: "Remove a Group, move its direct child Groups and WorkPackages to its parent, and remove dependencies that name it."
-
-  defp architect_tool_description("upsert_dependency"),
-    do: "Create or edit one dependency intent between WorkPackage or Group endpoints; the backend derives effective WorkPackage edges."
-
-  defp architect_tool_description("delete_dependency"), do: "Remove one dependency intent from a WorkRequest you own."
   defp architect_tool_description("skip_work_package"), do: "End a planned WorkPackage of a WorkRequest you own as skipped."
 
   defp architect_tool_description("dispatch_work_package"),

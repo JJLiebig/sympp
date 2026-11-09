@@ -92,8 +92,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
           "id" => "local-read-delivery-board",
           "method" => "tools/call",
           "params" => %{
-            "name" => "read_delivery_board",
-            "arguments" => %{"work_request_id" => work_request.id}
+            "name" => "read_work_request",
+            "arguments" => %{"work_request_id" => work_request.id, "view" => "board"}
           }
         },
         read_server

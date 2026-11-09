@@ -31,7 +31,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
   @type t :: %__MODULE__{
           id: String.t() | nil,
           work_request_id: String.t() | nil,
-          product_tree_node_id: String.t() | nil,
+          group: String.t() | nil,
           sequence: pos_integer() | nil,
           kind: String.t() | nil,
           title: String.t() | nil,
@@ -66,7 +66,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
 
   schema "sympp_work_packages" do
     field(:work_request_id, :string)
-    field(:product_tree_node_id, :string)
+    field(:group, :string)
     field(:sequence, :integer)
     field(:kind, :string)
     field(:title, :string)
@@ -149,7 +149,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
     |> cast(attrs, [
       :id,
       :work_request_id,
-      :product_tree_node_id,
+      :group,
       :sequence,
       :kind,
       :title,
@@ -177,6 +177,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
       :dispatched_at
     ])
     |> Title.validate()
+    |> normalize_group()
     |> validate_required([:id, :kind, :title, :repo, :base_branch, :acceptance_criteria, :status])
     |> validate_inclusion(:kind, @kinds)
     |> validate_status()
@@ -185,6 +186,44 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
     |> validate_branch_pattern()
     |> validate_policy_template()
     |> validate_review_requirement()
+  end
+
+  @doc """
+  Normalizes a group path such as `"Backend/ Billing"` to `"Backend / Billing"`:
+  segments split on `/`, trimmed and joined with `" / "`. A blank path means no
+  group. An empty segment is an error.
+  """
+  @spec normalize_group_path(term()) :: {:ok, String.t() | nil} | :error
+  def normalize_group_path(nil), do: {:ok, nil}
+
+  def normalize_group_path(path) when is_binary(path) do
+    segments = path |> String.split("/") |> Enum.map(&String.trim/1)
+
+    cond do
+      String.trim(path) == "" -> {:ok, nil}
+      Enum.any?(segments, &(&1 == "")) -> :error
+      true -> {:ok, Enum.join(segments, " / ")}
+    end
+  end
+
+  def normalize_group_path(_path), do: :error
+
+  @doc "The segments of a group path, outermost first."
+  @spec group_segments(String.t() | nil) :: [String.t()]
+  def group_segments(nil), do: []
+  def group_segments(path) when is_binary(path), do: String.split(path, " / ")
+
+  defp normalize_group(changeset) do
+    case fetch_change(changeset, :group) do
+      {:ok, path} ->
+        case normalize_group_path(path) do
+          {:ok, normalized} -> put_change(changeset, :group, normalized)
+          :error -> add_error(changeset, :group, "must be names separated by /, with no empty name", validation: :group_path)
+        end
+
+      :error ->
+        changeset
+    end
   end
 
   defp validate_status(changeset), do: validate_inclusion(changeset, :status, Lifecycle.statuses())

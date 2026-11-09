@@ -12,10 +12,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadAccessTest do
 
     for {tool, arguments} <- [
           {"read_work_request", %{"work_request_id" => work_request.id}},
-          {"read_plan", %{"work_request_id" => work_request.id}},
-          {"read_delivery_board", %{"work_request_id" => work_request.id}},
-          {"reconcile_work_request", %{"work_request_id" => work_request.id}},
-          {"read_task_plan", %{"work_package_id" => package.id}}
+          {"read_work_request", %{"work_request_id" => work_request.id, "view" => "plan"}},
+          {"read_work_request", %{"work_request_id" => work_request.id, "view" => "board"}},
+          {"read_work_request", %{"work_request_id" => work_request.id, "view" => "package", "work_package_id" => package.id}},
+          {"reconcile_work_request", %{"work_request_id" => work_request.id}}
         ] do
       result = tool!(client, tool, arguments)
       assert result.response["result"], "#{tool}: #{inspect(result.response)}"
@@ -24,24 +24,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadAccessTest do
 
     assert Ownership.owner(repo, work_request.id) == nil
 
-    write = tool!(client, "upsert_group", %{"work_request_id" => work_request.id, "title" => "First write"})
-    assert is_binary(write.response["result"]["structuredContent"]["group"]["id"])
+    write = tool!(client, "edit_plan", %{"work_request_id" => work_request.id, "ops" => [group_op(package)]})
+    assert [%{"op" => "update_package"}] = write.response["result"]["structuredContent"]["applied"]
     assert %{"role" => "architect", "work_request_id" => work_request_id} = write.herdr_binding
     assert work_request_id == work_request.id
     assert %WorkedOn{display_address: "testbox/t1", state: "live"} = Ownership.owner(repo, work_request.id)
 
     tools = call!(client, "tools", "tools/list", %{}).response["result"]["tools"] |> Map.new(&{&1["name"], &1})
-    assert tools["read_plan"]["annotations"] == %{"readOnlyHint" => true}
-    assert tools["upsert_group"]["annotations"] == %{"readOnlyHint" => false}
+    assert tools["read_work_request"]["annotations"] == %{"readOnlyHint" => true}
+    assert tools["edit_plan"]["annotations"] == %{"readOnlyHint" => false}
   end
 
   test "an owner reads another WorkRequest exactly as named", %{repo: repo} do
     owned = create_work_request!(repo, id: "WR-READS-OWNED")
+    owned_package = add_package!(repo, owned, "WP-READS-OWNED")
     other = create_work_request!(repo, id: "WR-READS-OTHER", repo: "nextide/other-product", base_branch: "develop")
     other_packages = for index <- 1..3, do: add_package!(repo, other, "WP-READS-OTHER-#{index}")
     client = connect!(repo, "client-reads-owner")
 
-    assert tool!(client, "upsert_group", %{"work_request_id" => owned.id, "title" => "Own"}).response["result"]
+    assert tool!(client, "edit_plan", %{"work_request_id" => owned.id, "ops" => [group_op(owned_package)]}).response["result"]
 
     read = fn tool, arguments ->
       result = tool!(client, tool, arguments)
@@ -51,16 +52,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadAccessTest do
 
     assert read.("read_work_request", %{"work_request_id" => other.id})["work_request"]["id"] == other.id
 
-    board = read.("read_delivery_board", %{"work_request_id" => other.id, "detail" => "full"})
+    board = read.("read_work_request", %{"work_request_id" => other.id, "view" => "board", "detail" => "full"})
     assert board["work_request"]["id"] == other.id
     assert length(board["delivery_board"]["work_packages"]) == 3
 
-    plan = read.("read_plan", %{"work_request_id" => other.id, "detail" => "full", "view" => "groups_with_work_packages"})
+    plan = read.("read_work_request", %{"work_request_id" => other.id, "view" => "plan", "detail" => "full"})
     assert plan["work_request"]["id"] == other.id
     assert plan["scope"] == %{"repo" => "nextide/other-product", "base_branch" => "develop"}
-    assert plan["product_tree"]["work_packages"] |> Enum.map(& &1["id"]) |> Enum.sort() == Enum.map(other_packages, & &1.id)
+    assert plan["plan"]["work_packages"] |> Enum.map(& &1["id"]) |> Enum.sort() == Enum.map(other_packages, & &1.id)
 
-    assert read.("read_task_plan", %{"work_package_id" => hd(other_packages).id})["uri"] =~ hd(other_packages).id
+    package = read.("read_work_request", %{"work_request_id" => other.id, "view" => "package", "work_package_id" => hd(other_packages).id})
+    assert package["work_package"]["id"] == hd(other_packages).id
+    assert %{"version" => _, "steps" => []} = package["task_plan"]
     assert read.("reconcile_work_request", %{"work_request_id" => other.id})["work_request"]["id"] == other.id
     assert Ownership.owner(repo, other.id) == nil
   end
@@ -78,6 +81,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadAccessTest do
 
     package
   end
+
+  defp group_op(package),
+    do: %{"op" => "update_package", "work_package_id" => package.id, "expected_revision" => package.contract_revision, "patch" => %{"group" => "Reads"}}
 
   defp connect!(repo, client_key) do
     config = local_mcp_config(repo)

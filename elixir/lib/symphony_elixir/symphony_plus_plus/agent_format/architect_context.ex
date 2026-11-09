@@ -17,8 +17,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
 
   defp agent_payload(payload, :work_request_read), do: work_request_read_payload(payload)
 
-  defp agent_payload(payload, :work_request_product_tree),
-    do: work_request_product_tree_payload(payload)
+  defp agent_payload(payload, :work_request_plan), do: work_request_plan_payload(payload)
 
   defp agent_payload(payload, :work_request_delivery_board),
     do: delivery_board_agent_payload(payload)
@@ -38,24 +37,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
     }
   end
 
-  defp work_request_product_tree_payload(payload) do
-    product_tree = map_value(payload, "product_tree") || %{}
+  defp work_request_plan_payload(payload) do
+    plan = map_value(payload, "plan") || %{}
 
     %{
-      "agent_context" => "work_request_product_tree",
+      "agent_context" => "work_request_plan",
       "work_request" => payload |> map_value("work_request") |> compact_work_request(),
       "scope" => payload |> map_value("scope") |> primitive_map(),
-      "view" => text_value(map_value(payload, "view")),
-      "schema_version" => text_value(map_value(product_tree, "schema_version")),
-      "mode" => text_value(map_value(product_tree, "mode")),
-      "summary" => product_tree |> map_value("summary") |> primitive_map(),
-      "root_group_ids" => product_tree |> map_value("root_group_ids") |> join_list(),
-      "root_work_package_ids" => product_tree |> map_value("root_work_package_ids") |> join_list(),
-      "groups" => product_tree |> map_value("groups") |> list_rows(&product_tree_group_row/1),
-      "dependency_intents" => product_tree |> map_value("dependency_intents") |> list_rows(&dependency_intent_row/1),
-      "execution_graph" => product_tree |> map_value("execution_graph") |> execution_graph_row(),
-      "work_package_refs" => product_tree |> map_value("work_package_refs") |> list_rows(&product_tree_work_package_ref_row/1),
-      "work_packages" => product_tree |> map_value("work_packages") |> list_rows(&work_package_row/1)
+      "summary" => plan |> map_value("summary") |> primitive_map(),
+      "dependencies" => plan |> map_value("dependencies") |> list_rows(&dependency_row/1),
+      "execution_graph" => plan |> map_value("execution_graph") |> execution_graph_row(),
+      "work_packages" => plan |> map_value("work_packages") |> list_rows(&work_package_row/1)
     }
   end
 
@@ -129,7 +121,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
   defp work_package_row(%{} = work_package) do
     %{
       "id" => text_value(map_value(work_package, "id")),
-      "group_id" => text_value(map_value(work_package, "group_id")),
+      "group" => text_value(map_value(work_package, "group")),
       "sequence" => integer_value(map_value(work_package, "sequence")),
       "title" => text_value(map_value(work_package, "title")),
       "goal" => text_value(map_value(work_package, "goal")),
@@ -182,37 +174,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
     }
   end
 
-  defp product_tree_group_row(%{} = group) do
-    %{
-      "id" => text_value(map_value(group, "id")),
-      "parent_group_id" => text_value(map_value(group, "parent_group_id")),
-      "title" => text_value(map_value(group, "title")),
-      "description" => text_value(map_value(group, "description")),
-      "kind" => text_value(map_value(group, "kind")),
-      "work_package_count" => integer_value(map_value(group, "work_package_count")),
-      "child_group_count" => integer_value(map_value(group, "child_group_count")),
-      "work_package_ids" => group |> map_value("work_package_ids") |> join_list()
-    }
-    |> reject_nil_values()
-  end
-
-  defp dependency_intent_row(%{} = dependency) do
+  defp dependency_row(%{} = dependency) do
     %{
       "id" => text_value(map_value(dependency, "id")),
-      "dependent" => dependency |> map_value("dependent") |> dependency_endpoint_value(),
-      "prerequisite" => dependency |> map_value("prerequisite") |> dependency_endpoint_value(),
+      "from" => text_value(map_value(dependency, "from")),
+      "to" => text_value(map_value(dependency, "to")),
+      "candidate_head_sha" => text_value(map_value(dependency, "candidate_head_sha")),
       "reason" => text_value(map_value(dependency, "reason"))
     }
     |> reject_nil_values()
   end
-
-  defp dependency_endpoint_value(%{} = endpoint) do
-    kind = text_value(map_value(endpoint, "kind"))
-    id = text_value(map_value(endpoint, "id"))
-    if kind && id, do: "#{kind}:#{id}", else: nil
-  end
-
-  defp dependency_endpoint_value(_endpoint), do: nil
 
   defp execution_graph_row(%{} = graph) do
     %{
@@ -252,17 +223,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
       "status" => text_value(map_value(resolution, "status")),
       "delivery_outcome" => text_value(map_value(resolution, "delivery_outcome")),
       "resolved" => bool_value(map_value(resolution, "resolved"))
-    }
-    |> reject_nil_values()
-  end
-
-  defp product_tree_work_package_ref_row(%{} = work_package) do
-    %{
-      "id" => text_value(map_value(work_package, "id")),
-      "group_id" => text_value(map_value(work_package, "group_id")),
-      "sequence" => integer_value(map_value(work_package, "sequence")),
-      "title" => text_value(map_value(work_package, "title")),
-      "status" => text_value(map_value(work_package, "status"))
     }
     |> reject_nil_values()
   end

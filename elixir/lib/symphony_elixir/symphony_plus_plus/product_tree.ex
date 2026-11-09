@@ -11,23 +11,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree do
   @spec trees_for_work_requests(module(), [String.t()]) :: {:ok, map()} | {:error, term()}
   defdelegate trees_for_work_requests(repo, work_request_ids), to: Repository
 
-  @spec create_node(module(), map()) :: {:ok, term()} | {:error, term()}
-  defdelegate create_node(repo, attrs), to: Repository
-
-  @spec upsert_node(module(), map()) :: {:ok, term()} | {:error, term()}
-  defdelegate upsert_node(repo, attrs), to: Repository
-
   @spec create_dependency_edge(module(), map()) :: {:ok, term()} | {:error, term()}
   defdelegate create_dependency_edge(repo, attrs), to: Repository
-
-  @spec upsert_dependency_edge(module(), map()) :: {:ok, term()} | {:error, term()}
-  defdelegate upsert_dependency_edge(repo, attrs), to: Repository
-
-  @spec delete_dependency_edge(module(), String.t(), String.t()) :: {:ok, term()} | {:error, term()}
-  defdelegate delete_dependency_edge(repo, work_request_id, id), to: Repository
-
-  @spec delete_group(module(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  defdelegate delete_group(repo, work_request_id, id), to: Repository
 
   @spec record_revision(module(), String.t(), map()) :: {:ok, term()} | {:error, term()}
   defdelegate record_revision(repo, work_request_id, attrs), to: Repository

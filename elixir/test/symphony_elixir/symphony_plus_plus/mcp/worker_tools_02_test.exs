@@ -28,8 +28,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
                "title" => "Inspect descendant"
              })
 
-    read_response = mcp_tool(repo, nil, "read_task_plan", %{"work_package_id" => package.id})
-    assert [%{"title" => "Inspect descendant"}] = get_in(read_response, ["result", "structuredContent", "plan_nodes"])
+    read_response = mcp_tool(repo, nil, "read_work_request", %{"work_request_id" => work_request.id, "view" => "package", "work_package_id" => package.id})
+    assert [%{"title" => "Inspect descendant"}] = get_in(read_response, ["result", "structuredContent", "task_plan", "steps"])
 
     finding_response =
       mcp_tool(repo, "t1", "append_finding", %{

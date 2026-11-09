@@ -1,6 +1,6 @@
 # sympp Architect
 
-Own product clarification, optional Group organization, WorkPackage planning, worker
+Own product clarification, optional group paths, WorkPackage planning, worker
 dispatch, guidance routing, and delivery closeout. Do not implement worker
 packages yourself. Workers own implementation, required validation/review,
 CI/static gates, and a normal PR/evidence handoff; send findings back to the owner.
@@ -34,8 +34,7 @@ ends it. `sympp.health` shows your terminal and the WorkRequests it owns.
    take ownership. Pass `work_request_id` explicitly; tools that name a
    `work_package_id` use that package's WorkRequest when you omit it.
 2. For WorkRequest lanes, read `read_work_request(work_request_id)` and
-   `read_plan(work_request_id, view?, detail?)` before planning WorkPackages or
-   rearranging Groups.
+   `read_work_request(work_request_id, view: "plan")` before planning WorkPackages.
 3. If MCP or WorkRequest state is unavailable, report the blocker. Do not
    invent state.
 
@@ -44,13 +43,15 @@ ends it. `sympp.health` shows your terminal and the WorkRequests it owns.
 TOON is presentation only. Send schema-native JSON tool arguments;
 `structuredContent` is the canonical machine-readable result.
 
-`read_work_request` defaults to the request description, open questions, compact
-package rows with PRs/next actions, and the five most recent decision previews.
-Omission counts identify contracts and history available with `detail: "full"`.
-Use full detail before editing a package contract or relying on a decision's
-complete rationale. Decisions explain choices; current status remains delivery
-truth. `read_plan` also defaults to compact package references; use
-`detail: "full"` with the same `view` for complete package fields.
+`read_work_request` reads one WorkRequest in a `view`. The default `overview`
+has the request description, open questions, compact package rows with
+PRs/next actions, and the five most recent decision previews. `plan` lists
+packages with their groups, dependencies and the execution graph. `board` has
+delivery state and evidence. `package` (with `work_package_id`) has one
+package's contract, revision, dependencies and task plan. Every view is compact
+by default; `detail: "full"` returns complete contracts and history. Use full
+detail before editing a package contract or relying on a decision's complete
+rationale. Decisions explain choices; current status remains delivery truth.
 
 ## Clarify
 
@@ -66,17 +67,18 @@ truth. `read_plan` also defaults to compact package references; use
   only what it cannot settle. Without a chief, ask the user. Do not choose
   product behavior just to keep work moving.
 - Once open questions are answered or closed, continue straight to
-  `read_work_request` and `slice_work_request`; no separate
+  `read_work_request` and `edit_plan`; no separate
   clarification-complete status tool is required. Open questions still block
   WorkPackage planning.
 
 ## Plan WorkPackages
 
-Groups optionally organize larger WorkRequests; they have no lifecycle or
-completion step. Use `read_plan`, not direct ledger queries: `groups_only`
-for outlines, `groups_with_work_package_refs` for ids, or
-`groups_with_work_packages` for bodies. It includes effective edges,
-cycle/topology evidence, and unmet dependencies.
+A package's optional `group` is a path such as `"Backend / Billing"`; the board
+nests a path under its first segment. Groups are only these paths: they have no
+records, lifecycle or completion step, and a package that needs none leaves
+`group` empty. Read the plan with `read_work_request(view: "plan")`, not direct
+ledger queries. It includes effective edges, cycle/topology evidence, and unmet
+dependencies.
 
 Design one cohesive PR-sized WorkPackage per worker unless the operator
 approves another shape. Prefer smaller independently reviewable outcomes.
@@ -92,24 +94,28 @@ provider-neutral review, stop conditions, and guidance routing when useful.
 Honor assigned size budgets; numerical budgets are optional. Escalate material
 scope growth or reviewability risk.
 
-Use `upsert_dependency`/`delete_dependency` for ordering. Group endpoints expand
-to the backend's effective WorkPackage graph; do not maintain another graph.
-Without a candidate pin, dispatch waits for actual prerequisite delivery.
+Dependencies are between packages: `from` depends on `to`. The backend derives
+the effective WorkPackage graph; do not maintain another graph. Without a
+candidate pin, dispatch waits for actual prerequisite delivery.
 For qualified unmerged inputs and UI approval, use the
 [UI/candidate procedure](references/operations.md#ui-collaboration-and-candidates).
 
-Use `slice_work_request` to create planned packages atomically; there is no
-separate approval/finish step. Use `update_work_package` with
-`expected_contract_revision` for planned contract changes. Root packages need
-no synthetic Group. Skip stale/superseded planned packages. For Group edits,
-secondary repo defaults, read
+Plan with `edit_plan(work_request_id, ops)`, one atomic call per change:
+`add_package` (a contract, optional `group`, `depends_on`, and a `key` later
+ops in the same call can use as a reference), `update_package`
+(`work_package_id`, `expected_revision`, `patch`), `set_dependency` (`from`,
+`to`, optional `candidate_head_sha`) and `remove_dependency`. A failing op rolls
+back the whole edit; the error names the op index, the state and the next
+action. The response lists each op's result and the plan after the edit. There
+is no separate approval/finish step. Skip stale/superseded planned packages.
+For secondary repo defaults and contract edits, read
 [planning operations](references/operations.md#planning-operations).
 
 ## Dispatch
 
 Dispatch a planned package with `dispatch_work_package(work_package_id, review_mode)`,
 then run the `launch_line` it returns. Dispatch belongs to the architect and
-enforces the same graph as `read_plan`, refusing cycles and unmet dependencies.
+enforces the same graph as the plan view, refusing cycles and unmet dependencies.
 The one call prepares the package's worktree on the factory, writes the worker's
 assignment file under that worktree's git dir, mints the package's Review Suite
 id, and returns:
@@ -139,7 +145,7 @@ prepared, the package stays `dispatched` and the response carries `error` and
 `next_action` instead of `launch_line`: fix the cause and dispatch again with the
 same `review_mode`.
 
-`read_delivery_board` defaults to one summary per package, retaining delivery
+`read_work_request(view: "board")` defaults to one summary per package, retaining delivery
 outcome, attention reasons, merge eligibility and PR URL. Use `detail: "full"`
 for nested runtime, blocker, review, successor and closeout evidence.
 Terminal packages have no pending merge next action. WorkRequest reads include
@@ -220,7 +226,7 @@ For selected candidate inputs, pass the consumed inputs from the handoff as
 for the dependent's current head; a green PR can't prove which prerequisite head
 it consumed.
 
-Use `read_delivery_board` for lifecycle evidence.
+Use `read_work_request(view: "board")` for lifecycle evidence.
 
 Before an authorized GitHub merge, require the package's `merge_eligibility.eligible`
 and current candidate selections on that board, plus the worker's exact-head
@@ -265,4 +271,4 @@ After required delivery and WR acceptance, optional sanity checks create follow-
 work; they are not another completion gate.
 
 Human attention is **Needs you**, raised only by the chief or architect with one sentence stating the action: a human question or product/policy approval, access only the human can grant, or recovery exhausted after the system tried. Raise it with `ask_question`.
-Read `read_delivery_board` for stale workers (`next_actor: architect`, `inspect_runtime`), blockers and validation evidence; handle silent workers, failing checks and quiet tasks before escalating exhausted recovery. Review rounds, running CI, dependencies, queues and worker-parent questions never need human attention by themselves.
+Read `read_work_request(view: "board")` for stale workers (`next_actor: architect`, `inspect_runtime`), blockers and validation evidence; handle silent workers, failing checks and quiet tasks before escalating exhausted recovery. Review rounds, running CI, dependencies, queues and worker-parent questions never need human attention by themselves.

@@ -63,7 +63,7 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
     .toEqual(parseBoard(browserBoard));
   const detail = nativeBoard.body.work_request_details.find((entry: any) => entry.work_request.id === id);
   expect(detail.asks).toEqual([]);
-  expect(browserBoard.work_request_details.find((entry: any) => entry.work_request.id === id).product_tree.root_work_package_ids).toContain(nativePackage);
+  expect(browserBoard.work_request_details.find((entry: any) => entry.work_request.id === id).work_packages.find((entry: any) => entry.id === nativePackage).group).toBeNull();
   expect(detail.work_packages.find((entry: any) => entry.id === nativePackage).board_state.stage).toBe('build');
   for (const headers of [
     { host: 'example.invalid' }, { forwarded: 'for=127.0.0.1' },
@@ -162,13 +162,13 @@ test('ownership lets every terminal read any request but refuses writes to anoth
   expect((await architect.call('read_work_request', { detail: 'full', work_request_id: own })).clarification_questions).toEqual([]);
   const peer = await factory.client();
   const other = await peer.request('Other request');
-  const [otherWp] = (await peer.call('slice_work_request', { work_packages: [contract('Hidden sibling')] })).work_package_ids;
+  const [otherWp] = await peer.addPackages([contract('Hidden sibling')]);
   const question = (await peer.call('ask_question', {
     work_request_id: other, category: 'scope', question: 'Which behavior is required?', why_needed: 'A concrete choice is needed.',
   })).clarification_question;
   expect((await architect.call('read_work_request', { detail: 'full', work_request_id: other })).work_request.id).toBe(other);
   for (const [name, args] of [
-    ['slice_work_request', { work_request_id: other, work_packages: [contract('Stolen')] }],
+    ['edit_plan', { work_request_id: other, ops: [{ op: 'add_package', ...contract('Stolen') }] }],
     ['dispatch_work_package', { work_request_id: other, work_package_id: otherWp }],
     ['dispatch_work_package', { work_package_id: otherWp }],
     ['reconcile_work_request', { work_request_id: other, apply: true }],
@@ -189,18 +189,16 @@ test('ownership lets every terminal read any request but refuses writes to anoth
     }, 'not_found');
     expect(JSON.stringify(denied)).not.toContain(other);
   }
-  for (const [name, args] of [
-    ['update_work_package', { expected_contract_revision: 1, patch: { title: 'Stolen' } }],
-    ['skip_work_package', {}],
-  ] as const) {
-    await architect.reject(name, { work_request_id: own, work_package_id: otherWp, ...args }, 'not_found');
+  await architect.reject('skip_work_package', { work_request_id: own, work_package_id: otherWp }, 'not_found');
+  // A package of another WorkRequest is unknown to this plan, whichever op names it.
+  for (const op of [
+    { op: 'update_package', work_package_id: otherWp, expected_revision: 1, patch: { title: 'Stolen' } },
+    { op: 'set_dependency', from: ownWp, to: otherWp, reason: 'Foreign endpoint' },
+  ]) {
+    const refused = await architect.reject('edit_plan', { work_request_id: own, ops: [op] }, 'unknown_work_package');
+    expect(refused.work_package_ref).toBe(otherWp);
   }
-  const foreignDependency = await architect.tool('upsert_dependency', {
-    dependent: { kind: 'work_package', id: ownWp }, prerequisite: { kind: 'work_package', id: otherWp }, reason: 'Foreign endpoint',
-  });
-  expect(foreignDependency.error.code).toBe(-32602);
-  expect(foreignDependency.error.data.reason).toContain('product_tree_dependency_target_scope');
-  const tree = await architect.call('read_plan', { detail: 'full', work_request_id: own, view: 'groups_with_work_packages' });
+  const tree = await architect.call('read_work_request', { detail: 'full', work_request_id: own, view: 'plan' });
   expect(JSON.stringify(tree)).not.toContain(otherWp);
   const unchanged = await peer.call('read_work_request', { detail: 'full', work_request_id: other });
   expect(unchanged.work_request.title).toBe('Other request');
@@ -211,41 +209,33 @@ test('ownership lets every terminal read any request but refuses writes to anoth
   const secondary = await factory.client();
   await secondary.request('Secondary repository reader', 'integration', 'example/client');
   expect((await secondary.call('read_work_request', { detail: 'full', work_request_id: own })).work_request.id).toBe(own);
-  const [secondaryWp] = (await architect.call('slice_work_request', { work_packages: [contract('Secondary delivery', { repo: 'example/client', base_branch: 'integration' })] })).work_package_ids;
+  const [secondaryWp] = await architect.addPackages([contract('Secondary delivery', { repo: 'example/client', base_branch: 'integration' })]);
   await architect.call('dispatch_work_package', { work_package_id: secondaryWp });
   // Another terminal reads this WorkRequest in full; ownership gates writes only.
-  const readerBoard = (await secondary.call('read_delivery_board', { detail: 'full', work_request_id: own })).delivery_board;
+  const readerBoard = await secondary.board(own, 'full');
   expect(readerBoard.work_packages.find((entry: any) => entry.id === ownWp).work_package.id).toBe(ownWp);
   expect(readerBoard.work_packages.find((entry: any) => entry.id === secondaryWp).work_package.id).toBe(secondaryWp);
-  const parentGroup = (await architect.call('upsert_group', { title: 'Visible ancestor' })).group.id;
-  const secondaryGroup = (await architect.call('upsert_group', { title: 'Secondary group', parent_group_id: parentGroup })).group.id;
-  const primaryGroup = (await architect.call('upsert_group', { title: 'Primary group' })).group.id;
-  for (const [wp, group] of [[ownWp, primaryGroup], [secondaryWp, secondaryGroup]]) {
-    await architect.call('update_work_package', { work_package_id: wp, expected_contract_revision: 1, patch: { group_id: group } });
-  }
-  const planArgs = { detail: 'full', work_request_id: own, view: 'groups_with_work_packages' };
-  const readerPlan = await secondary.call('read_plan', planArgs);
-  expect(readerPlan.product_tree.groups.map((entry: any) => entry.id).sort()).toEqual([parentGroup, secondaryGroup, primaryGroup].sort());
-  expect(readerPlan).toEqual(await architect.call('read_plan', planArgs));
-  await peer.reject('update_work_package', { work_package_id: otherWp, expected_contract_revision: 1, patch: { group_id: secondaryGroup } }, 'not_found');
-  const dependencyArgs = { dependent: { kind: 'group', id: primaryGroup }, prerequisite: { kind: 'work_package', id: secondaryWp }, reason: 'Scoped dependency' };
-  const dependency = (await architect.call('upsert_dependency', dependencyArgs)).dependency.id;
-  const beforeEdges = (await architect.call('read_plan', { detail: 'full', work_request_id: own, view: 'groups_with_work_packages' })).product_tree.dependency_intents;
-  const foreignUpdate = await architect.tool('upsert_dependency', {
-    ...dependencyArgs, dependency_id: dependency, prerequisite: { kind: 'work_package', id: otherWp },
-  });
-  expect(foreignUpdate.error.code).toBe(-32602);
-  expect(foreignUpdate.error.data.reason).toContain('product_tree_dependency_target_scope');
-  expect((await architect.call('read_plan', { detail: 'full', work_request_id: own, view: 'groups_with_work_packages' })).product_tree.dependency_intents).toEqual(beforeEdges);
+  await architect.call('edit_plan', { ops: [
+    { op: 'update_package', work_package_id: ownWp, expected_revision: 1, patch: { group: 'Primary group' } },
+    { op: 'update_package', work_package_id: secondaryWp, expected_revision: 1, patch: { group: 'Visible ancestor / Secondary group' } },
+    { op: 'set_dependency', from: ownWp, to: secondaryWp, reason: 'Scoped dependency' },
+  ] });
+  const planArgs = { detail: 'full', work_request_id: own, view: 'plan' };
+  const readerPlan = await secondary.call('read_work_request', planArgs);
+  expect(readerPlan.plan.work_packages.map((entry: any) => entry.group).sort()).toEqual(['Primary group', 'Visible ancestor / Secondary group']);
+  expect(readerPlan).toEqual(await architect.call('read_work_request', planArgs));
+  const beforeEdges = readerPlan.plan.dependencies;
+  await architect.reject('edit_plan', { ops: [{ op: 'set_dependency', from: ownWp, to: otherWp }] }, 'unknown_work_package');
+  expect((await architect.call('read_work_request', planArgs)).plan.dependencies).toEqual(beforeEdges);
   await close(architect, ownWp);
   const closedRow = await row(secondary, own, ownWp);
   expect(closedRow.work_package.id).toBe(ownWp);
   expect(closedRow.operational_state.key).toBe('completed_no_pr');
   const sameRepoReader = await factory.client();
   await sameRepoReader.request('Same repository different delivery base', 'integration');
-  const [alternateBase] = (await architect.call('slice_work_request', { work_packages: [contract('Alternate delivery base', { base_branch: 'integration' })] })).work_package_ids;
+  const [alternateBase] = await architect.addPackages([contract('Alternate delivery base', { base_branch: 'integration' })]);
   await architect.call('dispatch_work_package', { work_package_id: alternateBase });
-  const baseBoard = (await sameRepoReader.call('read_delivery_board', { detail: 'full', work_request_id: own })).delivery_board;
+  const baseBoard = await sameRepoReader.board(own, 'full');
   expect(baseBoard.work_packages.find((entry: any) => entry.id === alternateBase).work_package.id).toBe(alternateBase);
   expect(baseBoard.work_packages.find((entry: any) => entry.id === ownWp).work_package.id).toBe(ownWp);
   await sameRepoReader.reject('record_work_package_delivery', { work_request_id: own, work_package_id: ownWp, outcome: 'completed_no_pr',
@@ -261,76 +251,40 @@ test('ownership lets every terminal read any request but refuses writes to anoth
   }
 });
 
-test('plan views give a terminal that owns another request the same complete plan as the owner', async ({ processes }) => {
+test('read views give a terminal that owns another request the same complete plan as the owner', async ({ processes }) => {
   const factory = processes.factory();
   const architect = await factory.client();
   const request = await architect.request('Plan projection authority');
   const reader = await factory.client();
   await reader.request('Secondary plan reader', 'integration', 'example/client');
-  const views = ['groups_only', 'groups_with_work_package_refs', 'groups_with_work_packages'];
-  const read = async (client: Client, view: string) => (await client.call('read_plan', { detail: 'full', work_request_id: request, view })).product_tree;
-  const group = async (title: string, parent?: string) => (await architect.call('upsert_group', {
-    title, ...(parent ? { parent_group_id: parent } : {}),
-  })).group.id as string;
-  const empty = await group('Empty authoring group');
-  const primaryRoot = await group('Primary root');
-  const primaryGroup = await group('Primary package group', primaryRoot);
-  const emptyDescendant = await group('Empty primary descendant', primaryGroup);
-  const ancestor = await group('Secondary ancestor');
-  const secondaryGroup = await group('Secondary package group', ancestor);
-  const mixed = await group('Mixed membership');
-  const allGroups = [empty, primaryRoot, primaryGroup, emptyDescendant, ancestor, secondaryGroup, mixed].sort();
-  for (const client of [architect, reader]) for (const view of views) {
-    const plan = await read(client, view);
-    expect(plan.groups.map((entry: any) => entry.id).sort()).toEqual(allGroups);
-    expect(plan.summary.work_package_count).toBe(0);
-  }
-  const primary = (await architect.call('slice_work_request', { work_packages: [
-    contract('Primary contract', { group_id: primaryGroup }),
-    contract('Primary ancestor membership', { group_id: ancestor }),
-    contract('Primary mixed membership', { group_id: mixed }),
-    contract('Primary terminal contract', { group_id: primaryGroup, kind: 'docs' }),
-  ] })).work_package_ids as string[];
+  const views = ['overview', 'plan', 'board'];
+  const read = async (client: Client, view: string) => client.call('read_work_request', { detail: 'full', work_request_id: request, view });
+  for (const client of [architect, reader]) expect((await read(client, 'plan')).plan.work_packages).toEqual([]);
   const secondary = { repo: 'example/client', base_branch: 'integration' };
-  const [planned, mixedMember, terminal, rootMember] = (await architect.call('slice_work_request', { work_packages: [
-    contract('Secondary planned contract', { ...secondary, group_id: secondaryGroup }),
-    contract('Secondary mixed contract', { ...secondary, group_id: mixed }),
-    contract('Secondary terminal contract', { ...secondary, group_id: secondaryGroup, kind: 'docs' }),
-    contract('Secondary root contract', secondary),
-  ] })).work_package_ids;
-  const all = [...primary, planned, mixedMember, terminal, rootMember].sort();
-  const dependency = async (dependent: string, prerequisite: string, kind = 'work_package') =>
-    (await architect.call('upsert_dependency', {
-      dependent: { kind, id: dependent }, prerequisite: { kind, id: prerequisite }, reason: 'Required bounded scope',
-    })).dependency.id as string;
-  const edges = [
-    await dependency(planned, terminal),
-    await dependency(mixed, secondaryGroup, 'group'),
-    await dependency(planned, primary[0]),
-    await dependency(mixed, primaryGroup, 'group'),
-  ];
+  const add = (title: string, key: string, patch: object = {}) => ({ op: 'add_package', key, ...contract(title, patch) });
+  const edited = await architect.call('edit_plan', { ops: [
+    add('Primary contract', 'primary', { group: 'Primary root / Primary package group' }),
+    add('Primary ancestor membership', 'ancestor', { group: 'Secondary ancestor' }),
+    add('Primary mixed membership', 'mixed', { group: 'Mixed membership', depends_on: ['primary'] }),
+    add('Primary terminal contract', 'primaryTerminal', { group: 'Primary root / Primary package group', kind: 'docs' }),
+    add('Secondary terminal contract', 'terminal', { ...secondary, group: 'Secondary ancestor / Secondary package group', kind: 'docs' }),
+    add('Secondary planned contract', 'planned', { ...secondary, group: 'Secondary ancestor / Secondary package group', depends_on: ['terminal', 'primary'] }),
+    add('Secondary mixed contract', 'mixedMember', { ...secondary, group: 'Mixed membership', depends_on: ['planned'] }),
+    add('Secondary root contract', 'root', secondary),
+  ] });
+  const ids = Object.fromEntries(edited.applied.map((op: any) => [op.key, op.work_package_id]));
   const assertComplete = async (terminalStatus: string) => {
-    for (const view of views) {
-      const plan = await read(reader, view);
-      expect(plan).toEqual(await read(architect, view));
-      expect(plan.groups.map((entry: any) => entry.id).sort()).toEqual(allGroups);
-      expect(plan.summary.work_package_count).toBe(8);
-      expect(plan.summary.group_count).toBe(7);
-      if (view === 'groups_only') {
-        expect(plan.work_packages).toBeUndefined();
-        expect(plan.omitted_work_package_count).toBe(8);
-      } else {
-        const members = view === 'groups_with_work_packages' ? plan.work_packages : plan.work_package_refs;
-        expect(members.map((entry: any) => entry.id).sort()).toEqual(all);
-        expect(members.find((entry: any) => entry.id === terminal).status).toBe(terminalStatus);
-        expect(members.find((entry: any) => entry.id === primary[3]).status).toBe(terminalStatus);
-        expect(plan.root_work_package_ids).toEqual([rootMember]);
-        expect(plan.dependency_intents.map((entry: any) => entry.id).sort()).toEqual([...edges].sort());
-      }
-    }
+    for (const view of views) expect(await read(reader, view)).toEqual(await read(architect, view));
+    const plan = (await read(reader, 'plan')).plan;
+    expect(plan.work_packages.map((entry: any) => entry.id).sort()).toEqual(Object.values(ids).sort());
+    expect(plan.summary.work_package_count).toBe(8);
+    expect(plan.work_packages.find((entry: any) => entry.id === ids.terminal).status).toBe(terminalStatus);
+    expect(plan.work_packages.find((entry: any) => entry.id === ids.primaryTerminal).status).toBe(terminalStatus);
+    expect(plan.work_packages.find((entry: any) => entry.id === ids.root).group).toBeNull();
+    expect(plan.dependencies).toHaveLength(4);
   };
   await assertComplete('planned');
-  for (const wp of [primary[3], terminal]) {
+  for (const wp of [ids.primaryTerminal, ids.terminal]) {
     await architect.call('dispatch_work_package', { work_package_id: wp });
     await close(architect, wp);
   }
@@ -340,17 +294,19 @@ test('plan views give a terminal that owns another request the same complete pla
 test('package evidence tools keep plans atomic, findings idempotent and progress redacted for the owner', async ({ processes }) => {
   const factory = processes.factory();
   const architect = await factory.client();
-  await architect.request('Package planning and history');
+  const request = await architect.request('Package planning and history');
   const reviewValues = ['synthetic-review-credential', 'synthetic-review-access', 'synthetic-review-verifier'];
-  const [wp, sibling] = (await architect.call('slice_work_request', { work_packages: [
+  const [wp, sibling] = await architect.addPackages([
     contract('Plan owner', { review: { type: 'review-suite', args: {
       mode: 'fast', credential: reviewValues[0], access_key: reviewValues[1], grant_verifier: reviewValues[2],
     } } }), contract('Other plan'),
-  ] })).work_package_ids;
+  ]);
   for (const work_package_id of [wp, sibling]) await architect.call('dispatch_work_package', { work_package_id });
   const own = (args: object) => ({ work_package_id: wp, ...args });
   const other = (args: object) => ({ work_package_id: sibling, ...args });
-  expect((await architect.call('read_task_plan', own({}))).text).toContain('Implement requested scope');
+  const taskPlan = async (work_package_id: string) =>
+    (await architect.call('read_work_request', { work_request_id: request, view: 'package', work_package_id, detail: 'full' })).task_plan;
+  expect((await taskPlan(wp)).text).toContain('Implement requested scope');
   const progressBefore = (await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).progress;
   for (const [args, reason] of [
     [{ summary: 'Invalid key', idempotency_key: 123 }, 'invalid_idempotency_key'],
@@ -408,9 +364,7 @@ test('package evidence tools keep plans atomic, findings idempotent and progress
 deliveryTest('architect CI observations reach the native dashboard with stable per-head change times', async ({ delivery: { factory, provider } }) => {
   const architect = await factory.client();
   const request = await architect.request('CI reporting');
-  const [wp] = (await architect.call('slice_work_request', { work_packages: [contract('CI reporting', {
-    kind: 'mcp', branch_pattern: 'feature/authority',
-  })] })).work_package_ids;
+  const [wp] = await architect.addPackages([contract('CI reporting', { kind: 'mcp', branch_pattern: 'feature/authority' })]);
   await architect.call('dispatch_work_package', { work_package_id: wp });
   const signal = async () => {
     const dashboard = await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated');
@@ -590,7 +544,7 @@ test('architect descendant planning stays owned through terminal closeout and re
   const factory = processes.factory();
   const architect = await factory.client();
   const request = await architect.request('Architect descendant evidence');
-  const [wp] = (await architect.call('slice_work_request', { work_packages: [contract('Secondary planning', { repo: 'example/client', base_branch: 'integration' })] })).work_package_ids;
+  const [wp] = await architect.addPackages([contract('Secondary planning', { repo: 'example/client', base_branch: 'integration' })]);
   const finding = (await architect.call('append_finding', { work_package_id: wp, title: 'Scoped evidence', body: 'Owned descendant', idempotency_key: 'architect-finding' })).finding;
   const progress = (await architect.call('append_progress', { work_package_id: wp, summary: 'Owned descendant progress', idempotency_key: 'architect-progress' })).progress_event;
   const detail = await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`);
@@ -599,10 +553,10 @@ test('architect descendant planning stays owned through terminal closeout and re
   const uri = `sympp://work-packages/${wp}/findings.md`;
   expect((await architect.rpc('resources/read', { uri })).result.contents[0].text).toContain('Scoped evidence');
   const foreign = await factory.client();
-  await foreign.request('Other planning owner');
+  const foreignRequest = await foreign.request('Other planning owner');
   const [otherWp] = await packages(foreign, ['Private foreign plan']);
   // Reads by explicit id are free for trusted callers; writes need the owner.
-  expect((await architect.call('read_task_plan', { work_package_id: otherWp })).uri).toContain(otherWp);
+  expect((await architect.call('read_work_request', { work_request_id: foreignRequest, view: 'package', work_package_id: otherWp })).task_plan).toBeTruthy();
   await architect.reject('append_progress', { work_package_id: otherWp, summary: 'Foreign', idempotency_key: 'foreign' }, 'owned_by_other_terminal');
   await close(architect, wp);
   for (const [name, args] of [
@@ -614,6 +568,6 @@ test('architect descendant planning stays owned through terminal closeout and re
   // Archiving ends ownership; the archived request's evidence stays readable by id and refuses writes.
   expect((await architect.call('sympp.health')).caller.owns).toEqual([]);
   expect((await architect.rpc('resources/read', { uri })).result.contents[0].text).toContain('Scoped evidence');
-  await architect.reject('slice_work_request', { work_packages: [contract('Archived scope')] }, 'work_request_archived');
+  await architect.reject('edit_plan', { work_request_id: request, ops: [{ op: 'add_package', ...contract('Archived scope') }] }, 'work_request_archived');
 });
 

@@ -37,7 +37,7 @@ test('competing terminals end with one owner, Release hands over and ownership s
   const read = await loser.raw({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: loser.toolParams('read_work_request', { work_request_id: request }) });
   expect(read.binding).toBeNull();
 
-  const [wp] = (await winner.call('slice_work_request', { work_request_id: request, work_packages: [contract('Owned work')] })).work_package_ids;
+  const [wp] = (await winner.addPackages([contract('Owned work')], { work_request_id: request }));
   await winner.call('dispatch_work_package', { work_package_id: wp });
   const mutation = { work_package_id: wp, summary: 'Accepted exactly once', body: 'A durable observation', idempotency_key: 'once' };
   const first = (await winner.call('append_progress', mutation)).progress_event;
