@@ -42,6 +42,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest do
           desired_dispatch_shape: String.t() | nil,
           creator_kind: String.t() | nil,
           creator_name: String.t() | nil,
+          creator_terminal: String.t() | nil,
           created_via: String.t() | nil,
           operator_completed_at: DateTime.t() | nil,
           report: map() | nil,
@@ -62,6 +63,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest do
     field(:desired_dispatch_shape, :string)
     field(:creator_kind, :string)
     field(:creator_name, :string)
+    # The creating Herdr terminal's key (core id plus address), when an agent created it.
+    field(:creator_terminal, :string)
     field(:created_via, :string)
     field(:dispatched_by, :map)
     field(:operator_completed_at, :utc_datetime_usec)
@@ -100,7 +103,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest do
   def update_changeset(%__MODULE__{} = work_request, attrs) do
     attrs = normalize_keys(attrs)
 
-    changeset(work_request, Map.drop(attrs, ["id", "dispatched_by", "report", "operator_completed_at", "archived_at", "archive_reason", "restored_at", "inserted_at", "updated_at", "created_at"]))
+    changeset(
+      work_request,
+      Map.drop(attrs, ["id", "creator_terminal", "dispatched_by", "report", "operator_completed_at", "archived_at", "archive_reason", "restored_at", "inserted_at", "updated_at", "created_at"])
+    )
   end
 
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
@@ -124,6 +130,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest do
       :desired_dispatch_shape,
       :creator_kind,
       :creator_name,
+      :creator_terminal,
       :created_via,
       :dispatched_by,
       :archived_at,

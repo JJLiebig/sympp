@@ -3681,7 +3681,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   # Text the factory would type into a terminal arrives here as {:pasted, target, text}.
   defp capture_pastes! do
     test_pid = self()
-    paste = fn target, text -> send(test_pid, {:pasted, target, text}) && :ok end
+    paste = fn target, text, :prefill -> send(test_pid, {:pasted, target, text}) && :ok end
     Application.put_env(:symphony_elixir, :sympp_herdr_send, paste)
     on_exit(fn -> Application.put_env(:symphony_elixir, :sympp_herdr_send, nil) end)
   end
