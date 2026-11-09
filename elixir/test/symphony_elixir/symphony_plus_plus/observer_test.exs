@@ -1,21 +1,17 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   use ExUnit.Case, async: false
 
-  alias SymphonyElixir.GitHubTestSupport
-  alias SymphonyElixir.SymphonyPlusPlus.GitHub.{Api, PullRequestProgress}
+  alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
   alias SymphonyElixir.SymphonyPlusPlus.Observer
   alias SymphonyElixir.SymphonyPlusPlus.Observer.Observation
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.ReviewStatus
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Qualification, WorkPackage, WorkPackageDelivery}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{WorkPackage, WorkPackageDelivery}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
-  alias SymphonyElixir.TestSupport
   alias SymphonyElixir.WorkPackageFactory
 
   @repo_name "nextide/repo"
@@ -39,34 +35,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   end
 
   describe "GitHub" do
-    test "a merge is recorded as pr_merged with no MCP call, and the PR is no longer watched", %{repo: repo} do
-      package = package!(repo, "WP-OBS-MERGE")
-      attach!(repo, package, 41)
-
-      sweep(repo, %{{:pr, "nextide", "repo", 41} => {:ok, pr(41, "head-a", %{"ci" => %{"status" => "pending"}})}})
-      assert repo.get!(WorkPackage, package.id).status == "dispatched"
-
-      merged = pr(41, "head-a", %{"state" => "merged", "merged" => true, "merged_at" => "2026-11-09T10:00:00Z", "merge_commit_sha" => "merge-41"})
-      sweep(repo, %{{:pr, "nextide", "repo", 41} => {:ok, merged}})
-
-      assert repo.get!(WorkPackage, package.id).status == "ended"
-      delivery = repo.get_by!(WorkPackageDelivery, work_package_id: package.id)
-      assert {delivery.outcome, delivery.pr_number, delivery.merge_commit_sha} == {"pr_merged", 41, "merge-41"}
-
-      Observer.sweep(repo, snapshot: fn entries -> flunk("ended package still watched: #{inspect(entries)}") end, review: &no_review/2)
-    end
-
-    test "a merged PR matches a package scoped to its local checkout", %{repo: repo} do
-      repo_path = TestSupport.git_repo_with_origin_fixture!("https://github.com/nextide/repo.git", prefix: "sympp-observer-repo")
-      package = package!(repo, "WP-OBS-LOCAL", repo: repo_path)
-      attach!(repo, package, 27)
-
-      merged = pr(27, "head-local", %{"state" => "merged", "merged" => true, "merged_at" => "2026-11-09T10:00:00Z", "merge_commit_sha" => "merge-27"})
-      sweep(repo, %{{:pr, "nextide", "repo", 27} => {:ok, merged}})
-
-      assert repo.get!(WorkPackage, package.id).status == "ended"
-    end
-
     test "a merge whose evidence can't be recorded changes nothing", %{repo: repo} do
       package = package!(repo, "WP-OBS-MERGE-CONFLICT", status: "ready")
       attach!(repo, package, 9)
@@ -86,50 +54,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert repo.get!(WorkPackage, package.id).status == "ready"
       refute repo.get_by(WorkPackageDelivery, work_package_id: package.id)
       refute Enum.any?(events(repo, package.id), &(&1.status == "github_pr_merged"))
-    end
-
-    test "a PR found on the package's branch is attached", %{repo: repo} do
-      package = package!(repo, "WP-OBS-DISCOVER")
-      entry = {:branch, "nextide", "repo", "agent/example", "main"}
-
-      sweep(repo, %{entry => {:ok, nil}})
-      assert {:error, :missing_attached_pr} = current_pr(repo, package.id)
-
-      sweep(repo, %{entry => {:ok, pr(77, "head-b", %{"ci" => %{"status" => "pending"}})}})
-      assert {:ok, %{ref: %{number: 77}, payload: %{"head_sha" => "head-b"}}} = current_pr(repo, package.id)
-
-      # Once attached, the PR itself is watched.
-      sweep(repo, %{{:pr, "nextide", "repo", 77} => {:ok, pr(77, "head-b", %{"ci" => %{"status" => "pending"}})}})
-    end
-
-    test "a discovered PR on another base branch is not attached", %{repo: repo} do
-      package = package!(repo, "WP-OBS-OTHER-BASE")
-      sweep(repo, %{{:branch, "nextide", "repo", "agent/example", "main"} => {:ok, pr(78, "head-c", %{"base_branch" => "release"})}})
-      assert {:error, :missing_attached_pr} = current_pr(repo, package.id)
-    end
-
-    test "an attached PR retargeted to another base unqualifies its package", %{repo: repo} do
-      package = package!(repo, "WP-OBS-RETARGET", status: "ready")
-      attach!(repo, package, 79)
-
-      sweep(repo, %{{:pr, "nextide", "repo", 79} => {:ok, pr(79, "head-a", %{"base_branch" => "release"})}})
-
-      assert repo.get!(WorkPackage, package.id).status == "dispatched"
-      assert "pr_base_mismatch" in unqualified_event!(repo, package.id).payload["reasons"]
-    end
-
-    test "a ready PR merged into another base unqualifies instead of ending", %{repo: repo} do
-      package = package!(repo, "WP-OBS-MERGED-ELSEWHERE", status: "ready")
-      attach!(repo, package, 81)
-
-      merged =
-        pr(81, "head-a", %{"base_branch" => "release", "state" => "merged", "merged" => true, "merged_at" => "2026-11-09T10:00:00Z", "merge_commit_sha" => "merge-81"})
-
-      sweep(repo, %{{:pr, "nextide", "repo", 81} => {:ok, merged}})
-
-      assert repo.get!(WorkPackage, package.id).status == "dispatched"
-      refute repo.get_by(WorkPackageDelivery, work_package_id: package.id)
-      assert "pr_base_mismatch" in unqualified_event!(repo, package.id).payload["reasons"]
     end
 
     test "a PR replaced by sync_pr during a sweep is neither re-attached nor recorded as merged", %{repo: repo} do
@@ -167,395 +91,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert {:ok, %{payload: %{"head_sha" => "head-b"}}} = current_pr(repo, package.id)
       assert repo.get!(Observation, package.id).pr == nil
     end
-
-    test "CI changes are recorded once; an unchanged snapshot after a restart records nothing", %{repo: repo} do
-      package = package!(repo, "WP-OBS-CI")
-      attach!(repo, package, 70)
-      entry = {:pr, "nextide", "repo", 70}
-
-      sweep(repo, %{entry => {:ok, pr(70, "head-a", %{"ci" => %{"status" => "pending", "completed" => 1, "total" => 2}})}})
-      failing = pr(70, "head-a", %{"ci" => %{"status" => "failing", "completed" => 2, "total" => 2}})
-      sweep(repo, %{entry => {:ok, failing}}, failing_checks: fn @repo_name, "head-a" -> {:ok, ["build"]} end)
-
-      assert {:ok, %{payload: payload}} = current_pr(repo, package.id, ["sync_pr"])
-      assert payload["check_summary"] == %{"status" => "failing", "current" => 2, "total" => 2}
-      assert get_in(repo.get!(Observation, package.id).pr, ["ci", "failing"]) == ["build"]
-      before = length(events(repo, package.id))
-
-      # A new Observer process starts with no memory: the stored snapshot keeps
-      # it from recording the same state, or re-reading check details, again.
-      sweep(repo, %{entry => {:ok, failing}}, failing_checks: fn _repository, _head -> flunk("detail read for an unchanged head") end)
-      assert length(events(repo, package.id)) == before
-      assert repo.get!(WorkPackage, package.id).status == "dispatched"
-    end
-
-    test "a closed PR is recorded, unqualifies its package and is no longer watched", %{repo: repo} do
-      package = package!(repo, "WP-OBS-CLOSED", status: "ready")
-      attach!(repo, package, 80)
-
-      sweep(repo, %{{:pr, "nextide", "repo", 80} => {:ok, pr(80, "head-a", %{"state" => "closed"})}})
-      assert repo.get!(WorkPackage, package.id).status == "dispatched"
-      assert %{"reasons" => reasons} = unqualified_event!(repo, package.id).payload
-      assert "pr_not_open" in reasons
-
-      Observer.sweep(repo, snapshot: fn entries -> assert entries == [] end, review: &no_review/2)
-
-      # Once the architect syncs the PR again (here: reopened), it is watched again.
-      attach!(repo, package, 80, "head-a")
-      sweep(repo, %{{:pr, "nextide", "repo", 80} => {:ok, pr(80, "head-a")}})
-      assert repo.get!(Observation, package.id).pr["state"] == "open"
-    end
-  end
-
-  describe "qualification" do
-    test "a merge from main that keeps the PR's patch stays ready; a changed patch goes back", %{repo: repo} do
-      package = package!(repo, "WP-OBS-QUALIFY", review_mode: "fast", review_id: "rvw_qualify0001")
-      attach!(repo, package, 50)
-      entry = {:pr, "nextide", "repo", 50}
-
-      # A review accepted for another head doesn't count.
-      suite(%{"done" => true, "status" => "done", "reviewed_head" => "head-old", "accepted_head" => "head-old"})
-      suite_sweep(repo, %{entry => {:ok, pr(50, "head-a")}})
-      assert repo.get!(WorkPackage, package.id).status == "dispatched"
-
-      suite(%{"done" => true, "status" => "done", "reviewed_head" => "head-a", "accepted_head" => "head-a"})
-      suite_sweep(repo, %{entry => {:ok, pr(50, "head-a")}})
-      assert repo.get!(WorkPackage, package.id).status == "ready"
-
-      # `main` merged in with the PR's own patch unchanged: Review Suite carries
-      # the review to the merge commit and the package stays ready.
-      suite(%{"done" => true, "status" => "done", "reviewed_head" => "head-a", "accepted_head" => "head-merge", "required_checks" => "current_head_required", "base_interaction" => interaction(false)})
-      suite_sweep(repo, %{entry => {:ok, pr(50, "head-merge")}})
-      assert repo.get!(WorkPackage, package.id).status == "ready"
-      refute Enum.any?(events(repo, package.id), &(&1.status == "unqualified"))
-      assert %{accepted_head: "head-merge", reviewed_head: "head-a", status: "passed"} = review_signal(repo, package)
-
-      # A fix commit changed the patch: the review no longer covers the head.
-      suite(%{"done" => false, "status" => "stale", "review_ladder" => "invalidated", "reviewed_head" => "head-a", "current_head" => "head-fix"})
-      suite_sweep(repo, %{entry => {:ok, pr(50, "head-fix")}})
-      assert repo.get!(WorkPackage, package.id).status == "dispatched"
-      assert %{"reasons" => ["review_not_done"], "head_sha" => "head-fix"} = unqualified_event!(repo, package.id).payload
-
-      # Replaying the same snapshot doesn't unqualify or record again.
-      before = length(events(repo, package.id))
-      suite_sweep(repo, %{entry => {:ok, pr(50, "head-fix")}})
-      assert length(events(repo, package.id)) == before
-    end
-
-    test "a new head whose checks GitHub doesn't report yet takes a ready package back", %{repo: repo} do
-      package = package!(repo, "WP-OBS-NEW-HEAD-CI", review_mode: "fast", review_id: "rvw_newheadci001")
-      attach!(repo, package, 52)
-      entry = {:pr, "nextide", "repo", 52}
-
-      suite(%{"done" => true, "status" => "done", "reviewed_head" => "head-a", "accepted_head" => "head-a"})
-      suite_sweep(repo, %{entry => {:ok, pr(52, "head-a")}})
-      assert repo.get!(WorkPackage, package.id).status == "ready"
-
-      # Unknown CI on the head it qualified on holds; on a new head it is unproven.
-      suite_sweep(repo, %{entry => {:ok, pr(52, "head-a", %{"ci" => %{"status" => "unknown"}})}})
-      assert repo.get!(WorkPackage, package.id).status == "ready"
-
-      suite(%{"done" => true, "status" => "done", "reviewed_head" => "head-a", "accepted_head" => "head-merge", "base_interaction" => interaction(false)})
-      suite_sweep(repo, %{entry => {:ok, pr(52, "head-merge", %{"ci" => %{"status" => "unknown"}})}})
-      assert repo.get!(WorkPackage, package.id).status == "dispatched"
-      assert %{"reasons" => reasons, "head_sha" => "head-merge"} = unqualified_event!(repo, package.id).payload
-      assert "ci_unknown" in reasons
-    end
-
-    test "an architect's CI override qualifies its head through pending CI; a new head clears it", %{repo: repo} do
-      package = package!(repo, "WP-OBS-CI-OVERRIDE")
-      attach!(repo, package, 53)
-      entry = {:pr, "nextide", "repo", 53}
-      pending = %{"ci" => %{"status" => "pending", "completed" => 0, "total" => 1}}
-
-      sweep(repo, %{entry => {:ok, pr(53, "head-a", pending)}})
-      assert repo.get!(WorkPackage, package.id).status == "dispatched"
-
-      override = %{reason: "CI queue is stuck; the change is docs-only.", by: "box/t1", head: "head-a"}
-      assert {:ok, _package} = Qualification.put_ci_override(repo, repo.get!(WorkPackage, package.id), override)
-      sweep(repo, %{entry => {:ok, pr(53, "head-a", pending)}})
-      assert repo.get!(WorkPackage, package.id).status == "ready"
-      assert board_row(repo, package).work_package.ci_override == override
-
-      sweep(repo, %{entry => {:ok, pr(53, "head-b", pending)}})
-      assert repo.get!(WorkPackage, package.id).status == "dispatched"
-      assert repo.get!(WorkPackage, package.id).ci_override == nil
-      assert board_row(repo, package).work_package.ci_override == nil
-    end
-
-    test "a carried review whose base change still needs a targeted check doesn't count", %{repo: repo} do
-      package = package!(repo, "WP-OBS-BASE-CHECK", review_mode: "fast", review_id: "rvw_basecheck001")
-      attach!(repo, package, 51)
-      entry = {:pr, "nextide", "repo", 51}
-
-      suite(%{"done" => true, "status" => "done", "reviewed_head" => "head-a", "accepted_head" => "head-a"})
-      suite_sweep(repo, %{entry => {:ok, pr(51, "head-a")}})
-      assert repo.get!(WorkPackage, package.id).status == "ready"
-
-      suite(%{"done" => true, "status" => "done", "reviewed_head" => "head-a", "accepted_head" => "head-merge", "required_checks" => "current_head_required", "base_interaction" => interaction(true)})
-      suite_sweep(repo, %{entry => {:ok, pr(51, "head-merge")}})
-      assert repo.get!(WorkPackage, package.id).status == "dispatched"
-      assert %{"reasons" => ["review_not_done"]} = unqualified_event!(repo, package.id).payload
-      assert %{status: "inspection_needed", accepted_head: "head-merge"} = review_signal(repo, package)
-    end
-
-    test "an unreachable GitHub flags the package stale and never transitions", %{repo: repo} do
-      ready = package!(repo, "WP-OBS-GH-DOWN", status: "ready")
-      attach!(repo, ready, 90)
-      entry = {:pr, "nextide", "repo", 90}
-      sweep(repo, %{entry => {:ok, pr(90, "head-a")}})
-
-      merged = pr(90, "head-a", %{"state" => "merged", "merged" => true, "merged_at" => "2026-11-09T10:00:00Z", "merge_commit_sha" => "merge-90"})
-
-      paused_until = System.system_time(:millisecond) + 60_000
-
-      for failure <- [{:error, :request_failed}, {:error, {:rate_limited, paused_until}}] do
-        sweep(repo, %{entry => failure})
-        assert repo.get!(WorkPackage, ready.id).status == "ready"
-        assert repo.get!(Observation, ready.id).stale == ["github"]
-      end
-
-      assert {:ok, board} = DeliveryBoard.project(repo, ready.work_request_id)
-      eligibility = Enum.find(board.work_packages, &(&1.id == ready.id)).merge_eligibility
-      refute eligibility.eligible
-      assert "observation_stale" in eligibility.reason_codes
-
-      sweep(repo, %{entry => {:ok, merged}})
-      assert repo.get!(WorkPackage, ready.id).status == "ended"
-    end
-
-    test "without a GitHub token every watched package is stale and nothing changes", %{repo: repo} do
-      package = package!(repo, "WP-OBS-NO-TOKEN", status: "ready")
-      attach!(repo, package, 91)
-      Api.forget_token()
-
-      GitHubTestSupport.with_github_token_env(nil, fn ->
-        Application.put_env(:symphony_elixir, :sympp_github_request, fn request -> flunk("GitHub request without a token: #{inspect(request.url)}") end)
-
-        try do
-          Observer.sweep(repo, review: &no_review/2)
-        after
-          Application.delete_env(:symphony_elixir, :sympp_github_request)
-          Api.forget_token()
-        end
-      end)
-
-      assert repo.get!(WorkPackage, package.id).status == "ready"
-      assert repo.get!(Observation, package.id).stale == ["github"]
-    end
-
-    test "an unreachable review host flags the package stale and blocks qualifying only", %{repo: repo} do
-      dispatched = package!(repo, "WP-OBS-REVIEW-DOWN", review_mode: "normal", review_id: "rvw_reviewdown01")
-      ready = package!(repo, "WP-OBS-REVIEW-DOWN-READY", status: "ready", review_mode: "normal", review_id: "rvw_reviewdown02")
-      attach!(repo, dispatched, 92)
-      attach!(repo, ready, 93, "head-b")
-
-      snapshot = %{{:pr, "nextide", "repo", 92} => {:ok, pr(92, "head-a")}, {:pr, "nextide", "repo", 93} => {:ok, pr(93, "head-b")}}
-      # Review Suite answers with something that isn't its status JSON.
-      Application.put_env(:symphony_elixir, :sympp_review_command, fn "python3", _args, _timeout -> {:ok, {"Traceback (most recent call last)", 1}} end)
-      suite_sweep(repo, snapshot)
-
-      assert repo.get!(WorkPackage, dispatched.id).status == "dispatched"
-      assert repo.get!(WorkPackage, ready.id).status == "ready"
-      assert repo.get!(Observation, dispatched.id).stale == ["review"]
-      assert repo.get!(Observation, ready.id).stale == ["review"]
-
-      # The merge itself is still recorded: it doesn't depend on the review host.
-      merged = pr(93, "head-b", %{"state" => "merged", "merged" => true, "merged_at" => "2026-11-09T10:00:00Z", "merge_commit_sha" => "merge-93"})
-      sweep(repo, Map.put(snapshot, {:pr, "nextide", "repo", 93}, {:ok, merged}), review: fn _id, _machine -> :unknown end)
-      assert repo.get!(WorkPackage, ready.id).status == "ended"
-    end
-  end
-
-  describe "stacked commits" do
-    test "a PR carrying another active package's unmerged commits holds until that PR merges; the PR it builds on qualifies", %{repo: repo} do
-      base = package!(repo, "WP-STACK-BASE")
-      stacked = package!(repo, "WP-STACK-TOP")
-      attach!(repo, base, 70, "head-base")
-      attach!(repo, stacked, 71, "head-top")
-      snapshot = %{{:pr, "nextide", "repo", 70} => {:ok, pr(70, "head-base")}, {:pr, "nextide", "repo", 71} => {:ok, pr(71, "head-top")}}
-      # The stacked branch carries the base PR's fix commit.
-      lists = %{70 => ["fix-1"], 71 => ["fix-1", "top-1"]}
-
-      sweep(repo, snapshot, commits: listed(snapshot, lists))
-      assert repo.get!(WorkPackage, base.id).status == "ready"
-      assert repo.get!(WorkPackage, stacked.id).status == "dispatched"
-      assert repo.get!(Observation, stacked.id).stacked_on == [base.id]
-
-      assert board_row(repo, stacked).operational_state.activity_signal["next_action"] ==
-               "remove WP-STACK-BASE's unmerged commits, or wait for its PR to merge"
-
-      # Squash-merged on GitHub before the ledger records it: a merged PR no
-      # longer counts, though its commits stay on the stacked branch.
-      merged = pr(70, "head-base", %{"state" => "merged", "merged" => true, "merged_at" => "2026-11-09T10:00:00Z", "merge_commit_sha" => "merge-70"})
-      sweep(repo, %{snapshot | {:pr, "nextide", "repo", 70} => {:ok, merged}}, commits: listed(snapshot, lists))
-      assert repo.get!(WorkPackage, base.id).status == "ended"
-      assert repo.get!(WorkPackage, stacked.id).status == "ready"
-      assert repo.get!(Observation, stacked.id).stacked_on == []
-    end
-
-    test "when two PRs share unmerged work, the later one holds", %{repo: repo} do
-      first = package!(repo, "WP-SHARE-FIRST")
-      second = package!(repo, "WP-SHARE-SECOND")
-      attach!(repo, first, 72, "head-first")
-      attach!(repo, second, 73, "head-second")
-      snapshot = %{{:pr, "nextide", "repo", 72} => {:ok, pr(72, "head-first")}, {:pr, "nextide", "repo", 73} => {:ok, pr(73, "head-second")}}
-
-      sweep(repo, snapshot, commits: listed(snapshot, %{72 => ["shared", "first-1"], 73 => ["shared", "second-1"]}))
-      assert repo.get!(WorkPackage, first.id).status == "ready"
-      assert repo.get!(WorkPackage, second.id).status == "dispatched"
-      assert repo.get!(Observation, second.id).stacked_on == [first.id]
-    end
-
-    test "a ready PR that becomes stacked unqualifies", %{repo: repo} do
-      base = package!(repo, "WP-STACK-LATE-BASE")
-      top = package!(repo, "WP-STACK-LATE-TOP")
-      attach!(repo, base, 74, "head-base")
-      attach!(repo, top, 75, "head-top")
-      snapshot = %{{:pr, "nextide", "repo", 74} => {:ok, pr(74, "head-base")}, {:pr, "nextide", "repo", 75} => {:ok, pr(75, "head-top")}}
-      sweep(repo, snapshot)
-      assert repo.get!(WorkPackage, top.id).status == "ready"
-
-      # The worker merged the sibling's branch: a new head with its commits.
-      moved = Map.put(snapshot, {:pr, "nextide", "repo", 75}, {:ok, pr(75, "head-merged")})
-      sweep(repo, moved, commits: listed(moved, %{74 => ["head-base"], 75 => ["head-base", "head-top", "head-merged"]}))
-      assert repo.get!(WorkPackage, top.id).status == "dispatched"
-      assert "stacked_on_unmerged_work" in unqualified_event!(repo, top.id).payload["reasons"]
-    end
-
-    test "ended packages, other repositories and a package's own earlier PR don't count", %{repo: repo} do
-      package = package!(repo, "WP-STACK-CLEAN")
-      sibling = package!(repo, "WP-STACK-SIBLING")
-      # A superseded package's PR is still open with the commits its successor reuses.
-      _retired = package!(repo, "WP-STACK-RETIRED", status: "ended")
-      fork = package!(repo, "WP-STACK-FORK", repo: "nextide/fork")
-      attach!(repo, package, 76, "head-old")
-      attach!(repo, package, 77, "head-new")
-      attach!(repo, sibling, 78, "head-sibling")
-      attach_in!(repo, fork, "nextide/fork", 79, "head-fork")
-
-      snapshot = %{
-        {:pr, "nextide", "repo", 77} => {:ok, pr(77, "head-new")},
-        {:pr, "nextide", "repo", 78} => {:ok, pr(78, "head-sibling")},
-        {:pr, "nextide", "fork", 79} => {:ok, pr(79, "head-fork", %{"repository" => "nextide/fork", "url" => "https://github.com/nextide/fork/pull/79"})}
-      }
-
-      # Only the two open PRs in nextide/repo have their commits read.
-      commits = fn prs ->
-        assert Enum.sort(prs) == [{"nextide", "repo", 77}, {"nextide", "repo", 78}]
-        listed(snapshot, %{77 => ["retired-1", "fork-1", "old-1", "new-1"], 78 => ["head-sibling"]}).(prs)
-      end
-
-      sweep(repo, snapshot, commits: commits)
-      assert repo.get!(WorkPackage, package.id).status == "ready"
-      assert repo.get!(Observation, package.id).stacked_on == []
-    end
-
-    test "another package's PR that can't be read defers qualification and never unqualifies", %{repo: repo} do
-      package = package!(repo, "WP-STACK-DEFER")
-      other = package!(repo, "WP-STACK-UNREAD")
-      attach!(repo, package, 80, "head-a")
-      attach!(repo, other, 81, "head-b")
-      readable = %{{:pr, "nextide", "repo", 80} => {:ok, pr(80, "head-a")}, {:pr, "nextide", "repo", 81} => {:ok, pr(81, "head-b")}}
-      unreadable = Map.put(readable, {:pr, "nextide", "repo", 81}, {:error, :request_failed})
-
-      sweep(repo, unreadable)
-      assert repo.get!(WorkPackage, package.id).status == "dispatched"
-      assert repo.get!(Observation, package.id).stale == ["stacking"]
-
-      sweep(repo, readable)
-      assert repo.get!(WorkPackage, package.id).status == "ready"
-      assert repo.get!(Observation, package.id).stale == []
-
-      sweep(repo, unreadable)
-      assert repo.get!(WorkPackage, package.id).status == "ready"
-      assert repo.get!(Observation, package.id).stale == ["stacking"]
-    end
-
-    test "a package whose branch lookup fails may hide an open PR, so others in its repository wait", %{repo: repo} do
-      package = package!(repo, "WP-STACK-HIDDEN-PR")
-      _unattached = package!(repo, "WP-STACK-NO-PR-YET")
-      sibling = package!(repo, "WP-STACK-OPEN")
-      attach!(repo, package, 83, "head-a")
-      attach!(repo, sibling, 84, "head-b")
-
-      sweep_with = fn branch_result ->
-        Observer.sweep(repo,
-          snapshot: fn entries ->
-            Map.new(entries, fn
-              {:pr, _owner, _name, 83} = entry -> {entry, {:ok, pr(83, "head-a")}}
-              {:pr, _owner, _name, 84} = entry -> {entry, {:ok, pr(84, "head-b")}}
-              {:branch, _owner, _name, _branch, _base} = entry -> {entry, branch_result}
-            end)
-          end,
-          review: &no_review/2,
-          failing_checks: fn _repository, _head -> {:ok, []} end,
-          commits: listed(%{{:pr, "nextide", "repo", 83} => {:ok, pr(83, "head-a")}, {:pr, "nextide", "repo", 84} => {:ok, pr(84, "head-b")}}, %{})
-        )
-      end
-
-      sweep_with.({:error, :request_failed})
-      assert repo.get!(WorkPackage, package.id).status == "dispatched"
-      assert repo.get!(Observation, package.id).stale == ["stacking"]
-
-      sweep_with.({:ok, nil})
-      assert repo.get!(WorkPackage, package.id).status == "ready"
-    end
-
-    test "commit lists are read only where two PRs are open in one repository, and again only when a head or base moves", %{repo: repo} do
-      first = package!(repo, "WP-COMMITS-FIRST")
-      attach!(repo, first, 85, "head-a")
-      alone = %{{:pr, "nextide", "repo", 85} => {:ok, pr(85, "head-a")}}
-      sweep(repo, alone, commits: fn prs -> flunk("commits read for #{inspect(prs)}") end)
-
-      second = package!(repo, "WP-COMMITS-SECOND")
-      attach!(repo, second, 86, "head-b")
-      both = Map.put(alone, {:pr, "nextide", "repo", 86}, {:ok, pr(86, "head-b")})
-      recording = fn snapshot -> fn prs -> send(self(), {:commits_read, Enum.sort(prs)}) && listed(snapshot, %{}).(prs) end end
-
-      sweep(repo, both, commits: recording.(both))
-      assert_received {:commits_read, [{"nextide", "repo", 85}, {"nextide", "repo", 86}]}
-
-      sweep(repo, both, commits: fn prs -> flunk("commits read again for #{inspect(prs)}") end)
-
-      base_moved = Map.put(both, {:pr, "nextide", "repo", 85}, {:ok, pr(85, "head-a", %{"base_sha" => "main-2"})})
-      sweep(repo, base_moved, commits: recording.(base_moved))
-      assert_received {:commits_read, [{"nextide", "repo", 85}]}
-    end
   end
 
   describe "terminals" do
-    test "a worker terminal moves its package from launching to implementing, and finishing it to worker_exited", %{repo: repo} do
-      package = package!(repo, "WP-OBS-WORKER")
-      next_action = fn -> board_row(repo, package).operational_state.activity_signal["next_action"] end
-
-      assert next_action.() == "run_launch_line"
-
-      worker = %{"state" => "live", "status" => "working", "labels" => %{"sympp.role" => "worker", "sympp.work_package_id" => package.id}}
-      Observer.observe_terminals(repo, {:ok, %{core_id: "core-1", core_name: "jj", terminals: %{"t9" => worker}}})
-      assert %WorkedOn{display_address: "jj/t9", role: "worker", state: "live"} = Ownership.workers(repo, [package.id])[package.id]
-      assert next_action.() == "wait"
-
-      # An unreachable core changes nothing.
-      Observer.observe_terminals(repo, :unavailable)
-      assert Ownership.workers(repo, [package.id])[package.id].state == "live"
-
-      Observer.observe_terminals(repo, {:ok, %{core_id: "core-1", terminals: %{"t9" => Map.put(worker, "state", "finished")}}})
-      assert %WorkedOn{state: "finished", finish_reason: "terminal_finished"} = Ownership.workers(repo, [package.id])[package.id]
-      assert next_action.() == "inspect_worker"
-    end
-
-    test "a worker that started and exited between two reads still counts as exited", %{repo: repo} do
-      package = package!(repo, "WP-OBS-QUICK-WORKER")
-      worker = %{"state" => "finished", "labels" => %{"sympp.role" => "worker", "sympp.work_package_id" => package.id}}
-
-      Observer.observe_terminals(repo, {:ok, %{core_id: "core-1", terminals: %{"t8" => worker}}})
-      Observer.observe_terminals(repo, {:ok, %{core_id: "core-1", terminals: %{"t8" => worker}}})
-
-      assert [%WorkedOn{state: "finished", finish_reason: "terminal_finished"}] = repo.all(WorkedOn)
-      assert board_row(repo, package).operational_state.activity_signal["next_action"] == "inspect_worker"
-    end
-
     test "terminals the factory's core reports finished end their rows; other cores' rows stay", %{repo: repo} do
       package = package!(repo, "WP-OBS-OWNERS")
       seen = owner!(repo, package.work_request_id, "core-1/t1")
@@ -621,30 +159,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert command =~ ~s("$HOME/.agents/skills/review-suite/plugins/review-suite/scripts/review.py")
       assert command =~ ~s("${CODEX_HOME:-$HOME/.codex}"/plugins/cache/review-suite/review-suite/*/scripts/review.py)
     end
-
-    test "a cycle that doesn't exist yet is not started; an unusable answer is unknown" do
-      answers = %{
-        "rvw_missing0001" => {:ok, {Jason.encode!(%{"error" => "unknown review cycle id: rvw_missing0001", "status" => "usage_error"}), 2}},
-        "rvw_broken0001" => {:ok, {"Traceback (most recent call last)", 1}},
-        "rvw_timeout0001" => :error
-      }
-
-      Application.put_env(:symphony_elixir, :sympp_review_command, fn "python3", [_script, "--id", id | _rest], _timeout -> Map.fetch!(answers, id) end)
-
-      assert ReviewStatus.read("rvw_missing0001", nil) == :not_started
-      assert ReviewStatus.state(:not_started, "abc") == :pending
-      assert ReviewStatus.read("rvw_broken0001", nil) == :unknown
-      assert ReviewStatus.read("rvw_timeout0001", nil) == :unknown
-      assert ReviewStatus.state(:unknown, "abc") == :unknown
-    end
-  end
-
-  test "PR progress helpers preserve created_at precedence over legacy sequences" do
-    old_event = %ProgressEvent{id: "old-pr", sequence: 200, created_at: ~U[2026-05-20 12:00:00Z], payload: pr_event_payload(1, "old-head")}
-    new_event = %ProgressEvent{id: "new-pr", sequence: 1, created_at: ~U[2026-05-21 12:00:00Z], payload: pr_event_payload(2, "new-head")}
-
-    assert {:ok, %{ref: %{number: 2}, payload: %{"head_sha" => "new-head"}}} =
-             PullRequestProgress.current_pr_state([new_event, old_event], ["attach_pr"])
   end
 
   # Commit lists default to each PR's own head commit, so PRs share nothing.
@@ -673,20 +187,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   defp no_review(_id, _machine), do: flunk("review read for a package in mode none")
 
   # Review Suite's `review.py --id <id> --show-status --json` answer, for every review id.
-  defp suite(status) do
-    output = status |> Map.put("review", "rvw_fake") |> Jason.encode!()
-    answer = fn "python3", [_script, "--id", _id, "--show-status", "--json"], _timeout -> {:ok, {output, 0}} end
-    Application.put_env(:symphony_elixir, :sympp_review_command, answer)
-  end
-
-  defp suite_sweep(repo, snapshot), do: sweep(repo, snapshot, review: &ReviewStatus.read/2)
 
   # Review Suite's base_interaction for a carried review: whether the base change
   # touched the PR's paths and still needs a targeted check.
-  defp interaction(true), do: %{"check" => true, "reason" => "shared_paths", "paths" => ["lib/app.ex"], "line_overlap_paths" => []}
-  defp interaction(false), do: %{"check" => false, "reason" => "inspect_dependencies", "paths" => [], "line_overlap_paths" => []}
-
-  defp review_signal(repo, package), do: board_row(repo, package).work_package.review_signal
 
   defp pr(number, head, patch \\ %{}) do
     Map.merge(
@@ -746,16 +249,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
              })
   end
 
-  defp attach_in!(repo, package, repository, number, head) do
-    assert {:ok, _event} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: package.id,
-               summary: "PR attached",
-               status: "pr_attached",
-               payload: %{"type" => "pr", "source_tool" => "attach_pr", "url" => "https://github.com/#{repository}/pull/#{number}", "repository" => repository, "number" => number, "head_sha" => head}
-             })
-  end
-
   defp pr_event_payload(number, head) do
     %{"type" => "pr", "source_tool" => "attach_pr", "url" => "https://github.com/#{@repo_name}/pull/#{number}", "repository" => @repo_name, "number" => number, "head_sha" => head}
   end
@@ -773,11 +266,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
     })
   end
 
-  defp board_row(repo, package) do
-    {:ok, board} = DeliveryBoard.project(repo, package.work_request_id)
-    Enum.find(board.work_packages, &(&1.id == package.id))
-  end
-
   defp events(repo, package_id) do
     {:ok, events} = PlanningRepository.list_progress_events(repo, package_id)
     events
@@ -785,9 +273,5 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
 
   defp current_pr(repo, package_id, sources \\ ["attach_pr"]) do
     repo |> events(package_id) |> PullRequestProgress.current_pr_state(sources)
-  end
-
-  defp unqualified_event!(repo, package_id) do
-    repo |> events(package_id) |> Enum.filter(&(&1.status == "unqualified")) |> List.last() || flunk("no unqualify recorded")
   end
 end

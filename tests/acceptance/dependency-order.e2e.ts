@@ -27,6 +27,12 @@ test('all dependency endpoint combinations dispatch only after canonical deliver
   expect((await architect.reject('dispatch_work_package', { work_package_id: next }, 'unmet_work_package_dependencies')).next_action)
     .toBe(`${delivered} ${direct}, then dispatch`);
   await depend(architect, next, cancelled, { reason: 'Initially required scope.' });
+  // Unstarted scope is skipped, never abandoned; a successor belongs to the same request.
+  expect((await architect.reject('close_work_package', { work_package_id: cancelled, outcome: 'abandoned', rationale: 'Dropped.' }, 'ending_not_allowed')).state).toBe('planned');
+  const elsewhere = await factory.client();
+  await elsewhere.request('Another request');
+  const [foreign] = await elsewhere.addPackages([contract('Foreign successor')]);
+  await architect.reject('close_work_package', { work_package_id: cancelled, outcome: 'superseded', successor_work_package_id: foreign, rationale: 'Elsewhere.' }, 'successor_work_package_out_of_scope');
   await architect.call('close_work_package', { work_package_id: cancelled, outcome: 'skipped' });
   const refusal = await architect.reject('dispatch_work_package', { work_package_id: next }, 'unmet_work_package_dependencies');
   expect(refusal.state).toBe('planned');
@@ -124,4 +130,53 @@ test('out-of-order automatic and manual closeout retain order violations through
   expect(after.merge_eligibility.reason_codes).toContain('delivery_order_violation');
   await architect.call('sync_pr', { work_package_id: ui });
   expect((await row(architect, request, ui)).delivery).toEqual(merged.delivery);
+});
+
+test('the watcher holds a PR stacked on another package\'s unmerged work until that PR merges, and never unqualifies on an unreadable sibling', async ({ watched: { factory, provider } }) => {
+  const architect = await factory.client();
+  const request = await architect.request('Watched stacking');
+  const [fix, feature, later, retired] = await architect.addPackages(['CI fix', 'Feature', 'Later sibling', 'Retired attempt']
+    .map((title, index) => contract(title, { branch_pattern: `feature/delivery-${311 + index}` })));
+  for (const wp of [fix, feature, later, retired]) await architect.call('dispatch_work_package', { work_package_id: wp });
+  const status = async (wp: string) => (await row(architect, request, wp)).raw_status;
+  const commitReads = () => provider.graphql.filter(({ query }) => query.includes('commits(first: 100)')).length;
+  const open = (number: number, sha: string, commits: string[], patch: object = {}) =>
+    provider.set(number, pr(number, sha, { commits: commits.map((oid) => ({ oid })), ...patch }));
+  // A retired package's PR may stay open with commits its successor reuses: it never counts.
+  await close(architect, retired, 'superseded', { successor_work_package_id: later, rationale: 'The later sibling owns this scope.' });
+  open(314, head('9'), [head('9')]);
+  open(311, head('a'), [head('a')]);
+  open(312, head('b'), [head('9'), head('b')]);
+  await factory.tick('sweep');
+  expect(await status(fix)).toBe('ready');
+  expect(await status(feature)).toBe('ready');
+  // Commit lists are read again only when a head or base moves.
+  const reads = commitReads();
+  await factory.tick('sweep');
+  expect(commitReads()).toBe(reads);
+  // An unreadable sibling PR defers the check: a ready package stays ready.
+  provider.unreadable.add(311);
+  await factory.tick('sweep');
+  expect(await status(feature)).toBe('ready');
+  expect((await row(architect, request, feature)).work_package.observation_stale).toEqual(['stacking']);
+  provider.unreadable.delete(311);
+  // The feature branch merged the unmerged CI fix: its ready PR unqualifies.
+  open(312, head('c'), [head('9'), head('b'), head('a'), head('c')]);
+  await factory.tick('sweep');
+  const stacked = await row(architect, request, feature);
+  expect(stacked.raw_status).toBe('dispatched');
+  expect(stacked.work_package.stacked_on).toEqual([fix]);
+  expect(stacked.operational_state.activity_signal.next_action).toBe(`remove ${fix}'s unmerged commits, or wait for its PR to merge`);
+  expect(await status(fix)).toBe('ready');
+  // Of two PRs sharing unmerged work that neither fully contains, the later one holds.
+  open(313, head('d'), [head('a'), head('d')]);
+  await factory.tick('sweep');
+  expect((await row(architect, request, later)).work_package.stacked_on.sort()).toEqual([fix, feature].sort());
+  // Squash-merged: the fix's commits no longer belong to an open PR.
+  open(311, head('a'), [head('a')], { state: 'MERGED', mergedAt: new Date().toISOString(), mergeCommit: { oid: head('e') } });
+  await factory.tick('sweep');
+  expect((await row(architect, request, fix)).delivery_outcome).toBe('pr_merged');
+  expect(await status(feature)).toBe('ready');
+  expect((await row(architect, request, feature)).work_package.stacked_on).toEqual([]);
+  expect((await row(architect, request, later)).work_package.stacked_on).toEqual([feature]);
 });

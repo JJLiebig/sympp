@@ -11,7 +11,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -38,36 +37,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
     repo.delete_all(WorkPackage)
     repo.delete_all(WorkRequest)
     :ok
-  end
-
-  test "superseded closeout ends the package and the terminal working on it", %{repo: repo} do
-    {work_request, work_package, linked_package} = linked_slice!(repo, status: "dispatched")
-    successor_slice = create_work_package!(repo, work_request, id: "WRS-DELIVERY-UNCLAIMED-SUCCESSOR")
-    worker_row = insert_worker_row!(repo, linked_package.id)
-
-    assert {:ok, delivery} =
-             Service.record_work_package_delivery(
-               repo,
-               work_request.id,
-               work_package.id,
-               delivery_attrs(%{
-                 outcome: "superseded",
-                 idempotency_key: "delivery-superseded-unclaimed-worker-authority",
-                 successor_work_package_id: successor_slice.id,
-                 superseded_reason: "Recut onto a concrete branch after the old worker authority went stale."
-               })
-             )
-
-    assert delivery.outcome == "superseded"
-    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
-    assert %WorkedOn{state: "finished", finish_reason: "subject_ended"} = repo.get!(WorkedOn, worker_row.id)
-
-    events = repo.all(ProgressEvent)
-    assert Enum.any?(events, &(&1.payload["type"] == "work_request_delivery_closeout"))
-
-    assert {:ok, %{counts: %{"superseded" => 1}, work_packages: [slice, _successor]}} = DeliveryBoard.project(repo, work_request.id)
-    assert slice.operational_state.key == "superseded"
-    refute "work_package_active_after_delivery" in slice.attention_reason_codes
   end
 
   test "abandoned closeout clears missing managed worktree after durable closeout", %{repo: repo} do
@@ -128,33 +97,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
     end
   end
 
-  test "abandoned closeout is refused for planned packages, which are skipped instead", %{repo: repo} do
-    for {status, request_id} <- [{"planned", "WR-DELIVERY-ABANDONED-PLANNED"}] do
-      {work_request, work_package, linked_package} =
-        linked_slice!(
-          repo,
-          work_request_id: request_id,
-          status: status
-        )
-
-      assert {:error, {:ending_not_allowed, "planned", "abandoned"}} =
-               Service.record_work_package_delivery(
-                 repo,
-                 work_request.id,
-                 work_package.id,
-                 delivery_attrs(%{
-                   outcome: "abandoned",
-                   idempotency_key: "delivery-abandoned-#{status}",
-                   abandoned_rationale: "No-code abandoned repair must not hide implementation state."
-                 })
-               )
-
-      assert repo.get!(WorkPackage, linked_package.id).status == status
-    end
-
-    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
-  end
-
   defp linked_slice!(repo, overrides) do
     kind = Keyword.get(overrides, :kind, "mcp")
     status = Keyword.get(overrides, :status, "dispatched")
@@ -174,21 +116,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
     assert {:ok, dispatched_slice} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", work_package.id)
 
     {work_request, dispatched_slice, work_package}
-  end
-
-  defp insert_worker_row!(repo, work_package_id) do
-    now = DateTime.utc_now(:microsecond)
-
-    repo.insert!(%WorkedOn{
-      id: "wo_#{System.unique_integer([:positive])}",
-      subject_kind: "work_package",
-      subject_id: work_package_id,
-      terminal_key: "core/t9",
-      display_address: "box/t9",
-      role: "worker",
-      state: "live",
-      started_at: now
-    })
   end
 
   defp create_work_request!(repo, overrides) do

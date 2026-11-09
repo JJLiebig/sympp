@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { contract } from '../support/factory.js';
 import { close, head, installReviewSuite, pr, prUrl, row, sync, test } from '../support/delivery.js';
+import { githubCheckout } from '../support/worktree-git.js';
 
 test('deployment observations cover every delivered revision and preserve completion through rollback and unavailable history', async ({ delivery: { factory, provider } }) => {
   const architect = await factory.client();
@@ -430,4 +431,289 @@ test('architect integration holds gate a ready PR without reopening work or chan
   expect((await row(architect, request, wp)).raw_status).toBe('ended');
   await architect.reject('set_blocker', hold, 'work_package_ended');
   expect((await row(architect, request, wp)).work_package.blocker_state['active?']).toBe(false);
+});
+
+test('the watcher carries a dispatched package through ready to a recorded merge with no architect call, and a restart replays nothing', async ({ watched: { factory, provider, restart } }) => {
+  let architect = await factory.client();
+  const request = await architect.request('Watched delivery');
+  const [wp] = await architect.addPackages([contract('Watched change', { branch_pattern: 'feature/delivery-901' })]);
+  await architect.call('dispatch_work_package', { work_package_id: wp });
+  const detail = () => architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`);
+  const revision = async () => (await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision;
+  // A PR from the package branch into another base isn't this package's delivery.
+  provider.set(900, pr(900, head('9'), { headRefName: 'feature/delivery-901', baseRefName: 'other' }));
+  await factory.tick('sweep');
+  expect((await detail()).metadata.pr).toBeFalsy();
+  provider.set(901, pr(901, head('a'), { statusCheckRollup: [{ name: 'required', status: 'IN_PROGRESS', conclusion: null }] }));
+  await factory.tick('sweep');
+  const waiting = await detail();
+  expect(waiting.metadata.pr.number).toBe(901);
+  expect(waiting.metadata.pr.check_summary.status).toBe('pending');
+  expect((await row(architect, request, wp)).raw_status).toBe('dispatched');
+  // A head turning failing reads which checks failed, once.
+  provider.set(901, pr(901, head('a'), { statusCheckRollup: [{ name: 'required', status: 'COMPLETED', conclusion: 'FAILURE' }] }));
+  await factory.tick('sweep');
+  expect((await row(architect, request, wp)).work_package.pr_signal.checks).toMatchObject({ status: 'failing', failing: ['required'] });
+  // A new watcher process starts with no memory: the stored snapshot keeps it
+  // from recording the same state, or reading the check details, again.
+  const reads = provider.rest.length;
+  const recorded = await revision();
+  factory = await restart();
+  architect = await factory.client(architect.terminal);
+  await factory.tick('sweep');
+  expect(provider.rest).toHaveLength(reads);
+  expect(await revision()).toEqual(recorded);
+  provider.set(901, pr(901, head('a')));
+  await factory.tick('sweep');
+  const ready = await row(architect, request, wp);
+  expect(ready.raw_status).toBe('ready');
+  expect(ready.merge_eligibility.eligible).toBe(true);
+  const qualified = await detail();
+  expect(qualified.metadata.pr.check_summary.status).toBe('passing');
+  await factory.tick('sweep');
+  expect((await detail()).metadata.pr.checks_changed_at).toBe(qualified.metadata.pr.checks_changed_at);
+  const mergeTime = new Date().toISOString();
+  provider.set(901, pr(901, head('a'), { state: 'MERGED', mergedAt: mergeTime, mergeCommit: { oid: head('f') } }));
+  await factory.tick('sweep');
+  const delivered = await row(architect, request, wp);
+  expect(delivered.raw_status).toBe('ended');
+  expect(delivered.delivery_outcome).toBe('pr_merged');
+  expect(delivered.delivery.merge_commit_sha).toBe(head('f'));
+  expect(Date.parse(delivered.delivery.pr_merged_at)).toBe(Date.parse(mergeTime));
+  expect((await architect.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.completed_at).toBeTruthy();
+  // A merged PR is no longer watched.
+  const documents = provider.graphql.length;
+  await factory.tick('sweep');
+  expect(provider.graphql).toHaveLength(documents);
+  expect(provider.calls.filter(({ argv }) => argv[0] === 'pr')).toEqual([]);
+});
+
+test('the watcher unqualifies a retargeted, closed or elsewhere-merged PR and watches a closed one again only once it is synced', async ({ watched: { factory, provider, root } }) => {
+  const architect = await factory.client();
+  const request = await architect.request('Watched retargets');
+  await mkdir(join(root, 'checkouts'));
+  // A package scoped to a local checkout is delivered by its origin's PRs.
+  const local = (await githubCheckout(root, 'local', 'beta')).dir;
+  const [wp, closing, scoped] = await architect.addPackages([
+    contract('Retargeted change', { branch_pattern: 'feature/delivery-920' }), contract('Closed change', { branch_pattern: 'feature/delivery-921' }),
+    contract('Local checkout change', { repo: local, base_branch: 'beta', branch_pattern: 'feature/delivery-922' }),
+  ]);
+  for (const id of [wp, closing, scoped]) await architect.call('dispatch_work_package', { work_package_id: id });
+  provider.set(922, pr(922, head('c'), { state: 'MERGED', mergedAt: new Date().toISOString(), mergeCommit: { oid: head('d') } }));
+  provider.set(920, pr(920, head('a')));
+  provider.set(921, pr(921, head('b')));
+  await factory.tick('sweep');
+  for (const id of [wp, closing]) expect((await row(architect, request, id)).raw_status).toBe('ready');
+  expect((await row(architect, request, scoped)).delivery_outcome).toBe('pr_merged');
+  // A PR retargeted to another base no longer delivers its package.
+  provider.set(920, pr(920, head('a'), { baseRefName: 'other' }));
+  await factory.tick('sweep');
+  expect((await row(architect, request, wp)).raw_status).toBe('dispatched');
+  await architect.reject('sync_pr', { work_package_id: wp, url: prUrl(920) }, 'base_branch_mismatch');
+  provider.set(920, pr(920, head('a')));
+  await factory.tick('sweep');
+  expect((await row(architect, request, wp)).raw_status).toBe('ready');
+  // Merged into another base, it unqualifies instead of ending.
+  provider.set(920, pr(920, head('a'), { baseRefName: 'other', state: 'MERGED', mergedAt: new Date().toISOString(), mergeCommit: { oid: head('e') } }));
+  await factory.tick('sweep');
+  const elsewhere = await row(architect, request, wp);
+  expect(elsewhere.raw_status).toBe('dispatched');
+  expect(elsewhere.delivery_outcome).toBeNull();
+  // A closed PR unqualifies its package and is no longer read.
+  provider.set(921, pr(921, head('b'), { state: 'CLOSED' }));
+  await factory.tick('sweep');
+  expect((await row(architect, request, closing)).raw_status).toBe('dispatched');
+  const closedReads = () => provider.graphql.filter(({ variables }) => Object.values(variables).includes(921)).length;
+  const before = closedReads();
+  await factory.tick('sweep');
+  expect(closedReads()).toBe(before);
+  // Reopened and synced by the architect, it is watched again.
+  provider.set(921, pr(921, head('b')));
+  expect((await architect.call('sync_pr', { work_package_id: closing, url: prUrl(921) })).work_package.status).toBe('ready');
+  provider.set(921, pr(921, head('b'), { state: 'MERGED', mergedAt: new Date().toISOString(), mergeCommit: { oid: head('f') } }));
+  await factory.tick('sweep');
+  expect((await row(architect, request, closing)).delivery_outcome).toBe('pr_merged');
+});
+
+test('the watcher holds work on unknown GitHub or Review Suite input and follows the accepted head across base and head changes', async ({ watched: { factory, provider } }) => {
+  const architect = await factory.client();
+  const request = await architect.request('Watched reviews');
+  const [wp, other] = await architect.addPackages([
+    contract('Reviewed change', { branch_pattern: 'feature/delivery-910' }), contract('Unreviewed change', { branch_pattern: 'feature/delivery-911' }),
+  ]);
+  const reviewId = (await architect.call('dispatch_work_package', { work_package_id: wp, review_mode: 'fast' })).work_package.review_id;
+  await architect.call('dispatch_work_package', { work_package_id: other });
+  const review = await installReviewSuite(factory.home);
+  const done = (reviewed: string, accepted: string, extra: object = {}) =>
+    review.answer({ review: reviewId, done: true, status: 'done', reviewed_head: head(reviewed), accepted_head: head(accepted), progress: '1/1', ...extra });
+  const interaction = (check: boolean) => ({ required_checks: 'current_head_required',
+    base_interaction: { check, reason: check ? 'shared_paths' : 'inspect_dependencies', paths: check ? ['src/service.ts'] : [], line_overlap_paths: [] } });
+  const status = async (id: string) => (await row(architect, request, id)).raw_status;
+  // A review accepted for another head doesn't count.
+  await done('9', '9');
+  provider.set(910, pr(910, head('a')));
+  provider.set(911, pr(911, head('b')));
+  await factory.tick('sweep');
+  expect(await status(wp)).toBe('dispatched');
+  expect(await status(other)).toBe('ready');
+  await done('a', 'a');
+  await factory.tick('sweep');
+  expect(await status(wp)).toBe('ready');
+  // Unreachable GitHub: nothing moves, and stale work is not merge-eligible.
+  provider.github = 'down';
+  provider.set(911, pr(911, head('b'), { state: 'MERGED', mergedAt: new Date().toISOString(), mergeCommit: { oid: head('f') } }));
+  await factory.tick('sweep');
+  for (const id of [wp, other]) {
+    const stale = await row(architect, request, id);
+    expect(stale.raw_status).toBe('ready');
+    expect(stale.work_package.observation_stale).toEqual(['github']);
+    expect(stale.merge_eligibility.eligible).toBe(false);
+    expect(stale.merge_eligibility.reason_codes).toContain('observation_stale');
+  }
+  provider.github = 'up';
+  await factory.tick('sweep');
+  expect((await row(architect, request, other)).delivery_outcome).toBe('pr_merged');
+  expect((await row(architect, request, wp)).work_package.observation_stale).toEqual([]);
+  // The base merged in with the PR's patch unchanged: the review carries to the new head.
+  await done('a', 'c', interaction(false));
+  provider.set(910, pr(910, head('c')));
+  await factory.tick('sweep');
+  expect(await status(wp)).toBe('ready');
+  expect((await row(architect, request, wp)).work_package.review_signal).toMatchObject({ accepted_head: head('c'), reviewed_head: head('a'), status: 'passed' });
+  // A base change that touches the PR's paths still needs a targeted check.
+  await done('a', 'd', interaction(true));
+  provider.set(910, pr(910, head('d')));
+  await factory.tick('sweep');
+  expect(await status(wp)).toBe('dispatched');
+  expect((await row(architect, request, wp)).work_package.review_signal).toMatchObject({ accepted_head: head('d'), status: 'inspection_needed' });
+  // An unusable Review Suite answer is unknown: it blocks qualifying only.
+  await review.answer({ traceback: 'Traceback (most recent call last)' } as object, 1);
+  await factory.tick('sweep');
+  expect(await status(wp)).toBe('dispatched');
+  expect((await row(architect, request, wp)).work_package.observation_stale).toEqual(['review']);
+  await done('d', 'd');
+  await factory.tick('sweep');
+  expect(await status(wp)).toBe('ready');
+  await review.answer({ traceback: 'Traceback (most recent call last)' } as object, 1);
+  await factory.tick('sweep');
+  expect(await status(wp)).toBe('ready');
+  // A fix commit changed the patch: the review no longer covers the head.
+  await review.answer({ review: reviewId, done: false, status: 'stale', review_ladder: 'invalidated', reviewed_head: head('d'), current_head: head('e') });
+  provider.set(910, pr(910, head('e')));
+  await factory.tick('sweep');
+  expect(await status(wp)).toBe('dispatched');
+  const revision = (await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision;
+  await factory.tick('sweep');
+  expect((await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision).toEqual(revision);
+  // The repository reports checks, so a new head whose checks aren't reported yet stays unproven.
+  await done('e', 'g');
+  provider.set(910, pr(910, head('g'), { statusCheckRollup: [] }));
+  await factory.tick('sweep');
+  expect(await status(wp)).toBe('dispatched');
+  provider.set(910, pr(910, head('g'), { statusCheckRollup: [{ name: 'required', status: 'COMPLETED', conclusion: 'FAILURE' }] }));
+  await factory.tick('sweep');
+  expect((await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).metadata.pr.check_summary.status).toBe('failing');
+  provider.set(910, pr(910, head('g')));
+  await factory.tick('sweep');
+  expect(await status(wp)).toBe('ready');
+});
+
+test('a manual sync needs known CI once the repository has CI, unless the architect records an override for that head', async ({ watched: { factory, provider } }) => {
+  const architect = await factory.client();
+  const request = await architect.request('Known CI');
+  const [seed, wp, noCi] = await architect.addPackages([
+    contract('Checked change'), contract('Unchecked change'), contract('Repository without CI', { repo: 'example/client', base_branch: 'integration' }),
+  ]);
+  for (const id of [seed, wp, noCi]) await architect.call('dispatch_work_package', { work_package_id: id });
+  // One reported check is enough to know the repository has CI.
+  provider.set(930, pr(930, head('1')));
+  expect((await sync(architect, seed, 930, head('1'))).work_package.status).toBe('ready');
+  const quiet = { statusCheckRollup: [] };
+  provider.set(931, pr(931, head('a'), quiet));
+  const held = await architect.call('sync_pr', { work_package_id: wp, url: prUrl(931) });
+  expect(held.work_package.status).toBe('dispatched');
+  expect(held.pr_sync.readiness_reasons).toContain('ci_unknown');
+  expect(held.pr_sync.next_action).toBe('wait for CI, or sync_pr with ci_override: "<why CI can be skipped for this head>"');
+  await architect.reject('sync_pr', { work_package_id: wp, url: prUrl(931), ci_override: '  ' }, 'blank_ci_override');
+  // Without a URL the override names the attached PR's current head.
+  const reason = 'Docs-only change; this repository\'s CI does not run on docs.';
+  expect((await architect.call('sync_pr', { work_package_id: wp, ci_override: reason })).work_package.status).toBe('ready');
+  expect((await row(architect, request, wp)).work_package.ci_override).toEqual({ reason, by: architect.address, head: head('a') });
+  // The watcher honours the override through pending CI on that head.
+  provider.set(931, pr(931, head('a'), { statusCheckRollup: [{ name: 'required', status: 'IN_PROGRESS', conclusion: null }] }));
+  await factory.tick('sweep');
+  expect((await row(architect, request, wp)).raw_status).toBe('ready');
+  // A new head clears it.
+  provider.set(931, pr(931, head('b'), { statusCheckRollup: [{ name: 'required', status: 'IN_PROGRESS', conclusion: null }] }));
+  await factory.tick('sweep');
+  const moved = await row(architect, request, wp);
+  expect(moved.raw_status).toBe('dispatched');
+  expect(moved.work_package.ci_override).toBeNull();
+  // Failing CI is never overridden: the failure is still recorded, and the error says why.
+  provider.set(931, pr(931, head('b'), { statusCheckRollup: [{ name: 'required', status: 'COMPLETED', conclusion: 'FAILURE' }] }));
+  const failing = await architect.reject('sync_pr', { work_package_id: wp, url: prUrl(931), ci_override: reason }, 'ci_failing');
+  expect(failing).toMatchObject({ state: 'dispatched', next_action: 'fix the failing checks, then sync_pr' });
+  expect(failing.message).toContain('never skips failing checks');
+  expect((await row(architect, request, wp)).work_package.ci_override).toBeNull();
+  // Each qualification fact that stops holding unqualifies a ready package; a green sync qualifies it again.
+  for (const [patch, unmet] of [
+    [{ isDraft: true }, 'pr_draft'],
+    [{ statusCheckRollup: [{ name: 'required', status: 'COMPLETED', conclusion: 'FAILURE' }] }, 'ci_not_green'],
+    [{ state: 'CLOSED' }, 'pr_not_open'],
+  ] as const) {
+    provider.set(931, pr(931, head('b')));
+    expect((await sync(architect, wp, 931, head('b'))).work_package.status).toBe('ready');
+    provider.set(931, pr(931, head('b'), patch));
+    const unqualified = await sync(architect, wp, 931, head('b'));
+    expect(unqualified.work_package.status).toBe('dispatched');
+    expect(unqualified.pr_sync.readiness_reasons).toContain(unmet);
+  }
+  // A repository that has never reported checks qualifies a head without CI.
+  provider.set(932, pr(932, head('c'), { ...quiet, url: 'https://github.com/example/client/pull/932', baseRefName: 'integration' }));
+  const clientSync = await architect.call('sync_pr', { work_package_id: noCi, url: 'https://github.com/example/client/pull/932' });
+  expect(clientSync.work_package.status).toBe('ready');
+});
+
+test('the watcher follows worker terminals from launch to exit and never treats an unreachable core as finished', async ({ watched: { factory, provider } }) => {
+  const architect = await factory.client();
+  const request = await architect.request('Watched workers');
+  const [wp, quick] = await architect.addPackages([contract('Worker change'), contract('Quick worker')]);
+  for (const id of [wp, quick]) await architect.call('dispatch_work_package', { work_package_id: id });
+  const next = async (id: string) => (await row(architect, request, id)).operational_state.activity_signal.next_action;
+  expect(await next(wp)).toBe('run_launch_line');
+  const worker = (address: string, id: string, state: 'live' | 'finished') =>
+    provider.terminal({ address, state, labels: { 'sympp.role': 'worker', 'sympp.work_package_id': id } });
+  worker('w1', wp, 'live');
+  await factory.tick('terminals');
+  expect(await next(wp)).toBe('wait');
+  provider.core = null;
+  await factory.tick('terminals');
+  expect(await next(wp)).toBe('wait');
+  provider.core = { id: 'acceptance-core', name: 'acceptance' };
+  worker('w1', wp, 'finished');
+  await factory.tick('terminals');
+  expect(await next(wp)).toBe('inspect_worker');
+  // Ending a package ends its worker's work on it.
+  const [replaced] = await architect.addPackages([contract('Replaced attempt')]);
+  await architect.call('dispatch_work_package', { work_package_id: replaced });
+  worker('w3', replaced, 'live');
+  await factory.tick('terminals');
+  // Herdr's request detail shows each package's worker terminal.
+  const workerTerminal = async (id: string) => (await architect.raw(undefined, {}, 'GET', `/api/v1/sympp/herdr/work-requests/${request}`))
+    .body.work_packages.find((item: any) => item.id === id).worker_terminal;
+  expect(await workerTerminal(replaced)).toEqual({ address: 'acceptance/w3', state: 'live', status: 'live' });
+  await close(architect, replaced, 'superseded', { successor_work_package_id: quick, rationale: 'The quick worker owns this scope.' });
+  expect((await workerTerminal(replaced)).state).toBe('finished');
+  // A worker that started and exited between two reads still counts as exited.
+  worker('w2', quick, 'finished');
+  await factory.tick('terminals');
+  await factory.tick('terminals');
+  expect(await next(quick)).toBe('inspect_worker');
+  // The architect's terminal finishing ends its work on the request.
+  const owner = async () => (await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated'))
+    .work_request_details.find((entry: any) => entry.work_request.id === request).work_request.worked_on;
+  expect((await owner()).address).toBe(architect.address);
+  provider.terminal({ address: architect.terminal!, state: 'finished' });
+  await factory.tick('terminals');
+  expect(await owner()).toBeFalsy();
 });

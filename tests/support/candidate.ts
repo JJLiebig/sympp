@@ -7,7 +7,9 @@ import { basename, delimiter, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { test as base } from 'e2e';
 
-export type CandidateOptions = { database?: string; offline?: boolean };
+// `watcher` runs the factory runtime with its Observer (tests/support/watcher.exs)
+// against the given loopback GitHub endpoint, instead of the cockpit.
+export type CandidateOptions = { database?: string; offline?: boolean; watcher?: string };
 
 // A real candidate process, not the installed plugin or an in-process test harness.
 export class Candidate {
@@ -18,6 +20,7 @@ export class Candidate {
   protocolLineCount = 0;
   private sequence = 0;
   private pending = new Map<number | string | null, { resolve: (response: any) => void; reject: (error: Error) => void }>();
+  private ticks: { line: string; resolve: () => void; reject: (error: Error) => void }[] = [];
   private log;
 
   constructor(root: string, name: string, private transport: 'stdio' | 'http' = 'stdio', provider?: { bin: string; endpoint: string }, options: CandidateOptions = {}) {
@@ -27,6 +30,7 @@ export class Candidate {
     this.log = createWriteStream(this.logPath);
     const args = transport === 'stdio'
       ? ['sympp.mcp', '--database', this.database, '--repo-root', resolve('.')]
+      : options.watcher ? ['run', '--no-start', resolve('tests/support/watcher.exs')]
       : ['sympp.cockpit', '--database', this.database, '--port', '0', '--no-open-dashboard',
         '--dashboard-origin', 'http://127.0.0.1:1'];
     this.process = spawn('mix', args, {
@@ -36,6 +40,9 @@ export class Candidate {
         PATH: provider ? `${provider.bin}${delimiter}${process.env.PATH}` : process.env.PATH,
         ...(provider ? { ACCEPTANCE_PROVIDER: provider.endpoint } : {}),
         ...(options.offline ? { SYMPP_OFFLINE_SANDBOX: '1' } : {}),
+        // A synthetic credential: GitHub here is the loopback provider.
+        ...(options.watcher ? { SYMPP_RUNTIME_ARTIFACT: '1', SYMPP_DATABASE: this.database, ACCEPTANCE_GITHUB: options.watcher,
+          GITHUB_TOKEN: 'acceptance-synthetic-github-credential' } : {}),
         HOME: this.home,
         USERPROFILE: this.home,
         TMPDIR: root,
@@ -51,6 +58,7 @@ export class Candidate {
     const lines = createInterface({ input: this.process.stdout });
     lines.on('line', (line) => {
       this.log.write(`${line}\n`);
+      if (this.ticks[0]?.line === line) this.ticks.shift()!.resolve();
       // Mix/log output is not a protocol response. Unknown response fields are tolerated.
       if (!line.startsWith('{') && !line.startsWith('[')) return;
       this.protocolLineCount++;
@@ -69,6 +77,15 @@ export class Candidate {
   private fail(error: Error) {
     for (const request of this.pending.values()) request.reject(error);
     this.pending.clear();
+    for (const tick of this.ticks.splice(0)) tick.reject(error);
+  }
+
+  // One Observer tick (watcher candidates): `sweep` reads GitHub, Review Suite
+  // and cards; `terminals` reads herdr-core. Resolves once the tick ran.
+  async tick(name: 'sweep' | 'terminals') {
+    const done = new Promise<void>((resolve, reject) => this.ticks.push({ line: `watcher: ${name} done`, resolve, reject }));
+    this.process.stdin.write(`${name}\n`);
+    await done;
   }
 
   async request(method: string, params: object = {}) {

@@ -8,29 +8,42 @@ import { Factory, type Client } from './factory.js';
 
 type Reply = { stdout: string; exitCode: number };
 
-// Own only the external gh protocol. The real factory, adapter and OS child
-// invocation remain unchanged. This does not qualify gh or GitHub compatibility.
+// A terminal as the factory host's herdr-core lists it.
+export type Terminal = { address: string; state: 'live' | 'finished'; cwd?: string; parent?: string; title?: string; labels?: Record<string, string> };
+
+// Own only the external protocols: the `gh` and `hc` CLIs, and GitHub's HTTP
+// API the Observer reads. One PR model (`set`) answers both `gh pr view` and
+// GraphQL. The real factory, adapters and OS child invocation remain
+// unchanged. This does not qualify gh, herdr or GitHub compatibility.
 export class Provider {
   readonly replies = new Map<number, Reply>();
   readonly apiReplies = new Map<string, Reply>();
   readonly calls: { argv: string[]; reply: Reply }[] = [];
+  // GitHub's HTTP API: down answers 503; unreadable PRs resolve to nothing.
+  github: 'up' | 'down' = 'up';
+  readonly unreadable = new Set<number>();
+  readonly graphql: { query: string; variables: Record<string, unknown> }[] = [];
+  readonly rest: string[] = [];
+  // herdr-core: `core` null is unreachable. `sent` records `hc send`.
+  core: { id: string; name: string } | null = { id: 'acceptance-core', name: 'acceptance' };
+  readonly terminals = new Map<string, Terminal>();
+  readonly sent: string[][] = [];
   readonly server = createServer(async (request, response) => {
     let body = '';
     for await (const chunk of request) body += chunk;
-    const { argv } = JSON.parse(body);
-    let reply: Reply = { stdout: 'Unexpected synthetic provider command', exitCode: 1 };
-    if (JSON.stringify(argv) === JSON.stringify(['auth', 'status', '--hostname', 'github.com'])) {
-      reply = { stdout: 'Synthetic protocol available', exitCode: 0 };
-    } else if (argv.length === 6 && JSON.stringify(argv.slice(0, 5)) ===
-      JSON.stringify(['api', '--hostname', 'github.com', '--method', 'GET'])) {
-      reply = this.apiReplies.get(argv[5]) ?? { stdout: 'HTTP 404 synthetic API not found', exitCode: 1 };
-    } else if (argv.length === 7 && argv[0] === 'pr' && argv[1] === 'view' &&
-      /^\d+$/.test(argv[2]) && argv[3] === '--repo' && ['example/service', 'example/client'].includes(argv[4]) && argv[5] === '--json') {
-      reply = this.replies.get(Number(argv[2])) ?? { stdout: 'HTTP 404 synthetic PR not found', exitCode: 1 };
+    let status = 200;
+    let reply: unknown;
+    if (request.url === '/cli') {
+      const { program, argv } = JSON.parse(body);
+      const answer = program === 'hc' ? this.herdr(argv) : this.gh(argv);
+      if (program !== 'hc') this.calls.push({ argv, reply: answer });
+      await appendFile(this.receipt, `${JSON.stringify({ program, argv, reply: answer })}\n`);
+      reply = answer;
+    } else {
+      [status, reply] = this.http(request.method ?? 'GET', request.url ?? '/', body);
+      await appendFile(this.receipt, `${JSON.stringify({ http: `${request.method} ${request.url}`, status })}\n`);
     }
-    this.calls.push({ argv, reply });
-    await appendFile(this.receipt, `${JSON.stringify({ argv, reply })}\n`);
-    response.writeHead(200, { 'content-type': 'application/json' });
+    response.writeHead(status, { 'content-type': 'application/json' });
     response.end(JSON.stringify(reply));
   });
   constructor(private receipt: string) {}
@@ -39,14 +52,98 @@ export class Provider {
     this.replies.set(number, { stdout: JSON.stringify(metadata), exitCode: 0 });
   }
 
+  terminal(record: Terminal) {
+    this.terminals.set(record.address, { labels: {}, ...this.terminals.get(record.address), ...record });
+  }
+
+  private gh(argv: string[]): Reply {
+    if (JSON.stringify(argv) === JSON.stringify(['auth', 'status', '--hostname', 'github.com'])) {
+      return { stdout: 'Synthetic protocol available', exitCode: 0 };
+    } else if (argv.length === 6 && JSON.stringify(argv.slice(0, 5)) ===
+      JSON.stringify(['api', '--hostname', 'github.com', '--method', 'GET'])) {
+      return this.apiReplies.get(argv[5]) ?? { stdout: 'HTTP 404 synthetic API not found', exitCode: 1 };
+    } else if (argv.length === 7 && argv[0] === 'pr' && argv[1] === 'view' &&
+      /^\d+$/.test(argv[2]) && argv[3] === '--repo' && ['example/service', 'example/client'].includes(argv[4]) && argv[5] === '--json') {
+      return this.replies.get(Number(argv[2])) ?? { stdout: 'HTTP 404 synthetic PR not found', exitCode: 1 };
+    }
+    return { stdout: 'Unexpected synthetic provider command', exitCode: 1 };
+  }
+
+  private herdr(argv: string[]): Reply {
+    const json = (value: unknown) => ({ stdout: JSON.stringify(value), exitCode: 0 });
+    if (!this.core) return { stdout: 'herdr-core unreachable', exitCode: 1 };
+    const [command, ...rest] = argv;
+    if (command === 'server' && rest.join(' ') === 'status --json') return json({ core: this.core });
+    if (command === 'ls' && rest[0] === '--all' && rest[1] === '--json') {
+      const [key, value] = rest[2] === '--label' ? rest[3].split('=') : [];
+      const listed = [...this.terminals.values()].filter((terminal) => !key || terminal.labels?.[key] === value);
+      // `hc ls` leaves worker labels out; `hc get` reads them.
+      return json({ terminals: listed.map(({ labels, ...terminal }) => (labels?.['sympp.role'] === 'worker' ? terminal : { ...terminal, labels })) });
+    }
+    if (command === 'get' && rest[1] === '--json' && this.terminals.has(rest[0])) return json(this.terminals.get(rest[0]));
+    if (command === 'send') {
+      this.sent.push(rest);
+      return json({ ok: true });
+    }
+    return { stdout: 'Unexpected synthetic herdr command', exitCode: 1 };
+  }
+
+  private pr(number: number): any {
+    const reply = this.replies.get(number);
+    if (!reply || reply.exitCode !== 0 || this.unreadable.has(number)) return undefined;
+    try { return JSON.parse(reply.stdout); } catch { return undefined; }
+  }
+
+  private prs(repository: string) {
+    return [...this.replies.keys()].map((number) => this.pr(number))
+      .filter((pr) => pr && typeof pr.url === 'string' && pr.url.startsWith(`https://github.com/${repository}/pull/`));
+  }
+
+  private http(method: string, url: string, body: string): [number, unknown] {
+    if (this.github === 'down') return [503, { message: 'Synthetic GitHub unavailable' }];
+    if (method === 'POST' && url === '/graphql') {
+      const { query, variables } = JSON.parse(body);
+      this.graphql.push({ query, variables });
+      const data: Record<string, unknown> = {};
+      for (let index = 0; `o${index}` in variables; index++) {
+        const repository = `${variables[`o${index}`]}/${variables[`r${index}`]}`;
+        const selection = query.slice(query.indexOf(`e${index}: repository(`));
+        if (!['example/service', 'example/client'].includes(repository)) { data[`e${index}`] = null; continue; }
+        if (selection.includes(`pullRequest(number: $n${index}) { headRefOid baseRefOid commits(first: 100)`)) {
+          const pr = this.pr(variables[`n${index}`]);
+          data[`e${index}`] = pr ? { pullRequest: commitsNode(pr) } : null;
+        } else if (selection.includes(`pullRequest(number: $n${index})`)) {
+          if (this.unreadable.has(variables[`n${index}`])) { data[`e${index}`] = null; continue; }
+          const pr = this.pr(variables[`n${index}`]);
+          data[`e${index}`] = { pullRequest: pr && prNode(pr) };
+        } else {
+          const base = variables[`t${index}`];
+          const nodes = this.prs(repository).filter((pr) => pr.headRefName === variables[`b${index}`] && (!base || pr.baseRefName === base));
+          data[`e${index}`] = { pullRequests: { nodes: nodes.map(prNode) } };
+        }
+      }
+      return [200, { data }];
+    }
+    this.rest.push(url);
+    const checks = url.match(/^\/repos\/([^/]+\/[^/]+)\/commits\/([0-9a-f]+)\/(check-runs|status)\?per_page=100$/);
+    if (method === 'GET' && checks) {
+      const pr = this.prs(checks[1]).find((candidate) => candidate.headRefOid === checks[2]);
+      if (checks[3] === 'status') return [200, { statuses: [] }];
+      return [200, { check_runs: (pr?.statusCheckRollup ?? []).map((check: any) => ({ name: check.name, conclusion: check.conclusion?.toLowerCase() ?? null })) }];
+    }
+    return [404, { message: 'Not Found' }];
+  }
+
   async start(root: string) {
     this.server.listen(0, '127.0.0.1');
     await once(this.server, 'listening');
     const address = this.server.address() as { port: number };
     const bin = join(root, 'provider-bin');
     await mkdir(bin);
-    await copyFile(resolve('tests/support/provider-cli.mjs'), join(bin, 'gh'));
-    await chmod(join(bin, 'gh'), 0o755);
+    for (const program of ['gh', 'hc']) {
+      await copyFile(resolve('tests/support/provider-cli.mjs'), join(bin, program));
+      await chmod(join(bin, program), 0o755);
+    }
     return { bin, endpoint: `http://127.0.0.1:${address.port}` };
   }
 
@@ -58,21 +155,67 @@ export class Provider {
   }
 }
 
-export const test = base.extend<{ delivery: { factory: Factory; provider: Provider } }>({
-  delivery: async ({}, use) => {
-    const root = await mkdtemp(join(tmpdir(), 'sympp-delivery-'));
-    await mkdir('.e2e', { recursive: true });
-    const provider = new Provider(join('.e2e', `${basename(root)}-provider.jsonl`));
-    let factory: Factory | undefined;
-    try {
-      factory = new Factory(root, await provider.start(root));
-      await use({ factory, provider });
-    } finally {
-      await factory?.stop();
-      await provider.stop();
-      await rm(root, { recursive: true, force: true });
-    }
-  },
+// GitHub's GraphQL view of a `gh pr view` PR: the head commit's check rollup
+// is derived from the same checks, and no checks at all is no rollup.
+function prNode(pr: any) {
+  const checks: any[] = pr.statusCheckRollup ?? [];
+  const states = checks.map((check) => (check.status === 'COMPLETED' ? check.conclusion : check.status ?? check.state));
+  const counts = [...new Set(states)].map((state) => ({ state, count: states.filter((item) => item === state).length }));
+  const rollup = checks.length === 0 ? null : {
+    state: states.some((state) => ['FAILURE', 'STARTUP_FAILURE', 'TIMED_OUT', 'CANCELLED', 'ERROR'].includes(state)) ? 'FAILURE'
+      : states.some((state) => ['IN_PROGRESS', 'QUEUED', 'PENDING', 'WAITING', 'REQUESTED', 'EXPECTED'].includes(state)) ? 'PENDING' : 'SUCCESS',
+    contexts: { checkRunCountsByState: counts, statusContextCountsByState: [] },
+  };
+  return {
+    number: pr.number, url: pr.url, state: pr.state, isDraft: pr.isDraft, merged: pr.state === 'MERGED', mergedAt: pr.mergedAt,
+    mergeable: pr.mergeable, headRefOid: pr.headRefOid, headRefName: pr.headRefName, baseRefName: pr.baseRefName,
+    baseRefOid: pr.baseRefOid, mergeCommit: pr.mergeCommit, headRepositoryOwner: { login: new URL(pr.url).pathname.split('/')[1] },
+    commits: { nodes: [{ commit: { oid: pr.headRefOid, statusCheckRollup: rollup } }] },
+    reviews: { nodes: [] },
+  };
+}
+
+function commitsNode(pr: any) {
+  const commits = pr.commits ?? [];
+  return {
+    headRefOid: pr.headRefOid, baseRefOid: pr.baseRefOid,
+    commits: { totalCount: commits.length, pageInfo: { hasNextPage: false, endCursor: null }, nodes: commits.map((commit: any) => ({ commit: { oid: commit.oid } })) },
+  };
+}
+
+// `restart` stops the candidate and starts a new process on the same ledger.
+type Delivery = { factory: Factory; provider: Provider; root: string; restart: () => Promise<Factory> };
+
+async function delivery(watcher: boolean, use: (value: Delivery) => Promise<void>) {
+  const root = await mkdtemp(join(tmpdir(), 'sympp-delivery-'));
+  await mkdir('.e2e', { recursive: true });
+  const provider = new Provider(join('.e2e', `${basename(root)}-provider.jsonl`));
+  let current: Factory | undefined;
+  try {
+    const started = await provider.start(root);
+    const options = {
+      ...(watcher ? { watcher: started.endpoint } : {}),
+      onTerminal: (address: string) => { if (!provider.terminals.has(address)) provider.terminal({ address, state: 'live' }); },
+    };
+    current = new Factory(root, started, options);
+    const restart = async () => {
+      await current!.stop();
+      current = new Factory(root, started, { ...options, database: current!.database });
+      return current;
+    };
+    await use({ factory: current, provider, root, restart });
+  } finally {
+    await current?.stop();
+    await provider.stop();
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+// `delivery` is the cockpit: no Observer runs. `watched` is the factory
+// runtime with its Observer, whose ticks the journey sends (`factory.tick`).
+export const test = base.extend<{ delivery: Delivery; watched: Delivery }>({
+  delivery: async ({}, use) => delivery(false, use),
+  watched: async ({}, use) => delivery(true, use),
 });
 
 export const head = (digit: string) => digit.repeat(40);
