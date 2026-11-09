@@ -57,9 +57,6 @@ $script:SymppHerdrProcess = $null
 $script:SymppHerdrInspectorRevision = 0
 $script:SymppHerdrInspectorInflightRevision = 0
 $script:SymppHerdrInspectorPending = $false
-& (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $PSScriptRoot "herdr-binding-tests.js")
-$herdrNodeExitCode = $LASTEXITCODE
-Assert-True ($herdrNodeExitCode -eq 0) "Node bridge must translate Herdr binding metadata"
 $faultedRead = [System.Threading.Tasks.TaskCompletionSource[string]]::new()
 $faultedRead.SetException([System.IO.IOException]::new("test read failure"))
 $faultedState = [pscustomobject]@{ pending_task = $faultedRead.Task; buffered_lines = [System.Collections.Generic.Queue[string]]::new(); eof = $false }

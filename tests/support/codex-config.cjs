@@ -1,6 +1,8 @@
+#!/usr/bin/env node
 "use strict";
 
-// Controlled Codex config protocol; real TOML editing is qualified separately.
+// Codex's native config API as its app-server serves it, over a JSON file in
+// CODEX_HOME. It qualifies the launcher's use of the protocol, not Codex itself.
 const fs = require("node:fs");
 const path = require("node:path");
 const { createInterface } = require("node:readline");

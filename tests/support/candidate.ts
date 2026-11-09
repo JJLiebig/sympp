@@ -7,7 +7,8 @@ import { basename, delimiter, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { test as base } from 'e2e';
 
-export type CandidateOptions = { database?: string; offline?: boolean };
+// `env` adds named factory settings, such as a repository root, to the allowlist.
+export type CandidateOptions = { database?: string; offline?: boolean; env?: Record<string, string> };
 
 // A real candidate process, not the installed plugin or an in-process test harness.
 export class Candidate {
@@ -44,6 +45,7 @@ export class Candidate {
         MIX_ARCHIVES: process.env.MIX_ARCHIVES,
         LANG: 'C.UTF-8',
         ELIXIR_ERL_OPTIONS: '+S 2:2 +fnu',
+        ...options.env,
       },
       stdio: 'pipe',
     });

@@ -1,15 +1,19 @@
-import { spawn } from 'node:child_process';
-import { appendFile, mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { appendFile, chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, delimiter, dirname, join, resolve } from 'node:path';
+import { createInterface } from 'node:readline';
 import { expect, test as base } from 'e2e';
 
 export class Installed {
   readonly env: NodeJS.ProcessEnv;
   readonly project: string;
+  // Host programs this machine has installed, first on PATH.
+  readonly bin: string;
 
   constructor(readonly root: string) {
     this.project = join(root, 'project');
+    this.bin = join(root, 'bin');
     this.env = Object.fromEntries(['PATH', 'PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC', 'PSModulePath']
       .filter(name => process.env[name]).map(name => [name, process.env[name]]));
     Object.assign(this.env, {
@@ -21,10 +25,19 @@ export class Installed {
       SYMPP_RUNTIME_FILE: join(root, 'runtime', 'runtime.json'), SYMPP_OPEN_DASHBOARD: '0',
       DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1',
     });
+    if (process.platform !== 'win32') this.env.PATH = `${this.bin}${delimiter}${this.env.PATH}`;
   }
 
   async prepare() {
-    for (const path of [this.project, this.env.HOME!, this.env.TEMP!, this.env.CLAUDE_CONFIG_DIR!]) await mkdir(path, { recursive: true });
+    for (const path of [this.project, this.bin, this.env.HOME!, this.env.TEMP!, this.env.CLAUDE_CONFIG_DIR!]) await mkdir(path, { recursive: true });
+  }
+
+  // Puts a host program on this machine's PATH: a script file or a Node module.
+  async program(name: string, body: string | { module: string }) {
+    const file = join(this.bin, name);
+    if (typeof body === 'string') await writeFile(file, body);
+    else await copyFile(resolve(body.module), file);
+    await chmod(file, 0o755);
   }
 
   async run(command: string, args: string[], cwd = this.project, env = this.env) {
@@ -52,7 +65,8 @@ export class Installed {
   }
 
   skills(args: string[], cwd = this.project) {
-    return this.ok(process.execPath, [resolve(dirname(process.execPath), 'node_modules/npm/bin/npx-cli.js'),
+    const npm = process.platform === 'win32' ? dirname(process.execPath) : resolve(dirname(process.execPath), '../lib');
+    return this.ok(process.execPath, [join(npm, 'node_modules/npm/bin/npx-cli.js'),
       '--yes', 'skills@1.7.0', ...args], cwd);
   }
 
@@ -63,8 +77,61 @@ export class Installed {
       : join(this.env.CLAUDE_CONFIG_DIR!, 'skills/sympp'));
   }
 
-  setup(bundle: string, host = 'both') {
-    return this.run(process.execPath, [join(bundle, 'scripts/setup-sympp.js'), '--host', host]);
+  setup(bundle: string, host = 'both', ...args: string[]) {
+    return this.run(process.execPath, [join(bundle, 'scripts/setup-sympp.js'), '--host', host, ...args]);
+  }
+
+  // The sympp server Codex would start from its registration in config.toml.
+  async codexRegistration() {
+    const config = await readFile(join(this.env.CODEX_HOME!, 'config.toml'), 'utf8');
+    const start = config.indexOf('# BEGIN sympp Skills MCP\n[mcp_servers.sympp]\n');
+    const block = config.slice(start, config.indexOf('# END sympp Skills MCP', start));
+    const value = (key: string) => JSON.parse(block.match(new RegExp(`^${key} = (.+)$`, 'm'))![1]);
+    const env = Object.fromEntries([...block.slice(block.indexOf('[mcp_servers.sympp.env]')).matchAll(/^(\w+) = (".*")$/gm)]
+      .map(([, key, text]) => [key, JSON.parse(text)]));
+    return { command: value('command') as string, args: value('args') as string[], forwarded: value('env_vars') as string[], env };
+  }
+}
+
+// An MCP server process speaking newline-delimited JSON-RPC over STDIO, as an agent host runs it.
+export class Stdio {
+  readonly process: ChildProcessWithoutNullStreams;
+  stderr = '';
+  private sequence = 0;
+  private pending = new Map<number, (response: any) => void>();
+
+  constructor(command: string, args: string[], env: NodeJS.ProcessEnv, cwd: string) {
+    this.process = spawn(command, args, { env, cwd, windowsHide: true, stdio: 'pipe' });
+    this.process.stderr.on('data', (chunk) => { this.stderr += chunk; });
+    createInterface({ input: this.process.stdout }).on('line', (line) => {
+      const response = JSON.parse(line);
+      this.pending.get(response.id)?.(response);
+      this.pending.delete(response.id);
+    });
+  }
+
+  request(method: string, params: object = {}) {
+    const id = ++this.sequence;
+    return new Promise<any>((resolveResponse, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${method} timed out: ${this.stderr}`)), 60_000);
+      this.pending.set(id, (response) => { clearTimeout(timer); resolveResponse(response); });
+      this.process.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+    });
+  }
+
+  async call(name: string, args: object = {}) {
+    const response = await this.request('tools/call', { name, arguments: args });
+    expect(response.error, `${name}: ${JSON.stringify(response.error)}`).toBeUndefined();
+    expect(response.result.isError, JSON.stringify(response.result)).not.toBe(true);
+    return response.result.structuredContent;
+  }
+
+  async close() {
+    if (this.process.exitCode !== null) return this.process.exitCode;
+    const exited = new Promise<number | null>((resolveExit) => this.process.once('exit', resolveExit));
+    this.process.stdin.end();
+    const timer = setTimeout(() => this.process.kill('SIGKILL'), 10_000);
+    try { return await exited; } finally { clearTimeout(timer); }
   }
 }
 

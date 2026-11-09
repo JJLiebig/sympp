@@ -3,8 +3,9 @@ import { readFile } from 'node:fs/promises';
 
 // B1 jobs select one owned file from the shared API target. Unrelated filtered
 // definitions are not skips in this gate; every definition in its file is owed.
+// Windows installs locally; Linux and macOS clients install against a factory.
 const expected = new Map([
-  ['tests/acceptance/installed-runtime.e2e.ts', 1],
+  ['tests/acceptance/installed-runtime.e2e.ts', process.platform === 'win32' ? 1 : 2],
   ['tests/acceptance/offline-copy.e2e.ts', 1],
 ]);
 const file = process.argv[2];

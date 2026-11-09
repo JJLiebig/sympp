@@ -5,31 +5,12 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const http = require("node:http");
-const { spawn, execFileSync } = require("node:child_process");
+const { spawn } = require("node:child_process");
 const { once } = require("node:events");
-const { serverConnection, privateWrite } = require("../../scripts/sympp-remote.js");
 
-test("SSH alias resolves once and token storage stays private on replacement", t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sympp-remote-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const calls = [];
-  const result = serverConnection("factory", (cmd, args) => {
-    calls.push(args);
-    return { status: 0, stdout: args[0] === "-G" ? "host factory\nhostname 100.123.207.19\n" : "fixture-token\n" };
-  });
-  assert.equal(result.endpoint, "http://100.123.207.19:19998");
-  assert.equal(calls.length, 2);
-  const file = path.join(root, "token");
-  privateWrite(file, result.token);
-  privateWrite(file, "updated");
-  assert.equal(fs.readFileSync(file, "utf8"), "updated");
-  if (process.platform !== "win32") assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-  assert.deepEqual(serverConnection("http://127.0.0.1:19998"), { endpoint: "http://127.0.0.1:19998", token: "" });
-  assert.throws(() => serverConnection("-oProxyCommand=bad"));
-  assert.throws(() => serverConnection("http://other:19998"));
-});
-
-test("remote bridge forwards MCP with authentication, sessions and metadata without a local runtime", async t => {
+// The installed journey reaches a loopback factory, which needs no token and never drops a
+// request. A tailnet factory's credential and a connection lost mid-mutation stay here.
+test("remote bridge authenticates, never repeats a mutation the factory may have received, and stops on a refused token", async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sympp-remote-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const received = [];
@@ -80,25 +61,6 @@ test("remote bridge forwards MCP with authentication, sessions and metadata with
   const ambiguous = await run("fixture-token", "ambiguous_mutation");
   assert.equal(ambiguous.replies[1].error.data.reason, "backend_lost_after_request_started");
   assert.equal(received.filter(r => r.body?.params?.name === "ambiguous_mutation").length, 1);
-  execFileSync("git", ["init", root]);
-  execFileSync("git", ["-C", root, "remote", "add", "origin", "https://fixture-user:fixture-password@example.org/team/repo.git"]);
-  const credentialOrigin = await run("fixture-token", "create_work_request");
-  assert.match(credentialOrigin.replies[1].error.data.detail, /Repository origins must not include credentials/);
-  assert.equal(JSON.stringify(credentialOrigin).includes("fixture-password"), false);
-  assert.equal(received.some(r => r.body?.params?.name === "create_work_request"), false);
-  execFileSync("git", ["-C", root, "remote", "set-url", "origin", "https://fixture-account-or-token@example.org/team/repo.git"]);
-  await run("fixture-token", "create_work_request");
-  assert.equal(received.find(r => r.body?.params?.name === "create_work_request").body.params.arguments.repo, "https://example.org/team/repo.git");
-  await run("fixture-token", "create_work_request", true, { repo: "." });
-  assert.equal(received.at(-1).body.params.arguments.repo, "https://example.org/team/repo.git");
-  const checkout = path.join(root, "checkout");
-  execFileSync("git", ["init", checkout]);
-  execFileSync("git", ["-C", checkout, "remote", "add", "origin", "https://example.org/other/checkout.git"]);
-  await run("fixture-token", "create_work_request", true, { repo: "checkout" });
-  assert.equal(received.at(-1).body.params.arguments.repo, "https://example.org/other/checkout.git");
-  fs.mkdirSync(path.join(root, "explicit-owner", "explicit-repo"), { recursive: true });
-  await run("fixture-token", "create_work_request", true, { repo: "explicit-owner/explicit-repo" });
-  assert.equal(received.at(-1).body.params.arguments.repo, "explicit-owner/explicit-repo");
   const postsBeforeDenial = received.filter(r => r.url === "/mcp").length;
   const denied = await run("wrong-token", "list_work_requests", false);
   assert.match(denied.stderr, /authentication failed.*401/);

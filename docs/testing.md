@@ -56,6 +56,18 @@ records what the factory types; it does not qualify a live Herdr. Offline denial
 operation on the disposable ledger. The failed-call journey checks that refused
 calls are counted by tool and reason without their arguments.
 
+Installed journeys install the skill with the Skills CLI into disposable homes.
+Windows setup registers local Codex and Claude Code. Linux and macOS setup
+registers a remote client of a candidate cockpit in factory repository mode,
+which clones from a loopback Git smart-HTTP remote. The journey starts Codex's
+registration from `config.toml` in a terminal of a test-only `hc` that serves
+`hc connect` and `hc run` from a JSON file, runs the dispatch launch line through
+it, and checks that the worker terminal's server lists no tools. The task
+launcher journey uses the same `hc` and a test-only Codex config API. These
+qualify sympp's use of the host, Herdr and Git protocols, not live Codex, Herdr
+or a tailnet factory. Linux runs in native acceptance; macOS is a best-effort job
+outside the required gate.
+
 Keep precise lower-level checks for ownership races and herdr-core liveness,
 along with stored authority and transaction qualifications. A repository-backed
 failed-call journey does not qualify health calls that lack the selected ledger
