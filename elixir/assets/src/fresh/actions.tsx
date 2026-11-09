@@ -1,7 +1,6 @@
 import { MoreHorizontal } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { readOnly } from "./api";
 import type { Goal, GoalView, Phase } from "./model";
 import { useAct, type GoalStep, type OperatorAction } from "./operator";
 
@@ -28,7 +27,6 @@ export function ActButton({ action, className = "", confirm, label, look = "roun
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  if (readOnly) return null;
 
   const run = async () => {
     if (confirm && !armed) return setArmed(true);
@@ -71,8 +69,6 @@ export function GoalActions({ className, goal, moving = 0, phase }: { className?
     window.addEventListener("pointerdown", close);
     return () => window.removeEventListener("pointerdown", close);
   }, [open]);
-
-  if (readOnly) return <span className={`inline-block size-6 shrink-0 ${className ?? ""}`} />;
 
   const toggle = () => {
     setOpen(!open);
@@ -125,7 +121,7 @@ export function ShelfCleanup({ at, views }: { at: number; views: GoalView[] }) {
     { key: "stale", label: `older than 30 days (${stale.length})`, picked: stale.length < views.length ? stale : [] },
     { key: "all", label: `all (${views.length})`, picked: views },
   ].filter((choice) => choice.picked.length > 0);
-  if (readOnly || choices.length === 0) return null;
+  if (choices.length === 0) return null;
 
   const pick = async (choice: (typeof choices)[number]) => {
     if (armed !== choice.key) return setArmed(choice.key);

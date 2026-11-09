@@ -14,7 +14,7 @@ defmodule SymphonyElixirWeb.FactoryAccessPlug do
   def call(conn, _opts) do
     cond do
       not FactoryService.enabled?() or loopback?(conn.remote_ip) -> conn
-      tailnet_board_read?(conn) -> Conn.put_private(conn, :sympp_board_read_only, true)
+      tailnet?(conn.remote_ip) and not forwarded?(conn) -> authorize_tailnet(conn)
       not (valid_token?(conn) or valid_board_code?(conn) or valid_board_cookie?(conn)) -> deny(conn, 401)
       forwarded?(conn) -> deny(conn, 403)
       true -> authenticate(conn)
@@ -24,21 +24,13 @@ defmodule SymphonyElixirWeb.FactoryAccessPlug do
   @spec authenticated?(Conn.t()) :: boolean()
   def authenticated?(conn), do: conn.private[:sympp_remote_authenticated] == true
 
-  @spec board_read_only?(Conn.t()) :: boolean()
-  def board_read_only?(conn), do: conn.private[:sympp_board_read_only] == true
-
-  defp tailnet_board_read?(conn) do
-    conn.method in ["GET", "HEAD"] and Conn.get_req_header(conn, "authorization") == [] and
-      not valid_board_cookie?(conn) and
-      tailnet?(conn.remote_ip) and not forwarded?(conn) and board_path?(conn.path_info)
+  defp authorize_tailnet(conn) do
+    if conn.method in ["GET", "HEAD", "OPTIONS"] or Conn.get_req_header(conn, "origin") == [] or cookie_origin?(conn) do
+      authenticate(conn)
+    else
+      deny(conn, 403)
+    end
   end
-
-  defp board_path?([]), do: true
-  defp board_path?(["sympp" | _]), do: true
-  defp board_path?(["assets" | _]), do: true
-  defp board_path?([file]) when file in ["favicon.ico", "splusplus-logo.png"], do: true
-  defp board_path?(["api", "v1", "sympp", "operator", "dashboard", kind]) when kind in ["hydrated", "events"], do: true
-  defp board_path?(_), do: false
 
   defp tailnet?({100, second, _, _}) when second in 64..127, do: true
   defp tailnet?({0xFD7A, 0x115C, 0xA1E0, _, _, _, _, _}), do: true
@@ -82,7 +74,11 @@ defmodule SymphonyElixirWeb.FactoryAccessPlug do
   end
 
   defp board_cookie_path?(["api", "v1", "sympp", "operator" | _]), do: true
-  defp board_cookie_path?(path), do: board_path?(path)
+  defp board_cookie_path?([]), do: true
+  defp board_cookie_path?(["sympp" | _]), do: true
+  defp board_cookie_path?(["assets" | _]), do: true
+  defp board_cookie_path?([file]) when file in ["favicon.ico", "splusplus-logo.png"], do: true
+  defp board_cookie_path?(_), do: false
 
   defp cookie_origin?(%Conn{method: method}) when method in ["GET", "HEAD"], do: true
 
