@@ -156,3 +156,63 @@ test('operator attention differs from explicit blockers and settings/archive act
   await screen.getByText('Not started', { exact: false, visible: true }).tap();
   await expect(browser.locator(`[data-goal="${intakeId}"]`)).toContainText('Operator intake');
 });
+
+test('the person answers a question, reviews flagged decisions and releases a goal whose owner stopped answering', async ({ candidate, app, screen, browser }) => {
+  const { client, factory } = candidate;
+  const request = await client.request('Board review');
+  const ask = (await client.call('ask', { work_request_id: request, question: 'Which scope should ship?', decision_prompt: {
+    tl_dr: 'Choose scope', details: 'Keep this delivery bounded.',
+    options: [{ id: 'bounded', label: 'Bounded option', answer: 'Ship the bounded option.' }, { id: 'wide', label: 'Wide option', answer: 'Ship everything.' }],
+  } })).ask.id;
+  const recorder = await factory!.client();
+  const flag = async (decision: string) => (await recorder.call('record_decision', {
+    work_request_id: request, source_type: 'architect', decision, rationale: 'Pricing differs by region.', scope_impact: 'None', flag: true,
+  })).decision_log_entry.id;
+  const feedbackOn = await flag('Use regional prices.');
+  await candidate.capture('question-and-decision');
+  await app.open('/sympp/board');
+  const goal = browser.locator(`[data-goal="${request}"]`);
+  await expect(screen.getByText('Needs you · 1', { exact: true })).toBeVisible();
+  await expect(screen.getByText('Which scope should ship?', { exact: true })).toBeVisible();
+  await expect(screen.getByText('Decisions to review · 1', { exact: true })).toBeVisible();
+  await expect(screen.getByText('Use regional prices.', { exact: true })).toBeVisible();
+
+  await screen.getByRole('radio', 'Bounded option', { exact: true }).tap();
+  await screen.getByLabel('Note', { exact: true }).fill('Keep it small.');
+  await screen.getByRole('button', 'Send', { exact: true }).tap();
+  await expect(screen.getByText('Which scope should ship?', { exact: true })).toHaveCount(0);
+  const answered = (await client.call('read_work_request', { detail: 'full', work_request_id: request })).asks.find((entry: any) => entry.id === ask);
+  expect(answered).toMatchObject({ state: 'answered', answer: 'Ship the bounded option. Keep it small.', answered_by: 'operator' });
+
+  // The recording terminal is not on this factory's machine, so the feedback stays on the decision, undelivered.
+  await screen.getByRole('button', 'Feedback', { exact: true }).tap();
+  await screen.getByLabel(`Feedback for ${recorder.address}`, { exact: true }).fill('Prefer one global price.');
+  await screen.getByRole('button', 'Send', { exact: true }).tap();
+  await expect(screen.getByText('Undelivered', { exact: true })).toBeVisible();
+  await expect(screen.getByText('“Prefer one global price.”', { exact: true })).toBeVisible();
+  await screen.getByRole('button', 'Dismiss undelivered feedback', { exact: true }).tap();
+  await expect(screen.getByText('Use regional prices.', { exact: true })).toHaveCount(0);
+  const stored = (await client.call('read_work_request', { detail: 'full', work_request_id: request })).decision_log_entries.find((entry: any) => entry.id === feedbackOn);
+  expect(stored).toMatchObject({ review_state: 'feedback', feedback: 'Prefer one global price.' });
+
+  const acked = await flag('Launch in Europe first.');
+  await candidate.capture('second-decision');
+  await browser.reload();
+  await expect(screen.getByText('Launch in Europe first.', { exact: true })).toBeVisible();
+  await screen.getByRole('button', 'Ack', { exact: true }).tap();
+  await expect(screen.getByText('Launch in Europe first.', { exact: true })).toHaveCount(0);
+  await expect(screen.getByText('Decisions to review', { exact: false })).toHaveCount(0);
+  expect((await client.call('read_work_request', { detail: 'full', work_request_id: request })).decision_log_entries.find((entry: any) => entry.id === acked).review_state).toBe('acknowledged');
+
+  // The goal's owner is not answering here; Release hands the goal to whoever writes next.
+  const [wp] = await client.addPackages([contract('Regional pricing')]);
+  await client.call('dispatch_work_package', { work_package_id: wp });
+  await candidate.capture('owned-active-goal');
+  await browser.reload();
+  await expect(goal).toContainText(client.address!);
+  await screen.getByRole('button', 'Release', { exact: true }).tap();
+  await screen.getByRole('button', 'Release?', { exact: true }).tap();
+  await expect(goal).not.toContainText(client.address!);
+  expect((await client.call('sympp.health')).caller.owns).toEqual([]);
+  await recorder.call('set_report', { work_request_id: request, brief: 'Taken over after Release.' });
+});

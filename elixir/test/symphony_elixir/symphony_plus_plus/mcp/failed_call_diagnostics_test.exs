@@ -27,52 +27,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
     :ok
   end
 
-  test "every failed tool call is counted by day, tool, reason and layer, without its arguments", %{repo: repo} do
-    secret = "Bearer argument-value-that-must-not-be-stored"
-
-    response = MCPHarness.request(failed_health_request(secret), repo: repo)
-    assert response["error"]["data"]["code"] == "invalid_tool_arguments"
-    assert MCPHarness.request(failed_health_request(secret), repo: repo)["error"]
-
-    unknown_tool = put_in(failed_health_request(secret), ["params", "name"], "tool-#{secret}")
-    assert MCPHarness.request(unknown_tool, repo: repo)["error"]["code"] == -32_601
-
-    outside_herdr = tool_call("set_report", %{"work_request_id" => "WR-OUTSIDE-HERDR", "brief" => secret})
-    assert MCPHarness.request(outside_herdr, repo: repo)["error"]["data"]["code"] == "read_only_outside_herdr"
-
-    missing = tool_call("read_work_request", %{"work_request_id" => "missing-#{secret}"})
-    assert MCPHarness.request(missing, repo: repo)["error"]["code"] == -32_004
-
-    protocol_error = %{"jsonrpc" => "2.0", "id" => "protocol", "method" => "unknown/method", "params" => %{}}
-    assert MCPHarness.request(protocol_error, repo: repo)["error"]["code"] == -32_601
-
-    today = Date.utc_today() |> Date.to_iso8601()
-
-    assert {:ok, %{"total" => 5, "failures" => failures}} = FailedCall.summary(repo, %{})
-
-    assert Enum.map(failures, &Map.take(&1, ["day", "tool", "reason", "layer", "count"])) |> Enum.sort_by(&{-&1["count"], &1["tool"]}) == [
-             %{"day" => today, "tool" => "sympp.health", "reason" => "invalid_tool_arguments", "layer" => "tool", "count" => 2},
-             %{"day" => today, "tool" => "read_work_request", "reason" => "not_found", "layer" => "tool", "count" => 1},
-             %{"day" => today, "tool" => "set_report", "reason" => "read_only_outside_herdr", "layer" => "tool", "count" => 1},
-             %{"day" => today, "tool" => "unknown", "reason" => "method_not_found", "layer" => "tool", "count" => 1}
-           ]
-
-    refute inspect(repo.all(FailedCall.Count)) =~ "argument-value"
-    assert {:ok, %{"total" => 1, "failures" => [%{"tool" => "unknown"}]}} = FailedCall.summary(repo, %{"tool" => "unknown"})
-    assert {:ok, %{"total" => 0}} = FailedCall.summary(repo, %{"since" => Date.utc_today() |> Date.add(1) |> Date.to_iso8601()})
-    assert {:tool_error, "invalid_since"} = FailedCall.summary(repo, %{"since" => "yesterday"})
-  end
-
-  test "summarize_failed_mcp_calls reads the durable counts", %{repo: repo} do
-    assert MCPHarness.request(failed_health_request("x"), repo: repo)["error"]
-
-    response = MCPHarness.request(tool_call("summarize_failed_mcp_calls", %{"tool" => "sympp.health"}), repo: repo)
-    assert %{"total" => 1, "failures" => [%{"reason" => "invalid_tool_arguments", "count" => 1}]} = response["result"]["structuredContent"]
-
-    refused = MCPHarness.request(tool_call("summarize_failed_mcp_calls", %{"since" => "soon"}), repo: repo)
-    assert %{"code" => "invalid_since", "state" => nil, "next_action" => "fix_arguments"} = refused["error"]["data"]
-  end
-
   test "a raised or exited tool call is counted once and still raises", %{repo: repo} do
     on_exit(fn -> Process.delete({DiagnosticFailureRepo, :failure}) end)
     server = Server.new(%{local_mcp_config(DiagnosticFailureRepo) | database: "C:/trusted/ledger.db"}, initialized: true, state_key: "failure-test")

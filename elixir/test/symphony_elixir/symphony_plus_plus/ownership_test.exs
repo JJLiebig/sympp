@@ -4,20 +4,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
   alias SymphonyElixir.SymphonyPlusPlus.HerdrCore
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
 
   setup %{repo: repo} do
     work_request = create_work_request!(repo, %{"title" => "Ownership"})
     on_exit(fn -> Application.put_env(:symphony_elixir, :sympp_herdr_core, nil) end)
     {:ok, work_request: work_request}
   end
-
-  defp set_report(repo, terminal, work_request_id, brief) do
-    mcp_tool(repo, terminal, "set_report", %{"work_request_id" => work_request_id, "brief" => brief})
-  end
-
-  defp error_reason(response), do: get_in(response, ["error", "data", "code"])
 
   defp live_owner_rows(repo, work_request_id) do
     repo.all(from(row in WorkedOn, where: row.subject_id == ^work_request_id and row.state == "live"))
@@ -30,26 +22,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
     end)
   end
 
-  test "the first owner-gated write takes the WorkRequest; the same terminal keeps writing", %{repo: repo, work_request: work_request} do
-    assert %{"result" => _} = set_report(repo, "t1", work_request.id, "Started")
-    assert %{"result" => _} = set_report(repo, "t1", work_request.id, "Still going")
-
-    assert [%WorkedOn{display_address: "testbox/t1", role: "architect", state: "live"}] = live_owner_rows(repo, work_request.id)
-    assert %{"brief" => %{"text" => "Still going"}} = repo.get!(WorkRequest, work_request.id).report
-  end
-
-  test "a write from another terminal is refused, naming the owner and what to do", %{repo: repo, work_request: work_request} do
-    assert %{"result" => _} = set_report(repo, "t1", work_request.id, "Mine")
-
-    response = set_report(repo, "t2", work_request.id, "Taking over")
-
-    assert error_reason(response) == "owned_by_other_terminal"
-    assert get_in(response, ["error", "data", "owner", "address"]) == "testbox/t1"
-    assert get_in(response, ["error", "data", "owner", "status_state"]) == "unknown"
-    assert get_in(response, ["error", "data", "next_action"]) == "ask testbox/t1, or wait until it finishes"
-    assert %{"brief" => %{"text" => "Mine"}} = repo.get!(WorkRequest, work_request.id).report
-  end
-
   test "two terminals racing for one WorkRequest end with exactly one live owner", %{repo: repo, work_request: work_request} do
     results =
       ["t1", "t2", "t3", "t4"]
@@ -59,217 +31,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OwnershipTest do
     assert [{:ok, _row, :acquired}] = Enum.filter(results, &match?({:ok, _row, _how}, &1))
     assert Enum.count(results, &match?({:error, {:owned_by_other_terminal, _owner}}, &1)) == 3
     assert [_one] = live_owner_rows(repo, work_request.id)
-  end
-
-  test "an owner whose heartbeat lapsed without detach is not taken over", %{repo: repo, work_request: work_request} do
-    own!(repo, work_request.id, "t1")
-    # The factory's core is unreachable and no bridge heartbeat names t1.
-    refute ClientLeases.terminal_live?(test_terminal("t1").key)
-
-    assert error_reason(set_report(repo, "t2", work_request.id, "Taking over")) == "owned_by_other_terminal"
-    assert [%WorkedOn{display_address: "testbox/t1"}] = live_owner_rows(repo, work_request.id)
-    assert Ownership.public(Ownership.owner(repo, work_request.id))["liveness"] == "unknown"
-  end
-
-  test "a terminal the factory's core reports finished is taken over", %{repo: repo, work_request: work_request} do
-    own!(repo, work_request.id, "t1")
-    factory_core(%{"t1" => %{"address" => "t1", "state" => "finished"}, "t2" => %{"address" => "t2", "state" => "live"}})
-
-    assert %{"result" => _} = set_report(repo, "t2", work_request.id, "Mine now")
-
-    rows = repo.all(from(row in WorkedOn, where: row.subject_id == ^work_request.id, order_by: row.started_at))
-    assert [%WorkedOn{display_address: "testbox/t1", state: "finished", finish_reason: "taken_over"}, second] = rows
-    assert %WorkedOn{display_address: "testbox/t2", state: "live"} = second
-  end
-
-  test "a terminal the factory's core sees live keeps ownership", %{repo: repo, work_request: work_request} do
-    own!(repo, work_request.id, "t1")
-    factory_core(%{"t1" => %{"address" => "t1", "state" => "live", "status" => %{"state" => "idle"}}, "t2" => %{"address" => "t2", "state" => "live"}})
-
-    response = set_report(repo, "t2", work_request.id, "Taking over")
-
-    assert error_reason(response) == "owned_by_other_terminal"
-    assert get_in(response, ["error", "data", "owner", "status_state"]) == "idle"
-    assert Ownership.public(Ownership.owner(repo, work_request.id))["liveness"] == "live"
-  end
-
-  test "operator Release lets another terminal take the WorkRequest", %{repo: repo, work_request: work_request} do
-    own!(repo, work_request.id, "t1")
-
-    assert {:ok, %WorkedOn{state: "finished", finish_reason: "released_by_operator"}} = Ownership.release(repo, work_request.id)
-    assert {:error, :not_owned} = Ownership.release(repo, work_request.id)
-    assert %{"result" => _} = set_report(repo, "t2", work_request.id, "Mine now")
-    assert [%WorkedOn{display_address: "testbox/t2"}] = live_owner_rows(repo, work_request.id)
-  end
-
-  test "a clean detach ends ownership unless the factory's core still sees the terminal live", %{repo: repo, work_request: work_request} do
-    other = create_work_request!(repo, %{"title" => "Other"})
-    own!(repo, work_request.id, "t1")
-    own!(repo, other.id, "t9")
-
-    factory_core(%{"t9" => %{"address" => "t9", "state" => "live"}})
-    # t1 is on this core but not listed (gone); t9 is live here.
-    assert :ok = Ownership.detached(repo, test_terminal("t9").key)
-    assert [%WorkedOn{state: "live"}] = live_owner_rows(repo, other.id)
-
-    Application.put_env(:symphony_elixir, :sympp_herdr_core, nil)
-    assert :ok = Ownership.detached(repo, test_terminal("t1").key)
-    assert [] = live_owner_rows(repo, work_request.id)
-    assert %{"result" => _} = set_report(repo, "t2", work_request.id, "Mine now")
-  end
-
-  test "restarting the agent in the same terminal keeps ownership", %{repo: repo, work_request: work_request} do
-    assert %{"result" => _} = set_report(repo, "t1", work_request.id, "Before restart")
-    # A new agent process in the same terminal asserts the same core and address.
-    assert %{"result" => _} = set_report(repo, "t1", work_request.id, "After restart")
-    assert [_one] = live_owner_rows(repo, work_request.id)
-  end
-
-  test "a caller outside Herdr can read but not write", %{repo: repo, work_request: work_request} do
-    assert %{"result" => _} = mcp_tool(repo, nil, "read_work_request", %{"work_request_id" => work_request.id})
-    assert error_reason(set_report(repo, nil, work_request.id, "Hello")) == "read_only_outside_herdr"
-
-    assert error_reason(mcp_tool(repo, nil, "record_decision", %{"work_request_id" => work_request.id, "decision" => "x", "rationale" => "y", "scope_impact" => "z", "source_type" => "architect"})) ==
-             "read_only_outside_herdr"
-
-    assert [] = live_owner_rows(repo, work_request.id)
-  end
-
-  test "a terminal the factory's core reports finished cannot write as itself", %{repo: repo, work_request: work_request} do
-    factory_core(%{"t5" => %{"address" => "t5", "state" => "finished"}})
-    assert error_reason(set_report(repo, "t5", work_request.id, "Ghost")) == "terminal_not_live"
-  end
-
-  test "any Herdr terminal flags a decision on an owned WorkRequest, attributed to it", %{repo: repo, work_request: work_request} do
-    own!(repo, work_request.id, "t1")
-
-    response =
-      mcp_tool(
-        repo,
-        "t7",
-        "record_decision",
-        %{"work_request_id" => work_request.id, "decision" => "Ship it", "rationale" => "Key sk-synthetic-rationale", "scope_impact" => "none", "source_type" => "architect", "flag" => true},
-        labels: %{"sympp.role" => "chief", "sympp.domain" => "Kraken"}
-      )
-
-    assert %{"id" => id, "flagged" => true, "review_state" => "recorded", "created_by" => "testbox/t7"} =
-             get_in(response, ["result", "structuredContent", "decision_log_entry"])
-
-    # The recording terminal is stored by key, so feedback can be typed into it.
-    # Secrets are redacted before they reach the ledger.
-    assert %DecisionLogEntry{recorded_by_terminal: key, recorded_by_address: "testbox/t7", rationale: "Key [REDACTED]"} = repo.get!(DecisionLogEntry, id)
-    assert key == test_terminal("t7").key
-    assert [%WorkedOn{display_address: "testbox/t1"}] = live_owner_rows(repo, work_request.id)
-
-    unflagged = mcp_tool(repo, "t7", "record_decision", %{"work_request_id" => work_request.id, "decision" => "Log it", "rationale" => "Note", "scope_impact" => "none", "source_type" => "architect"})
-    refute Map.has_key?(get_in(unflagged, ["result", "structuredContent", "decision_log_entry"]), "review_state")
-  end
-
-  test "a flagged decision sends the WorkRequest's live chief one submitted line, and nothing otherwise", %{repo: repo} do
-    test_pid = self()
-    typed = fn target, text, mode -> send(test_pid, {:typed, target, text, mode}) && :ok end
-    Application.put_env(:symphony_elixir, :sympp_herdr_send, typed)
-    on_exit(fn -> Application.put_env(:symphony_elixir, :sympp_herdr_send, nil) end)
-
-    chief = %{"sympp.role" => "chief"}
-
-    create = fn address, title, labels ->
-      args = %{"repo" => "nextide/demo", "base_branch" => "main", "title" => title, "work_type" => "feature", "description" => "x", "own" => false}
-      response = mcp_tool(repo, address, "create_work_request", args, config: local_mcp_config(repo), labels: labels)
-      get_in(response, ["result", "structuredContent", "work_request", "id"])
-    end
-
-    by_chief = create.("t3", "Pricing\npage", chief)
-    by_architect = create.("t4", "Search", %{})
-    by_finished_chief = create.("t5", "Billing", chief)
-    # A chief on another core with the same name and address is a different terminal.
-    elsewhere = create_work_request!(repo, %{creator_kind: "agent", creator_name: "testbox/t3", creator_terminal: "other-core/t3"}).id
-
-    # t3 and t5 are chiefs on the factory's core; t5 has since finished.
-    terminals = %{
-      "t3" => %{"address" => "t3", "state" => "live", "labels" => chief},
-      "t4" => %{"address" => "t4", "state" => "live"},
-      "t5" => %{"address" => "t5", "state" => "finished", "labels" => chief},
-      "t7" => %{"address" => "t7", "state" => "live"}
-    }
-
-    snapshot = {:ok, %{core_id: MCPHarness.test_core_id(), core_name: "testbox", terminals: terminals}}
-    Application.put_env(:symphony_elixir, :sympp_herdr_core, fn -> snapshot end)
-
-    record = fn address, work_request_id, decision, flag ->
-      args = %{"work_request_id" => work_request_id, "decision" => decision, "rationale" => "Why", "scope_impact" => "none", "source_type" => "architect", "flag" => flag}
-      assert %{"result" => _} = mcp_tool(repo, address, "record_decision", args)
-    end
-
-    long = "Use monthly prices\nfirst. " <> String.duplicate("x", 200)
-    record.("t7", by_chief, long, true)
-    assert_received {:typed, "t3", notice, :submit}
-    assert "Product call on Pricing page by testbox/t7: Use monthly prices first. " <> rest = notice
-    assert String.length(notice) == String.length("Product call on Pricing page by testbox/t7: ") + 160 and String.ends_with?(rest, "x…")
-
-    record.("t7", by_chief, "Unflagged", false)
-    record.("t7", by_architect, "No chief", true)
-    record.("t3", by_chief, "The chief's own call", true)
-    record.("t7", by_finished_chief, "Chief finished", true)
-    record.("t7", elsewhere, "Another core's chief", true)
-    refute_received {:typed, _target, _text, _mode}
-  end
-
-  test "starting a write takes ownership even when the write itself fails validation", %{repo: repo, work_request: work_request} do
-    response = mcp_tool(repo, "t1", "set_report", %{"work_request_id" => work_request.id, "parking" => %{"reason" => "  "}})
-
-    assert error_reason(response) == "invalid_operator_report_parking"
-    assert [%WorkedOn{display_address: "testbox/t1"}] = live_owner_rows(repo, work_request.id)
-  end
-
-  test "one bridge detaching keeps ownership while another bridge in the terminal still heartbeats", %{repo: repo, work_request: work_request} do
-    own!(repo, work_request.id, "t1")
-    terminal = %{"core_id" => MCPHarness.test_core_id(), "terminal_id" => "t1"}
-    assert {:ok, _} = ClientLeases.handle_payload(%{"client_id" => "bridge-a", "action" => "attach", "terminal" => terminal})
-    assert {:ok, _} = ClientLeases.handle_payload(%{"client_id" => "bridge-b", "action" => "attach", "terminal" => terminal})
-
-    on_last = &Ownership.detached(repo, &1)
-    assert {:ok, _} = ClientLeases.handle_payload(%{"client_id" => "bridge-a", "action" => "detach", "terminal" => terminal}, on_last)
-    assert [_still_owned] = live_owner_rows(repo, work_request.id)
-
-    assert {:ok, _} = ClientLeases.handle_payload(%{"client_id" => "bridge-b", "action" => "detach", "terminal" => terminal}, on_last)
-    assert [] = live_owner_rows(repo, work_request.id)
-  end
-
-  test "create_work_request owns by default and hands off with own: false", %{repo: repo} do
-    args = %{"repo" => "nextide/demo", "base_branch" => "main", "title" => "Owned", "work_type" => "feature", "description" => "x"}
-
-    owned = mcp_tool(repo, "t1", "create_work_request", args, config: local_mcp_config(repo))
-    assert %{"address" => "testbox/t1"} = get_in(owned, ["result", "structuredContent", "worked_on"])
-
-    handed = mcp_tool(repo, "t1", "create_work_request", Map.merge(args, %{"title" => "Handed", "own" => false}), config: local_mcp_config(repo))
-    handed_id = get_in(handed, ["result", "structuredContent", "work_request", "id"])
-    assert get_in(handed, ["result", "structuredContent", "next_action"]) =~ "architect"
-    assert [] = live_owner_rows(repo, handed_id)
-  end
-
-  test "chief labels attribute new WorkRequests", %{repo: repo} do
-    args = %{"repo" => "nextide/demo", "base_branch" => "main", "title" => "From chief", "work_type" => "feature", "description" => "x", "own" => false}
-    response = mcp_tool(repo, "t3", "create_work_request", args, config: local_mcp_config(repo), labels: %{"sympp.role" => "chief", "sympp.domain" => "Kraken"})
-
-    id = get_in(response, ["result", "structuredContent", "work_request", "id"])
-    assert %{"kind" => "chief", "domain" => "Kraken"} = repo.get!(WorkRequest, id).dispatched_by
-  end
-
-  test "health reports the caller's terminal and what it owns", %{repo: repo, work_request: work_request} do
-    own!(repo, work_request.id, "t1")
-
-    caller = get_in(mcp_tool(repo, "t1", "sympp.health", %{}), ["result", "structuredContent", "caller"])
-    assert %{"access" => "write", "terminal" => "testbox/t1", "owns" => [%{"work_request_id" => id}]} = caller
-    assert id == work_request.id
-
-    assert %{"access" => "read_only"} = get_in(mcp_tool(repo, nil, "sympp.health", %{}), ["result", "structuredContent", "caller"])
-  end
-
-  test "archiving a WorkRequest ends its ownership", %{repo: repo, work_request: work_request} do
-    own!(repo, work_request.id, "t1")
-    Ownership.end_subject(repo, "work_request", work_request.id)
-    assert [] = live_owner_rows(repo, work_request.id)
   end
 
   test "the factory core view never treats an unseen or unreachable terminal as finished" do

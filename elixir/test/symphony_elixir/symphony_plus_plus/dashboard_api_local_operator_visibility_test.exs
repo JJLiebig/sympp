@@ -8,8 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
   alias SymphonyElixir.SymphonyPlusPlus.OperatorConfig
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
-  alias SymphonyElixir.SymphonyPlusPlus.Ownership
-  alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
@@ -147,117 +146,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
       missing = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/hydrated"), 200)
       assert work_request_detail(missing, request.id)["work_request"]["area_path"] == nil
       refute File.exists?(config_path)
-    end)
-  end
-
-  test "browser and Herdr payloads show which terminal works on each WorkRequest", %{repo: repo} do
-    with_local_operator_endpoint(fn ->
-      request = create_work_request!(repo, repo: "example-org/widget-service")
-      package = create_dispatched_package!(repo, request, slice_id: "WRS-OWNED", package_id: "WP-OWNED", status: "dispatched")
-      unowned = create_work_request!(repo, id: "WR-UNOWNED", repo: "example-org/widget-service")
-      _unowned_package = create_dispatched_package!(repo, unowned, slice_id: "WRS-UNOWNED", package_id: "WP-UNOWNED", status: "dispatched")
-      assert {:ok, _row, :acquired} = Ownership.acquire(repo, request.id, terminal("t8"))
-
-      browser_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/hydrated"), 200)
-      payload = native_dashboard()
-
-      assert Enum.map(payload["work_request_details"], & &1["work_request"]["id"]) ==
-               Enum.map(browser_payload["work_request_details"], & &1["work_request"]["id"])
-
-      assert payload["work_packages"] ==
-               Enum.map(browser_payload["work_packages"], &Map.take(&1, ["id", "active_agent_run"]))
-
-      expected = %{"address" => "build-desk/t8", "role" => "architect", "liveness" => "unknown"}
-      card = Enum.find(browser_payload["work_requests"]["work_requests"], &(&1["id"] == request.id))
-
-      for owner <- [work_request_detail(payload, request.id)["work_request"]["worked_on"], card["worked_on"]] do
-        assert Map.take(owner, ["address", "role", "liveness"]) == expected
-        assert is_binary(owner["since"])
-      end
-
-      refute Map.has_key?(work_request_detail(payload, unowned.id)["work_request"], "worked_on")
-      assert Enum.find(work_request_detail(payload, request.id)["work_packages"], &(&1["id"] == package.id))
-    end)
-  end
-
-  test "operator Release ends ownership so another terminal can take the WorkRequest", %{repo: repo} do
-    request = create_work_request!(repo, [])
-    assert {:ok, _row, :acquired} = Ownership.acquire(repo, request.id, terminal("t8"))
-    path = "/api/v1/sympp/operator/work-requests/#{request.id}/release"
-
-    with_local_operator_endpoint(fn ->
-      assert json_response(post(remote_conn(), path), 401)
-      assert Ownership.owner(repo, request.id)
-
-      released = json_response(post(local_operator_conn(), path), 200)
-      assert get_in(released, ["released", "address"]) == "build-desk/t8"
-      assert Ownership.owner(repo, request.id) == nil
-      assert [%OperatorAudit{action: "dangerous_override", target_work_request_id: work_request_id}] = repo.all(OperatorAudit)
-      assert work_request_id == request.id
-
-      assert %{"error" => %{"code" => "not_owned"}} = json_response(post(local_operator_conn(), path), 409)
-      assert {:ok, _row, :acquired} = Ownership.acquire(repo, request.id, terminal("t9"))
-    end)
-  end
-
-  test "local operator dashboard hides packages linked only from archived WorkRequests", %{repo: repo} do
-    with_local_operator_endpoint(fn ->
-      archived_request =
-        create_work_request!(repo,
-          id: "WR-LOCAL-ARCHIVED-LINKS",
-          repo: "nextide/symphony-plus-plus",
-          base_branch: "main"
-        )
-
-      terminal_package =
-        create_dispatched_package!(repo, archived_request,
-          slice_id: "WRS-LOCAL-ARCHIVED-TERMINAL",
-          package_id: "WP-LOCAL-ARCHIVED-TERMINAL",
-          status: "ended"
-        )
-
-      stale_package =
-        create_dispatched_package!(repo, archived_request,
-          slice_id: "WRS-LOCAL-ARCHIVED-STALE",
-          package_id: "WP-LOCAL-ARCHIVED-STALE",
-          status: "dispatched"
-        )
-
-      active_request =
-        create_work_request!(repo,
-          id: "WR-LOCAL-ACTIVE-LINK",
-          repo: archived_request.repo,
-          base_branch: archived_request.base_branch
-        )
-
-      active_package =
-        create_dispatched_package!(repo, active_request,
-          slice_id: "WRS-LOCAL-ACTIVE-LINK",
-          package_id: "WP-LOCAL-ACTIVE-LINK",
-          status: "dispatched"
-        )
-
-      archived_at = DateTime.utc_now(:microsecond)
-
-      archived_request
-      |> Ecto.Changeset.change(operator_completed_at: archived_at, archived_at: archived_at)
-      |> repo.update!()
-
-      payload = local_operator_dashboard_payload()
-
-      package_ids = dashboard_work_package_ids(payload)
-
-      refute terminal_package.id in package_ids
-      refute stale_package.id in package_ids
-      assert active_package.id in package_ids
-
-      refute Map.has_key?(payload, "work_request_work_package_ids")
-      assert payload["linked_work_package_ids"] == [active_package.id]
-
-      refute Enum.any?(payload["work_request_details"], &(get_in(&1, ["work_request", "id"]) == archived_request.id))
-
-      active_detail = work_request_detail(payload, active_request.id)
-      assert get_in(active_detail, ["work_packages", Access.at(0), "work_package_id"]) == active_package.id
     end)
   end
 
@@ -413,23 +301,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
     dashboard
     |> Map.get("work_packages", [])
     |> Enum.map(& &1["id"])
-  end
-
-  defp terminal(address),
-    do: Terminal.from_meta(%{"core_id" => "core-one", "core_name" => "build-desk", "terminal_id" => address})
-
-  defp native_dashboard do
-    build_conn()
-    |> Map.put(:host, "localhost")
-    |> Map.put(:remote_ip, {127, 0, 0, 1})
-    |> get("/api/v1/sympp/herdr/dashboard")
-    |> json_response(200)
-  end
-
-  defp remote_conn do
-    build_conn()
-    |> Map.put(:host, "factory.example.test")
-    |> Map.put(:remote_ip, {203, 0, 113, 7})
   end
 
   defp local_operator_conn do

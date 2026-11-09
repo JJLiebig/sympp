@@ -26,6 +26,7 @@ test('compiled inspector binds and pins actual request detail without stealing f
     await host.start(new URL(await factory!.endpoint).origin);
     await expect.poll(() => host.screen).toContain('Bound inspector request');
     await expect.poll(() => host.screen).toContain('Inspector findings');
+    expect(host.screen).toContain('example/service · active');
     expect(host.screen).toContain('Working now: Unknown');
     expect(host.screen).toContain('Runtime observation unknown');
     expect(host.screen).toContain('Worker pane missing');
@@ -88,6 +89,9 @@ test('compiled inspector binds and pins actual request detail without stealing f
     await expect.poll(() => host.frames).toBeGreaterThan(entered);
     expect(host.calls.filter((call) => call.method === 'pane.focus')).toEqual([]);
     expect(snapshot.focused_pane_id).toBe('owner-b');
+    // The person sees the request's phase follow an operator completion through the event stream.
+    expect((await client.operator(`/api/v1/sympp/operator/work-requests/${request}/complete`, {})).status).toBe(200);
+    await expect.poll(() => host.screen).toContain('example/service · done');
     host.process!.stdin.write('p');
     await expect.poll(() => host.screen).toContain('Other inspector request');
     expect(host.screen).not.toContain('Bound inspector request');
