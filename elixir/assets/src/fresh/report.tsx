@@ -168,9 +168,9 @@ export function DotStrip({ view }: { view: GoalView }) {
   return (
     <span className="flex flex-wrap items-center gap-y-1">
       {runs.map((state, index) => (
-        <span key={state.phase.id} className={`flex items-center gap-0.5 ${index > 0 ? "ml-1.5 border-l border-faint pl-1.5" : ""}`} title={state.phase.title || undefined}>
+        <span key={state.phase.id} className={`flex flex-wrap items-center gap-0.5 ${index > 0 ? "ml-1.5 border-l border-faint pl-1.5" : ""}`} title={state.phase.title || undefined}>
           {orderedDots(state).map((dot) => (
-            <span key={dot.id} title={dot.title}>
+            <span key={dot.id} className="flex" title={dot.title}>
               <Pip stage={dot.stage} failed={dot.failed} />
             </span>
           ))}
