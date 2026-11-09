@@ -6,7 +6,8 @@ description: Use when assigned a bounded task or a dispatched sympp WorkPackage:
 # sympp Worker
 
 Implement your assignment, run its checks and review, and hand the result to
-your parent. Make no sympp MCP calls: your parent owns the ledger.
+your parent, who owns the ledger. A dispatched WorkPackage worker makes no sympp
+MCP calls: its terminal gets no sympp tools.
 
 ## Start
 
@@ -38,8 +39,9 @@ scope growth before you implement it.
 
 Publish your dev server on your terminal with
 `hc label $HC_TERMINAL_ID sympp.preview_url=<url>`, and clear it with an empty
-value. Post screenshots at milestones and wait for the human's feedback in your
-terminal. Record their decisions in the handoff.
+value; in PowerShell, write `$env:HC_TERMINAL_ID`. Post screenshots at
+milestones and wait for the human's feedback in your terminal. Record their
+decisions in the handoff.
 
 ## Handoff
 
