@@ -19,7 +19,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     * a PR found on the package's branch is attached; a changed PR snapshot is
       recorded; a merge is recorded as `pr_merged` through the delivery
       evidence path; otherwise the package qualifies or unqualifies through
-      `Qualification`.
+      `Qualification`;
+    * the same snapshot reads the PRs of cards (`Cards`), the work of the
+      terminals the operator talks to.
 
   An input that can't be read (GitHub, or the review host) flags the package
   `stale` and changes nothing else. The last snapshot per package is stored
@@ -33,13 +35,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   require Logger
 
-  alias SymphonyElixir.SymphonyPlusPlus.{BaseBranch, DashboardPubSub, HerdrCore, Ownership, RepoIdentity, ReviewStatus}
+  alias SymphonyElixir.SymphonyPlusPlus.{BaseBranch, Cards, DashboardPubSub, HerdrCore, Ownership}
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{Api, DryClient, MergeReconciler, PullRequest, PullRequestProgress}
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{RateGovernor, Snapshot}
   alias SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope
   alias SymphonyElixir.SymphonyPlusPlus.Observer.Observation
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
+  alias SymphonyElixir.SymphonyPlusPlus.{RepoIdentity, ReviewStatus}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, Qualification, WorkPackage}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -120,23 +123,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   end
 
   @doc """
-  One sweep of every dispatched and ready package. Options (tests):
-  `:snapshot` replaces `GitHub.Snapshot.fetch/2`, `:failing_checks` replaces
-  `GitHub.Snapshot.failing_checks/3`, `:review` replaces `ReviewStatus.read/2`.
+  One sweep of every dispatched and ready package, and of cards. Options
+  (tests): `:snapshot` replaces `GitHub.Snapshot.fetch/2`, `:failing_checks`
+  replaces `GitHub.Snapshot.failing_checks/3`, `:review` replaces
+  `ReviewStatus.read/2`; `Cards.watch/2` takes its own.
   """
   @spec sweep(module(), keyword()) :: :ok
   def sweep(repo, opts \\ []) do
     watched = watched_packages(repo)
     observations = observations(repo, Enum.map(watched, & &1.package.id))
     watched = Enum.map(watched, &Map.put(&1, :observation, Map.get(observations, &1.package.id)))
+    cards = guarded(fn -> Cards.watch(repo, opts) end, [])
 
-    github = github_results(watched, opts)
+    {github, results} = github_results(watched, Enum.map(cards, & &1.entry), opts)
     reviews = review_results(Enum.map(watched, & &1.package), opts)
 
     Enum.each(watched, fn item ->
       result = Map.get(github, item.package.id, {:error, :not_watched})
       observe_package(repo, item, result, Map.get(reviews, item.package.id, :none), opts)
     end)
+
+    guarded(fn -> Cards.apply(repo, cards, results, opts) end, :ok)
+  end
+
+  # Cards never stop the package sweep.
+  defp guarded(fun, fallback) do
+    fun.()
+  rescue
+    error ->
+      Logger.warning("sympp observer card pass failed: #{Exception.message(error)}")
+      fallback
   end
 
   defp watched_packages(repo) do
@@ -185,9 +201,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   defp closed?(_observation, _ref), do: false
 
-  defp github_results(watched, opts) do
+  # Package and card entries share one batched snapshot. Returns each
+  # package's result and the results by entry.
+  defp github_results(watched, card_entries, opts) do
     entries = Map.new(watched, &{&1.package.id, github_entry(&1)})
-    wanted = entries |> Map.values() |> Enum.reject(&(&1 == :skip))
+    wanted = (Map.values(entries) ++ card_entries) |> Enum.reject(&(&1 == :skip)) |> Enum.uniq()
 
     results =
       cond do
@@ -196,10 +214,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
         true -> fetch_snapshot(wanted)
       end
 
-    Map.new(entries, fn
-      {id, :skip} -> {id, :skip}
-      {id, entry} -> {id, Map.get(results, entry, {:error, :request_failed})}
-    end)
+    packages =
+      Map.new(entries, fn
+        {id, :skip} -> {id, :skip}
+        {id, entry} -> {id, Map.get(results, entry, {:error, :request_failed})}
+      end)
+
+    {packages, results}
   end
 
   defp fetch_snapshot(entries) do
@@ -445,20 +466,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   defp repository(%WorkPackage{repo: repo} = package) do
     [repo, RepoIdentity.local_git_origin_remote(repo), RepoIdentity.local_git_origin_remote(package.worktree_path)]
-    |> Enum.find_value({:error, :unknown_repository}, &github_repository/1)
+    |> Enum.find_value({:error, :unknown_repository}, &RepoIdentity.github_repository/1)
   end
-
-  defp github_repository(value) when is_binary(value) do
-    value = String.trim(value)
-
-    cond do
-      match = Regex.run(~r{^([\w.-]+)/([\w.-]+)$}, value) -> {:ok, {Enum.at(match, 1), Enum.at(match, 2)}}
-      match = Regex.run(~r{github\.com[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?/?$}, value) -> {:ok, {Enum.at(match, 1), Enum.at(match, 2)}}
-      true -> nil
-    end
-  end
-
-  defp github_repository(_value), do: nil
 
   defp branch(%WorkPackage{worktree_path: path} = package) do
     case WorktreeScope.live_branch(path) do

@@ -124,21 +124,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
     assert unauthorized_log =~ ~s("error_classification":"unauthorized")
     assert unauthorized_log =~ ~s("tool_name":"set_report")
 
-    missing_session_id = "secret-session-value"
+    missing_work_request_id = "secret-work-request-value"
 
     not_found_request = %{
       "jsonrpc" => "2.0",
       "id" => "not-found",
       "method" => "tools/call",
-      "params" => %{"name" => "solo_show", "arguments" => %{"session_id" => missing_session_id}}
+      "params" => %{"name" => "read_work_request", "arguments" => %{"work_request_id" => missing_work_request_id}}
     }
 
     {not_found_response, not_found_log} = capture_response(fn -> MCPHarness.request(not_found_request, repo: repo) end)
     assert not_found_response["error"]["code"] == -32_004
     assert not_found_log =~ ~s("error_classification":"not_found")
-    assert not_found_log =~ ~s("tool_name":"solo_show")
-    assert not_found_log =~ ~s("argument_keys":["session_id"])
-    refute diagnostic_event_line(not_found_log) =~ missing_session_id
+    assert not_found_log =~ ~s("tool_name":"read_work_request")
+    assert not_found_log =~ ~s("argument_keys":["work_request_id"])
+    refute diagnostic_event_line(not_found_log) =~ missing_work_request_id
   end
 
   test "batch failures emit once per tool item including notifications", %{repo: repo} do

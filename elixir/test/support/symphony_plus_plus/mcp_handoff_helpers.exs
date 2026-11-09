@@ -44,12 +44,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.HandoffHelpers do
     |> then(fn path -> if windows?(), do: String.downcase(path), else: path end)
   end
 
-  def solo_workspace_path(name) do
-    path = Path.join(System.tmp_dir!(), "sympp-mcp-solo-#{name}-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(path)
-    path
-  end
-
   def sqlite_file_uri(path, query) do
     encoded_path =
       path

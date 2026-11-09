@@ -77,9 +77,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
       alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
       alias SymphonyElixir.SymphonyPlusPlus.Repo
       alias SymphonyElixir.SymphonyPlusPlus.Repo.MigrationFileLock
-      alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Repository, as: SoloSessionRepository
-      alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession
-      alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry
       alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
       alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
       alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
@@ -111,7 +108,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
 
         start_supervised!({Repo, database: database_path, pool_size: 1})
         assert :ok = WorkPackageRepository.migrate(Repo)
-        assert :ok = SoloSessionRepository.migrate(Repo)
 
         on_exit(fn -> File.rm(database_path) end)
 
@@ -126,8 +122,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
         repo.delete_all(Artifact)
         repo.delete_all(ProgressEvent)
         repo.delete_all(PlanNode)
-        repo.delete_all(SoloSessionEntry)
-        repo.delete_all(SoloSession)
+        repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Cards.Card)
         repo.delete_all(WorkedOn)
         repo.delete_all(WorkRequest)
         repo.delete_all(WorkPackage)

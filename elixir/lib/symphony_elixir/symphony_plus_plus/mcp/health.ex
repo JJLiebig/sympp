@@ -142,7 +142,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
       "resources" => resource_contract_material(),
       "schema_version" => @mcp_contract_schema_version,
       "tool_sets" =>
-        Map.new([:full, :architect, :coordinator, :solo], fn profile ->
+        Map.new([:full, :architect], fn profile ->
           {Atom.to_string(profile), ToolCatalog.startup_tool_specs(profile, config)}
         end),
       "owner_gated_tools" => Enum.filter(ToolCatalog.known_tools(), &ToolCatalog.owner_gated_call?(&1, %{"apply" => true}))

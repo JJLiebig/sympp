@@ -20,7 +20,6 @@ const dashboard = await capture("/dashboard", "dashboard.json");
 const deferred = await capture("/dashboard/deferred", "dashboard.deferred.json");
 await capture("/dashboard/hydrated", "dashboard.hydrated.json");
 const archived = await capture("/dashboard?surface=archived", "dashboard.archived.json");
-const solo = await capture("/dashboard?surface=solo", "dashboard.solo.json");
 
 const details = deferred?.work_request_details ?? [];
 const workRequestIds = unique([
@@ -31,11 +30,9 @@ const workPackageIds = unique([
   ...(deferred?.work_packages ?? []).map((pkg) => pkg.id),
   ...details.flatMap((detail) => (detail.work_packages ?? []).map((slice) => slice.work_package_id)),
 ]);
-const soloSessionIds = unique((solo?.solo_sessions?.solo_sessions ?? []).map((session) => session.id));
 
 for (const id of workRequestIds) await capture(`/work-requests/${encodeURIComponent(id)}`, path.join("work-requests", `${id}.json`));
 for (const id of workPackageIds) await capture(`/work-packages/${encodeURIComponent(id)}`, path.join("work-packages", `${id}.json`));
-for (const id of soloSessionIds) await capture(`/solo-sessions/${encodeURIComponent(id)}`, path.join("solo-sessions", `${id}.json`));
 
 const failed = requests.filter((request) => request.status !== 200);
 await writeFile(
@@ -48,7 +45,6 @@ await writeFile(
       counts: {
         work_requests: workRequestIds.length,
         work_packages: workPackageIds.length,
-        solo_sessions: soloSessionIds.length,
         archived_work_requests: archived?.archived_work_requests?.work_requests?.length ?? 0,
       },
       failed,

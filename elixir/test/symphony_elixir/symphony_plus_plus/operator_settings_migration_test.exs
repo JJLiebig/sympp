@@ -35,7 +35,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettingsMigrationTest do
 
         assert @migration_version in Ecto.Migrator.run(Repo, Migrations.all(), :up, all: true, log: false)
         assert {:ok, after_upgrade} = Repository.get(Repo)
-        assert Map.take(Map.from_struct(after_upgrade), Map.keys(before)) == %{before | work_request_archive_after_days: unquote(expected_days)}
+        # The Solo retention setting became the card retention setting and kept its value.
+        expected = before |> Map.delete(:solo_session_delete_after_days) |> Map.merge(%{card_retention_days: 45, work_request_archive_after_days: unquote(expected_days)})
+        assert Map.take(Map.from_struct(after_upgrade), Map.keys(expected)) == expected
         assert after_upgrade.work_request_never_started_archive_after_days == 30
 
         assert {:ok, _custom} = Repository.update(Repo, %{"work_request_archive_after_days" => 14})

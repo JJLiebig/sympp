@@ -17,9 +17,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyEdge
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository, as: ProductTreeRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Repository, as: SoloRepository
-  alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession
-  alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
@@ -197,12 +194,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
     end
   end
 
-  defp migrate_repositories do
-    case WorkPackageRepository.migrate(Repo) do
-      :ok -> SoloRepository.migrate(Repo)
-      {:error, reason} -> {:error, reason}
-    end
-  end
+  defp migrate_repositories, do: WorkPackageRepository.migrate(Repo)
 
   defp seed_demo_records(database, scenario) do
     Repo.transaction(fn ->
@@ -211,7 +203,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
            {:ok, _ask} <- seed_human_decision_prompt(),
            {:ok, _evidence} <- seed_work_package_evidence(),
            {:ok, _endings} <- work_packages |> Enum.map(&{&1.work_request_id, &1.id, seed_ending(&1.id)}) |> end_demo_packages(),
-           {:ok, solo_sessions} <- seed_solo_sessions(),
            {:ok, scenario_records} <- seed_scenario(scenario),
            {_, nil} <- normalize_demo_timestamps() do
         %{
@@ -221,8 +212,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
           "scenario" => scenario,
           "seed" => %{
             "work_requests" => Enum.map(work_requests, & &1.id) ++ scenario_records.work_request_ids,
-            "work_packages" => Enum.map(work_packages, & &1.id) ++ scenario_records.work_package_ids,
-            "solo_sessions" => Enum.map(solo_sessions, & &1.id)
+            "work_packages" => Enum.map(work_packages, & &1.id) ++ scenario_records.work_package_ids
           }
         }
       else
@@ -761,39 +751,9 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
     |> Kernel.<>("-#{sequence}")
   end
 
-  defp seed_solo_sessions do
-    now = @demo_now
-
-    sessions = [
-      solo_session("SYMPP-DEMO-SOLO-ACTIVE", "active", "Active cockpit smoke test", now),
-      solo_session("SYMPP-DEMO-SOLO-PAUSED", "paused", "Paused documentation review", now),
-      solo_session("SYMPP-DEMO-SOLO-COMPLETED", "completed", "Completed validation pass", now),
-      solo_session("SYMPP-DEMO-SOLO-ARCHIVED", "archived", "Archived exploratory spike", now)
-    ]
-
-    entries =
-      Enum.flat_map(sessions, fn session ->
-        [
-          solo_entry(session.id, 1, "task_plan", "Plan #{session.title}", "pending", now),
-          solo_entry(session.id, 2, "finding", "Finding #{session.title}", nil, now),
-          solo_entry(session.id, 3, "progress", "Progress #{session.title}", "recorded", now),
-          solo_entry(session.id, 4, "decision", "Decision #{session.title}", nil, now),
-          solo_entry(session.id, 5, "validation_note", "Validation #{session.title}", "completed", now)
-        ]
-      end)
-
-    Repo.insert_all(SoloSession, sessions, on_conflict: :raise)
-    Repo.insert_all(SoloSessionEntry, entries, on_conflict: :raise)
-
-    {:ok, sessions}
-  rescue
-    error in Ecto.ConstraintError -> {:error, {:constraint_failed, error.constraint}}
-    error in Exqlite.Error -> {:error, {:storage_failed, Exception.message(error)}}
-  end
-
   defp normalize_demo_timestamps do
     Enum.each(
-      [WorkRequest, WorkPackage, Ask, SoloSession],
+      [WorkRequest, WorkPackage, Ask],
       fn schema -> Repo.update_all(schema, set: [inserted_at: @demo_now, updated_at: @demo_now]) end
     )
 
@@ -803,8 +763,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
       WorkPackageDelivery,
       set: [recorded_at: @demo_now, inserted_at: @demo_now, updated_at: @demo_now]
     )
-
-    Repo.update_all(SoloSessionEntry, set: [created_at: @demo_now, updated_at: @demo_now])
 
     Repo.update_all(
       from(work_package in WorkPackage, where: not is_nil(work_package.dispatched_at)),
@@ -825,98 +783,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
       )
     end)
   end
-
-  defp solo_session(id, status, title, now) do
-    %{
-      id: id,
-      repo: @demo_repo,
-      base_branch: @demo_base_branch,
-      workspace_path: demo_workspace_path(id),
-      caller_id: "local-demo-operator",
-      title: title,
-      status: status,
-      last_activity_at: now,
-      archived_at: if(status == "archived", do: now),
-      inserted_at: now,
-      updated_at: now
-    }
-  end
-
-  defp demo_workspace_path(id) do
-    case :os.type() do
-      {:win32, _name} -> "c:/demo/#{String.downcase(id)}"
-      _type -> "/demo/#{String.downcase(id)}"
-    end
-  end
-
-  defp solo_entry(solo_session_id, sequence, kind, title, status, now) do
-    %{
-      id: "#{solo_session_id}-ENTRY-#{sequence}",
-      solo_session_id: solo_session_id,
-      entry_kind: kind,
-      title: title,
-      body: solo_demo_body(kind, title, status),
-      status: status || "recorded",
-      sequence: sequence,
-      idempotency_key: "#{solo_session_id}:#{kind}",
-      payload: %{"synthetic_demo" => true},
-      created_at: now,
-      updated_at: now
-    }
-  end
-
-  defp solo_demo_body("task_plan", title, _status) do
-    subject = solo_demo_subject(title)
-
-    """
-    ## Current plan
-    - Verify the local cockpit flow represented by `#{subject}`.
-    - Keep the card view short and move the deeper ledger context into the click-in modal.
-    - Record validation evidence before marking the session complete.
-    """
-  end
-
-  defp solo_demo_body("finding", _title, _status) do
-    """
-    ## Finding
-    The Solo Session is useful as a lightweight planning ledger, but the board should only surface active attention and recent progress.
-    """
-  end
-
-  defp solo_demo_body("progress", _title, "completed") do
-    """
-    ## Progress
-    - Finished the implementation pass.
-    - Captured the final validation state.
-    """
-  end
-
-  defp solo_demo_body("progress", _title, _status) do
-    """
-    ## Progress
-    - Inspected the active UI surface.
-    - Confirmed the next step is visible without adding noisy sub-cards.
-    """
-  end
-
-  defp solo_demo_body("decision", _title, _status) do
-    """
-    ## Decision
-    Keep Solo Session cards compact. Use dropdowns inside the modal for task plans, findings, progress, decisions, and validation notes.
-    """
-  end
-
-  defp solo_demo_body("validation_note", _title, _status) do
-    """
-    ## Validation
-    - Dashboard smoke path loads.
-    - Modal content preserves readable markdown formatting.
-    """
-  end
-
-  defp solo_demo_body(_kind, title, _status), do: "Synthetic demo Solo Session entry for #{title}."
-
-  defp solo_demo_subject(title), do: String.replace_prefix(title, "Plan ", "")
 
   defp insert_all(items, insert_fun) do
     Enum.reduce_while(items, {:ok, []}, fn item, {:ok, acc} ->

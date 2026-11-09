@@ -17,8 +17,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.ApiCase do
       alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
       alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
       alias SymphonyElixir.SymphonyPlusPlus.Repo
-      alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession
-      alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry
       alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
       alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
       alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
@@ -57,8 +55,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.ApiCase do
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Planning.Artifact)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode)
-    repo.delete_all(SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry)
-    repo.delete_all(SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession)
+    repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Cards.Card)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage)

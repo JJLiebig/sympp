@@ -5,8 +5,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Retention do
 
   require Logger
 
+  alias SymphonyElixir.SymphonyPlusPlus.Cards
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.{Repository, RetentionThrottle, Settings}
-  alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Service, as: SoloSessionService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
 
   @interval_ms 30 * 60_000
@@ -44,9 +44,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Retention do
            WorkRequestService.retention_pass(repo,
              archive_after_days: settings.work_request_archive_after_days,
              never_started_archive_after_days: settings.work_request_never_started_archive_after_days,
-             delete_after_days: settings.solo_session_delete_after_days
+             delete_after_days: settings.card_retention_days
            ),
-         {:ok, _solo_summary} <- SoloSessionService.retention_pass(repo, now) do
+         {:ok, _deleted} <- Cards.delete_expired(repo, settings.card_retention_days, now) do
       :ok
     end
   end

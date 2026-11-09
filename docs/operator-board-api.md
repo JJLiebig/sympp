@@ -77,6 +77,7 @@ services, response shapes and dashboard invalidation as their operator siblings:
 | `/decisions/:decision_id/ack` | No input; HTTP 200 with `{ok:true, decision_id, work_request_id, review_state, refresh:{dashboard:true, work_request_id}}`. |
 | `/decisions/:decision_id/feedback` | `{"text":"…"}`; HTTP 200 with the ack result plus `delivery`. |
 | `/decisions/:decision_id/dismiss` | No input; HTTP 200 with the ack result. |
+| `/cards/:card_id/dismiss` | No input; HTTP 200 with `{ok:true, card_id, state:"dismissed", refresh:{dashboard:true}}`. Dismissing again returns the same; an unknown card returns HTTP 404. |
 
 Native human authority means a trusted direct local process, not an authenticated
 Herdr application identity. Requests require a loopback peer and local Host,
@@ -262,8 +263,8 @@ On upgrade, the normal ledger migrations convert stored archive settings of
 that data conversion. No manual database edit is required. Already overdue
 completed goals qualify on the next retention pass. The same setting also
 controls hiding terminal packages without a parent goal. Completed archived goals
-retain their history until deletion; the existing deletion setting
-`solo_session_delete_after_days` also governs those archives (default 30 days).
+retain their history until deletion; the deletion setting `card_retention_days`
+(default 30 days) governs those archives and ended cards.
 
 ## Never-started goal retention
 
@@ -327,6 +328,9 @@ answer fields and `delivery` result described under
 review flagged decisions as described under
 [Native human actions](#native-human-actions).
 
+`POST /api/v1/sympp/operator/cards/:id/dismiss` dismisses a card, as described
+under [Cards](#cards).
+
 Worktree cleanup runs asynchronously and defers active workers while
 their package records exist. Deleting those records removes that activity check,
 so deletion must not be treated as a way to stop a running worker.
@@ -351,6 +355,36 @@ ownership. Use Release on an `unknown` owner that you know has crashed.
 `work_request_details[].work_packages[].session_location` remains the configured
 machine `label` and `kind` for a package's current agent run, from the
 `operator-board.json` `machines` map.
+
+## Cards
+
+The hydrated, deferred and Herdr board reads include `cards`: the work of
+terminals the operator talks to, outside WorkPackages. A terminal on the
+factory's herdr-core gets a card when it is a child of a chief or architect
+terminal, or carries the label `sympp.card=1`, and works on a branch other than
+its base or has a PR. Dispatched workers never get cards. Open cards come first,
+then the most recently changed.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Card id, derived from the terminal. |
+| `state` | `working` (branch, no PR), `review_ci` (PR open), `merged`, `done` (PR closed, or the terminal finished without a PR) or `dismissed`. |
+| `title` | The terminal's title or name. |
+| `worked_on` | The terminal, in the [Worked on by](#worked-on-by) shape with `role: "card"`. |
+| `repository`, `base_branch`, `branch` | From `git` in the terminal's directory. |
+| `pr` | `{repository, number, url, state, draft, head_sha, ci:{status, completed, total}, github_review}` once a PR is found. |
+| `review` | `{id, state, status}` when the terminal labels `sympp.review_id`; `state` is `done`, `pending` or `unknown` for the PR head. |
+| `stale` | Inputs the last sweep couldn't read (`github`, `review`). They never end a card. |
+| `asks` | The card's open asks, in the ask shape above with `card_id` instead of `work_request_id`. |
+| `since`, `ended_at`, `updated_at` | Timestamps. |
+
+A card agent opens an ask with `ask` and no `work_request_id`; the operator
+answers it through the same answer routes, and the answer is typed into the
+card's terminal. The answer result names `card_id` instead of
+`work_request_id`. Ending a card withdraws its open asks. A dismissed, merged or
+done card opens again as `working` or `review_ci` when its live terminal starts
+work on another branch. `merged`, `done` and `dismissed` cards leave the list
+and the ledger `card_retention_days` after they ended.
 
 ## Review descendants
 

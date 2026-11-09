@@ -7,17 +7,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
   @type tool_call_result :: {:ok, arguments()} | {:error, integer(), String.t(), map()}
   @type tool_error :: {:tool_error, String.t()}
 
-  @spec solo_tool_arguments(map(), String.t()) :: tool_call_result()
-  def solo_tool_arguments(params, name) do
-    case Map.get(params, "arguments", %{}) do
-      arguments when is_map(arguments) ->
-        validate_solo_arguments(name, arguments)
-
-      _arguments ->
-        {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "invalid_tool_arguments"}}
-    end
-  end
-
   @spec local_operator_tool_arguments(map(), String.t()) :: tool_call_result()
   def local_operator_tool_arguments(params, name) do
     case Map.get(params, "arguments", %{}) do
@@ -211,17 +200,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
     end)
   end
 
-  defp validate_solo_arguments(name, arguments) do
-    allowed = MapSet.new(allowed_solo_argument_keys(name))
-    unexpected = arguments |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
-
-    if unexpected == [] do
-      {:ok, arguments}
-    else
-      {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "unexpected_argument", "arguments" => unexpected}}
-    end
-  end
-
   defp validate_local_operator_arguments(name, arguments) do
     allowed = MapSet.new(allowed_local_operator_argument_keys(name))
     unexpected = arguments |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
@@ -267,13 +245,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
         {:error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => reason}}
       end
     end
-  end
-
-  defp allowed_solo_argument_keys(name) do
-    name
-    |> ToolCatalog.solo_tool_input_schema()
-    |> Map.get("properties", %{})
-    |> Map.keys()
   end
 
   defp allowed_local_operator_argument_keys(name) do

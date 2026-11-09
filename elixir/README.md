@@ -84,16 +84,6 @@ mise exec -- mix build
 mise exec -- ./bin/symphony ./WORKFLOW.md
 ```
 
-## Solo Sessions
-
-sympp Solo Sessions provide persistent planning memory for one repo/worktree
-without creating WorkRequests or WorkPackages. Agents use configured MCP tools
-for every Solo ledger read and write. Follow the packaged
-[Solo Session procedure](../packages/sympp/skills/symphony-solo-session/SKILL.md).
-Ordinary work without requested persistence needs no sympp backend.
-If required MCP tools are unavailable, recover the connection before ledger work;
-there is no business CLI or private-file fallback.
-
 ## WorkRequest Planned-Slice Dispatch
 
 Dispatching a planned WorkPackage with a review mode prepares its factory

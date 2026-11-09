@@ -12,7 +12,7 @@ The primary user is the human overseer coordinating local agent work. They need 
 
 sympp is a local planning and orchestration cockpit for real software delivery. It gives agents structured tools and gives the human operator a shared visual source of truth. Success means the operator can quickly answer what is happening, what can proceed, what is waiting, and what needs attention.
 
-For delivery-tracked work, sympp typically begins after the human and an agent have explored the problem and refined it into a sufficiently concrete goal, spec, or direction. That handoff becomes a WorkRequest, after which an architect can slice the work, dispatch bounded execution, and oversee delivery end to end. Solo Sessions remain available for lightweight planning before or outside that lifecycle.
+For delivery-tracked work, sympp typically begins after the human and an agent have explored the problem and refined it into a sufficiently concrete goal, spec, or direction. That handoff becomes a WorkRequest, after which an architect can slice the work, dispatch bounded execution, and oversee delivery end to end. Work outside that lifecycle, such as a chief's or architect's hands-on helpers, shows on the board as cards the factory observes on its own.
 
 sympp coordinates delivery work through its ledger; it does not own terminal sessions, model accounts, or the human's interactive coding environment.
 

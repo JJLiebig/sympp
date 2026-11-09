@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, SoloTools}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.Config
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.{InputSchemas, SurfaceSpecs}
 
   @health_tool "sympp.health"
@@ -17,7 +17,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "status",
     "version"
   ]
-  @solo_tools SoloTools.tool_names()
   @bootstrap_tools ["create_work_request"]
   @local_operator_tools ["summarize_failed_mcp_calls"]
   @architect_tools [
@@ -34,7 +33,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "skip_work_package",
     "dispatch_work_package"
   ]
-  @known_tools Enum.uniq([@health_tool] ++ @solo_tools ++ @bootstrap_tools ++ @local_operator_tools ++ @architect_tools)
+  @known_tools Enum.uniq([@health_tool] ++ @bootstrap_tools ++ @local_operator_tools ++ @architect_tools)
   @work_request_views ["overview", "plan", "board", "package"]
   # Every tool is a write unless listed here. Writes need a Herdr terminal
   # identity; the same split drives the MCP readOnlyHint annotation.
@@ -42,12 +41,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     @health_tool,
     "list_work_requests",
     "read_work_request",
-    "solo_list",
-    "solo_show",
     "summarize_failed_mcp_calls"
   ]
   # Writes that take or confirm ownership of the target WorkRequest. Decisions,
-  # asks, WorkRequest creation and Solo stay open to any Herdr terminal.
+  # asks and WorkRequest creation stay open to any Herdr terminal.
   @owner_gated_tools [
     "set_blocker",
     "sync_pr",
@@ -69,9 +66,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   @spec mcp_contract_health_fields() :: [String.t()]
   def mcp_contract_health_fields, do: @mcp_contract_health_fields
-
-  @spec solo_tools() :: [tool_name()]
-  def solo_tools, do: @solo_tools
 
   @spec bootstrap_tools() :: [tool_name()]
   def bootstrap_tools, do: @bootstrap_tools
@@ -107,9 +101,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   @spec work_request_views() :: [String.t()]
   def work_request_views, do: @work_request_views
 
-  @spec solo_tool_input_schema(tool_name()) :: input_schema()
-  defdelegate solo_tool_input_schema(name), to: InputSchemas
-
   @spec bootstrap_tool_input_schema(tool_name()) :: input_schema()
   defdelegate bootstrap_tool_input_schema(name), to: InputSchemas
 
@@ -119,7 +110,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   @spec architect_tool_input_schema(tool_name()) :: input_schema()
   defdelegate architect_tool_input_schema(name), to: InputSchemas
 
-  @spec startup_tool_specs(:full | :architect | :coordinator | :solo, Config.t()) :: [tool_spec()]
+  @spec startup_tool_specs(:full | :architect, Config.t()) :: [tool_spec()]
   defdelegate startup_tool_specs(profile, config), to: SurfaceSpecs
 
   @spec lean_tool_specs([tool_spec()]) :: [tool_spec()]

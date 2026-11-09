@@ -1,5 +1,5 @@
 {
-  "mcp_contract_fingerprint": "d6b1dc65c1dc6b668dc1a0b26c0b2faa0a81ebf6e092cc3ee3a21db67d42e73c",
+  "mcp_contract_fingerprint": "53a380623ceaf21cd5a3481d1b3fb864d8eb664a18861ca1b00c1b49d663ba66",
   "tool_sets": {
     "owner_gated_tools": [
       "set_blocker",
@@ -12,28 +12,12 @@
     ],
     "read_tools": [
       "sympp.health",
-      "solo_show",
-      "solo_list",
       "list_work_requests",
       "read_work_request",
       "summarize_failed_mcp_calls"
     ],
     "tools": [
       "sympp.health",
-      "solo_attach",
-      "solo_show",
-      "solo_list",
-      "solo_record_task_plan",
-      "solo_append_progress",
-      "solo_append_finding",
-      "solo_record_decision",
-      "solo_report_blocker",
-      "solo_resolve_blocker",
-      "solo_record_validation",
-      "solo_pause",
-      "solo_resume",
-      "solo_complete",
-      "solo_archive",
       "create_work_request",
       "list_work_requests",
       "read_work_request",

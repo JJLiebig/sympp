@@ -84,7 +84,7 @@ type Detail = {
 export type Settings = {
   work_request_archive_after_days?: number;
   work_request_never_started_archive_after_days?: number;
-  solo_session_delete_after_days?: number;
+  card_retention_days?: number;
   open_dashboard_on_boot?: boolean;
   capture_failed_mcp_calls?: boolean;
 };

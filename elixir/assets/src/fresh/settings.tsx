@@ -10,7 +10,7 @@ type Draft = Partial<Record<Key, number | boolean>>;
 const DAYS: Array<[Key, string]> = [
   ["work_request_archive_after_days", "Finished goals are archived after"],
   ["work_request_never_started_archive_after_days", "Goals that never started, after"],
-  ["solo_session_delete_after_days", "Archived goals are deleted for good after"],
+  ["card_retention_days", "Archived goals and finished cards are removed after"],
 ];
 const SWITCHES: Array<[Key, string]> = [
   ["open_dashboard_on_boot", "Open the board when the backend starts"],

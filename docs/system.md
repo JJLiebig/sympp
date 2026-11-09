@@ -15,7 +15,7 @@ This guide describes implemented behavior. The approved beta direction is in
 |---|---|
 | WorkRequest | Product goal, repository, base branch, constraints, asks, decisions, plan, and delivery state. |
 | WorkPackage | Canonical bounded assignment from architect planning through worker execution and delivery. |
-| Solo Session | Optional persistent plans, progress, findings, decisions, blockers, and validation for ordinary single-agent work. |
+| Card | One Herdr terminal's own work outside a WorkPackage (branch, PR, CI, review, asks), observed by the factory with no agent setup. |
 
 A WorkPackage owns its goal, file scope, delivery repository/base, acceptance
 criteria, optional validation/stop/review context, optional group path,
@@ -45,8 +45,16 @@ lineage to resolve; missing or cyclic successors leave the goal unresolved.
 Open questions never change the phase. Writes to an archived WorkRequest are
 refused until the operator restores it; nothing restores it implicitly.
 
-Solo Sessions do not create a WorkRequest, WorkPackage, or dispatch.
-All ledger operations, including Solo, use MCP. The packaged
+A terminal gets a card when it is a child of a chief or architect terminal, or
+is labelled `sympp.card=1`, and works on a branch other than its base or has a
+PR; dispatched workers (`sympp.role=worker`) never do. The factory's Observer
+reads the terminal from its herdr-core, the branch from `git` in the terminal's
+directory, and the PR, CI and Review Suite state (by the terminal's
+`sympp.review_id` label) in the same sweep that watches packages. A card is
+`working`, then `review_ci` once a PR is open, and ends `merged`, `done` (PR
+closed, or terminal finished without a PR) or `dismissed` by the operator.
+Unknown inputs never end a card. Cards create no WorkRequest, WorkPackage, or
+dispatch. All ledger operations use MCP. The packaged
 [agent skills](../packages/sympp/skills/) own operating procedures.
 
 ## Review And Delivery Authority

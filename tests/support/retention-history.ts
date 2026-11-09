@@ -5,8 +5,8 @@ import { basename, join } from 'node:path';
 import { expect } from 'e2e';
 import { type Client, type Factory } from './factory.js';
 
-type Age = { table: 'sympp_work_requests' | 'sympp_solo_sessions'; id: string;
-  column: 'inserted_at' | 'operator_completed_at' | 'archived_at' | 'restored_at' | 'last_activity_at'; days: number };
+type Age = { table: 'sympp_work_requests'; id: string;
+  column: 'inserted_at' | 'operator_completed_at' | 'archived_at' | 'restored_at'; days: number };
 
 // Hosted-only prepared history. Stop this disposable candidate before changing
 // timestamps; every lifecycle action itself still goes through its public API.
@@ -39,7 +39,7 @@ export const archives = async (client: Client) => (await client.inspect('/api/v1
 export async function retention(client: Client, days = 30) {
   const result = await client.operator('/api/v1/sympp/operator/settings', {
     work_request_archive_after_days: 3, work_request_never_started_archive_after_days: days,
-    solo_session_delete_after_days: 30, open_dashboard_on_boot: false,
+    card_retention_days: 30, open_dashboard_on_boot: false,
   });
   expect(result.status).toBe(200);
   expect(result.body.settings.work_request_never_started_archive_after_days).toBe(days);

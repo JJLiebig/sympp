@@ -21,7 +21,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.Repo.MigrationFileLock
-  alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Repository, as: SoloSessionRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
@@ -73,7 +72,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     if Process.whereis(Endpoint) == nil, do: start_supervised!({Endpoint, []})
 
     assert :ok = WorkPackageRepository.migrate(Repo)
-    assert :ok = SoloSessionRepository.migrate(Repo)
     assert :ok = PhaseRepository.migrate(Repo)
     assert :ok = WorkRequestRepository.migrate(Repo)
 
@@ -602,7 +600,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
   test "cleanup startup and the first MCP write share the migration file lock" do
     database_path = WorkPackageFactory.database_path()
-    workspace_path = solo_workspace_path("startup-migration")
     original_repo_config = Application.get_env(:symphony_elixir, LazyHTTPRepo)
     observer_key = :sympp_migration_lock_wait_observer
     original_observer = Application.get_env(:symphony_elixir, observer_key)
@@ -614,7 +611,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       restore_app_env(LazyHTTPRepo, original_repo_config)
       restore_app_env(observer_key, original_observer)
       File.rm(database_path)
-      File.rm_rf(workspace_path)
     end)
 
     parent = self()
@@ -642,12 +638,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
         request =
           Task.async(fn ->
             post_json(
-              tool_call_request("first-write", "solo_attach", %{
-                "repo" => "fixture/startup",
-                "base_branch" => "beta",
-                "workspace_path" => workspace_path,
-                "caller_id" => "startup-test"
-              })
+              tool_call_request("first-write", "create_work_request", work_request_arguments("fixture/startup", "beta"))
               |> with_terminal("t1"),
               [{"mcp-session-id", session_id}]
             )
@@ -658,16 +649,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
         assert Repo.same_database_path?(request_lock_path, lock_path)
         send(lock_task.pid, :release_migration_lock)
         assert :ok = Task.await(lock_task)
-        assert get_in(json_response(Task.await(request, 30_000), 200), ["result", "structuredContent", "action"]) == "solo_attach"
+        assert is_binary(get_in(json_response(Task.await(request, 30_000), 200), ["result", "structuredContent", "work_request", "id"]))
       end)
     after
       send(lock_task.pid, :release_migration_lock)
     end
   end
 
-  test "POST /mcp dispatches Solo tools through the dashboard lazy repo seam" do
+  test "POST /mcp dispatches ledger tools through the dashboard lazy repo seam" do
     database_path = WorkPackageFactory.database_path()
-    workspace_path = solo_workspace_path("lazy-repo")
     original_repo_config = Application.get_env(:symphony_elixir, LazyHTTPRepo)
     original_database = Application.get_env(:symphony_elixir, :sympp_repo_database)
 
@@ -677,7 +667,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       restore_app_env(LazyHTTPRepo, original_repo_config)
       restore_sympp_repo_database(original_database)
       File.rm(database_path)
-      File.rm_rf(workspace_path)
     end)
 
     with_endpoint_repo(LazyHTTPRepo, fn ->
@@ -685,16 +674,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       [session_id] = get_resp_header(init, "mcp-session-id")
 
       pre_attach_health = post_json(tool_call_request("health", "sympp.health", %{}), [{"mcp-session-id", session_id}])
-      tool_notification = post_json(tool_call_notification("solo_list", %{}), [{"mcp-session-id", session_id}])
+      tool_notification = post_json(tool_call_notification("list_work_requests", %{}), [{"mcp-session-id", session_id}])
 
       conn =
         post_json(
-          tool_call_request("attach", "solo_attach", %{
-            "repo" => "nextide/example",
-            "base_branch" => "main",
-            "workspace_path" => workspace_path,
-            "caller_id" => "codex-local"
-          })
+          tool_call_request("attach", "create_work_request", work_request_arguments("nextide/example", "main"))
           |> with_terminal("t1"),
           [{"mcp-session-id", session_id}]
         )
@@ -704,7 +688,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       assert get_in(json_response(pre_attach_health, 200), ["result", "structuredContent", "status"]) == "degraded"
       assert get_in(json_response(pre_attach_health, 200), ["result", "structuredContent", "ledger", "reachable"]) == false
       assert response(tool_notification, 202) == ""
-      assert get_in(json_response(conn, 200), ["result", "structuredContent", "action"]) == "solo_attach"
+      assert is_binary(get_in(json_response(conn, 200), ["result", "structuredContent", "work_request", "id"]))
       assert get_in(json_response(post_attach_health, 200), ["result", "structuredContent", "status"]) == "ok"
       assert get_in(json_response(post_attach_health, 200), ["result", "structuredContent", "ledger", "reachable"]) == true
       assert File.exists?(database_path)
@@ -811,8 +795,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
       tools = post_json(tools_list_request("tools"), [{"mcp-session-id", session_id}])
       notification = post_json(notification_request(), [{"mcp-session-id", session_id}])
-      repo_backed = post_json(tool_call_request("repo-backed", "solo_list", %{}), [{"mcp-session-id", session_id}])
-      repo_backed_notification = post_json(tool_call_notification("solo_list", %{}), [{"mcp-session-id", session_id}])
+      repo_backed = post_json(tool_call_request("repo-backed", "list_work_requests", %{}), [{"mcp-session-id", session_id}])
+      repo_backed_notification = post_json(tool_call_notification("list_work_requests", %{}), [{"mcp-session-id", session_id}])
       resources = post_json(resources_list_request("resources"), [{"mcp-session-id", session_id}])
       health = post_json(tool_call_request("health", "sympp.health", %{}), [{"mcp-session-id", session_id}])
 
@@ -827,7 +811,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
       unknown = post_json(tools_list_request("missing"), [{"mcp-session-id", "missing-session"}])
 
-      assert "solo_attach" in tool_names(json_response(tools, 200))
+      assert "create_work_request" in tool_names(json_response(tools, 200))
       assert response(notification, 202) == ""
       assert json_response(repo_backed, 503) == json_rpc_error("repo-backed", -32_000, "Server error", "ledger_unavailable")
       assert json_response(repo_backed_notification, 503) == json_rpc_error(nil, -32_000, "Server error", "ledger_unavailable")
@@ -856,7 +840,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
       tools = post_json(tools_list_request("tools"), [{"mcp-session-id", session_id}])
       health = post_json(tool_call_request("health", "sympp.health", %{}), [{"mcp-session-id", session_id}])
-      repo_backed = post_json(tool_call_request("repo-backed", "solo_list", %{}), [{"mcp-session-id", session_id}])
+      repo_backed = post_json(tool_call_request("repo-backed", "list_work_requests", %{}), [{"mcp-session-id", session_id}])
 
       assert get_in(json_response(init, 200), ["result", "serverInfo", "name"]) == "sympp"
       assert "sympp.health" in tool_names(json_response(tools, 200))
@@ -1214,11 +1198,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     end
   end
 
-  defp solo_workspace_path(name) do
-    path = Path.join(System.tmp_dir!(), "sympp-mcp-http-solo-#{name}-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(path)
-    path
-  end
+  defp work_request_arguments(repo, base_branch),
+    do: %{"repo" => repo, "base_branch" => base_branch, "title" => "Lazy repo write", "request_kind" => "feature", "description" => "First write through the HTTP endpoint."}
 
   defp add_package_op(overrides), do: overrides |> WorkPackageFactory.attrs() |> Map.new(fn {key, value} -> {to_string(key), value} end) |> Map.put("op", "add_package")
 

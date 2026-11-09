@@ -4,7 +4,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
 
   It reads `hc server status` and `hc ls --all` on the factory host and caches
   the result briefly; the `Observer` refreshes it every 15 s. Worker terminals
-  (label `sympp.role=worker`) carry their labels. A terminal on another core is
+  (label `sympp.role=worker`) carry their labels; chief terminals
+  (`sympp.role=chief`) and terminals labelled `sympp.card=1` carry that label. A terminal on another core is
   `:unseen`; when the core can't be reached the answer is `:unknown`. Neither
   ever counts as finished. Ordinary reads keep using the last good snapshot for
   up to 2 minutes while the core is unreachable; reads that confirm a finish
@@ -59,6 +60,41 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
 
       :unavailable ->
         :unknown
+    end
+  end
+
+  @doc "The factory core's current snapshot: cached, or the last good one for up to 2 minutes."
+  @spec current() :: {:ok, snapshot()} | :unavailable
+  def current, do: snapshot(false)
+
+  @doc """
+  One terminal's full record from the factory's core (`hc get`), with its
+  labels and title. With a function source (tests) it is the snapshot's record.
+  """
+  @spec get(String.t()) :: {:ok, map()} | :error
+  def get(address) when is_binary(address) do
+    case Application.get_env(:symphony_elixir, :sympp_herdr_core, "hc") do
+      nil -> :error
+      fun when is_function(fun, 0) -> snapshot_record(normalize(fun.()), address)
+      command when is_binary(command) -> get_with(System.find_executable(command), address)
+    end
+  end
+
+  defp snapshot_record({:ok, %{terminals: terminals}}, address) do
+    case Map.get(terminals, address) do
+      %{} = record -> {:ok, record}
+      nil -> :error
+    end
+  end
+
+  defp snapshot_record(:unavailable, _address), do: :error
+
+  defp get_with(nil, _address), do: :error
+
+  defp get_with(path, address) do
+    case run(path, ["get", address, "--json"]) do
+      {:ok, %{"address" => ^address} = record} -> {:ok, Map.delete(record, "argv")}
+      _unavailable -> :error
     end
   end
 
@@ -208,9 +244,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
     with path when is_binary(path) <- System.find_executable(command),
          {:ok, %{"core" => %{"id" => core_id} = core}} when is_binary(core_id) <- run(path, ["server", "status", "--json"]),
          {:ok, %{"terminals" => terminals}} when is_list(terminals) <- run(path, ["ls", "--all", "--json"]),
-         {:ok, %{"terminals" => workers}} when is_list(workers) <- run(path, ["ls", "--all", "--json", "--label", "sympp.role=worker"]) do
+         {:ok, %{"terminals" => workers}} when is_list(workers) <- run(path, ["ls", "--all", "--json", "--label", "sympp.role=worker"]),
+         {:ok, %{"terminals" => chiefs}} when is_list(chiefs) <- run(path, ["ls", "--all", "--json", "--label", "sympp.role=chief"]),
+         {:ok, %{"terminals" => cards}} when is_list(cards) <- run(path, ["ls", "--all", "--json", "--label", "sympp.card=1"]) do
       labels = worker_labels(path, workers)
-      terminals = Map.new(terminals, fn record -> {record["address"], put_labels(record, labels)} end)
+      marked = Map.merge(marker_labels(cards, "sympp.card", "1"), marker_labels(chiefs, "sympp.role", "chief"), fn _address, card, chief -> Map.merge(card, chief) end)
+
+      terminals =
+        Map.new(terminals, fn record ->
+          {record["address"], record |> put_labels(labels) |> merge_labels(Map.get(marked, record["address"]))}
+        end)
+
       snapshot = %{core_id: core_id, terminals: terminals}
       {:ok, if(is_binary(core["name"]), do: Map.put(snapshot, :core_name, core["name"]), else: snapshot)}
     else
@@ -244,6 +288,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
       _unavailable -> nil
     end
   end
+
+  # `hc ls --label` names the terminals that carry a label, without the rest of their labels.
+  defp marker_labels(records, key, value), do: Map.new(for(%{"address" => address} <- records, is_binary(address), do: {address, %{key => value}}))
+
+  defp merge_labels(record, nil), do: record
+  defp merge_labels(record, labels), do: Map.update(record, "labels", labels, &Map.merge(&1, labels))
 
   defp put_labels(%{"labels" => %{}} = record, _labels), do: record
 

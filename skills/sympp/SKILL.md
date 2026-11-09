@@ -1,6 +1,6 @@
 ---
 name: sympp
-description: Coordinate sympp WorkRequests, execute assigned WorkPackages, or use optional Solo planning memory through MCP; also supports ordinary worker and parent coordination without persistence.
+description: Coordinate sympp WorkRequests and execute assigned WorkPackages through MCP; also supports ordinary worker and parent coordination without persistence.
 ---
 
 # sympp
@@ -11,10 +11,11 @@ Read the procedure matching the assignment, then follow its contract:
 - Assigned WorkPackage: [worker](references/symphony-worker/procedure.md).
 - Parent coordinating ordinary repository work: [coordinator](references/symphony-coordinator/procedure.md).
 - Bounded implementation without a WorkPackage: [worker](references/symphony-worker/procedure.md).
-- Optional durable planning for ordinary work: [Solo Session](references/symphony-solo-session/procedure.md).
 
 The parent owns slicing and integration; each worker owns its bounded task,
-checks, required review, and merge-ready handoff. Persistence is optional for
+checks, required review, and merge-ready handoff. A chief's or architect's
+child that works on a branch or PR shows on the board as a card with no setup;
+it asks the operator with `ask` without `work_request_id`. Persistence is optional for
 ordinary work. WorkRequest/WorkPackage and requested ledger operations require
 configured `sympp` MCP tools. If those tools are unavailable,
 report the missing connection and recover it before ledger work. Do not use

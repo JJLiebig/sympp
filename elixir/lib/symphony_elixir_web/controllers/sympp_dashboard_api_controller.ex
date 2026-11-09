@@ -7,6 +7,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   alias Plug.Conn
   alias SymphonyElixir.SymphonyPlusPlus.Asks
+  alias SymphonyElixir.SymphonyPlusPlus.Cards
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
@@ -150,7 +151,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp normalize_origin_port(_scheme, port), do: port
 
   @spec operator_dashboard(Conn.t(), map()) :: Conn.t()
-  def operator_dashboard(conn, %{"surface" => surface}) when surface in ["archived", "solo"] do
+  def operator_dashboard(conn, %{"surface" => surface}) when surface in ["archived"] do
     send_local_operator_response(conn, :dashboard_read, Target.new(:dashboard), :operator_dashboard_surface, fn repo ->
       with {:ok, payload} <- LocalOperatorDashboard.operator_dashboard_surface_payload(repo, surface) do
         json(conn, payload)
@@ -321,17 +322,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
         end
       end
     )
-  end
-
-  @spec operator_solo_session_detail(Conn.t(), map()) :: Conn.t()
-  def operator_solo_session_detail(conn, %{"solo_session_id" => solo_session_id}) do
-    send_local_operator_response(conn, :dashboard_read, Target.new(:dashboard), :operator_solo_session_detail, fn repo ->
-      with {:ok, repo_identity_catalog} <- Dashboard.local_operator_repo_identity_catalog(repo),
-           {:ok, payload} <-
-             Dashboard.solo_session_detail(repo, solo_session_id, repo_identity_catalog: repo_identity_catalog) do
-        json(conn, payload)
-      end
-    end)
   end
 
   @spec operator_create_work_request(Conn.t(), map()) :: Conn.t()
@@ -532,7 +522,22 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   # submitted; `delivery` says whether that reached it.
   defp answer_ask_response(repo, conn, %{"ask_id" => ask_id} = params) do
     with {:ok, ask, delivery} <- Asks.answer_by_operator(repo, ask_id, params) do
-      json(conn, mutation_success_payload(%{ask_id: ask.id, work_request_id: ask.work_request_id, delivery: delivery}, %{work_request_id: ask.work_request_id}))
+      subject = if ask.card_id, do: %{card_id: ask.card_id}, else: %{work_request_id: ask.work_request_id}
+      json(conn, mutation_success_payload(Map.merge(%{ask_id: ask.id, delivery: delivery}, subject), subject))
+    end
+  end
+
+  @doc "Operator dismisses a card: it drops off the boards after the card retention window."
+  @spec operator_dismiss_card(Conn.t(), map()) :: Conn.t()
+  def operator_dismiss_card(conn, params), do: send_local_operator_response(conn, :card_dismiss, Target.new(:card), :operator_dismiss_card, &dismiss_card_response(&1, conn, params))
+
+  @spec herdr_dismiss_card(Conn.t(), map()) :: Conn.t()
+  def herdr_dismiss_card(conn, params), do: send_native_operator_response(conn, :card_dismiss, Target.new(:card), :operator_dismiss_card, &dismiss_card_response(&1, conn, params))
+
+  defp dismiss_card_response(repo, conn, %{"card_id" => card_id}) do
+    case Cards.dismiss(repo, card_id) do
+      {:ok, card} -> json(conn, mutation_success_payload(%{card_id: card.id, state: card.state}))
+      {:error, :not_found} -> {:error, :card_not_found}
     end
   end
 
@@ -751,6 +756,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp script_name_prefix(%Conn{script_name: script_name}), do: "/" <> Enum.join(script_name, "/")
 
   defp error_response(conn, :not_found), do: error_response(conn, 404, "not_found", "Work package not found")
+  defp error_response(conn, :card_not_found), do: error_response(conn, 404, "not_found", "Card not found")
   defp error_response(conn, :unauthorized), do: error_response(conn, 401, "unauthorized", "Unauthorized")
   defp error_response(conn, :forbidden), do: error_response(conn, 403, "forbidden", "Forbidden")
   defp error_response(conn, :database_busy), do: error_response(conn, 503, "database_busy", "Dashboard ledger is busy")

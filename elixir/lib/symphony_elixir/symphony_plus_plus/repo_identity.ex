@@ -61,6 +61,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.RepoIdentity do
 
   def scope_match?(_expected_repo, _actual_repo, _opts), do: false
 
+  @doc "The GitHub `{owner, name}` of an `owner/name` value or a github.com remote URL, else nil."
+  @spec github_repository(term()) :: {:ok, {String.t(), String.t()}} | nil
+  def github_repository(value) when is_binary(value) do
+    value = String.trim(value)
+
+    cond do
+      match = Regex.run(~r{^([\w.-]+)/([\w.-]+)$}, value) -> {:ok, {Enum.at(match, 1), Enum.at(match, 2)}}
+      match = Regex.run(~r{github\.com[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?/?$}, value) -> {:ok, {Enum.at(match, 1), Enum.at(match, 2)}}
+      true -> nil
+    end
+  end
+
+  def github_repository(_value), do: nil
+
   @spec local_git_origin_remote(term()) :: String.t() | nil
   def local_git_origin_remote(repo_path) when is_binary(repo_path) do
     with :ok <- OfflineSandbox.require_online(),

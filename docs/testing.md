@@ -103,13 +103,14 @@ Portable native qualification starts from the candidate when the published runti
 has an incompatible MCP contract. Cold start, reuse, recovery and offline checks
 still run; same-contract cross-revision refresh needs a compatible published baseline.
 
-## Retention, Solo and worktrees (B2)
+## Retention and worktrees (B2)
 
 Retention journeys use public operator settings and lifecycle actions against
 disposable candidate ledgers. Age fixtures stop the candidate before changing
 timestamps; they never manufacture completion, archive, ownership or dispatch.
-Solo journeys exercise persistent entries, lifecycle, redaction and inactivity.
-Exact time boundaries, historical migrations and precise contention remain
+Cards are observed only by the factory runtime's Observer, which the cockpit
+does not run, so card states, asks and retention are ExUnit checks with faked
+herdr-core, git and GitHub reads. Exact time boundaries, historical migrations and precise contention remain
 separate hosted storage checks.
 
 Worktree journeys use real disposable Git repositories. They prove preparation,

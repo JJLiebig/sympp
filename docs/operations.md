@@ -107,7 +107,6 @@ runtime freshness. Unknown timing and observations remain explicit.
 
 | Need | Entry point |
 |---|---|
-| Persistent single-agent planning | [sympp Solo Session](../skills/sympp/references/symphony-solo-session/procedure.md) |
 | Implement one assigned package | [sympp worker](../skills/sympp/references/symphony-worker/procedure.md) |
 | Clarify and slice a WorkRequest | [sympp architect](../skills/sympp/references/symphony-architect/procedure.md) |
 | Coordinate ordinary repository work without required persistence | [sympp coordinator](../skills/sympp/references/symphony-coordinator/procedure.md) |
