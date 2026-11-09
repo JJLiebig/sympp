@@ -210,7 +210,7 @@ export function variantPayload(variant) {
       work_packages: [pkg('k-1', 'Key table', 1, 'planned'), pkg('k-2', 'Help overlay', 2, 'planned')],
     },
     {
-      work_request: { id: 'wr-old', title: 'Playback retry', repo: 'owner/web', phase: 'archived', inserted_at: at(9 * 1440) },
+      work_request: { id: 'wr-old', title: 'Playback retry', repo: 'owner/web', phase: 'archived', archived_at: at(6 * 1440), inserted_at: at(9 * 1440) },
       work_packages: [pkg('o-1', 'Retry signed URLs', 1, 'ended', ended('pr_merged', 9 * 1440))],
     },
   );
@@ -318,8 +318,8 @@ export function applyDemo(payload, path, body = {}) {
     const r = details.find((d) => d.work_request.id === id)?.work_request;
     if (!r) return null;
     if (step === 'complete') Object.assign(r, { phase: 'done', completed_at: now });
-    else if (step === 'archive') Object.assign(r, { phase: 'archived', prior_phase: r.phase });
-    else if (step === 'restore') r.phase = r.prior_phase ?? 'done';
+    else if (step === 'archive') Object.assign(r, { phase: 'archived', archived_at: now, prior_phase: r.phase });
+    else if (step === 'restore') Object.assign(r, { phase: r.prior_phase ?? 'done', archived_at: null });
     else if (step === 'release') delete r.worked_on;
     else if (step === 'delete') payload.work_request_details = details.filter((d) => d.work_request.id !== id);
     else return null;

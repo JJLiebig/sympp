@@ -157,7 +157,6 @@ function buildJob(detail, now) {
     baseBranch: request.base_branch ?? null,
     offPrimary: offPrimary(request.base_branch, request.default_branch),
     createdAt,
-    closedAt: ms(request.completed_at),
     report,
     asks,
     needs,
