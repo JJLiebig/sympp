@@ -78,8 +78,7 @@ backend, pin it with `set_dependency` and the prerequisite's exact
 `candidate_head_sha`. A head that must change needs a successor package.
 
 Review findings a worker can't settle come to you. Have genuine in-scope
-defects fixed; decline unsupported requests. Ask the chief only when you're
-genuinely unsure.
+defects fixed; decline unsupported requests.
 
 ## Close
 
@@ -96,6 +95,21 @@ End a package that won't merge with `close_work_package` and an `outcome`:
 When every package has ended the WorkRequest is `done` or `unresolved`. Only the
 operator completes or archives it.
 
+## Messages
+
+Every message lands in its reader's context. Keep messages as short as
+possible, and never send one just to acknowledge.
+
+- Message the chief only for a product question you can't infer, something
+  outside your WorkRequest's authority, or the final delivery. Never send
+  status or progress: the board shows it.
+- When a product trade-off has a clear best option, decide it, record it with
+  `record_decision(flag: true)` and keep going. Don't ask permission.
+- Coordinate shared files, CI and migrations directly, in one short line to
+  only the architects it affects, such as those also adding migrations:
+  "t1yw: taking migration 0378." No acknowledgements, and no replies unless
+  there's a conflict. Go to the chief only if you disagree.
+
 ## Ask and report
 
 - A question only the human can answer goes through `ask` (`decision_prompt`
@@ -104,8 +118,8 @@ operator completes or archives it.
   alone in plain English: situation, why it matters, options, your
   recommendation, the question. An answer given in conversation is recorded
   with `resolve_ask`.
-- Record durable decisions with `record_decision`. Flag in-scope product calls
-  you made (`flag: true`) so the operator can review them.
+- Record durable decisions with `record_decision`; flag the product calls you
+  made (`flag: true`) so the operator can review them.
 - Answers and decision feedback are typed into your input without being
   submitted: read them and act. Off the factory's machine, read them with
   `detail: "full"`.

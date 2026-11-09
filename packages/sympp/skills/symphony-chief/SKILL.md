@@ -15,7 +15,8 @@ Call `create_work_request` with `title` (2–5 words, at most 40 characters),
 `repo` (remote URL or `owner/name`), `base_branch`, `description` and
 `work_type`; add `constraints` when they matter. Pass `own: false` when an
 architect will own it: the architect's first plan write takes it. Then start
-the architect with the WorkRequest id.
+the architect with the WorkRequest id. Architects may change in-repo CI and
+tests without asking.
 
 ## Settle product calls
 
@@ -37,6 +38,12 @@ The operator's answers (`Answer: …`) and decision feedback
 (`Decision feedback: …`) are typed into your input without being submitted:
 read them and act on them. If your terminal isn't on the factory's machine,
 read them with `read_work_request(detail: "full")`.
+
+## Messages
+
+- Don't ask architects for status: read the board.
+- Keep messages to agents as short as possible, and never send one just to
+  acknowledge.
 
 ## Cards
 
