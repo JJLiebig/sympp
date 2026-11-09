@@ -187,7 +187,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   @spec operator_dashboard_events(Conn.t(), map()) :: Conn.t()
   def operator_dashboard_events(conn, _params) do
-    with true <- SymphonyElixirWeb.FactoryAccessPlug.board_read_only?(conn) or local_operator_browser?(conn),
+    with true <- local_operator_browser?(conn),
          :ok <- OperatorDashboardOpener.ensure_started(),
          :ok <- DashboardPubSub.subscribe() do
       conn =
@@ -582,8 +582,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   defp send_online_or_local_response(conn, action, target, tool_name, fun) do
-    if local_operator_browser?(conn) or
-         (tool_name == :operator_dashboard_hydrated and SymphonyElixirWeb.FactoryAccessPlug.board_read_only?(conn)) do
+    if local_operator_browser?(conn) do
       send_authorized_operator_response(conn, action, target, tool_name, fun)
     else
       error_response(conn, :unauthorized)

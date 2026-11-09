@@ -137,7 +137,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
         end
       end)
 
-      %{remote: [remote_ip: {100, 64, 0, 2}, host: "100.123.207.19"], headers: [{"authorization", "Bearer " <> token}]}
+      %{remote: [remote_ip: {203, 0, 113, 2}, host: "100.123.207.19"], headers: [{"authorization", "Bearer " <> token}]}
     end
 
     test "remote non-board entrypoints require the token before routing or parsing", %{remote: remote} do
@@ -151,24 +151,57 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       end
     end
 
-    test "direct tailnet peers can read only the board without credentials", %{remote: remote} do
+    test "direct tailnet peers have full board and native access without credentials", %{remote: remote} do
       ipv6 = {0xFD7A, 0x115C, 0xA1E0, 0, 0, 0, 0, 1}
       mapped = {0, 0, 0, 0, 0, 65_535, 0x6440, 2}
+      settings_path = "/api/v1/sympp/operator/settings"
 
       for ip <- [{100, 64, 0, 0}, {100, 127, 255, 255}, ipv6, mapped] do
         opts = Keyword.put(remote, :remote_ip, ip)
         assert get_local("/api/v1/sympp/operator/dashboard/hydrated", [], opts) |> json_response(200) |> Map.has_key?("work_request_details")
+        assert get_local("/api/v1/sympp/operator/dashboard?surface=archived", [], opts).status == 200
+        assert get_local("/api/v1/sympp/herdr/dashboard", [], opts).status == 200
 
-        events = "/api/v1/sympp/operator/dashboard/events"
-
-        for path <- ["/", "/sympp", "/sympp/board", "/assets/index.js", "/favicon.ico", "/splusplus-logo.png", events] do
-          conn = Plug.Test.conn("GET", path) |> Map.put(:remote_ip, ip) |> SymphonyElixirWeb.FactoryAccessPlug.call([])
-          refute conn.halted
-          assert SymphonyElixirWeb.FactoryAccessPlug.board_read_only?(conn)
-          refute SymphonyElixirWeb.FactoryAccessPlug.authenticated?(conn)
+        for headers <- [[], [{"origin", "http://100.123.207.19:4000"}]] do
+          result = post_json(%{"open_dashboard_on_boot" => false}, headers, Keyword.put(opts, :path, settings_path)) |> json_response(200)
+          assert result["settings"]["open_dashboard_on_boot"] == false
         end
+
+        intake = %{"title" => "Tailnet intake", "repo" => "example/service", "base_branch" => "main", "human_description" => "Create a request from the native panel."}
+        native = post_json(intake, [], Keyword.put(opts, :path, "/api/v1/sympp/herdr/work-requests")) |> json_response(201)
+        assert native["work_request"]["work_request"]["title"] == "Tailnet intake"
+
+        for origin <- ["http://evil.example", "null", "http://100.123.207.19:4001", "https://100.123.207.19:4000"] do
+          assert post_json(%{"open_dashboard_on_boot" => true}, [{"origin", origin}], Keyword.put(opts, :path, settings_path)).status == 403
+          assert post_json(intake, [{"origin", origin}], Keyword.put(opts, :path, "/api/v1/sympp/herdr/work-requests")).status == 403
+        end
+
+        assert get_local("/api/v1/sympp/operator/dashboard/hydrated", [], opts) |> json_response(200) |> get_in(["settings", "open_dashboard_on_boot"]) == false
+      end
+    end
+
+    test "tailnet authority requires a trusted Host even when Origin matches", %{remote: remote, headers: token_headers} do
+      tailnet = Keyword.put(remote, :remote_ip, {100, 64, 0, 2})
+      path = "/api/v1/sympp/operator/settings"
+      {:ok, hostname} = :inet.gethostname()
+
+      for host <- ["100.64.0.1", "fd7a:115c:a1e0::1", "factory.tailnet.ts.net", "localhost", "127.0.0.1", "::1", List.to_string(hostname)] do
+        opts = tailnet |> Keyword.put(:host, host) |> Keyword.put(:path, path)
+        origin = URI.to_string(%URI{scheme: "http", host: host, port: 4000})
+        response = post_json(%{"open_dashboard_on_boot" => false}, [{"origin", origin}], opts) |> json_response(200)
+        assert response["settings"]["open_dashboard_on_boot"] == false
       end
 
+      for host <- ["rebound.example", "factory.ts.net.evil.example", "100.128.0.1"] do
+        opts = tailnet |> Keyword.put(:host, host) |> Keyword.put(:path, path)
+        origin_headers = [{"origin", "http://#{host}:4000"}]
+        assert post_json(%{"open_dashboard_on_boot" => true}, origin_headers, opts).status == 401
+        assert get_local("/api/v1/sympp/herdr/dashboard", [], opts).status == 401
+        assert post_json(%{"open_dashboard_on_boot" => false}, origin_headers ++ token_headers, opts).status == 200
+      end
+    end
+
+    test "outside peers and forwarded tailnet requests retain credential requirements", %{remote: remote, headers: headers} do
       outside_ipv6 = {0xFD7A, 0x115C, 0xA1E1, 0, 0, 0, 0, 1}
 
       for ip <- [{100, 63, 255, 255}, {100, 128, 0, 0}, {192, 168, 1, 5}, {8, 8, 8, 8}, outside_ipv6] do
@@ -176,16 +209,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
         assert get_local("/sympp", [], Keyword.put(remote, :remote_ip, ip)).status == 401
       end
 
+      tailnet = Keyword.put(remote, :remote_ip, {100, 64, 0, 2})
+
       for header <- ["forwarded", "x-real-ip", "x-forwarded-for", "x-forwarded-custom"] do
-        assert get_local("/api/v1/sympp/operator/dashboard/hydrated", [{header, "127.0.0.1"}], remote).status == 401
-      end
-
-      for path <- ["/api/v1/sympp/operator/dashboard/hydrated", "/sympp/board", "/assets/index.js"] do
-        assert get_local(path, [{"authorization", "Bearer wrong"}], remote).status == 401
-      end
-
-      for path <- ["/api/v1/sympp/operator/settings", "/api/v1/sympp/operator/work-requests/example/archive", "/api/v1/sympp/operator/work-requests/example/release", "/mcp/client-lease"] do
-        assert post_json(%{}, [], Keyword.put(remote, :path, path)).status == 401
+        assert get_local("/api/v1/sympp/operator/dashboard/hydrated", [{header, "127.0.0.1"}], tailnet).status == 401
+        assert get_local("/api/v1/sympp/operator/dashboard/hydrated", [{header, "127.0.0.1"} | headers], tailnet).status == 403
       end
     end
 
