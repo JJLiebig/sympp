@@ -114,7 +114,7 @@ if (process.platform !== 'win32') {
       await installed.program('codex', '#!/bin/sh\nexit 0\n');
       await installed.program('hc', { module: 'tests/support/herdr-terminals.mjs' });
       await installed.program('herdr-app', '#!/bin/sh\ncase "$1" in --version) echo acceptance ;; check) test ! -e "$HERDR_APP_HOME/refuse-check" ;; *) exit 1 ;; esac\n');
-      await installed.program('xdg-open', `#!/bin/sh\nprintf '%s' "$1" > ${JSON.stringify(join(root, 'opened'))}\n`);
+      await installed.program(process.platform === 'darwin' ? 'open' : 'xdg-open', `#!/bin/sh\nprintf '%s' "$1" > ${JSON.stringify(join(root, 'opened'))}\n`);
       env.HERDR_APP_HOME = join(root, 'herdr');
       const layout = '{"id":"root","children":[{"content":{"terminal":"t5"}}]}\n';
       const topics = { 'desk.topics': { groups: [{ id: 'my-topic', spaces: ['s1'] }] } };
