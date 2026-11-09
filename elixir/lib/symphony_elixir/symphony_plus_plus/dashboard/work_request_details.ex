@@ -3,11 +3,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.BulkRepository, as: WorkRequestBulkRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -277,23 +279,39 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
       delivery_board
       |> Map.get(:work_packages, [])
       |> Map.new(fn item ->
+        summary = Map.get(item, :work_package) || %{}
+
         signals =
-          item
-          |> Map.get(:work_package)
-          |> Kernel.||(%{})
+          summary
           |> Map.take(@delivery_signal_keys)
           |> Map.put(:merge_eligibility, Map.fetch!(item, :merge_eligibility))
           |> Map.reject(fn {_key, value} -> is_nil(value) end)
           |> Map.new(fn {key, value} -> {key, Dashboard.redacted_json(value)} end)
 
-        {Map.fetch!(item, :id), signals}
+        {Map.fetch!(item, :id), {summary, signals}}
       end)
 
     Enum.map(work_packages, fn work_package ->
+      {summary, signals} = Map.get(signals_by_id, Map.fetch!(work_package, :id), {%{}, %{}})
+
       work_package
-      |> Map.merge(Map.get(signals_by_id, Map.fetch!(work_package, :id), %{}))
+      |> Map.merge(signals)
+      |> Map.merge(observed_worker(work_package, summary))
       |> Map.update(:operational_state, %{}, &Map.delete(&1, :activity_signal))
     end)
+  end
+
+  # What the Observer saw of the package's worker. These keys are always
+  # present: `worker_terminal` is null until a worker terminal is seen, and
+  # `progress` is null unless the package is dispatched.
+  defp observed_worker(work_package, summary) do
+    terminal = Map.get(summary, :worker_terminal)
+
+    %{
+      worker_terminal: terminal && Dashboard.redacted_json(terminal),
+      observation_stale: Map.get(summary, :observation_stale, []),
+      progress: if(Lifecycle.dispatched?(work_package), do: Signals.progress(summary))
+    }
   end
 
   defp build_work_request_detail(

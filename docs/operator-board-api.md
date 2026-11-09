@@ -5,6 +5,9 @@ same hydrated board projection as the browser endpoint below. It includes each
 request's packages with their group paths, the execution graph, attention,
 package/delivery signals and which terminal
 works on each request (`worked_on`, below).
+Unlike the browser board, it also lists archived requests in
+`work_request_details`, with `phase: "archived"`, `archived_at` and their
+packages, so the panel can show them and offer Restore.
 The normal standalone web board and its authorization are unchanged.
 
 Each `work_request_details[]` includes `asks`, the request's open asks: the
@@ -78,6 +81,15 @@ services, response shapes and dashboard invalidation as their operator siblings:
 | `/decisions/:decision_id/feedback` | `{"text":"…"}`; HTTP 200 with the ack result plus `delivery`. |
 | `/decisions/:decision_id/dismiss` | No input; HTTP 200 with the ack result. |
 | `/cards/:card_id/dismiss` | No input; HTTP 200 with `{ok:true, card_id, state:"dismissed", refresh:{dashboard:true}}`. Dismissing again returns the same; an unknown card returns HTTP 404. |
+| `/work-packages/:work_package_id/finish` | Finish, as under [Operator actions](#operator-actions). No input; HTTP 200 with `{ok:true, work_package_id, status:"ended", refresh:{dashboard:true, work_package_id}}`. |
+| `/work-requests/:work_request_id/release` | Release. No input; HTTP 200 with `{ok:true, work_request_id, released:<worked_on>, refresh:{dashboard:true, work_request_id}}`; no live owner returns HTTP 409 `not_owned`. |
+| `/work-requests/:work_request_id/complete` | Complete. No input; HTTP 200 with `{ok:true, work_request:<request>, refresh:{dashboard:false, work_request_id}}`. |
+| `/work-requests/:work_request_id/archive` | Archive. No input; HTTP 200 with `{ok:true, work_request:<request>, refresh:{dashboard:true, work_request_id}}`. |
+| `/work-requests/:work_request_id/restore` | Restore. No input; HTTP 200 with the archive result. |
+| `/work-requests/:work_request_id/delete` | Delete. No input; HTTP 200 with `{ok:true, work_request:{id}, refresh:{dashboard:true, work_request_id}}`. |
+
+The last six run the operator routes' handlers: same preconditions, refusals
+and operator audit entry, with the native path in the audit's request metadata.
 
 Native human authority means a trusted direct local process, not an authenticated
 Herdr application identity. Requests require a loopback peer and local Host,
@@ -134,8 +146,8 @@ HTTP 422 `missing_feedback`. Hydrated and detail reads also carry `flagged`,
 Refetch the native board after success or its event-stream invalidation. Errors
 use `{error:{code,message}}`: malformed input/choice returns HTTP 422,
 absent targets return HTTP 404, and an ask that is no longer open returns HTTP
-409 `ask_not_open`. No draft-edit, deletion, dispatch or
-ownership mutation is exposed by these native routes.
+409 `ask_not_open`. No draft-edit or dispatch is exposed by these native
+routes.
 
 ## Hydrated board
 
@@ -162,6 +174,9 @@ response. Existing fields retain their meaning. Read each entry of
 | `review_signal.provider_status` | Review Suite's raw stage; `status` keeps its existing normalized meaning. |
 | `review_signal.steps` | Optional ordered ladder of `{index, name, state}` entries (`done`, `current`, or `pending`). |
 | `review_signal.round_history` | Optional oldest-first list of the latest 20 provider rounds. |
+| `worker_terminal` | The package's worker terminal as the Observer last saw it, `{address, state, status}`: `state` is `live` or `finished`; for a live terminal `status` is the core's agent state (such as `working` or `idle`), `live` when the core reports none, or `unknown` when the factory's core can't see it; for a finished one it is `finished`. `null` when no worker terminal was seen. |
+| `observation_stale` | Inputs the Observer couldn't read on its last sweep (`github`, `review`); `[]` when none. |
+| `progress` | For a `dispatched` package: `launching`, `implementing`, `worker_exited` or `review_ci` (an open PR). `null` otherwise. |
 
 Repository signals use only existing local checkouts under the factory repos root,
 with the same identity and ambiguity rules as checkout resolution. They never
@@ -310,7 +325,7 @@ These existing POST routes require local operator authorization:
 | `/complete` | Operator override; no delivery or inactive-worker precondition. Sets `operator_completed_at`, so the phase is `done`; withdraws open asks, clears package blockers and queues terminal package worktree cleanup. Does not stop workers or merge PRs. Confirm the override when work is still running. An archived goal returns `work_request_archived` (409) with `next_action: "restore"`. |
 | `/archive` | Requires phase `done` or `unresolved`; otherwise returns `not_completed`. Hides the goal, withdraws its open asks and queues terminal package worktree cleanup. History remains. Archiving again is a no-op. |
 | `/delete` | Requires only that the goal exists; archive and completion are **not** backend prerequisites. Permanently removes the goal and dependent ledger history and ownership rows and queues linked worktree cleanup, including nonterminal packages. Confirm deletion and finish or stop active work first; it is not a safe unconditional one-click action. |
-| `/release` | Ends the goal's live ownership (`finish_reason: released_by_operator`) so another Herdr terminal's next owner-gated write takes it. Use it for an owner that crashed on a machine the factory can't see. HTTP 200 with `{ok:true, work_request_id, released:<worked_on>, refresh}`; a goal with no live owner returns `not_owned` (409). |
+| `/release` | Ends the goal's live ownership (`finish_reason: released_by_operator`) so another Herdr terminal's next owner-gated write takes it. Use it for an owner that crashed on a machine the factory can't see. HTTP 200 with `{ok:true, work_request_id, released:<worked_on>, refresh}`; a goal with no live owner returns `{error:{code:"not_owned",message}}` (409). |
 | `/restore` | Requires an existing goal. Clears the archive and records `restored_at`, which starts a fresh retention window for both finished and never-started goals. Does not restore deleted worktrees or undo queued cleanup. |
 
 `POST /api/v1/sympp/operator/work-packages/:id/finish` ends a `dispatched` or
@@ -330,6 +345,9 @@ review flagged decisions as described under
 
 `POST /api/v1/sympp/operator/cards/:id/dismiss` dismisses a card, as described
 under [Cards](#cards).
+
+Finish and the five request actions above also have native routes under
+`/api/v1/sympp/herdr`, listed under [Native human actions](#native-human-actions).
 
 Worktree cleanup runs asynchronously and defers active workers while
 their package records exist. Deleting those records removes that activity check,

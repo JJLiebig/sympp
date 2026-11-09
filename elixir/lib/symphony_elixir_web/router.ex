@@ -32,6 +32,12 @@ defmodule SymphonyElixirWeb.Router do
     post("/api/v1/sympp/herdr/decisions/:decision_id/feedback", SymppDashboardApiController, :herdr_feedback_decision)
     post("/api/v1/sympp/herdr/decisions/:decision_id/dismiss", SymppDashboardApiController, :herdr_dismiss_decision)
     post("/api/v1/sympp/herdr/cards/:card_id/dismiss", SymppDashboardApiController, :herdr_dismiss_card)
+    post("/api/v1/sympp/herdr/work-requests/:work_request_id/complete", SymppDashboardApiController, :herdr_complete_work_request)
+    post("/api/v1/sympp/herdr/work-requests/:work_request_id/archive", SymppDashboardApiController, :herdr_archive_work_request)
+    post("/api/v1/sympp/herdr/work-requests/:work_request_id/restore", SymppDashboardApiController, :herdr_restore_work_request)
+    post("/api/v1/sympp/herdr/work-requests/:work_request_id/delete", SymppDashboardApiController, :herdr_delete_work_request)
+    post("/api/v1/sympp/herdr/work-requests/:work_request_id/release", SymppDashboardApiController, :herdr_release_work_request)
+    post("/api/v1/sympp/herdr/work-packages/:work_package_id/finish", SymppDashboardApiController, :herdr_finish_work_package)
 
     match(:*, "/api/v1/sympp/herdr/work-requests", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/herdr/asks/:ask_id/answer", ObservabilityApiController, :method_not_allowed)
@@ -39,6 +45,12 @@ defmodule SymphonyElixirWeb.Router do
     match(:*, "/api/v1/sympp/herdr/decisions/:decision_id/feedback", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/herdr/decisions/:decision_id/dismiss", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/herdr/cards/:card_id/dismiss", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/sympp/herdr/work-requests/:work_request_id/complete", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/sympp/herdr/work-requests/:work_request_id/archive", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/sympp/herdr/work-requests/:work_request_id/restore", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/sympp/herdr/work-requests/:work_request_id/delete", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/sympp/herdr/work-requests/:work_request_id/release", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/sympp/herdr/work-packages/:work_package_id/finish", ObservabilityApiController, :method_not_allowed)
   end
 
   scope "/", SymphonyElixirWeb do
