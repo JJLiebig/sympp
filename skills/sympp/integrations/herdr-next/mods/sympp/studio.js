@@ -1,7 +1,6 @@
 // Pure UI studio logic: one UI package's tab, its worker terminal beside a preview. No GPUI or Herdr
 // imports; main.js runs these against Herdr and studioview.js draws the studio's own pane.
 
-import { bindingsFor } from "./model.js";
 import { jobSpace } from "./job.js";
 
 // Open studios by Herdr tab: { [tab id]: { job, pkg, dev } }. `dev` names the package's preview copy.
@@ -19,7 +18,7 @@ export function isUiWork(pkg, previewUrl = null) {
 }
 
 // The web preview a worker published on its own terminal (sympp.preview_url), when it is an http(s)
-// address. Display-only: shown only once the worker's launch has been verified.
+// address. Display-only: shown only while the factory sees that worker live.
 export function previewUrlOf(terminal) {
   const url = terminal?.labels?.["sympp.preview_url"];
   if (typeof url !== "string") return null;
@@ -28,11 +27,24 @@ export function previewUrlOf(terminal) {
 }
 
 // Whether a job view offers the package a studio: unfinished UI work, by its title or by a preview its
-// worker published (a signal only; the studio shows the address after verifying the worker).
-export function uiPackage(job, pkg, bindings, terminalList) {
+// worker published. `here` turns the factory's address for the worker into Herdr's.
+export function uiPackage(pkg, terminalList, here = (address) => address) {
   if (pkg.stage === "ended") return false;
-  const url = bindingsFor(bindings, job.id, pkg.id).map((b) => previewUrlOf((terminalList ?? []).find((k) => k.address === b.address))).find(Boolean);
+  const address = pkg.owner ? here(pkg.owner.address) : null;
+  const url = address ? previewUrlOf((terminalList ?? []).find((k) => k.address === address)) : null;
   return isUiWork(pkg, url);
+}
+
+// The package's worker for its studio: the terminal the factory sees working on it, while Herdr runs
+// it here. A local worker's folder is the worktree its Herdr-view preview builds from; a worker on
+// another machine has none here. "none" until the factory sees a worker; "gone" once it stops.
+export function studioWorker(pkg, terminalList, here = (address) => address) {
+  if (!pkg.owner) return { state: "none" };
+  const address = here(pkg.owner.address);
+  const terminal = pkg.owner.liveness === "live" ? (terminalList ?? []).find((k) => k.address === address && k.state === "live") : null;
+  if (!terminal) return { state: "gone" };
+  const local = !address.includes("/");
+  return { state: "live", address, cwd: local && typeof terminal.cwd === "string" && terminal.cwd ? terminal.cwd : null };
 }
 
 // A tab named after the package in the job's local space; the copy's connection props carry over.
@@ -80,11 +92,6 @@ export function placement(paneList, tab, pane, address, swapped) {
   const order = paneList.filter((p) => p.tab === tab).map((p) => p.pane);
   if (!swapped && order.indexOf(at.pane) > order.indexOf(pane)) return { step: "swap", pane: at.pane };
   return { step: null, pane: at.pane };
-}
-
-// The worker's bindings for this package, launches before hand-started sessions.
-export function workerBindings(bindings) {
-  return [...bindings].sort((a, b) => (a.kind === "launch" ? 0 : 1) - (b.kind === "launch" ? 0 : 1));
 }
 
 // What the preview pane shows. A published web preview wins; an sympp worktree whose Herdr view the

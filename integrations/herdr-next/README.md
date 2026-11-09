@@ -131,9 +131,10 @@ herdr-app do tab.new '{"name":"<package title>","mod":"sympp","props":{"studio":
 A studio opened outside the job's space moves there; a second one for the same
 package hands over to the first. Neither closes a tab that holds a terminal.
 
-The studio places the worker only after the execution helper has verified its
-launch. A worker without a pane is brought into the studio; one shown in another
-tab stays there until you choose **Move here** (or **Go to it**).
+The worker is the terminal the factory sees working on the package, while Herdr
+runs it; the studio places nothing else. A worker without a pane is brought
+into the studio; one shown in another tab stays there until you choose
+**Move here** (or **Go to it**).
 
 The preview shows, in order:
 
@@ -141,7 +142,7 @@ The preview shows, in order:
   (see the [worker UI collaboration procedure](../../packages/sympp/skills/symphony-worker/SKILL.md#ui-work)),
   as its address with **Open** (O or Enter) for the browser. Herdr mods cannot
   embed a browser; a rendered picture of the page is a later addition.
-- **The Herdr view itself** when the worker is local and its worktree changes
+- **The Herdr view itself** when the worker is local and its folder (its worktree) changes
   `integrations/herdr-next/mods` against the job's base branch. The worktree's own
   `preview.mjs` builds that view on the sample board as `mods/sympp-dev-<package>`
   in the Herdr home and rebuilds on every save, so changes show within seconds. The
