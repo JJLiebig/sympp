@@ -153,6 +153,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert repo.get!(Observation, package.id).pr == nil
     end
 
+    test "a newer sync_pr of the same PR during a sweep wins over the sweep's older read", %{repo: repo} do
+      package = package!(repo, "WP-OBS-NEWER-SYNC")
+      attach!(repo, package, 930, "head-a")
+
+      newer_sync_during_read = fn entries ->
+        attach!(repo, package, 930, "head-b")
+        Map.new(entries, &{&1, {:ok, pr(930, "head-a")}})
+      end
+
+      Observer.sweep(repo, snapshot: newer_sync_during_read, review: &no_review/2)
+
+      assert repo.get!(WorkPackage, package.id).status == "dispatched"
+      assert {:ok, %{payload: %{"head_sha" => "head-b"}}} = current_pr(repo, package.id)
+      assert repo.get!(Observation, package.id).pr == nil
+    end
+
     test "CI changes are recorded once; an unchanged snapshot after a restart records nothing", %{repo: repo} do
       package = package!(repo, "WP-OBS-CI")
       attach!(repo, package, 70)
@@ -368,7 +384,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert ReviewStatus.state({:ok, review}, "def456") == :pending
 
       assert {:ok, ^review} = ReviewStatus.read("rvw_read0001", "worker-box") |> then(fn {:ok, remote} -> {:ok, Map.put(remote, "observed_at", review["observed_at"])} end)
-      assert_received {:command, "hc", ["exec", "--json", "--on", "worker-box", "--timeout", "3", "--", "sh", "-c", _command, "sh", "rvw_read0001"], _timeout}
+      assert_received {:command, "hc", ["exec", "--json", "--on", "worker-box", "--timeout", "3", "--", "sh", "-c", command, "sh", "rvw_read0001"], _timeout}
+      # The skills install first, else the Codex marketplace plugin.
+      assert command =~ ~s("$HOME/.agents/skills/review-suite/plugins/review-suite/scripts/review.py")
+      assert command =~ ~s("${CODEX_HOME:-$HOME/.codex}"/plugins/cache/review-suite/review-suite/*/scripts/review.py)
     end
 
     test "a cycle that doesn't exist yet is not started; an unusable answer is unknown" do

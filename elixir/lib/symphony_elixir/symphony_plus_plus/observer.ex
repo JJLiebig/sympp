@@ -151,7 +151,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   defp attached_pr(repo, %WorkPackage{} = package) do
     with {:ok, state} <- PlanningRepository.get_state(repo, package.id),
          {:ok, current} <- PullRequestProgress.current_pr_state(state.progress_events) do
-      current.ref
+      # The attaching event's sequence tells a newer `sync_pr` of the same PR apart.
+      Map.put(current.ref, :sequence, current.sequence)
     else
       _missing -> nil
     end
@@ -325,8 +326,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     end
   end
 
-  # The PR is recorded only if the package still has the PR the sweep read:
-  # an architect may have attached another one with `sync_pr` meanwhile.
+  # The PR is recorded only if the package's PR record is still the one the
+  # sweep read: an architect may have synced that PR or attached another one.
   defp record(repo, package, attached, payload) do
     with :ok <- same_attachment(attached_pr(repo, package), attached),
          do: Qualification.record_pr(repo, Actor.observer(), package, payload)
@@ -348,7 +349,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   defp rollback_on_error(_repo, result), do: result
 
   defp same_attachment(nil, nil), do: :ok
-  defp same_attachment(%{repository: repository, number: number}, %{repository: repository, number: number}), do: :ok
+
+  defp same_attachment(%{repository: repository, number: number, sequence: sequence}, %{repository: repository, number: number, sequence: sequence}),
+    do: :ok
+
   defp same_attachment(_current, _read), do: {:error, :pr_replaced}
 
   defp record_merge(repo, %WorkPackage{} = package, payload) do

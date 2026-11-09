@@ -23,6 +23,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
   @timeout_ms 3_000
   @max_output_bytes 256_000
   @script_path ".agents/skills/review-suite/plugins/review-suite/scripts/review.py"
+  @plugin_glob "plugins/cache/review-suite/review-suite/*/scripts/review.py"
   @list_limit 20
   @string_limit 240
 
@@ -43,16 +44,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
   defp local?(machine), do: machine in [nil, ""] or machine == HerdrCore.machine_name()
 
   defp read_local(runner, review_id) do
-    script = Path.join(System.user_home!(), @script_path)
-
-    case runner.("python3", [script, "--id", review_id, "--show-status", "--json"], @timeout_ms) do
+    case runner.("python3", [local_script(), "--id", review_id, "--show-status", "--json"], @timeout_ms) do
       {:ok, {output, status}} -> parse(output, status)
       _unavailable -> :unknown
     end
   end
 
+  # Review Suite installed as a skill, else as the Codex marketplace plugin.
+  # Every install reads the same state directory on that machine.
+  defp local_script do
+    home = System.user_home!()
+    codex_home = nonblank(System.get_env("CODEX_HOME")) || Path.join(home, ".codex")
+    plugins = codex_home |> Path.join(@plugin_glob) |> Path.wildcard() |> Enum.sort(:desc)
+
+    Enum.find([Path.join(home, @script_path) | plugins], Path.join(home, @script_path), &File.regular?/1)
+  end
+
   defp read_remote(runner, review_id, machine) do
-    command = ~s(exec python3 "$HOME/#{@script_path}" --id "$1" --show-status --json)
+    command =
+      ~s(for s in "$HOME/#{@script_path}" "${CODEX_HOME:-$HOME/.codex}"/#{@plugin_glob}; do ) <>
+        ~s([ -f "$s" ] && exec python3 "$s" --id "$1" --show-status --json; done; exit 127)
+
     args = ["exec", "--json", "--on", machine, "--timeout", "3", "--", "sh", "-c", command, "sh", review_id]
 
     with {:ok, {output, 0}} <- runner.("hc", args, @timeout_ms + 2_000),
@@ -148,6 +160,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
 
   defp non_negative(value) when is_integer(value) and value >= 0, do: value
   defp non_negative(_value), do: nil
+
+  defp nonblank(value) when is_binary(value), do: if(String.trim(value) == "", do: nil, else: value)
+  defp nonblank(_value), do: nil
 
   defp text(value) when is_binary(value) do
     case String.trim(value) do

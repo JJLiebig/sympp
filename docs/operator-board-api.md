@@ -151,11 +151,13 @@ at 240 characters; steps are capped at 20 entries. Round timestamps must be ISO
 omitted when unavailable. Older Review Suite versions that omit `steps` or
 `round_history` leave those fields absent from the signal.
 
-Review observations use the enabled Review Suite marketplace plugin first. If
-Codex reports no enabled Review Suite plugin, discovery checks the portable
-skills bundle at `~/.agents/skills/review-suite/plugins/review-suite/scripts/review.py`.
-That fallback must be a regular file at the fixed user-home location; discovery
-does not search PATH or a package's worktree for a provider script.
+Review observations come from the factory's Observer, which reads each
+package's Review Suite cycle by the `review_id` dispatch minted, on the worker's
+machine (directly on the factory host, else through `hc exec --on`). It runs the
+portable skills bundle's `~/.agents/skills/review-suite/plugins/review-suite/scripts/review.py`,
+else the Codex marketplace plugin under `$CODEX_HOME/plugins/cache/review-suite`;
+it does not search PATH or a package's worktree for a provider script. A host
+that can't be read leaves the last observation and marks the package stale.
 
 A dispatched package is building from `dispatched_at`, without worker reports,
 runtime observations, or a reporting cadence. Native review observations augment
