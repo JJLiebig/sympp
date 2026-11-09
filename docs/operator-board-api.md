@@ -164,6 +164,7 @@ response. Existing fields retain their meaning. Read each entry of
 | `board_state.outcome` | Canonical recorded delivery outcome, when present. |
 | `board_state.delivered` | Whether the package merged or completed without a PR. |
 | `repo_signal.has_ci` | `true` when the factory checkout has a `.github/workflows/*.yml` or `*.yaml` file; `false` without one. Omitted when no checkout can be resolved. |
+| `ci_override` | The architect's `sync_pr` CI override for the package's current head: `reason`, `by` (terminal) and `head`. Omitted when there is none; a new head clears it. |
 | `pr_signal.created_at` | GitHub PR creation time, when available. |
 | `pr_signal.updated_at` | GitHub PR update time; this is not a stage-change time. |
 | `pr_signal.observed_at` | Stored provider snapshot observation time, when available. |

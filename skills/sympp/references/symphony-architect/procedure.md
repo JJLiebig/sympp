@@ -68,6 +68,9 @@ and act on each package's `next_action`: `run_launch_line`, `inspect_worker`
 Call `sync_pr` only to attach a PR the factory can't find, such as a fork or
 upstream PR (`url`).
 
+Override CI (`sync_pr` with `ci_override`) only when it's busy, stuck or
+irrelevant to the change, and say why.
+
 Every branch starts from its package's base and its PR targets it. Never build
 on another unmerged branch: a PR carrying another open package's commits
 doesn't qualify.

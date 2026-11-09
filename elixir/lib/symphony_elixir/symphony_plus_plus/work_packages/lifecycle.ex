@@ -127,8 +127,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
   current PR head. A package qualifies only when every predicate holds:
 
     1. the PR is open and not a draft;
-    2. CI is green for the current head (an architect's manual `sync_pr` also
-       accepts CI that reports no state at all);
+    2. CI is green for the current head. An architect's `ci_override` for this
+       head also accepts pending CI or CI that reports no state; a manual
+       `sync_pr` in a repository that has never reported checks accepts CI
+       that reports no state. Failing CI never qualifies;
     3. Review Suite accepts the review for the current head (a merge or rebase
        that leaves the PR's own patch unchanged keeps it), or the package
        needs no review;
@@ -140,7 +142,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
   """
   @spec qualification(map()) :: :qualified | {:unqualified, [String.t()]}
   def qualification(facts) when is_map(facts) do
-    ci_accepted = if Map.get(facts, :manual?, false), do: ["passing", "unknown"], else: ["passing"]
+    ci_accepted =
+      cond do
+        Map.get(facts, :ci_override?, false) -> ["passing", "pending", "unknown"]
+        Map.get(facts, :no_ci?, false) -> ["passing", "unknown"]
+        true -> ["passing"]
+      end
 
     [
       {Map.get(facts, :pr_state) != "open", "pr_not_open"},

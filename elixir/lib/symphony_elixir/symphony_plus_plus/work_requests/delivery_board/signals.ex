@@ -213,6 +213,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
     if reviewed == observation |> map_value("accepted_head") |> bounded_string(), do: nil, else: reviewed
   end
 
+  @doc "An architect's CI override for the package's current head: `reason`, `by` and `head`."
+  @spec ci_override(WorkPackage.t()) :: map() | nil
+  def ci_override(%WorkPackage{ci_override: %{} = override}) do
+    %{
+      reason: override |> map_value("reason") |> bounded_string(),
+      by: override |> map_value("by") |> bounded_string(),
+      head: override |> map_value("head") |> bounded_string()
+    }
+  end
+
+  def ci_override(%WorkPackage{}), do: nil
+
   @spec board_state(WorkPackage.t(), map(), map() | nil) :: map()
   def board_state(work_package, summary, delivery) do
     pr = Map.get(summary, :pr_signal, %{})

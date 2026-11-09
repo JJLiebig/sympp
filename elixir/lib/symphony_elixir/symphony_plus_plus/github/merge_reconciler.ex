@@ -8,7 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, Qualification}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
@@ -251,13 +251,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
   end
 
   defp append_sync_snapshot(repo, %WorkPackage{} = work_package, payload) do
-    PlanningRepository.append_progress_event(repo, %{
-      "work_package_id" => work_package.id,
-      "summary" => "GitHub PR synced by local operator",
-      "status" => "pr_synced",
-      "idempotency_key" => "operator_sync_pr:#{work_package.id}:#{metadata_idempotency_key(payload)}",
-      "payload" => Map.put(payload, "operator_source_tool", @operator_source_tool)
-    })
+    with {:ok, event} <-
+           PlanningRepository.append_progress_event(repo, %{
+             "work_package_id" => work_package.id,
+             "summary" => "GitHub PR synced by local operator",
+             "status" => "pr_synced",
+             "idempotency_key" => "operator_sync_pr:#{work_package.id}:#{metadata_idempotency_key(payload)}",
+             "payload" => Map.put(payload, "operator_source_tool", @operator_source_tool)
+           }) do
+      :ok = Qualification.note_repository_ci(repo, payload)
+      {:ok, event}
+    end
   end
 
   defp append_merge_evidence(repo, %WorkPackage{} = before_package, payload, metadata) do

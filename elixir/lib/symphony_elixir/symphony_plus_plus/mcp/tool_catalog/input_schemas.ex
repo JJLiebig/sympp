@@ -95,7 +95,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "url" => described_string_schema("PR URL to synchronize; merged PRs close delivery from GitHub merge evidence."),
         "number" => pr_number_schema(),
         "repository" => string_schema(),
-        "head_sha" => described_string_schema("Optional expected PR head; when supplied, must match the fetched provider head.")
+        "head_sha" => described_string_schema("Optional expected PR head; when supplied, must match the fetched provider head."),
+        "ci_override" => described_string_schema("Why this head may qualify while CI is pending or reports nothing. Never skips failing checks; a new head clears it.")
       },
       ["work_package_id"]
     )

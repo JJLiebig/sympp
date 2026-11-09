@@ -21,6 +21,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
     :repo_signal,
     :pr_signal,
     :review_signal,
+    :ci_override,
     :worker_signal,
     :activity_signal,
     :board_state

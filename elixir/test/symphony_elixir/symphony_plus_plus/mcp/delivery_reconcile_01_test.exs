@@ -239,6 +239,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       assert get_in(not_started, ["result", "structuredContent", "work_package", "status"]) == "dispatched"
       assert "review_not_done" in get_in(not_started, ["result", "structuredContent", "pr_sync", "readiness_reasons"])
 
+      # No PR in this repository has reported checks yet: a manual sync accepts
+      # a head whose CI reports nothing.
       Agent.update(reviewed, fn _state -> {head, head} end)
       accepted = mcp_tool(repo, "t1", "sync_pr", url_only)
       assert get_in(accepted, ["result", "structuredContent", "work_package", "status"]) == "ready"
@@ -252,8 +254,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       carried = mcp_tool(repo, "t1", "sync_pr", url_only)
       assert get_in(carried, ["result", "structuredContent", "work_package", "status"]) == "ready"
 
-      # A new head whose checks GitHub doesn't report yet is unproven, even on a
-      # manual sync; the next sync accepts it for that head, as when qualifying.
+      # The repository has now reported checks. A new head whose checks GitHub
+      # doesn't report yet unqualifies, and a manual sync doesn't qualify it.
       unchecked_head = String.duplicate("e", 40)
       unchecked = GitHubPullRequestFixtures.metadata(412, unchecked_head, base_branch: anchor.base_branch)
       FakeGitHubClient.put_response("nextide/repo", 412, unchecked)
@@ -261,11 +263,38 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       moved = mcp_tool(repo, "t1", "sync_pr", url_only)
       assert get_in(moved, ["result", "structuredContent", "work_package", "status"]) == "dispatched"
       assert "ci_unknown" in get_in(moved, ["result", "structuredContent", "pr_sync", "readiness_reasons"])
-      resynced = mcp_tool(repo, "t1", "sync_pr", url_only)
-      assert get_in(resynced, ["result", "structuredContent", "work_package", "status"]) == "ready"
 
+      resynced = get_in(mcp_tool(repo, "t1", "sync_pr", url_only), ["result", "structuredContent"])
+      assert resynced["work_package"]["status"] == "dispatched"
+      assert "ci_unknown" in resynced["pr_sync"]["readiness_reasons"]
+      assert resynced["pr_sync"]["next_action"] =~ "wait for CI, or sync_pr with ci_override"
+
+      # The architect overrides with a reason; a blank one is refused.
+      blank = mcp_tool(repo, "t1", "sync_pr", Map.put(url_only, "ci_override", "  "))
+      assert get_in(blank, ["error", "data", "code"]) == "blank_ci_override"
+      assert repo.get!(WorkPackage, approved_slice.id).ci_override == nil
+
+      reason = "Docs-only change; this repo's CI doesn't run on docs."
+      # Without a URL, the override names the attached PR's current head.
+      overridden = mcp_tool(repo, "t1", "sync_pr", %{"work_package_id" => approved_slice.id, "ci_override" => reason})
+      assert get_in(overridden, ["result", "structuredContent", "work_package", "status"]) == "ready"
+      assert %{"reason" => ^reason, "head" => ^unchecked_head, "by" => by} = repo.get!(WorkPackage, approved_slice.id).ci_override
+      assert is_binary(by) and by != ""
+
+      # A new head clears the override.
       FakeGitHubClient.put_response("nextide/repo", 412, green)
       Agent.update(reviewed, fn _state -> {head, new_head} end)
+      assert get_in(mcp_tool(repo, "t1", "sync_pr", url_only), ["result", "structuredContent", "work_package", "status"]) == "ready"
+      assert repo.get!(WorkPackage, approved_slice.id).ci_override == nil
+
+      # Failing CI is never overridden: the failure is still recorded and
+      # unqualifies the package, and the error says why.
+      FakeGitHubClient.put_response("nextide/repo", 412, Map.put(green, "check_summary", %{"status" => "failure"}))
+      failing = mcp_tool(repo, "t1", "sync_pr", Map.put(url_only, "ci_override", reason))
+      assert %{"code" => "ci_failing", "state" => "dispatched", "message" => message} = get_in(failing, ["error", "data"])
+      assert message =~ "never skips failing checks"
+      assert repo.get!(WorkPackage, approved_slice.id).ci_override == nil
+      FakeGitHubClient.put_response("nextide/repo", 412, green)
       assert get_in(mcp_tool(repo, "t1", "sync_pr", url_only), ["result", "structuredContent", "work_package", "status"]) == "ready"
 
       # Each qualification predicate that stops holding unqualifies the ready package;
