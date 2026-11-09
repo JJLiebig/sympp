@@ -92,11 +92,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   # any chief or architect for finished) returns the ending it recorded; only
   # the outcome and its evidence identify it. Ownership is checked first.
   defp close(repo, work_request_id, work_package_id, attrs, terminal) do
-    existing = repo.get_by(WorkPackageDelivery, work_package_id: work_package_id)
+    case recorded_same_close(repo, work_package_id, attrs) do
+      {:ok, existing} -> {:ok, existing}
+      :none -> record_close(repo, work_request_id, work_package_id, attrs, terminal)
+    end
+  end
 
-    if existing && same_close?(existing, attrs),
-      do: {:ok, existing},
-      else: record_close(repo, work_request_id, work_package_id, attrs, terminal)
+  defp recorded_same_close(repo, work_package_id, attrs) do
+    existing = repo.get_by(WorkPackageDelivery, work_package_id: work_package_id)
+    if existing && same_close?(existing, attrs), do: {:ok, existing}, else: :none
   end
 
   defp same_close?(%WorkPackageDelivery{outcome: outcome} = existing, %{"outcome" => outcome} = attrs) do
@@ -105,14 +109,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   defp same_close?(_existing, _attrs), do: false
 
+  # A concurrent identical close that committed first is still this close.
   defp record_close(repo, work_request_id, work_package_id, attrs, terminal) do
-    with {:ok, {delivery, cleanup_work_package, closeout_context}} <-
-           mutate_product_tree(repo, work_request_id, "close_work_package", terminal_name(terminal), fn ->
-             DeliveryCloseout.record_in_transaction(repo, work_request_id, work_package_id, attrs)
-           end) do
-      DashboardPubSub.broadcast_changed()
-      :ok = DeliveryCloseout.cleanup_after_commit(repo, cleanup_work_package, delivery, closeout_context)
-      {:ok, delivery}
+    case mutate_product_tree(repo, work_request_id, "close_work_package", terminal_name(terminal), fn ->
+           DeliveryCloseout.record_in_transaction(repo, work_request_id, work_package_id, attrs)
+         end) do
+      {:ok, {delivery, cleanup_work_package, closeout_context}} ->
+        DashboardPubSub.broadcast_changed()
+        :ok = DeliveryCloseout.cleanup_after_commit(repo, cleanup_work_package, delivery, closeout_context)
+        {:ok, delivery}
+
+      {:error, {:delivery_outcome_conflict, _outcome}} = conflict ->
+        case recorded_same_close(repo, work_package_id, attrs) do
+          {:ok, existing} -> {:ok, existing}
+          :none -> conflict
+        end
+
+      error ->
+        error
     end
   end
 

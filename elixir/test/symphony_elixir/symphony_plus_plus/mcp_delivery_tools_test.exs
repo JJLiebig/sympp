@@ -136,6 +136,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     replay = record_delivery(repo, "t3", %{"work_package_id" => other_slice.id, "outcome" => "finished"})
     assert get_in(replay, ["result", "structuredContent", "work_package_delivery"]) == get_in(finished, ["result", "structuredContent", "work_package_delivery"])
 
+    {_request, racing, _package} = linked_slice!(repo, work_request_id: "WR-MCP-FINISH-RACE", work_package_status: "ready")
+
+    endings =
+      for address <- ["t4", "t5", "t6"] do
+        Task.async(fn -> record_delivery(repo, address, %{"work_package_id" => racing.id, "outcome" => "finished"}) end)
+      end
+      |> Task.await_many(30_000)
+      |> Enum.map(&get_in(&1, ["result", "structuredContent", "work_package_delivery", "id"]))
+
+    assert [id, id, id] = endings
+    assert is_binary(id)
+
     conflict = record_delivery(repo, "t2", %{"work_package_id" => other_slice.id, "outcome" => "abandoned", "rationale" => "Dropped."})
 
     assert %{"code" => "delivery_outcome_conflict", "outcome" => "finished", "state" => "ended", "next_action" => "none"} =
