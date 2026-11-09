@@ -408,6 +408,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert %{"done" => true, "reviewed_head" => "abc123", "status" => "passed", "current" => 1, "total" => 1, "round" => 2} = review
       assert ReviewStatus.state({:ok, review}, "abc123" <> String.duplicate("0", 34)) == :done
       assert ReviewStatus.state({:ok, review}, "def456") == :pending
+      # Review Suite can keep `done` while reporting the cycle no longer holds.
+      for status <- ["stale", "failed", "fix-pending", "invalidated"] do
+        stale = Jason.encode!(%{"review" => "rvw_read0001", "done" => true, "status" => status, "head" => "abc123"})
+        Application.put_env(:symphony_elixir, :sympp_review_command, fn "python3", _args, _timeout -> {:ok, {stale, 0}} end)
+        assert ReviewStatus.state(ReviewStatus.read("rvw_read0001", nil), "abc123") == :pending
+      end
+
+      Application.put_env(:symphony_elixir, :sympp_review_command, fn command, args, timeout ->
+        send(test_pid, {:command, command, args, timeout})
+
+        case command do
+          "python3" -> {:ok, {done, 0}}
+          "hc" -> {:ok, {Jason.encode!(%{"code" => 0, "stdout" => Base.encode64(done), "timed_out" => false}), 0}}
+        end
+      end)
 
       assert {:ok, ^review} = ReviewStatus.read("rvw_read0001", "worker-box") |> then(fn {:ok, remote} -> {:ok, Map.put(remote, "observed_at", review["observed_at"])} end)
       assert_received {:command, "hc", ["exec", "--json", "--on", "worker-box", "--timeout", "3", "--", "sh", "-c", command, "sh", "rvw_read0001"], _timeout}

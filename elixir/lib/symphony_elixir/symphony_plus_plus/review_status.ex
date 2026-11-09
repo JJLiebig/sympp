@@ -94,10 +94,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
 
   @doc """
   The review state that qualification reads: `:done` only when the cycle is
-  done for `head_sha`.
+  done for `head_sha` and Review Suite doesn't report it failed, stale or
+  invalidated.
   """
   @spec state(result(), String.t() | nil) :: :done | :pending | :unknown
-  def state({:ok, %{"done" => true, "reviewed_head" => reviewed}}, head) when is_binary(reviewed) and is_binary(head) do
+  def state({:ok, %{"done" => true, "status" => "passed", "reviewed_head" => reviewed}}, head) when is_binary(reviewed) and is_binary(head) do
     if String.starts_with?(head, reviewed) or String.starts_with?(reviewed, head), do: :done, else: :pending
   end
 
