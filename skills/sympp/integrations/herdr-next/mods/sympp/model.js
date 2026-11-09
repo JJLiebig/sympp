@@ -4,9 +4,15 @@
 
 export const BOARD_PATH = "/api/v1/sympp/herdr/dashboard";
 export const DASHBOARD_PATH = "/sympp";
-export const STAGES = ["queued", "build", "checks", "review", "merge", "done"];
-export const STAGE_LABEL = { queued: "Queued", build: "Building", checks: "Checks", review: "Review", merge: "Ready to merge", done: "Landed" };
-export const VERDICT_LABEL = { needs_you: "Needs you", on_track: "On track", idle: "Quiet", parked: "Parked", settled: "Done" };
+// v2 package progress, derived by the factory: a stored status (planned, dispatched, ready, ended)
+// and, while dispatched, the step its signals show. One stage key per step.
+export const STAGES = ["planned", "launching", "implementing", "review_ci", "ready", "ended"];
+export const LIVE_STAGES = ["launching", "implementing", "review_ci", "ready"];
+export const STAGE_LABEL = { planned: "Planned", launching: "Launching", implementing: "Implementing", review_ci: "Review/CI", ready: "Ready", ended: "Ended" };
+// How a package ended, in words, and what that means for the task: merged and finished count as
+// delivered, the rest as dropped.
+export const ENDING_LABEL = { pr_merged: "Merged", finished: "Finished", completed_no_pr: "Completed", superseded: "Superseded", abandoned: "Abandoned", skipped: "Skipped" };
+export const PHASE_LABEL = { intake: "Intake", planned: "Planned", active: "Active", unresolved: "Unresolved", done: "Done", archived: "Archived" };
 
 const MINUTE = 60e3;
 const HOUR = 60 * MINUTE;
@@ -16,24 +22,15 @@ const DORMANT_AFTER = 14 * DAY;
 const RANK = { needs_you: 0, on_track: 3, idle: 4, parked: 5, settled: 6 };
 const OUTCOMES = { pr_merged: "merged", completed_no_pr: "finished", finished: "finished", superseded: "dropped", abandoned: "dropped", skipped: "dropped" };
 // Migrated endings keep the old terminal status they were recorded with.
-const LEGACY_OUTCOMES = { merged: "merged", closed: "finished", abandoned: "dropped" };
-const deliveryOutcome = (delivery) => (delivery?.outcome === "legacy" ? LEGACY_OUTCOMES[delivery.legacy_status] : OUTCOMES[delivery?.outcome ?? ""]);
-// Packages without a backend stage: their recorded status, read as loosely as the web board does.
-const STATUS_RULES = [
-  [/^(merged|github_pr_merged)$/, "done"],
-  [/merge_ready|review_complete|^reviewed$|review_owner_accepted|acceptance|ready_for_close/, "merge"],
-  [/review/, "review"],
-  [/validat/, "checks"],
-];
-const ACTORS = { architect: "Architect", worker: "Worker", prerequisite_owner: "Prerequisite owner" };
-const REASONS = {
-  unmet_dependencies: "Waiting on prerequisite packages",
-  active_blocker: "Blocked",
-  runtime_stale: "Runtime observation is stale",
-  review_in_progress: "Review in progress",
-  awaiting_integration: "Waiting for the architect to integrate",
-  validation_pending: "Checks pending",
-};
+const LEGACY_ENDINGS = { merged: "pr_merged", closed: "completed_no_pr", abandoned: "abandoned" };
+const endingOf = (delivery) => (delivery?.outcome === "legacy" ? LEGACY_ENDINGS[delivery.legacy_status] : OUTCOMES[delivery?.outcome ?? ""] ? delivery.outcome : null) ?? null;
+const LIVENESS = new Set(["live", "unknown", "finished"]);
+
+// The factory names a terminal on a named core as "<core>/t8"; Herdr lists the same terminal on its
+// own core as "t8". An address on any other machine stays as it is.
+export function localAddress(address, coreName) {
+  return coreName && typeof address === "string" && address.startsWith(`${coreName}/`) ? address.slice(coreName.length + 1) : address;
+}
 
 // Polling: modest, slower in the background and after failures. GPUI fetch has no streaming body.
 export const POLL = { live: 15e3, quiet: 60e3, background: 60e3, retry: [15e3, 30e3, 60e3] };
@@ -103,18 +100,15 @@ export function isStale(state, now) {
   return Boolean(state.error) || now - state.receivedAt > 3 * POLL.quiet;
 }
 
-// ---------- Board ----------
+/// ---------- Board ----------
 
 export function parseBoard(payload) {
   if (!payload || typeof payload !== "object" || !Array.isArray(payload.work_request_details)) {
     throw new Error("sympp answered with something other than a board.");
   }
   const now = ms(payload.generated_at) ?? Date.now();
-  // The execution cards carry each package's active run; the request details do not.
-  const runs = new Map((Array.isArray(payload.work_packages) ? payload.work_packages : [])
-    .filter((card) => card?.id && card.active_agent_run).map((card) => [card.id, card.active_agent_run]));
-  const jobs = payload.work_request_details.filter((detail) => detail?.work_request?.id).map((detail) => buildJob(detail, now, runs));
-  return { now, jobs, offline: typeof payload.runtime?.offline === "boolean" ? payload.runtime.offline : null,
+  const jobs = payload.work_request_details.filter((detail) => detail?.work_request?.id).map((detail) => buildJob(detail, now));
+  return { now, jobs, cards: cardsOf(payload.cards), offline: typeof payload.runtime?.offline === "boolean" ? payload.runtime.offline : null,
     reposRoot: typeof payload.runtime?.repos_root === "string" && payload.runtime.repos_root ? payload.runtime.repos_root : null };
 }
 
@@ -135,32 +129,33 @@ function chiefOf(by) {
   return by?.kind === "chief" && typeof by.domain === "string" && by.domain.trim() ? by.domain.trim() : null;
 }
 
-function buildJob(detail, now, runs) {
+function buildJob(detail, now) {
   const request = detail.work_request;
   const repo = request.repo_display || request.repo || "";
   const repoShort = shortRepo(repo);
   const area = Array.isArray(request.area_path) && request.area_path.length ? request.area_path : ["Unfiled", repoShort || "Unknown"];
-  const packages = (detail.work_packages ?? []).map((slice) => buildPackage(slice, now, runs)).sort((a, b) => a.seq - b.seq);
-  // A package's group is a path such as "Backend / Billing"; its first segment is the architect's
-  // phase, as the web board strips them, in the order the planned packages first name them.
-  for (const pkg of packages) pkg.phase = pkg.group ? pkg.group.split(" / ")[0] : null;
+  const packages = (detail.work_packages ?? []).map((slice) => buildPackage(slice, repo, now)).sort((a, b) => a.seq - b.seq);
+  // Phases are the first segment of each package's group path, in the order their packages are planned.
   const phases = [...new Set(packages.map((pkg) => pkg.phase).filter(Boolean))];
   const titles = new Map(packages.map((pkg) => [pkg.id, pkg.title]));
   for (const pkg of packages) pkg.after = pkg.unmet.map((id) => titles.get(id) ?? id);
-  const report = reportOf(request.operator_report, now);
-  const asks = asksOf(detail.asks, request.id);
 
-  const live = packages.filter((pkg) => pkg.stage !== "queued" && pkg.stage !== "done");
-  const done = packages.filter((pkg) => pkg.stage === "done");
-  const queued = packages.filter((pkg) => pkg.stage === "queued");
+  const report = reportOf(request.operator_report, now);
+  const owner = workedOnOf(request.worked_on);
+  // Who asked or decided, named as the task's owner when it is that terminal.
+  const known = (by) => (by && owner && by.address === owner.address ? { ...by, role: owner.role } : by);
+  const asks = asksOf(detail.asks).map((ask) => ({ ...ask, by: known(ask.by), jobId: request.id }));
+  const needs = asks.map((ask) => ({ key: ask.key, kind: "ask", label: "Needs you", text: ask.text, since: ask.since, jobId: request.id, pkgId: ask.pkgId, ask }));
+  const live = packages.filter((pkg) => LIVE_STAGES.includes(pkg.stage));
+  const done = packages.filter((pkg) => pkg.stage === "ended");
+  const queued = packages.filter((pkg) => pkg.stage === "planned");
   const createdAt = ms(request.inserted_at) ?? now;
-  const closedAt = ms(request.completed_at);
-  const attention = asks.map((ask) => ({ ...ask, label: "Needs you" }));
-  const settled = ["done", "unresolved"].includes(request.phase) || (closedAt !== null && closedAt <= now) || (packages.length > 0 && done.length === packages.length && attention.length === 0);
+  const phase = PHASE_LABEL[request.phase] ? request.phase : packages.length ? "planned" : "intake";
+  const settled = phase === "done" || phase === "archived";
   const job = {
     id: request.id,
     title: request.title || request.id,
-    phase: request.phase ?? null,
+    phase,
     repo,
     repoShort,
     repos: [...new Set([repo, ...packages.map((pkg) => pkg.repo)].filter(Boolean))],
@@ -168,87 +163,176 @@ function buildJob(detail, now, runs) {
     baseBranch: request.base_branch ?? null,
     offPrimary: offPrimary(request.base_branch, request.default_branch),
     createdAt,
-    closedAt,
     report,
-    needs: attention,
-    architect: workedOnOf(request.worked_on),
+    asks,
+    needs,
+    decisions: decisionsOf(detail.decisions_to_review).map((d) => ({ ...d, by: known(d.by), jobId: request.id })),
+    owner,
     dispatchedBy: chiefOf(request.dispatched_by),
     packages,
     // Prerequisite → dependent package pairs from the effective execution graph.
     edges: (detail.product_tree?.execution_graph?.effective_edges ?? [])
       .map((edge) => [edge?.prerequisite_work_package_id, edge?.dependent_work_package_id]).filter(([pre, dep]) => pre && dep),
     counts: { live: live.length, queued: queued.length, done: done.length, dropped: done.filter((pkg) => pkg.outcome === "dropped").length, total: packages.length },
-    state: settled ? "settled" : live.length > 0 || attention.length > 0 ? "live" : "resting",
+    state: settled ? "settled" : live.length > 0 || needs.length > 0 || phase === "unresolved" ? "live" : "resting",
     lastMoveAt: Math.max(createdAt, ...packages.map((pkg) => pkg.since ?? 0)),
     deployFailed: deployFailed(request.deployments),
     phases,
-    // The open asks, each answerable through its own route.
-    asks,
   };
-  job.bumps = bumpsOf(job, now);
-  job.verdict = verdictOf(job, now);
+  job.verdict = verdictOf(job);
   job.lane = laneOf(job, now);
-  job.brief = report.brief ? report.brief.text : draftBrief(job, now);
+  job.brief = report.brief ? report.brief.text : draftBrief(job);
   return job;
 }
 
-// The board's open asks, the only things that need the operator. Each answers through its own native
-// route; anything but a plain path on this factory is dropped, so an answer can only go back to where
-// the board came from.
-function asksOf(list, jobId) {
-  return (Array.isArray(list) ? list : []).filter((ask) => ask && typeof ask.text === "string" && ask.text.trim() && typeof ask.id === "string").map((ask) => ({
-    key: `ask:${ask.id}`,
-    id: ask.id,
-    kind: "ask",
-    jobId,
-    pkgId: ask.work_package_id ?? null,
-    text: ask.text.trim(),
-    prompt: ask.decision_prompt ?? null,
-    status: "open",
-    since: ms(ask.asked_at),
-    route: typeof ask.answer_route === "string" && /^\/[^/\\]/.test(ask.answer_route) ? ask.answer_route : null,
-  }));
+// The terminal working on a task, package or card, as the factory last observed it: live, not
+// answering (unknown) or finished. An address the panel can focus, never proof by itself.
+function workedOnOf(owner) {
+  if (typeof owner?.address !== "string" || !owner.address.trim()) return null;
+  return { address: owner.address.trim(), role: typeof owner.role === "string" ? owner.role : null,
+    liveness: LIVENESS.has(owner.liveness) ? owner.liveness : "unknown", since: ms(owner.since) };
 }
 
-function buildPackage(slice, now, runs) {
-  const board = slice.board_state ?? null;
-  const pr = slice.pr_signal ?? {};
+// A terminal named only by its address (who asked, who recorded a decision): its liveness is what
+// Herdr itself shows.
+function terminalOf(address) {
+  return typeof address === "string" && address.trim() ? { address: address.trim(), role: null, liveness: null, since: null } : null;
+}
+
+// A route the board hands over: only a plain path on this factory, so an action can only go back to
+// where the board came from.
+const routeOf = (route) => (typeof route === "string" && /^\/[^/\\]/.test(route) ? route : null);
+
+// Open asks: the only source of Needs you. A task's asks carry their answer route; a card's answer on
+// the same native route.
+function asksOf(list) {
+  if (!Array.isArray(list)) return [];
+  return list.map((ask) => ({ ask, text: typeof ask?.text === "string" ? ask.text : ask?.question }))
+    .filter(({ ask, text }) => typeof ask.id === "string" && ask.id && typeof text === "string" && text.trim() && (ask.state ?? "open") === "open")
+    .map(({ ask, text }) => ({
+      key: `ask:${ask.id}`, id: ask.id, text: text.trim(), prompt: promptOf(ask.decision_prompt),
+      pkgId: ask.work_package_id ?? null, by: terminalOf(ask.asked_by), since: ms(ask.asked_at),
+      route: ask.answer_route === undefined ? `/api/v1/sympp/herdr/asks/${encodeURIComponent(ask.id)}/answer` : routeOf(ask.answer_route),
+    }));
+}
+
+function promptOf(prompt) {
+  if (!prompt || typeof prompt !== "object" || !Array.isArray(prompt.options)) return null;
+  const options = prompt.options.filter((o) => o?.id && o.label);
+  return options.length ? { ...prompt, options } : null;
+}
+
+// Flagged decisions the person reviews, as the board lists them: recorded ones wait for Ack or
+// Feedback; feedback that never reached its terminal stays until dismissed. Each action is the route
+// the board gives; while the feedback is being typed there is none.
+function decisionsOf(list) {
+  if (!Array.isArray(list)) return [];
+  return list.filter((d) => d && typeof d.id === "string" && d.id && typeof d.decision === "string" && d.decision.trim())
+    .map((d) => ({
+      key: `decision:${d.id}`, id: d.id, text: d.decision.trim(), rationale: typeof d.rationale === "string" && d.rationale.trim() ? d.rationale.trim() : null,
+      by: terminalOf(d.recorded_by), at: ms(d.created_at), state: d.review_state ?? "recorded",
+      feedback: typeof d.feedback === "string" ? d.feedback : null,
+      routes: { ack: routeOf(d.ack_route), feedback: routeOf(d.feedback_route), dismiss: routeOf(d.dismiss_route) },
+    }))
+    .map((d) => ({ ...d, undelivered: d.state === "feedback" && Boolean(d.routes.dismiss), sending: d.state === "feedback" && !d.routes.dismiss }));
+}
+
+// Small work outside any task: one card per eligible terminal with a branch or PR. Dismissed cards
+// leave the panel.
+const CARD_STATES = new Set(["working", "review_ci", "merged", "done"]);
+// Review Suite's reading of a review: running, findings, done, or unknown when its host can't be read.
+const REVIEW_STATE = { in_progress: "running", passed: "done", failed: "findings", inspection_needed: "findings" };
+// A card's review: done only when the backend says it covers the current PR head; a pass on an older
+// head is still pending.
+function cardReview(review) {
+  if (!review) return null;
+  if (review.state === "done" || review.state === "unknown") return review.state;
+  return review.status === "passed" ? null : REVIEW_STATE[review.status] ?? null;
+}
+
+function cardsOf(list) {
+  if (!Array.isArray(list)) return [];
+  return list.filter((c) => typeof c?.id === "string" && c.id && CARD_STATES.has(c.state)).map((c) => {
+    const id = c.id;
+    const asks = asksOf(c.asks).map((ask) => ({ ...ask, cardId: id }));
+    const repo = c.repository ?? null;
+    const pr = c.pr ?? {};
+    const review = c.review ?? null;
+    return {
+      id, task: typeof c.title === "string" && c.title.trim() ? c.title.trim() : c.branch ?? id, repo, repos: repo ? [repo] : [], branch: c.branch ?? null,
+      owner: workedOnOf(c.worked_on), state: c.state, since: ms(c.since),
+      pr: prOf({ status: pr.state, number: pr.number, url: pr.url, repository: pr.repository, checks: pr.ci }),
+      review: { mode: null, state: cardReview(review), round: 1 },
+      ci: null,
+      asks, needs: asks.map((ask) => ({ key: ask.key, kind: "ask", label: "Needs you", text: ask.text, since: ask.since, cardId: id, pkgId: null, ask })),
+    };
+  });
+}
+
+function prOf(pr) {
+  const repo = pr.repository ?? (typeof pr.url === "string" ? pr.url.match(/github\.com\/([^/]+\/[^/]+)\/pull\//i)?.[1] : null) ?? null;
+  return { status: pr.status ?? null, number: pr.number ?? null, url: pr.url ?? null, repo, checks: pr.checks?.status ?? null, checksAt: ms(pr.checks?.changed_at) };
+}
+
+// The worker terminal the factory saw on a package: live while its core lists it running, finished
+// once it ended, else not answering.
+function workerOf(terminal) {
+  if (typeof terminal?.address !== "string" || !terminal.address.trim()) return null;
+  const liveness = terminal.state === "finished" ? "finished" : terminal.state === "live" && terminal.status !== "unknown" ? "live" : "unknown";
+  return { address: terminal.address.trim(), role: "worker", liveness, since: null };
+}
+
+// Review Suite counts rounds from zero before the first; older signals carry no count.
+function roundOf(review) {
+  return Number.isSafeInteger(Number(review.round)) && review.round !== null && review.round !== undefined && review.round !== "" ? Number(review.round) : 1;
+}
+
+// The factory's derived progress of a dispatched package. A worker that exited without a PR stays
+// in Implementing; its finished terminal says the rest.
+const PROGRESS = { launching: "launching", implementing: "implementing", worker_exited: "implementing", review_ci: "review_ci" };
+const repoKey = (repo) => String(repo).toLowerCase().replace(/\.git$/, "").split(/[\\/:]/).filter(Boolean).slice(-2).join("/");
+
+function buildPackage(slice, jobRepo) {
+  const pr = prOf(slice.pr_signal ?? {});
   const review = slice.review_signal ?? {};
-  const activity = slice.activity_signal ?? {};
-  const run = runs?.get(slice.work_package_id || slice.id) ?? null;
-  const outcome = deliveryOutcome(slice.delivery)
-    ?? (board && (board.delivered || board.stage === "done") ? (board.track === "no_pr" ? "finished" : "merged") : null);
-  const stage = outcome ? "done" : board?.stage ?? statusStage(slice);
-  const observed = stageTime(slice, board, stage);
-  const actor = activity.current_actor ?? null;
+  const ending = slice.status === "ended" || slice.delivery?.outcome ? endingOf(slice.delivery) ?? "abandoned" : null;
+  const stage = ending ? "ended" : slice.status === "ready" ? "ready"
+    : slice.status === "dispatched" ? PROGRESS[slice.progress] ?? "launching" : "planned";
+  const since = stage === "ended" ? ms(slice.delivery?.recorded_at) : stage === "planned" ? null : ms(slice.board_state?.entered_at) ?? ms(slice.dispatched_at);
+  const repo = slice.repo_display || slice.repo || jobRepo || null;
+  const group = typeof slice.group === "string" ? slice.group.split("/").map((part) => part.trim()).filter(Boolean) : [];
   return {
     id: slice.work_package_id || slice.id,
     title: slice.title || slice.id,
-    repo: slice.repo_display || slice.repo || null,
+    repo,
     seq: slice.sequence ?? 0,
-    group: typeof slice.group === "string" && slice.group.trim() ? slice.group : null,
+    // The architect's group path ("Backend / Ledger"): its first segment is the package's phase.
+    group,
+    phase: group[0] ?? null,
     stage,
-    outcome,
-    since: observed ?? ms(slice.dispatched_at) ?? ms(slice.inserted_at),
-    untimed: observed === null,
-    // The backend's own stage entry; nearby evidence times are not stage entries.
-    enteredAt: ms(board?.entered_at),
-    // Recorded moments only, for the package rails: creation, dispatch and recorded delivery.
+    ending,
+    outcome: ending ? OUTCOMES[ending] : null,
+    since: since ?? ms(slice.inserted_at),
+    untimed: since === null,
     createdAt: ms(slice.inserted_at),
     dispatchedAt: ms(slice.dispatched_at),
     dispatchedBy: chiefOf(slice.dispatched_by),
-    doneAt: stage === "done" ? observed : null,
-    failed: pr.checks?.status === "failing",
+    doneAt: stage === "ended" ? since : null,
+    failed: pr.checks === "failing",
     // Whether the package's repository runs CI at all; null while the board doesn't say.
     ci: typeof slice.repo_signal?.has_ci === "boolean" ? slice.repo_signal.has_ci : null,
-    track: board?.track ?? null,
-    // Review Suite counts rounds from zero before the first; older signals carry no count.
-    round: Number.isSafeInteger(Number(review.round)) && review.round !== null && review.round !== "" ? Number(review.round) : 1,
-    pr: { status: pr.status ?? null, number: pr.number ?? null, url: pr.url ?? null, checks: pr.checks?.status ?? null, checksAt: ms(pr.checks?.changed_at) },
+    round: roundOf(review),
+    pr,
+    // An open PR into a repository this factory doesn't merge into: only Finish ends it.
+    finishable: LIVE_STAGES.includes(stage) && pr.status === "open" && Boolean(pr.repo && repo) && repoKey(pr.repo) !== repoKey(repo),
+    owner: workerOf(slice.worker_terminal),
     review: {
       type: review.type ?? null,
+      mode: review.mode ?? null,
+      // Review Suite's reading for the current head: running, findings or done.
+      state: REVIEW_STATE[review.status] ?? null,
+      round: roundOf(review),
       status: review.status ?? null,
-      mode: review.mode ?? slice.review?.args?.mode ?? null,
       providerStatus: review.provider_status ?? null,
       nextAction: review.next_action ?? null,
       step: review.step ?? null,
@@ -265,44 +349,9 @@ function buildPackage(slice, now, runs) {
         outcome: h?.outcome ?? null, findings: Number.isSafeInteger(h?.findings) ? h.findings : null,
       })).filter((h) => Number.isSafeInteger(h.n) && h.n > 0),
     },
-    activity: {
-      actor: actor ? { name: actor.name || actor.id || null, role: actor.role ?? null } : null,
-      owner: activity.accountable_owner?.id ?? null,
-      nextActor: activity.next_actor ?? null,
-      next: describeNext(activity.next_actor, activity.next_action),
-      waiting: describeReason(activity.waiting_reason),
-      waitingCode: activity.waiting_reason ?? null,
-      lastUpdate: activity.last_update ?? null,
-      lastUpdateAt: ms(activity.last_update_at),
-      observation: activity.observation_state ?? null,
-    },
     unmet: slice.dependency_signal?.unmet_work_package_ids ?? [],
     after: [],
-    location: placeOf(slice.session_location),
-    run: run ? { attempt: Number.isSafeInteger(run.attempt) ? run.attempt : null, lastSeenAt: ms(run.last_seen_at), stale: run.stale === true } : null,
   };
-}
-
-function statusStage(slice) {
-  const status = slice.status ?? "";
-  const ruled = STATUS_RULES.find(([pattern]) => pattern.test(status))?.[1];
-  if (ruled) return ruled;
-  return ms(slice.dispatched_at) !== null ? "build" : "queued";
-}
-
-// When the package reached its stage: the backend's evidence first, then the closest observation of it.
-function stageTime(slice, board, stage) {
-  const pr = slice.pr_signal ?? {};
-  const review = slice.review_signal ?? {};
-  const delivery = slice.delivery ?? {};
-  const observed = {
-    build: [slice.dispatched_at],
-    checks: [pr.checks?.changed_at, pr.head_changed_at],
-    review: [review.round_started_at, review.started_at],
-    merge: [pr.checks?.changed_at, pr.head_changed_at],
-    done: [delivery.pr_merged_at, delivery.recorded_at],
-  };
-  return [board?.entered_at, ...(observed[stage] ?? [])].map(ms).find((at) => at !== null) ?? null;
 }
 
 function reportOf(report, now) {
@@ -315,33 +364,14 @@ function reportOf(report, now) {
   };
 }
 
-// The terminal sympp says works on a request and since when; shown, never navigated to or taken as
-// proof that it still runs.
-function workedOnOf(owner) {
-  if (typeof owner?.address !== "string" || !owner.address) return null;
-  return { where: owner.address, role: owner.role ?? null, seenAt: ms(owner.since) };
-}
-
-// A last known address, never proof that the session still runs; it is shown, not navigated to.
-function placeOf(seen) {
-  if (!seen) return null;
-  const herdr = seen.herdr ? [seen.herdr.workspace_label, seen.herdr.tab_label].filter(Boolean).join(" › ") || null : null;
-  const where = [seen.label, herdr ?? seen.description].filter(Boolean).join(" › ");
-  return where ? { where, role: seen.role ?? null, seenAt: ms(seen.last_seen_at) } : null;
-}
-
 function deployFailed(deployments) {
   return Object.values(deployments ?? {}).some((repo) => repo?.dev?.status === "failed" || repo?.prod?.status === "failed");
 }
 
-function bumpsOf(job, now) {
-  return [];
-}
-
 // A review in its third round or past three hours is a road bump. Its time runs from the recorded
-// review start, else from the recorded stage entry; an unrecorded start raises no time bump.
+// review start, else from when the package reached Review/CI.
 export function reviewBumps(pkg, now) {
-  if (pkg.stage !== "review") return [];
+  if (pkg.stage !== "review_ci") return [];
   const from = pkg.review.startedAt ?? pkg.review.roundStartedAt ?? (pkg.untimed ? null : pkg.since);
   return [
     pkg.round >= 3 ? { kind: "rounds", text: `Review is on round ${pkg.round}` } : null,
@@ -349,15 +379,15 @@ export function reviewBumps(pkg, now) {
   ].filter(Boolean);
 }
 
-function verdictOf(job, now) {
+function verdictOf(job) {
   if (job.needs.length > 0) return "needs_you";
   if (job.report.parked) return "parked";
-  if (job.bumps.length > 0) return "bump";
   if (job.state === "settled") return "settled";
   return job.counts.live === 0 ? "idle" : "on_track";
 }
 
 function laneOf(job, now) {
+  if (job.phase === "archived") return "archived";
   if (job.report.parked && job.needs.length === 0 && job.state !== "settled") return "parked";
   if (job.needs.length > 0 || job.state === "live") return "moving";
   if (job.state === "settled") return job.deployFailed ? "moving" : now - job.lastMoveAt < DAY ? "landed" : "settled";
@@ -365,20 +395,17 @@ function laneOf(job, now) {
   return now - job.lastMoveAt < DORMANT_AFTER ? "moving" : "dormant";
 }
 
-function draftBrief(job, now) {
+function draftBrief(job) {
   const { live, queued, done, total } = job.counts;
   if (job.needs.length > 0) return `Waiting on you: ${job.needs[0].text}`;
   if (job.report.parked) return `Parked: ${job.report.parked.text}`;
-  if (job.phase === "done" || job.phase === "unresolved") return `${total} packages closed${job.counts.dropped ? `; ${job.counts.dropped} dropped` : ""}.`;
+  if (job.phase === "unresolved") return "Every package has ended, but not all of them landed.";
   if (job.state === "settled") {
     if (job.counts.dropped) return `${total - job.counts.dropped} of ${total} packages finished; ${job.counts.dropped} dropped.`;
     return total ? `All ${total} packages have landed.` : "Closed.";
   }
   if (total === 0) return "Not sliced into packages yet.";
-  if (live === 0) {
-    return `Between packages: ${done} of ${total} landed, ${queued} up next.`;
-  }
-  if (job.bumps.length > 0) return job.bumps.length === 1 ? `${job.bumps[0]}.` : `${job.bumps[0]}, and ${job.bumps.length - 1} more.`;
+  if (live === 0) return `Between packages: ${done} of ${total} landed, ${queued} up next.`;
   return `${live} of ${total} packages moving. ${done} landed.`;
 }
 
@@ -386,49 +413,20 @@ function draftBrief(job, now) {
 
 // Lanes in reading order. Needs-you items are pulled out separately; their jobs still sit in "moving".
 export function lanesOf(jobs) {
-  const lanes = { moving: [], parked: [], backlog: [], landed: [], dormant: [], settled: [] };
+  const lanes = { moving: [], parked: [], backlog: [], landed: [], dormant: [], settled: [], archived: [] };
   for (const job of jobs) lanes[job.lane].push(job);
   lanes.moving.sort((a, b) => RANK[a.verdict] - RANK[b.verdict] || b.lastMoveAt - a.lastMoveAt);
-  for (const key of ["parked", "backlog", "landed", "dormant", "settled"]) lanes[key].sort((a, b) => b.lastMoveAt - a.lastMoveAt);
+  for (const key of ["parked", "backlog", "landed", "dormant", "settled", "archived"]) lanes[key].sort((a, b) => b.lastMoveAt - a.lastMoveAt);
   return lanes;
 }
 
-// Packages in three parts that never mix: moving now, up next, landed.
-export function packageSections(job) {
-  return {
-    now: job.packages.filter((pkg) => pkg.stage !== "queued" && pkg.stage !== "done"),
-    next: job.packages.filter((pkg) => pkg.stage === "queued"),
-    done: job.packages.filter((pkg) => pkg.stage === "done"),
-  };
-}
-
-export function stageText(pkg, now) {
-  if (pkg.stage === "done") return pkg.outcome === "dropped" ? "Dropped" : pkg.outcome === "finished" ? "Finished" : "Merged";
-  if (pkg.stage === "queued") return pkg.after.length ? `After ${pkg.after.join(", ")}` : "Queued";
-  const label = pkg.stage === "review" ? `Review${pkg.round > 1 ? ` · round ${pkg.round}` : ""}` : STAGE_LABEL[pkg.stage];
-  return pkg.untimed || pkg.since === null ? label : `${label} · ${span(now - pkg.since)}`;
-}
-
-// Delivery evidence as the providers reported it. Missing checks never read as passing.
-export function evidenceOf(pkg) {
-  const parts = [];
-  if (pkg.pr.number) parts.push(`PR #${pkg.pr.number}${pkg.pr.status && pkg.pr.status !== "none" ? ` ${pkg.pr.status}` : ""}`);
-  else if (pkg.track === "pr" && pkg.stage !== "done" && pkg.stage !== "queued") parts.push("No PR yet");
-  if (pkg.pr.number && pkg.pr.checks) parts.push(`checks ${pkg.pr.checks}`);
-  const r = pkg.review;
-  if (r.status && r.status !== "unavailable" && (pkg.stage === "review" || pkg.stage === "merge")) {
-    const step = r.current && r.total ? ` ${r.current}/${r.total}` : r.step ? ` ${r.step}` : "";
-    parts.push(`${r.mode ? `${r.mode} ` : ""}review ${r.status.replace(/_/g, " ")}${step}${r.observation === "stale" ? " (stale)" : ""}`);
-  }
-  return parts;
-}
-
-export function verdictCounts(jobs) {
+// How many tasks and cards need the person, and how many packages move.
+export function verdictCounts(jobs, cards = []) {
   const counts = { needs: 0, moving: 0, planned: 0 };
-  for (const job of jobs) {
-    if (job.needs.length > 0) counts.needs += 1;
-    counts.moving += job.counts.live;
-    if (job.lane === "backlog") counts.planned += 1;
+  for (const item of [...jobs, ...cards]) {
+    if (item.needs.length > 0) counts.needs += 1;
+    counts.moving += item.counts?.live ?? 0;
+    if (item.lane === "backlog") counts.planned += 1;
   }
   return counts;
 }
@@ -518,21 +516,6 @@ export function checkedBinding(binding, result, terminalList) {
   return Boolean(current?.available && current.coreId === binding.coreId && current.launchId === binding.launchId &&
     current.pid === binding.pid && current.processId === binding.processId && current.role === binding.role &&
     current.receipt === binding.receipt && current.jobId === binding.jobId && current.pkgId === binding.pkgId);
-}
-
-// ---------- Text ----------
-
-export function describeReason(reason) {
-  if (!reason) return null;
-  if (REASONS[reason]) return REASONS[reason];
-  return /^[a-z]+(_[a-z]+)+$/.test(reason) ? sentence(reason) : reason;
-}
-
-export function describeNext(actor, action) {
-  if (!actor && !action) return null;
-  const who = actor ? ACTORS[actor] ?? sentence(actor) : null;
-  const what = action && action !== "none" ? sentence(action).toLowerCase() : null;
-  return [who, what].filter(Boolean).join(" · ") || null;
 }
 
 export function span(value) {

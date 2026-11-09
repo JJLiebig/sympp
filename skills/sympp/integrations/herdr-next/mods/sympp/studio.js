@@ -30,7 +30,7 @@ export function previewUrlOf(terminal) {
 // Whether a job view offers the package a studio: unfinished UI work, by its title or by a preview its
 // worker published (a signal only; the studio shows the address after verifying the worker).
 export function uiPackage(job, pkg, bindings, terminalList) {
-  if (pkg.stage === "done") return false;
+  if (pkg.stage === "ended") return false;
   const url = bindingsFor(bindings, job.id, pkg.id).map((b) => previewUrlOf((terminalList ?? []).find((k) => k.address === b.address))).find(Boolean);
   return isUiWork(pkg, url);
 }

@@ -26,67 +26,122 @@ async function render(t, spec, main = null) {
 
 const skip = { skip: !available && 'herdr-app is not installed' };
 
-test('the factory ranks what needs you and gives one row per Herdr topic', skip, async (t) => {
-  const view = await render(t, { props: {}, width: 1400 });
-  for (const id of ['lens-overview', 'breadcrumb', 'crumb-factory', 'factory-main', 'factory-aside', 'needs-queue', 'topic-rows',
-    'topic-t-herdr', 'topic-t-tools', 'topic-t-live', 'topic-unsorted', 'need-wr-cross:ask', 'unblocks-wr-cross:ask'])
-    assert.ok(view.has(id), id);
-  assert.ok(view.text('Unblocks 2') && view.text('web · shares 1 job with Personal Tools') && view.text('Quiet'));
-  assert.ok(view.text('1 needs you'));
-  assert.ok(view.text("You're needed in 2"));
-  assert.equal(view.has('topic-nowhere'), false, 'no row for an empty catch-all');
-  const narrow = await render(t, { props: { role: 'panel' }, width: 1400 });
-  assert.ok(narrow.has('factory') && narrow.has('pin') && !narrow.has('factory-aside'), 'the panel stacks and can be pinned');
+// Herdr's runtime parses some code a standard engine refuses, so every view module must also parse
+// as a strict ES module here, with or without herdr-app.
+test('every view module parses as a standard ES module', async () => {
+  const { readdir } = await import('node:fs/promises');
+  for (const mod of ['sympp', 'sympp-lab']) {
+    for (const name of (await readdir(join(here, 'mods', mod))).filter((n) => n.endsWith('.js'))) {
+      const result = spawnSync(process.execPath, ['--check', join(here, 'mods', mod, name)], { encoding: 'utf8', windowsHide: true });
+      assert.equal(result.status, 0, `${mod}/${name}: ${result.stderr}`);
+    }
+  }
 });
 
-test('a topic puts each question first with one action; other tasks carry only their name, strip and what went wrong', skip, async (t) => {
+test('the factory lists every ask with its answer in place, the decisions to review, and one row per Herdr topic', skip, async (t) => {
+  const view = await render(t, { props: {}, width: 1400 });
+  for (const id of ['lens-overview', 'breadcrumb', 'crumb-factory', 'factory-main', 'factory-aside', 'needs-queue', 'topic-rows',
+    'topic-t-herdr', 'topic-t-tools', 'topic-t-live', 'topic-unsorted', 'ask-ask:esc-1', 'answer-ask:esc-1', 'owner-ask-ask:q1'])
+    assert.ok(view.has(id), id);
+  assert.equal(view.has('owner-ask-ask:esc-1'), false, 'an ask with no asking terminal names none');
+  assert.ok(view.text('Shared tokens · Personal Tools · unblocks 2') && view.text('web · shares 1 job with Personal Tools') && view.text('Quiet'));
+  assert.ok(view.text("You're needed in 2"));
+  assert.equal(view.has('decision-queue'), false, 'no decisions, no list');
+  assert.equal(view.has('topic-nowhere'), false, 'no row for an empty catch-all');
+  const busy = await render(t, { props: { role: 'panel' }, width: 1400, board: 'busy' });
+  assert.ok(busy.has('factory') && busy.has('pin') && !busy.has('factory-aside'), 'the panel stacks and can be pinned');
+  for (const id of ['ask-ask:ask-flicker', 'decision-queue', 'decision-dec-toast', 'ack-dec-toast', 'feedback-dec-toast', 'decision-dec-share', 'dismiss-feedback-dec-share'])
+    assert.ok(busy.has(id), id);
+  assert.ok(busy.text("You're needed in 3") && busy.text('2 need you') && busy.text('Undelivered'), "a card's ask counts too, in its topic as well");
+  assert.equal(busy.has('ack-dec-share'), false, 'undelivered feedback has only its dismiss');
+  const at = (id) => busy.out.indexOf(`:id[Str("${id}")]`);
+  assert.ok(at('decision-dec-share') < at('decision-dec-order') && at('decision-dec-order') < at('decision-dec-toast'), 'oldest decision first');
+});
+
+test("a factory topic opens in place to its tasks, each a compact line, while the row itself still opens the topic", skip, async (t) => {
+  const closed = await render(t, { props: { role: 'panel' }, width: 1400, board: 'busy' });
+  assert.ok(closed.has('topic-toggle-t-herdr') && closed.has('topic-toggle-t-tools') && !closed.has('topic-toggle-t-live'), 'a topic without tasks has no chevron');
+  assert.equal(closed.out.includes(':id[Str("ftask-'), false, 'closed until opened');
+  const open = await render(t, { props: { role: 'panel' }, width: 1400, board: 'busy', openTopics: ['t-herdr'] });
+  for (const id of ['ftask-wr-pr', 'fneeds-wr-pr', 'fstrip-wr-restore', 'ftask-wr-restore', 'phase-f-wr-recap', 'phase-f-wr-docs'])
+    assert.ok(open.has(id), id);
+  assert.equal(open.has('ftask-wr-cross') || open.has('ftask-wr-badges') || open.has('ftask-wr-old'), false, "other topics' work and settled work stay out");
+  assert.equal(open.has('phase-f-wr-restore'), false, 'an active task names no phase');
+  const at = (id) => open.out.indexOf(`:id[Str("${id}")]`);
+  assert.ok(at('topic-t-herdr') < at('ftask-wr-pr') && at('ftask-wr-pr') < at('ftask-wr-restore') && at('ftask-wr-restore') < at('topic-t-tools'), 'asking tasks first, under their topic');
+});
+
+test('a topic puts each ask first; tasks carry their name, phase and strip, with their decisions, then the small work', skip, async (t) => {
   const view = await render(t, { props: { role: 'panel' }, width: 1400, board: 'busy', path: { topic: 't-herdr' } });
   const at = (id) => view.out.indexOf(`:id[Str("${id}")]`);
   assert.ok(at('group-wr-pr') < at('group-wr-docs') && at('group-wr-cross') < at('group-wr-restore'), 'what asks the person comes first');
-  assert.ok(view.has('answer-ask:q1'), 'a question with an answer route is answered here');
-  assert.ok(view.has('chief-ask:esc-1'), 'one without a route goes to the topic chief');
-  assert.equal(view.has('ask-ask:wait-wp-review'), false, 'an unrecorded wait is not repeated beside a real question');
-  assert.ok(!view.text('Stuck') && !view.text('Checks failing') && !view.text('No recent report'));
-  assert.equal(view.has('issues-wr-pr') && view.has('issues-wr-cross'), false, 'a task with nothing wrong says nothing about itself');
-  assert.ok(view.has('strip-wr-restore-2') && !view.has('strip-wr-restore-3'), 'the strip runs once per top-level group');
-  assert.ok(view.has('later-t-herdr:') && !view.has('task-wr-badges') && !view.has('task-wr-keys'), 'planned and landed work stay folded');
+  assert.ok(view.has('answer-ask:q1') && view.has('answer-ask:esc-1'), 'every ask is answered here');
+  assert.ok(view.has('decision-dec-toast') && at('group-wr-restore') < at('decision-dec-toast'), "a decision sits under its task");
+  assert.ok(view.has('phase-wr-recap') && view.has('phase-wr-docs') && !view.has('phase-wr-restore'), 'only a task that is not simply active names its phase');
+  assert.ok(view.has('strip-wr-restore-2') && !view.has('strip-wr-restore-3'), 'the strip runs once per phase');
+  for (const id of ['card-card-tokens', 'card-card-flicker', 'card-card-typos', 'ask-ask:ask-flicker', 'dismiss-card-card-flicker', 'owner-card-card-flicker'])
+    assert.ok(view.has(id), id);
+  assert.equal(view.has('card-card-ocr'), false, "another topic's small work stays there");
+  assert.ok(view.has('later-t-herdr:') && view.has('later-archived:t-herdr:') && !view.has('task-wr-badges') && !view.has('task-wr-old'), 'planned, landed and archived work stay folded');
   assert.ok(view.has('filter-all') && view.has('filter-s-web'), "the topic's spaces are one click away");
   const quiet = await render(t, { props: { role: 'panel' }, width: 1400, board: 'quiet', path: { topic: 't-herdr' } });
-  assert.equal(quiet.out.includes(':id[Str("issues-') || quiet.out.includes(':id[Str("ask-'), false, 'nothing is said while all is well');
+  assert.equal(quiet.out.includes(':id[Str("ask-') || quiet.out.includes(':id[Str("decision-'), false, 'nothing is said while all is well');
   assert.doesNotMatch(quiet.out, /text "\d+\/\d+/, 'no counts');
 });
 
 test('a space shows only the tasks on its repository, drawn as its topic draws them', skip, async (t) => {
   const space = await render(t, { props: {}, width: 700, board: 'busy', path: { topic: 't-tools', space: 'vps/s-api' } });
-  assert.ok(space.text('api') && space.has('task-wr-cross') && space.has('task-wr-restore'));
+  assert.ok(space.text('api') && space.has('task-wr-cross') && space.has('task-wr-restore') && space.has('card-card-ocr'));
   assert.ok(space.has('filter-all') && space.has('filter-vps/s-api'), 'back to the whole topic, or on to another space');
-  assert.equal(space.has('task-wr-pr') || space.has('task-wr-theme'), false);
+  assert.equal(space.has('task-wr-pr') || space.has('task-wr-theme') || space.has('card-card-flicker'), false);
   const empty = await render(t, { props: {}, width: 1400, path: { topic: 'unsorted', space: 's-home' } });
   assert.ok(empty.text('Nothing running here'));
 });
 
-test('a task shows its packages at work on the pipeline and folds landed and queued work', skip, async (t) => {
+test('a task shows its phase and owner, its packages at work under their groups with their progress, and folds ended and planned work', skip, async (t) => {
   for (const width of [1400, 700]) {
     const view = await render(t, { props: {}, width, board: 'busy', path: { topic: 't-herdr', job: 'wr-restore' }, pkg: 'r-4' });
-    for (const id of ['strip-wr-restore', 'pkg-r-4', 'pkg-r-5', 'pkg-r-6', 'pkg-r-7', 'fold-Landed:wr-restore', 'fold-Up next:wr-restore', 'pr-step-r-4', 'pr-r-4', 'review-r-4'])
+    for (const id of ['task-head', 'phase-wr-restore', 'owner-job-wr-restore', 'complete-wr-restore', 'delete-wr-restore', 'strip-wr-restore',
+      'group-wr-restore-0-Recovery', 'group-wr-restore-1-Shell', 'group-wr-restore-0-Polish', 'pkg-r-4', 'pkg-r-5', 'pkg-r-6', 'pkg-r-7',
+      'owner-pkg-r-4', 'fold-Landed:wr-restore', 'fold-Up next:wr-restore', 'pr-step-r-4', 'review-r-4'])
       assert.ok(view.has(id), `${id} at ${width}`);
-    assert.equal(view.has('pkg-r-1') || view.has('pkg-r-9'), false, 'landed and queued packages are folded');
-    assert.ok(!view.text('Checks failing') && view.text('Review · deep sign-off'), 'the pipeline shows progress without raising an issue');
-    assert.ok(!view.text('Checks') && view.has('ci-r-4') && view.has('ci-r-6'), 'checks are a signal beside the steps, not a step');
+    assert.equal(view.has('pkg-r-1') || view.has('pkg-r-9'), false, 'ended and planned packages are folded');
+    assert.ok(view.text('Review/CI') && view.text('Implementing') && view.text('Ready') && view.text('deep · round 3') && view.text('normal · findings'));
+    assert.equal(view.has('finish-r-4') || view.has('restore-wr-restore') || view.has('archive-wr-restore'), false, 'no Finish for a PR into its own repository; no Archive or Restore while open');
     const at = (id) => view.out.indexOf(`:id[Str("${id}")]`);
-    assert.ok(at('pkg-r-4') < at('pkg-r-5') && at('pkg-r-5') < at('pkg-r-6'), 'packages stay in planned order');
+    assert.ok(at('group-wr-restore-0-Recovery') < at('pkg-r-4') && at('pkg-r-4') < at('group-wr-restore-1-Shell') && at('group-wr-restore-1-Shell') < at('pkg-r-5')
+      && at('pkg-r-6') < at('group-wr-restore-0-Polish') && at('group-wr-restore-0-Polish') < at('pkg-r-7'), 'groups nest in planned order');
   }
   const open = await render(t, { props: {}, width: 1400, board: 'busy', path: { topic: 't-herdr', job: 'wr-restore' }, expanded: ['Landed:wr-restore'] });
-  assert.ok(open.has('pkg-r-1') && !open.has('pkg-r-9'), 'a fold opens on request');
+  assert.ok(open.has('pkg-r-1') && open.text('Merged') && !open.has('pkg-r-9'), 'a fold opens on request and says how each package ended');
 });
 
-test('a question tops its task, and its package keeps its stage', skip, async (t) => {
+test('Finish and Release appear only where they apply; an unresolved task names what did not land; an archived one can be restored', skip, async (t) => {
+  const upstream = await render(t, { props: { role: 'panel' }, width: 1400, board: 'busy', path: { topic: 't-herdr', job: 'wr-upstream' } });
+  assert.ok(upstream.has('finish-u-2') && upstream.text('core#97'), 'an open PR into another repository');
+  assert.ok(upstream.has('release-job-wr-upstream') && !upstream.has('release-pkg-u-2'), 'Release only for an owner that stopped answering');
+  const recap = await render(t, { props: { role: 'panel' }, width: 1400, board: 'busy', path: { topic: 't-herdr', job: 'wr-recap' } });
+  assert.ok(recap.has('unresolved') && recap.text('XLSX export') && recap.text('abandoned') && recap.text('skipped'));
+  assert.ok(recap.has('complete-wr-recap') && recap.has('archive-wr-recap') && recap.has('dismiss-feedback-dec-share'));
+  const old = await render(t, { props: { role: 'panel' }, width: 1400, board: 'busy', path: { topic: 't-herdr', job: 'wr-old' } });
+  assert.ok(old.has('restore-wr-old') && old.has('delete-wr-old') && !old.has('archive-wr-old') && !old.has('complete-wr-old'));
+});
+
+test('an ask opens its answer form with the decision prompt, and a decision opens its feedback form', skip, async (t) => {
+  const view = await render(t, { props: { role: 'panel' }, width: 1400, board: 'busy', path: { topic: 't-herdr', job: 'wr-pr' },
+    answer: ['ask:q1'], choice: 'board_first', feedback: ['decision:dec-order'] });
+  for (const id of ['choice-ask:q1-board_first', 'choice-ask:q1-lens_first', 'choice-ask:q1-__custom_redirect__', 'save-ask:q1', 'send-feedback-dec-order', 'focus-feedback-dec-order', 'cancel-feedback-dec-order'])
+    assert.ok(view.has(id), id);
+  assert.equal(view.out.split('text "Which order should the levels land in?"').length - 1, 1, 'the question shows once');
+  assert.equal(view.has('ack-dec-order'), false, 'Ack waits while the feedback form is open');
+});
+
+test('an ask tops its task, and the review opens under its package', skip, async (t) => {
   const view = await render(t, { props: { role: 'panel' }, width: 1400, board: 'busy', path: { topic: 't-herdr', job: 'wr-pr' }, pkg: 'wp-review', review: { jobId: 'wr-pr', pkgId: 'wp-review', round: null } });
   const at = (id) => view.out.indexOf(`:id[Str("${id}")]`);
   assert.ok(at('ask-ask:q1') < at('pkg-wp-build') && at('pkg-wp-build') < at('pkg-wp-review'));
   assert.ok(view.has('answer-ask:q1') && view.has('review-wp-review') && view.has('review-rounds'), 'the review opens under its package');
 });
-
 test('the panel opens what it shows as a big tab, which draws the same scope wide', skip, async (t) => {
   const panel = await render(t, { props: { role: 'panel' }, width: 1400, board: 'busy', path: { topic: 't-herdr' } });
   assert.ok(panel.has('open-big') && panel.has('ci-wr-restore') && panel.has('ci-wr-cross'));
