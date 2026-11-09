@@ -18,7 +18,6 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.ReviewObservation
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
@@ -27,7 +26,6 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   import Ecto.Query, only: [from: 2]
 
   @local_operator_actor "local-operator"
-  @review_observation_timeout_ms 3_500
 
   @spec operator_dashboard_payload(module()) :: {:ok, map()} | {:error, term()}
   def operator_dashboard_payload(repo) do
@@ -637,47 +635,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
       |> Enum.map(&Map.get(&1, :id))
       |> Enum.reject(&is_nil/1)
 
-    refresh_review_observations(repo, work_request_ids, opts)
     Dashboard.work_request_board_details(repo, work_request_ids, Keyword.put(opts, :repo_identity_catalog, repo_identity_catalog))
-  end
-
-  defp refresh_review_observations(_repo, [], _opts), do: :ok
-
-  defp refresh_review_observations(repo, work_request_ids, opts) do
-    work_packages = review_observation_work_packages(repo, work_request_ids, opts)
-
-    task =
-      Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn ->
-        ReviewObservation.observe(work_packages)
-      end)
-
-    case Task.yield(task, @review_observation_timeout_ms) do
-      nil ->
-        Task.shutdown(task, :brutal_kill)
-        ReviewObservation.release_refresh(task.pid)
-
-      _completed ->
-        :ok
-    end
-
-    :ok
-  rescue
-    _failure -> :ok
-  end
-
-  defp review_observation_work_packages(repo, work_request_ids, opts) do
-    case Keyword.fetch(opts, :work_packages) do
-      {:ok, work_packages} when is_list(work_packages) ->
-        work_request_id_set = MapSet.new(work_request_ids)
-        Enum.filter(work_packages, &MapSet.member?(work_request_id_set, &1.work_request_id))
-
-      :error ->
-        repo.all(
-          from(work_package in WorkPackage,
-            where: work_package.work_request_id in ^work_request_ids
-          )
-        )
-    end
   end
 
   @spec work_request_attrs(map()) :: map()

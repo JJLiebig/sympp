@@ -3,7 +3,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments,
     only: [
-      optional_boolean: 3,
       optional_object_argument: 2,
       optional_positive_integer_argument: 2,
       optional_string_argument: 2,
@@ -33,51 +32,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @typep mcp_tool_result :: {:ok, map()} | {:error, integer(), String.t(), map()}
 
-  @tools ["reconcile_work_request", "sync_pr", "record_work_package_delivery"]
+  @tools ["sync_pr", "record_work_package_delivery"]
 
   @spec tools() :: [String.t()]
   def tools, do: @tools
 
   @spec call(String.t(), Config.t(), Terminal.t() | nil, map()) :: mcp_tool_result()
-  def call("reconcile_work_request", %Config{} = config, terminal, arguments) do
-    with {:ok, apply?} <- optional_boolean(arguments, "apply", false),
-         {:ok, arguments} <- validate_arguments(arguments, "reconcile_work_request"),
-         {:ok, detail} <- reconcile_detail_argument(arguments),
-         {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, recorded_by} <- optional_string_argument(arguments, "recorded_by", terminal_name(terminal)),
-         {:ok, work_request, _filters} <- WorkRequestScope.work_request_scope(config.repo, work_request_id),
-         scope = WorkRequestPayloads.redacted_work_request_scope(work_request),
-         {:ok, work_packages} <- WorkRequestService.list_work_packages(config.repo, work_request_id),
-         {visible_work_package_ids, work_package_contexts} <-
-           WorkRequestScope.visible_delivery_board_work_package_contexts(config.repo, work_request, work_packages),
-         {:ok, reconciliation} <-
-           reconcile_work_request(config.repo, terminal, work_request_id, apply?, recorded_by,
-             mode: reconcile_work_request_mode(apply?),
-             work_request: work_request,
-             work_packages: work_packages,
-             visible_work_package_ids: visible_work_package_ids,
-             work_package_contexts: work_package_contexts
-           ) do
-      {:ok, reconcile_work_request_result(work_request, reconciliation, detail, scope)}
-    else
-      error -> reconcile_work_request_error(error)
-    end
-  end
-
   def call("sync_pr", %Config{} = config, %Terminal{} = terminal, arguments) do
     with {:ok, arguments} <- validate_arguments(arguments, "sync_pr"),
          {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
@@ -216,44 +187,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   defp work_package_delivery_evidence_field(evidence, field, :positive_integer),
     do: optional_positive_integer_argument(evidence, field)
 
-  defp reconcile_detail_argument(arguments) do
-    case optional_string_argument(arguments, "detail", "summary") do
-      {:ok, detail} when detail in ["summary", "full"] -> {:ok, detail}
-      {:ok, _detail} -> {:tool_error, "invalid_detail"}
-      error -> error
-    end
-  end
-
-  defp reconcile_work_request_result(%WorkRequest{} = work_request, reconciliation, detail, scope) do
-    payload = %{
-      "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
-      "reconciliation" => reconciliation_payload(reconciliation, detail),
-      "delivery_board" =>
-        reconciliation.delivery_board
-        |> WorkRequestPayloads.delivery_board(detail)
-        |> then(fn board -> if detail == "full", do: board, else: Map.delete(board, "work_packages") end),
-      "detail" => detail,
-      "scope" => scope
-    }
-
-    ToolResult.with_text_profile(:full, fn -> ToolResult.read_tool_result(payload) end)
-  end
-
-  defp reconcile_work_request_error({:tool_error, reason}),
-    do: {:error, -32_602, "Invalid params", %{"tool" => "reconcile_work_request", "reason" => reason}}
-
-  defp reconcile_work_request_error({:error, :not_found}), do: not_found_error("reconcile_work_request")
-  defp reconcile_work_request_error({:error, reason}), do: architect_error(reason, "reconcile_work_request")
-
   defp validate_arguments(arguments, tool) do
     case ToolArguments.architect_tool_arguments(%{"arguments" => arguments}, tool) do
       {:ok, arguments} -> {:ok, arguments}
       {:error, _code, _message, %{"reason" => reason}} -> {:tool_error, reason}
     end
   end
-
-  defp reconcile_work_request_mode(true), do: :apply
-  defp reconcile_work_request_mode(false), do: :dry_run
 
   defp architect_sync_pr_result(repo, work_package_id, %{status: status} = pr_sync, scope)
        when status in ["merged", "already_merged", "dispatched", "ready"] do
@@ -277,58 +216,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
     {:error, -32_602, "Invalid params", data}
   end
-
-  defp reconcile_work_request(repo, %Terminal{} = terminal, work_request_id, true = _apply?, recorded_by, opts) do
-    opts = Keyword.put(opts, :recorded_by, recorded_by)
-    opts = Keyword.put(opts, :append_blocker_closeout_event, reconcile_blocker_closeout_appender(terminal))
-
-    run_architect_transaction(repo, fn ->
-      with {:ok, reconciliation} <- DeliveryReconciler.reconcile(repo, work_request_id, opts) do
-        record_reconcile_product_tree_revision_after_apply(repo, work_request_id, recorded_by, reconciliation)
-      end
-    end)
-  end
-
-  defp reconcile_work_request(repo, _terminal, work_request_id, false = _apply?, recorded_by, opts) do
-    opts = Keyword.put(opts, :recorded_by, recorded_by)
-
-    DeliveryReconciler.reconcile(repo, work_request_id, opts)
-  end
-
-  defp record_reconcile_product_tree_revision_after_apply(repo, work_request_id, recorded_by, reconciliation) do
-    with {:ok, _revision} <-
-           maybe_record_reconcile_product_tree_revision(repo, work_request_id, recorded_by, reconciliation) do
-      {:ok, reconciliation}
-    end
-  end
-
-  defp reconcile_blocker_closeout_appender(%Terminal{} = terminal) do
-    actor = Actor.from_terminal(terminal)
-
-    fn repo, work_package_id, attrs ->
-      PlanningRepository.append_audit_progress_event_for_work_package(repo, actor, work_package_id, attrs)
-    end
-  end
-
-  defp maybe_record_reconcile_product_tree_revision(repo, work_request_id, recorded_by, reconciliation) do
-    if reconcile_product_tree_revision_required?(reconciliation) do
-      record_current_product_tree_revision(repo, work_request_id, "reconcile_work_request", recorded_by)
-    else
-      {:ok, nil}
-    end
-  end
-
-  defp reconcile_product_tree_revision_required?(%{applied_count: count}) when count > 0, do: true
-
-  defp reconcile_product_tree_revision_required?(%{results: results}) when is_list(results) do
-    Enum.any?(results, &reconcile_result_has_delivery_closeout?/1)
-  end
-
-  defp reconcile_result_has_delivery_closeout?(%{reason: "already_closeout", work_package_status: status})
-       when is_binary(status),
-       do: true
-
-  defp reconcile_result_has_delivery_closeout?(_result), do: false
 
   defp work_request_id_argument(repo, arguments) do
     case Map.get(arguments, "work_request_id") do
@@ -361,9 +248,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   end
 
   defp terminal_name(%Terminal{display_address: address}), do: address
-  defp terminal_name(nil), do: "architect"
 
-  defp run_architect_transaction(repo, fun, notify? \\ true) do
+  defp run_architect_transaction(repo, fun, notify?) do
     result =
       case repo.transaction(fn -> rollback_architect_transaction_result(repo, fun.()) end) do
         {:ok, result} -> {:ok, result}
@@ -437,9 +323,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   defp product_tree_revision_reason("record_work_package_delivery"),
     do: "WorkPackage delivery recorded in product tree through MCP."
-
-  defp product_tree_revision_reason("reconcile_work_request"),
-    do: "WorkPackage delivery reconciled in product tree through MCP."
 
   defp record_work_package_delivery_error(%Ecto.Changeset{} = changeset),
     do: changeset_invalid_params_error("record_work_package_delivery", "invalid_work_package_delivery", changeset)
@@ -549,16 +432,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   defp optional_put(attrs, _key, nil), do: attrs
   defp optional_put(attrs, key, value), do: Map.put(attrs, key, value)
-
-  defp reconciliation_payload(reconciliation, detail) when is_map(reconciliation) do
-    reconciliation
-    |> Map.drop([:delivery_board, "delivery_board"])
-    |> Map.update!(:results, fn results ->
-      if detail == "full", do: results, else: Enum.filter(results, &(&1.status in ["proposed", "applied", "error"]))
-    end)
-    |> json_safe_payload()
-    |> Redactor.redact_output()
-  end
 
   defp reason_text(reason) when is_binary(reason), do: reason
   defp reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)

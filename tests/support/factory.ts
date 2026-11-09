@@ -60,7 +60,7 @@ export const herdr = (terminal: string, labels: Record<string, string> = {}) => 
 });
 
 // Writes that name only a WorkRequest; the client passes the request it works on.
-const requestScoped = new Set(['edit_plan', 'reconcile_work_request', 'set_report']);
+const requestScoped = new Set(['edit_plan', 'set_report']);
 
 export class Client {
   private sequence = 0;

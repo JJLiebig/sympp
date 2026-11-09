@@ -249,7 +249,7 @@ test('STDIO protocol errors and batches cannot smuggle identity across requests'
     batchTool(922, 'set_blocker', blocker('batch-other'), { herdr: herdr('t-batch-other') }),
     batchTool(923, 'set_blocker', blocker('batch-owner'), owner),
     batchTool(924, 'set_blocker', blocker('batch-after')),
-    batchTool(925, 'reconcile_work_request', { work_request_id: 'foreign' }),
+    batchTool(925, 'read_work_request', { work_request_id: 'foreign' }),
   ]);
   expect(denied[0].error.data.reason).toBe('request_must_be_object');
   expect(denied[1].error.data.reason).toBe('read_only_outside_herdr');

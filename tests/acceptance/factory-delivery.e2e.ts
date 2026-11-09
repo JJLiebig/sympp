@@ -2,9 +2,7 @@ import { expect } from 'e2e';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { contract } from '../support/factory.js';
-import { close, head, pr, prUrl, row, sync, test } from '../support/delivery.js';
-import { installReviewProvider } from '../support/browser-review-provider.js';
-import { repository } from '../support/worktree-git.js';
+import { close, head, installReviewSuite, pr, prUrl, row, sync, test } from '../support/delivery.js';
 
 test('deployment observations cover every delivered revision and preserve completion through rollback and unavailable history', async ({ delivery: { factory, provider } }) => {
   const architect = await factory.client();
@@ -130,28 +128,33 @@ test('separate repository deployments preserve live attempt time and no-PR work 
   expect(final.work_request_details.find((detail: any) => detail.work_request.id === onlyNoPr).work_request.deployments).toBeUndefined();
 });
 
-for (const status of [
-  { review: 'rvw_native_progress', mode: 'fast', status: 'running', done: false, progress: 'review 1/2 correctness', head: 'candidate-head', round: 'r1', round_started_at: '2026-10-10T10:00:00Z' },
-  { review: 'rvw_native_stale', mode: 'fast', status: 'stale', done: true },
-  { status: 'no_review_anchor' },
-]) test(`native review observation preserves ${status.status} without inventing delivery`, async ({ delivery: { factory } }) => {
-  const repo = await repository(factory.root, 'review-observation');
+test('installed Review Suite state for the review id gates qualification', async ({ delivery: { factory, provider } }) => {
   const architect = await factory.client();
-  const request = await architect.request('Review observation', 'beta', repo.origin);
-  const [wp] = (await architect.addPackages([contract('Observed review', { review: { type: 'review-suite', args: { mode: 'fast' } } })]));
-  await architect.call('dispatch_work_package', { work_package_id: wp, review_mode: 'fast', target_repo_root: repo.checkout });
-  await installReviewProvider({ root: factory.root, factory }, status);
-  await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated');
-  const observed = await row(architect, request, wp);
-  expect(observed.delivery_outcome).toBeNull();
-  const review = observed.work_package.review_signal;
-  expect(review.status).toBe(status.status === 'running' ? 'in_progress' : status.status === 'stale' ? 'failed' : 'pending');
-  if (status.status === 'running') {
-    expect(review.current).toBe(1);
-    expect(review.total).toBe(2);
-    expect(review.reviewed_head).toBe('candidate-head');
-    expect(review.round_started_at).toBe('2026-10-10T10:00:00Z');
-  } else if (status.status === 'no_review_anchor') expect(review.observation_state).toBe('unknown');
+  const request = await architect.request('Reviewed delivery');
+  const [wp] = (await architect.addPackages([contract('Reviewed change')]));
+  const reviewId = (await architect.call('dispatch_work_package', { work_package_id: wp, review_mode: 'fast' })).work_package.review_id;
+  expect(reviewId).toMatch(/^rvw_[0-9a-f]{16}$/);
+  provider.set(110, pr(110, head('a')));
+
+  // No provider installed: the review state is unknown and names where to look.
+  const unknown = await architect.call('sync_pr', { work_package_id: wp, url: prUrl(110) });
+  expect(unknown.pr_sync.readiness_reasons).toContain('review_unknown');
+  expect(unknown.pr_sync.next_action).toMatch(/^review state unknown: check /);
+
+  const review = await installReviewSuite(factory.home);
+  await review.answer({ error: `unknown review cycle id: ${reviewId}`, status: 'usage_error' }, 2);
+  const notStarted = await architect.call('sync_pr', { work_package_id: wp, url: prUrl(110) });
+  expect(notStarted.pr_sync.readiness_reasons).toContain('review_not_done');
+  expect((await row(architect, request, wp)).raw_status).toBe('dispatched');
+
+  await review.answer({ review: reviewId, done: true, status: 'done', head: head('b'), progress: '1/1' });
+  const otherHead = await architect.call('sync_pr', { work_package_id: wp, url: prUrl(110) });
+  expect(otherHead.pr_sync.readiness_reasons).toContain('review_not_done');
+
+  await review.answer({ review: reviewId, done: true, status: 'done', head: head('a'), progress: '1/1' });
+  const done = await architect.call('sync_pr', { work_package_id: wp, url: prUrl(110) });
+  expect(done.work_package.status).toBe('ready');
+  for (const argv of await review.calls()) expect(argv).toEqual(['--id', reviewId, '--show-status', '--json']);
 });
 
 test('ordinary PR handoff observes pending qualification then reconciles an exact external merge once', async ({ delivery: { factory, provider } }) => {
@@ -210,9 +213,8 @@ test('ordinary PR handoff observes pending qualification then reconciles an exac
   expect(Date.parse(delivered.delivery.pr_merged_at)).toBe(Date.parse(mergeTime));
   expect(await completion()).toBeTruthy();
   const revision = (await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision;
-  await architect.call('sync_pr', { work_package_id: wp });
-  const replay = await architect.call('reconcile_work_request', { work_request_id: request, apply: true });
-  expect(replay.reconciliation.applied_count).toBe(0);
+  const replay = await architect.call('sync_pr', { work_package_id: wp });
+  expect(replay.pr_sync.status).toBe('already_merged');
   expect((await row(architect, request, wp)).delivery).toEqual(delivered.delivery);
   expect((await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision).toEqual(revision);
   const calls = provider.calls.filter(({ argv }) => argv[0] === 'pr');
@@ -280,13 +282,10 @@ test('provider errors and incomplete or wrong-head evidence cannot complete a di
   await architect.reject('sync_pr', { work_package_id: wp, head_sha: head('a') }, 'provider_head_mismatch');
   expect((await row(architect, request, wp)).delivery_outcome).toBeNull();
   // GitHub's merge evidence closes the attached PR even when the handoff head is old.
-  const observed = await architect.operator('/api/v1/sympp/operator/github/sync-prs', { mode: 'auto' });
-  expect(observed.status).toBe(200);
-  expect(observed.body.sync.merged_count).toBe(1);
+  expect((await architect.call('sync_pr', { work_package_id: wp })).pr_sync.status).toBe('merged');
   expect((await row(architect, request, wp)).raw_status).toBe('ended');
   expect((await row(architect, request, wp)).delivery_outcome).toBe('pr_merged');
-  const replay = await architect.call('reconcile_work_request', { apply: true });
-  expect(replay.reconciliation.applied_count).toBe(0);
+  expect((await architect.call('sync_pr', { work_package_id: wp })).pr_sync.status).toBe('already_merged');
 });
 
 test('typed no-PR closeout resolves blockers once and terminal packages cannot reactivate', async ({ delivery: { factory } }) => {
@@ -333,7 +332,6 @@ test('typed no-PR closeout resolves blockers once and terminal packages cannot r
   await architect.reject('record_work_package_delivery', {
     work_package_id: wp, outcome: 'pr_merged', idempotency_key: 'flat-evidence', pr_url: prUrl(105), evidence: { pr_merged: mergedEvidence },
   }, 'unexpected_argument');
-  expect((await architect.call('reconcile_work_request', { work_request_id: request, apply: true })).reconciliation.applied_count).toBe(0);
   expect((await row(architect, request, remaining)).delivery_outcome).toBeNull();
   const result = await close(architect, wp);
   const scoped = await row(architect, request, wp);

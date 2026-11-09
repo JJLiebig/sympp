@@ -5,16 +5,16 @@ board does not reflect the real terminal outcome.
 
 ## Merged Pull Request
 
-1. Read `read_work_request` with `view: "board"`.
-2. Run `reconcile_work_request` as a dry run.
-3. Verify the proposed package, pull request URL, merge timestamp, and merge
-   commit against GitHub.
-4. Apply the reconciliation when it matches.
-5. Replay the same evidence safely if the first response was interrupted.
+The factory records a merge on its own once GitHub reports the attached PR
+merged, usually within a minute. When it doesn't:
 
-If automatic reconciliation lacks sufficient evidence, call
-`record_work_package_delivery` explicitly with `outcome: "pr_merged"` and one
-matching `evidence.pr_merged` object.
+1. Read `read_work_request` with `view: "board"`. A `stale` package means the
+   factory couldn't read GitHub; it records the merge on its next successful read.
+2. If the factory never saw the PR (opened from a fork or in an upstream
+   repository), attach it with `sync_pr` and its `url`; the merge is then recorded.
+3. If the merge still isn't recorded because its evidence doesn't match the
+   package (repository or base branch), call `record_work_package_delivery` with
+   `outcome: "pr_merged"` and one matching `evidence.pr_merged` object.
 
 ## Other Terminal Outcomes
 

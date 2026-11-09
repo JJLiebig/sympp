@@ -191,8 +191,12 @@ next action. In a worker terminal the sympp bridge serves no tools. See the
 The board view of `read_work_request` defaults to compact summaries; `detail: "full"`
 restores all nested package and delivery evidence. Structured results remain JSON
 and agent text uses TOON.
-`reconcile_work_request` defaults to counts plus proposed, applied and error
-rows; `detail: "full"` restores skipped rows and complete delivery-board evidence.
+The factory's Observer watches dispatched packages: worker terminals through the
+factory host's herdr-core, PRs, CI and merges through one batched GitHub GraphQL
+read per minute, and the Review Suite cycle by its review id on the worker's
+machine. It qualifies, unqualifies and records merges itself; `sync_pr` attaches
+PRs it can't find and records consumed dependency inputs. A package whose GitHub
+or review state can't be read is flagged `stale` and changes nothing.
 Terminal packages have no pending merge next action. WorkRequest reads expose
 the derived `phase`, plus `next_action` when the operator has to act
 (`complete_or_archive` for `unresolved`, `restore` for `archived`). Native Herdr

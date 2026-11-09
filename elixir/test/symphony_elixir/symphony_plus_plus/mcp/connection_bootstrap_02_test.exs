@@ -21,7 +21,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
     assert tool_sets == %{
              "tools" => tools,
              "read_tools" => Enum.filter(tools, &(ToolCatalog.tool_access(&1) == :read)),
-             "owner_gated_tools" => Enum.filter(tools, &ToolCatalog.owner_gated_call?(&1, %{"apply" => true}))
+             "owner_gated_tools" => Enum.filter(tools, &ToolCatalog.owner_gated_call?(&1, %{}))
            }
   end
 

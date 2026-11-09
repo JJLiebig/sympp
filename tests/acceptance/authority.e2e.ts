@@ -170,7 +170,6 @@ test('ownership lets every terminal read any request but refuses writes to anoth
     ['edit_plan', { work_request_id: other, ops: [{ op: 'add_package', ...contract('Stolen') }] }],
     ['dispatch_work_package', { work_request_id: other, work_package_id: otherWp }],
     ['dispatch_work_package', { work_package_id: otherWp }],
-    ['reconcile_work_request', { work_request_id: other, apply: true }],
     ['record_work_package_delivery', { work_request_id: other, work_package_id: otherWp, outcome: 'completed_no_pr', idempotency_key: 'foreign-close', evidence: { completed_no_pr: { no_pr_evidence: 'Refuse foreign closeout' } } }],
   ] as const) {
     const refused = await architect.reject(name, args, 'owned_by_other_terminal');

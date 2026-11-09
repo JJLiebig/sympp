@@ -14,8 +14,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadAccessTest do
           {"read_work_request", %{"work_request_id" => work_request.id}},
           {"read_work_request", %{"work_request_id" => work_request.id, "view" => "plan"}},
           {"read_work_request", %{"work_request_id" => work_request.id, "view" => "board"}},
-          {"read_work_request", %{"work_request_id" => work_request.id, "view" => "package", "work_package_id" => package.id}},
-          {"reconcile_work_request", %{"work_request_id" => work_request.id}}
+          {"read_work_request", %{"work_request_id" => work_request.id, "view" => "package", "work_package_id" => package.id}}
         ] do
       result = tool!(client, tool, arguments)
       assert result.response["result"], "#{tool}: #{inspect(result.response)}"
@@ -64,15 +63,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReadAccessTest do
     package = read.("read_work_request", %{"work_request_id" => other.id, "view" => "package", "work_package_id" => hd(other_packages).id})
     assert package["work_package"]["id"] == hd(other_packages).id
     assert %{"version" => _, "steps" => []} = package["task_plan"]
-    assert read.("reconcile_work_request", %{"work_request_id" => other.id})["work_request"]["id"] == other.id
     assert Ownership.owner(repo, other.id) == nil
-  end
-
-  test "a dry run rejects a non-boolean apply", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-READS-DRY-RUN")
-    operator = connect!(repo, "client-reads-dry-run")
-    refused = tool!(operator, "reconcile_work_request", %{"work_request_id" => work_request.id, "apply" => "true"})
-    assert refused.response["error"]["code"] == -32_602
   end
 
   defp add_package!(repo, work_request, id) do

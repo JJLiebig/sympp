@@ -1,10 +1,9 @@
 {
-  "mcp_contract_fingerprint": "a113046c1878493954ca73f9b1436a9f9c841c544146265336cefb5843d0f22c",
+  "mcp_contract_fingerprint": "d6b1dc65c1dc6b668dc1a0b26c0b2faa0a81ebf6e092cc3ee3a21db67d42e73c",
   "tool_sets": {
     "owner_gated_tools": [
       "set_blocker",
       "sync_pr",
-      "reconcile_work_request",
       "record_work_package_delivery",
       "set_report",
       "edit_plan",
@@ -40,7 +39,6 @@
       "read_work_request",
       "set_blocker",
       "sync_pr",
-      "reconcile_work_request",
       "record_work_package_delivery",
       "set_report",
       "ask",

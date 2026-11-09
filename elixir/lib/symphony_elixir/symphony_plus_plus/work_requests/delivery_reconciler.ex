@@ -1,287 +1,103 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
-  @moduledoc false
+  @moduledoc """
+  Records a `pr_merged` ending for a package from the merge evidence in its
+  progress events: the attached PR, its latest synced snapshot and any merge
+  reconciliation event. The evidence must name the package's repository and
+  base branch and carry the merge time and merge commit. The Observer and
+  `sync_pr` reach it through `GitHub.MergeReconciler`.
+  """
 
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
-
-  import Ecto.Query
 
   @default_recorded_by "work_request_delivery_reconciler"
   @terminal_without_pr_reason "no_structured_pr_merge_evidence"
 
-  @type mode :: :dry_run | :apply
-  @type result :: map()
+  @doc """
+  Records the package's `pr_merged` ending when its evidence is complete.
 
-  @spec reconcile(module(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def reconcile(repo, work_request_id, opts \\ [])
-      when is_atom(repo) and is_binary(work_request_id) and is_list(opts) do
-    with {:ok, mode} <- mode(Keyword.get(opts, :mode, :dry_run)),
-         {:ok, work_request} <- work_request(repo, work_request_id, opts),
-         {:ok, work_packages} <- work_packages(repo, work_request_id, opts),
-         {:ok, delivery_outcomes} <- delivery_outcomes(repo, work_packages) do
-      results =
-        Enum.map(
-          work_packages,
-          &reconcile_slice(repo, work_request, &1, delivery_outcomes, mode, opts)
-        )
-
-      with {:ok, final_work_packages} <-
-             final_board_work_packages(repo, work_request_id, work_packages, mode),
-           {:ok, final_board} <-
-             delivery_board(repo, work_request, final_work_packages, final_board_opts(mode, opts)) do
-        {:ok, summary(work_request.id, mode, results, final_board)}
-      end
-    end
-  end
-
+  Returns `{:ok, %{status: "applied" | "skipped", reason: ..., applied_count: 0 | 1}}`;
+  a failed write is `{:error, {:delivery_reconciliation_failed, reason}}`.
+  Options: `:recorded_by`, and `:record_work_package_delivery` (tests).
+  """
   @spec reconcile_work_package(module(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def reconcile_work_package(repo, work_package_id, opts \\ [])
       when is_atom(repo) and is_binary(work_package_id) and is_list(opts) do
-    case repo.one(from(work_package in WorkPackage, where: work_package.id == ^work_package_id, limit: 1)) do
-      nil ->
-        {:ok, %{status: "not_linked", work_package_id: work_package_id}}
-
-      %WorkPackage{work_request_id: nil} ->
-        {:ok, %{status: "not_linked", work_package_id: work_package_id}}
-
-      %WorkPackage{} = work_package ->
-        opts = opts |> Keyword.put(:mode, :apply) |> Keyword.put(:work_packages, [work_package])
-
-        repo
-        |> reconcile(work_package.work_request_id, opts)
-        |> require_successful_reconciliation()
-    end
-  end
-
-  defp require_successful_reconciliation({:ok, %{error_count: 0}} = result), do: result
-
-  defp require_successful_reconciliation({:ok, %{results: results}}) do
-    reason = results |> Enum.find(&(&1.status == "error")) |> then(&(&1 && &1.reason))
-    {:error, {:delivery_reconciliation_failed, reason || "unknown_delivery_error"}}
-  end
-
-  defp require_successful_reconciliation(result), do: result
-
-  defp mode(:dry_run), do: {:ok, :dry_run}
-  defp mode("dry_run"), do: {:ok, :dry_run}
-  defp mode("dry-run"), do: {:ok, :dry_run}
-  defp mode(:apply), do: {:ok, :apply}
-  defp mode("apply"), do: {:ok, :apply}
-  defp mode(_mode), do: {:error, :invalid_reconciliation_mode}
-
-  defp final_board_opts(:apply, opts), do: Keyword.delete(opts, :work_package_contexts)
-  defp final_board_opts(:dry_run, opts), do: opts
-
-  defp final_board_work_packages(repo, work_request_id, _work_packages, :apply),
-    do: WorkRequestService.list_work_packages(repo, work_request_id)
-
-  defp final_board_work_packages(_repo, _work_request_id, work_packages, :dry_run),
-    do: {:ok, work_packages}
-
-  defp work_request(repo, work_request_id, opts) do
-    case Keyword.get(opts, :work_request) do
-      %WorkRequest{id: ^work_request_id} = work_request -> {:ok, work_request}
-      nil -> WorkRequestService.get(repo, work_request_id)
-      _work_request -> {:error, :not_found}
-    end
-  end
-
-  defp work_packages(repo, work_request_id, opts) do
-    case Keyword.get(opts, :work_packages) do
-      work_packages when is_list(work_packages) ->
-        if Enum.all?(work_packages, &(&1.work_request_id == work_request_id)) do
-          {:ok, work_packages}
-        else
-          {:error, :not_found}
+    case repo.get(WorkPackage, work_package_id) do
+      %WorkPackage{work_request_id: request_id} = work_package when is_binary(request_id) ->
+        with {:ok, work_request} <- WorkRequestService.get(repo, request_id) do
+          repo |> reconcile(work_request, work_package, opts) |> result(work_package)
         end
 
-      nil ->
-        WorkRequestService.list_work_packages(repo, work_request_id)
-
-      _work_packages ->
-        {:error, :not_found}
+      _missing_or_unlinked ->
+        {:ok, %{status: "not_linked", work_package_id: work_package_id, applied_count: 0}}
     end
   end
 
-  defp delivery_board(repo, %WorkRequest{} = work_request, work_packages, opts) do
-    DeliveryBoard.project(repo, work_request.id,
-      work_request: work_request,
-      work_packages: work_packages,
-      visible_work_package_ids: Keyword.get(opts, :visible_work_package_ids, :all),
-      work_package_contexts: Keyword.get(opts, :work_package_contexts, %{})
-    )
-  end
-
-  defp delivery_outcomes(_repo, []), do: {:ok, %{}}
-
-  defp delivery_outcomes(repo, work_packages) do
-    work_package_ids = Enum.map(work_packages, & &1.id)
-
-    outcomes =
-      repo.all(
-        from(delivery in WorkPackageDelivery,
-          where: delivery.work_package_id in ^work_package_ids,
-          select: {delivery.work_package_id, delivery.outcome}
-        )
-      )
-      |> Map.new()
-
-    {:ok, outcomes}
-  end
-
-  defp reconcile_slice(
-         repo,
-         %WorkRequest{} = work_request,
-         %WorkPackage{} = work_package,
-         delivery_outcomes,
-         mode,
-         opts
-       ) do
-    case Map.fetch(delivery_outcomes, work_package.id) do
-      {:ok, delivery_outcome} ->
-        already_closeout_result(work_package, delivery_outcome)
-
-      :error ->
-        cond do
-          Lifecycle.planned?(work_package) ->
-            skipped_result(work_package, "not_dispatched")
-
-          not visible_work_package?(
-            work_package.id,
-            Keyword.get(opts, :visible_work_package_ids, :all)
-          ) ->
-            skipped_result(work_package, "work_package_out_of_scope")
-
-          true ->
-            reconcile_dispatched_slice(repo, work_request, work_package, mode, opts)
-        end
+  defp reconcile(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, opts) do
+    cond do
+      outcome = existing_outcome(repo, work_package) -> {:skip, "already_closeout", %{delivery_outcome: outcome}}
+      Lifecycle.planned?(work_package) -> {:skip, "not_dispatched", %{}}
+      true -> apply_closeout(repo, work_request, work_package, opts)
     end
   end
 
-  defp already_closeout_result(%WorkPackage{} = work_package, delivery_outcome) do
-    skipped_result(work_package, "already_closeout", delivery_outcome: delivery_outcome)
-  end
-
-  defp reconcile_dispatched_slice(
-         repo,
-         %WorkRequest{} = work_request,
-         %WorkPackage{} = work_package,
-         mode,
-         opts
-       ) do
-    with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package.id),
-         {:ok, action} <- closeout_action(repo, work_request, work_package, opts) do
-      maybe_apply_action(repo, work_request, work_package, action, mode, opts)
-    else
-      {:skip, reason, extras} -> skipped_result(work_package, reason, extras)
-      {:error, :not_found} -> skipped_result(work_package, "work_package_not_found")
-      {:error, reason} -> error_result(work_package, reason)
+  defp existing_outcome(repo, %WorkPackage{id: id}) do
+    case repo.get_by(WorkPackageDelivery, work_package_id: id) do
+      %WorkPackageDelivery{outcome: outcome} -> outcome
+      nil -> nil
     end
   end
 
-  defp closeout_action(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, opts) do
+  defp apply_closeout(repo, work_request, work_package, opts) do
     with {:ok, events} <- PlanningRepository.list_progress_events(repo, work_package.id),
          {:ok, evidence} <- merged_pr_evidence(events),
          :ok <- validate_repository(work_package, evidence),
          :ok <- validate_base_branch(work_package, evidence),
          {:ok, merged_at} <- required_merged_at(evidence),
          {:ok, merge_commit_sha} <- required_merge_commit_sha(evidence) do
-      {:ok,
-       %{
-         outcome: "pr_merged",
-         reason: "github_pr_merged",
-         attrs: %{
-           outcome: "pr_merged",
-           idempotency_key: idempotency_key(work_request, work_package, evidence, merge_commit_sha),
-           recorded_by: Keyword.get(opts, :recorded_by, @default_recorded_by),
-           pr_url: evidence.url,
-           pr_number: evidence.number,
-           pr_repository: evidence.repository,
-           pr_merged_at: merged_at,
-           merge_commit_sha: merge_commit_sha
-         },
-         evidence: %{
-           source_tool: evidence.source_tool,
-           pr_url: evidence.url,
-           pr_repository: evidence.repository,
-           pr_number: evidence.number,
-           head_sha: evidence.head_sha,
-           base_branch: evidence.base_branch
-         }
-       }}
-    else
-      {:skip, _reason, _extras} = skip -> skip
-      {:error, reason} -> {:error, reason}
+      attrs = %{
+        outcome: "pr_merged",
+        idempotency_key: idempotency_key(work_request, work_package, evidence, merge_commit_sha),
+        recorded_by: Keyword.get(opts, :recorded_by, @default_recorded_by),
+        pr_url: evidence.url,
+        pr_number: evidence.number,
+        pr_repository: evidence.repository,
+        pr_merged_at: merged_at,
+        merge_commit_sha: merge_commit_sha
+      }
+
+      case record_work_package_delivery(repo, work_request, work_package, attrs, opts) do
+        {:ok, delivery} -> {:applied, delivery}
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 
-  defp maybe_apply_action(
-         _repo,
-         %WorkRequest{} = work_request,
-         %WorkPackage{} = work_package,
-         action,
-         :dry_run,
-         _opts
-       ) do
-    action_payload = action_payload(work_request, work_package, action)
+  defp result({:applied, delivery}, %WorkPackage{} = work_package),
+    do: {:ok, %{status: "applied", reason: "github_pr_merged", work_package_id: work_package.id, delivery_id: delivery.id, applied_count: 1}}
 
-    work_package
-    |> base_result()
-    |> Map.merge(%{
-      status: "proposed",
-      reason: action.reason,
-      action: action_payload,
-      evidence: action.evidence
-    })
-  end
+  defp result({:skip, reason, extras}, %WorkPackage{} = work_package),
+    do: {:ok, Map.merge(%{status: "skipped", reason: reason, work_package_id: work_package.id, applied_count: 0}, extras)}
 
-  defp maybe_apply_action(
-         repo,
-         %WorkRequest{} = work_request,
-         %WorkPackage{} = work_package,
-         action,
-         :apply,
-         opts
-       ) do
-    action_payload = action_payload(work_request, work_package, action)
-    delivery_attrs = action.attrs
-
-    case record_work_package_delivery(repo, work_request, work_package, delivery_attrs, opts) do
-      {:ok, delivery} ->
-        work_package
-        |> base_result()
-        |> Map.merge(%{
-          status: "applied",
-          reason: action.reason,
-          action: action_payload,
-          evidence: action.evidence,
-          delivery_id: delivery.id
-        })
-
-      {:error, reason} ->
-        error_result(work_package, reason, action_payload)
-    end
-  end
+  defp result({:error, reason}, _work_package), do: {:error, {:delivery_reconciliation_failed, reason_text(reason)}}
 
   defp merged_pr_evidence(events) do
     events = PullRequestProgress.chronological_events(events)
 
     case PullRequestProgress.current_pr_state(events, ["attach_pr"]) do
       {:ok, pr_state} ->
-        pr_sync = latest_pr_snapshot(events, pr_state.ref, ["sync_pr"])
-        merge_reconciliation = latest_merge_reconciliation(events, pr_state.ref)
+        pr_sync = latest_payload(events, &(pr_snapshot_payload?(&1) and PullRequestProgress.same_pr?(&1, pr_state.ref)))
+        merge_reconciliation = latest_payload(events, &(merge_reconciliation_payload?(&1) and PullRequestProgress.same_pr?(&1, pr_state.ref)))
 
-        if PullRequestProgress.merged?(pr_state.payload) or PullRequestProgress.merged?(pr_sync) or
-             merge_reconciliation_payload?(merge_reconciliation) do
+        if PullRequestProgress.merged?(pr_state.payload) or PullRequestProgress.merged?(pr_sync) or merge_reconciliation_payload?(merge_reconciliation) do
           {:ok, evidence_from(pr_state.payload, pr_sync, merge_reconciliation, pr_state.ref)}
         else
           {:skip, @terminal_without_pr_reason, %{}}
@@ -295,96 +111,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
     end
   end
 
-  defp latest_pr_snapshot(events, ref, source_tools) do
+  defp latest_payload(events, match?) do
     events
     |> Enum.reverse()
     |> Enum.find_value(fn %ProgressEvent{} = event ->
       payload = PullRequestProgress.stringify_keys(event.payload || %{})
-
-      if pr_snapshot_payload?(payload, source_tools) and
-           PullRequestProgress.same_pr?(payload, ref) do
-        payload
-      end
+      if match?.(payload), do: payload
     end)
   end
 
-  defp latest_merge_reconciliation(events, ref) do
-    events
-    |> Enum.reverse()
-    |> Enum.find_value(fn %ProgressEvent{} = event ->
-      payload = PullRequestProgress.stringify_keys(event.payload || %{})
+  defp pr_snapshot_payload?(%{"type" => "pr", "source_tool" => "sync_pr"}), do: true
+  defp pr_snapshot_payload?(_payload), do: false
 
-      if merge_reconciliation_payload?(payload) and PullRequestProgress.same_pr?(payload, ref) do
-        payload
-      end
-    end)
-  end
+  defp merge_reconciliation_payload?(%{"type" => "github_pr_merge_reconciliation", "source_tool" => "operator_sync_prs"} = payload),
+    do: PullRequestProgress.merged?(payload)
 
-  defp pr_snapshot_payload?(%{"type" => "pr", "source_tool" => source_tool}, source_tools) do
-    source_tool in source_tools
-  end
-
-  defp pr_snapshot_payload?(_payload, _source_tools), do: false
+  defp merge_reconciliation_payload?(_payload), do: false
 
   defp evidence_from(pr_payload, pr_sync, merge_payload, ref) do
-    source_tool =
-      first_present([
-        map_value(merge_payload, "source_tool"),
-        map_value(pr_sync, "source_tool"),
-        map_value(pr_payload, "source_tool")
-      ])
-
-    base_branch_values = [map_value(pr_sync, "base_branch"), map_value(pr_payload, "base_branch")]
-
-    head_sha_values = [
-      map_value(merge_payload, "head_sha"),
-      map_value(pr_sync, "head_sha"),
-      map_value(pr_payload, "head_sha")
-    ]
-
-    merged_at_values = [
-      map_value(pr_sync, "merged_at"),
-      map_value(merge_payload, "merged_at"),
-      map_value(pr_payload, "merged_at")
-    ]
-
-    base_branch = clean_string(first_present(base_branch_values))
-    head_sha = clean_string(first_present(head_sha_values))
-    merged_at = first_present(merged_at_values)
-
-    merge_commit_sha =
-      first_present([
-        map_value(pr_sync, "merge_commit_sha"),
-        map_value(merge_payload, "merge_commit_sha"),
-        map_value(pr_payload, "merge_commit_sha")
-      ])
-
     %{
-      source_tool: source_tool,
       url: ref.url,
       repository: ref.repository,
       number: ref.number,
-      ref: ref,
-      base_branch: base_branch,
-      head_sha: head_sha,
-      merged_at: merged_at,
-      merge_commit_sha: merge_commit_sha
+      base_branch: clean_string(first_present([map_value(pr_sync, "base_branch"), map_value(pr_payload, "base_branch")])),
+      head_sha: clean_string(first_present(Enum.map([merge_payload, pr_sync, pr_payload], &map_value(&1, "head_sha")))),
+      merged_at: first_present([map_value(pr_sync, "merged_at"), map_value(merge_payload, "merged_at"), map_value(pr_payload, "merged_at")]),
+      merge_commit_sha: first_present([map_value(pr_sync, "merge_commit_sha"), map_value(merge_payload, "merge_commit_sha"), map_value(pr_payload, "merge_commit_sha")])
     }
   end
 
   defp validate_repository(%WorkPackage{} = work_package, evidence) do
-    expected = normalize_repository(work_package.repo)
-    actual = normalize_repository(evidence.repository)
-
     cond do
-      is_nil(expected) or is_nil(actual) ->
-        {:skip, "missing_repository", %{expected_repository: work_package.repo, actual_repository: evidence.repository}}
-
-      not RepoIdentity.scope_match?(work_package.repo, evidence.repository, local_path_remotes?: true) ->
-        {:skip, "repository_mismatch", %{expected_repository: work_package.repo, actual_repository: evidence.repository}}
-
-      true ->
-        :ok
+      is_nil(clean_string(work_package.repo)) or is_nil(clean_string(evidence.repository)) -> {:skip, "missing_repository", %{}}
+      not RepoIdentity.scope_match?(work_package.repo, evidence.repository, local_path_remotes?: true) -> {:skip, "repository_mismatch", %{}}
+      true -> :ok
     end
   end
 
@@ -393,14 +153,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
     actual = clean_string(evidence.base_branch)
 
     cond do
-      is_nil(expected) or is_nil(actual) ->
-        {:skip, "missing_base_branch", %{expected_base_branch: expected, actual_base_branch: actual}}
-
-      expected != actual ->
-        {:skip, "base_branch_mismatch", %{expected_base_branch: expected, actual_base_branch: actual}}
-
-      true ->
-        :ok
+      is_nil(expected) or is_nil(actual) -> {:skip, "missing_base_branch", %{expected_base_branch: expected, actual_base_branch: actual}}
+      expected != actual -> {:skip, "base_branch_mismatch", %{expected_base_branch: expected, actual_base_branch: actual}}
+      true -> :ok
     end
   end
 
@@ -418,8 +173,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
     end
   end
 
-  defp parse_datetime(%DateTime{} = datetime),
-    do: {:ok, DateTime.truncate(datetime, :microsecond)}
+  defp parse_datetime(%DateTime{} = datetime), do: {:ok, DateTime.truncate(datetime, :microsecond)}
 
   defp parse_datetime(value) when is_binary(value) do
     case DateTime.from_iso8601(String.trim(value)) do
@@ -430,113 +184,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
 
   defp parse_datetime(_value), do: :error
 
-  defp merge_reconciliation_payload?(
-         %{"type" => "github_pr_merge_reconciliation", "source_tool" => "operator_sync_prs"} =
-           payload
-       ) do
-    PullRequestProgress.merged?(payload)
-  end
-
-  defp merge_reconciliation_payload?(_payload), do: false
-
-  defp action_payload(%WorkRequest{} = work_request, %WorkPackage{} = work_package, action) do
-    %{
-      work_request_id: work_request.id,
-      work_package_id: work_package.id,
-      outcome: action.attrs.outcome,
-      idempotency_key: action.attrs.idempotency_key,
-      recorded_by: action.attrs.recorded_by,
-      evidence: %{
-        pr_merged: %{
-          pr_url: action.attrs.pr_url,
-          pr_number: action.attrs.pr_number,
-          pr_repository: action.attrs.pr_repository,
-          pr_merged_at: action.attrs.pr_merged_at,
-          merge_commit_sha: action.attrs.merge_commit_sha
-        }
-      }
-    }
-  end
-
-  defp record_work_package_delivery(
-         repo,
-         %WorkRequest{} = work_request,
-         %WorkPackage{} = work_package,
-         attrs,
-         opts
-       ) do
+  defp record_work_package_delivery(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, attrs, opts) do
     case Keyword.get(opts, :record_work_package_delivery) do
-      fun when is_function(fun, 4) ->
-        fun.(repo, work_request.id, work_package.id, attrs)
-
-      _missing ->
-        WorkRequestService.record_work_package_delivery(
-          repo,
-          work_request.id,
-          work_package.id,
-          attrs
-        )
+      fun when is_function(fun, 4) -> fun.(repo, work_request.id, work_package.id, attrs)
+      _missing -> WorkRequestService.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
     end
   end
 
-  defp idempotency_key(
-         %WorkRequest{} = work_request,
-         %WorkPackage{} = work_package,
-         evidence,
-         merge_commit_sha
-       ) do
-    material =
-      [work_request.id, work_package.id, evidence.url, evidence.head_sha, merge_commit_sha]
-      |> Enum.join(":")
-
+  defp idempotency_key(%WorkRequest{} = work_request, %WorkPackage{} = work_package, evidence, merge_commit_sha) do
+    material = Enum.join([work_request.id, work_package.id, evidence.url, evidence.head_sha, merge_commit_sha], ":")
     "delivery_reconciler:" <> Base.url_encode64(:crypto.hash(:sha256, material), padding: false)
   end
 
-  defp base_result(%WorkPackage{} = work_package) do
-    %{
-      work_request_id: work_package.work_request_id,
-      work_package_id: work_package.id,
-      work_package_status: work_package.status
-    }
-  end
-
-  defp skipped_result(%WorkPackage{} = work_package, reason, extras \\ %{}) do
-    work_package
-    |> base_result()
-    |> Map.merge(%{status: "skipped", reason: reason})
-    |> Map.merge(Map.new(extras))
-  end
-
-  defp error_result(%WorkPackage{} = work_package, reason, action \\ nil) do
-    work_package
-    |> base_result()
-    |> Map.merge(%{status: "error", reason: reason_text(reason), action: action})
-  end
-
-  defp visible_work_package?(_work_package_id, :all), do: true
-  defp visible_work_package?(_work_package_id, nil), do: true
-
-  defp visible_work_package?(work_package_id, visible_ids) when is_list(visible_ids),
-    do: work_package_id in visible_ids
-
-  defp visible_work_package?(_work_package_id, _visible_ids), do: false
-
-  defp summary(work_request_id, mode, results, delivery_board) do
-    %{
-      work_request_id: work_request_id,
-      mode: Atom.to_string(mode),
-      total_count: length(results),
-      proposed_count: Enum.count(results, &(&1.status == "proposed")),
-      applied_count: Enum.count(results, &(&1.status == "applied")),
-      skipped_count: Enum.count(results, &(&1.status == "skipped")),
-      error_count: Enum.count(results, &(&1.status == "error")),
-      results: results,
-      delivery_board: delivery_board
-    }
-  end
-
   defp map_value(nil, _key), do: nil
-  defp map_value(%{} = map, key), do: Map.get(map, key) || Map.get(map, to_string(key))
+  defp map_value(%{} = map, key), do: Map.get(map, key)
 
   defp first_present(values) do
     Enum.find(values, fn
@@ -545,18 +206,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
       _value -> true
     end)
   end
-
-  defp normalize_repository(value) when is_binary(value) do
-    value
-    |> String.trim()
-    |> String.downcase()
-    |> case do
-      "" -> nil
-      repository -> repository
-    end
-  end
-
-  defp normalize_repository(_value), do: nil
 
   defp clean_string(value) when is_binary(value) do
     value = String.trim(value)
