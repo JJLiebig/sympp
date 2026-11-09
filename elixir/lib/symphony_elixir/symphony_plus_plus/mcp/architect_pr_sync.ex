@@ -17,12 +17,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     PullRequestProgress
   }
 
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.{Actor, ProgressEvent}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, Qualification, Stacking, WorkPackage}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
+
+  @ci_wait_next_action ~s(wait for CI, or sync_pr with ci_override: "<why CI can be skipped for this head>")
 
   @spec sync(module(), Actor.t(), WorkPackage.t(), map()) :: {:ok, map()} | {:error, term()} | {:tool_error, term()}
   def sync(repo, %Actor{} = actor, %WorkPackage{} = work_package, arguments)
@@ -30,6 +32,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     client = Application.get_env(:symphony_elixir, :sympp_github_client, DefaultClient)
 
     with {:ok, expected_head} <- optional_string_argument(arguments, "head_sha"),
+         {:ok, ci_override} <- ci_override_argument(arguments),
          {:ok, ref} <- PullRequest.parse(arguments, work_package.repo),
          {:ok, metadata} <- Client.fetch_pull_request(client, ref, provider_snapshot: true),
          {:ok, payload} <- PullRequest.provider_snapshot(metadata, ref, expected_head),
@@ -37,7 +40,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
          :ok <- require_exact_head(payload, expected_head),
          :ok <- require_merge_evidence(payload),
          pr_facts = pr_facts(repo, work_package, metadata, payload),
-         {:ok, result} <- persist(repo, actor, work_package, payload, pr_facts) do
+         override = ci_override && %{reason: ci_override, by: actor.id, head: payload["head_sha"]},
+         :ok <- require_overridable(override, pr_facts),
+         {:ok, result} <- persist(repo, actor, work_package, payload, pr_facts, override) do
       if PullRequestProgress.merged?(payload) do
         MergeReconciler.reconcile_work_package(repo, work_package.id, pr_payload: payload, client: DryClient, metadata: payload)
       else
@@ -46,7 +51,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     end
   end
 
-  def sync(repo, %Actor{} = actor, %WorkPackage{} = work_package, %{"head_sha" => _head} = arguments) do
+  # An expected head or a CI override names the attached PR's current head.
+  def sync(repo, %Actor{} = actor, %WorkPackage{} = work_package, arguments)
+      when is_map_key(arguments, "head_sha") or is_map_key(arguments, "ci_override") do
     with {:ok, state} <- PlanningRepository.get_state(repo, work_package.id),
          {:ok, current} <- PullRequestProgress.current_pr_state(state.progress_events) do
       sync(repo, actor, work_package, Map.put(arguments, "url", current.ref.url))
@@ -77,13 +84,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     if PullRequestProgress.merged?(payload), do: PullRequest.validate_merge_evidence(payload), else: :ok
   end
 
-  defp persist(repo, actor, work_package, payload, pr_facts) do
+  # A present but blank reason is refused, never read as "no override".
+  defp ci_override_argument(arguments) do
+    case Map.get(arguments, "ci_override") do
+      nil -> {:ok, nil}
+      reason when is_binary(reason) -> if String.trim(reason) == "", do: {:tool_error, "blank_ci_override"}, else: {:ok, String.trim(reason)}
+      _other -> {:tool_error, "invalid_ci_override"}
+    end
+  end
+
+  # An override covers CI that hasn't reported, never CI that failed.
+  defp require_overridable(%{}, %{ci_status: "failing", pr_state: "open"}), do: {:error, :ci_failing}
+  defp require_overridable(_override, _pr_facts), do: :ok
+
+  defp persist(repo, actor, work_package, payload, pr_facts, override) do
     repo.transaction(fn ->
       with :ok <- lock_package(repo, work_package),
            {:ok, current} <- WorkPackageRepository.get(repo, work_package.id),
            :ok <- require_handoff(repo, current, payload),
            {:ok, candidate_head} <- Qualification.candidate_head(repo, current),
            :ok <- Qualification.record_pr(repo, actor, current, payload),
+           {:ok, current} <- put_ci_override(repo, current, override, payload),
            {:ok, decision} <- decide(repo, current, pr_facts, candidate_head, payload),
            {:ok, updated} <- Qualification.apply_decision(repo, actor, current, decision, payload["head_sha"]) do
         result(updated, payload, decision, pr_facts)
@@ -93,6 +114,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     end)
     |> DashboardPubSub.broadcast_changed_on_success()
   end
+
+  defp put_ci_override(repo, current, %{} = override, payload) do
+    if PullRequestProgress.merged?(payload), do: {:ok, current}, else: Qualification.put_ci_override(repo, current, override)
+  end
+
+  defp put_ci_override(_repo, current, nil, _payload), do: {:ok, current}
 
   # A merged PR is recorded by the merge path, not qualified.
   defp decide(repo, current, pr_facts, candidate_head, payload) do
@@ -107,9 +134,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     cond do
       match?([_ | _], pr_facts.stacked_on) -> Map.put(result, :next_action, Stacking.next_action(pr_facts.stacked_on))
       pr_facts.review == :unknown -> Map.put(result, :next_action, "review state unknown: check #{review_machine(updated)}")
+      waits_for_ci?(result.readiness_reasons, pr_facts) -> Map.put(result, :next_action, @ci_wait_next_action)
       true -> result
     end
   end
+
+  defp waits_for_ci?(reasons, pr_facts),
+    do: pr_facts.ci_status in ["pending", "unknown"] and Enum.any?(reasons, &(&1 in ["ci_unknown", "ci_not_green"]))
 
   defp review_machine(%WorkPackage{launch_machine: machine}) when is_binary(machine) and machine != "", do: machine
   defp review_machine(_package), do: "the worker's machine"
@@ -121,16 +152,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     pr_state = metadata |> Map.get("state") |> normalize_state()
     review = if merged?, do: :none, else: Qualification.review(work_package, payload["head_sha"])
 
+    ci_status = get_in(payload, ["check_summary", "status"])
+
     %{
-      manual?: true,
+      no_ci?: ci_status == "unknown" and not repository_has_ci?(repo, payload["repository"]),
       pr_state: pr_state,
       pr_draft?: Map.get(metadata, "draft") == true,
-      ci_status: get_in(payload, ["check_summary", "status"]),
+      ci_status: ci_status,
       review: review,
       head_sha: payload["head_sha"],
       stacked_on: if(merged? or pr_state != "open", do: [], else: stacking(repo, work_package, metadata, payload))
     }
   end
+
+  # A repository has CI once any PR snapshot recorded for it (by the Observer's
+  # sweeps or by `sync_pr`, for any package and any head) reported checks.
+  defp repository_has_ci?(repo, repository) when is_binary(repository) do
+    repository = String.downcase(repository)
+
+    query =
+      from(event in ProgressEvent,
+        where:
+          event.status == "pr_synced" and
+            fragment("lower(json_extract(?, '$.repository'))", event.payload) == ^repository and
+            fragment("json_extract(?, '$.check_summary.status')", event.payload) in ["passing", "failing", "pending"]
+      )
+
+    repo.exists?(query)
+  end
+
+  defp repository_has_ci?(_repo, _repository), do: true
 
   defp stacking(repo, work_package, metadata, payload) do
     own = %{work_package_id: work_package.id, repository: payload["repository"], number: payload["number"], commits: metadata["commits"]}

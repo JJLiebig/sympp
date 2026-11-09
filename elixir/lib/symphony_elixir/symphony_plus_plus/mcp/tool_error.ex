@@ -100,6 +100,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolError do
   defp message("delivery_outcome_conflict", _code, %{"outcome" => outcome}), do: "The package already ended as #{outcome}."
   defp message("ending_not_allowed", _code, %{"outcome" => outcome}), do: "This package can't close as #{outcome} in its current state."
   defp message("not_found", _code, _data), do: "Nothing with that id exists."
+  defp message("blank_ci_override", _code, _data), do: "ci_override needs a reason: why CI can be skipped for this head."
+  defp message("ci_failing", _code, _data), do: "CI is failing on this head; ci_override never skips failing checks."
   defp message("unexpected_argument", _code, %{"arguments" => [_ | _] = names}), do: "Unknown arguments: #{Enum.join(names, ", ")}."
   defp message("invalid_field", _code, %{"field" => field}), do: "#{field} has an invalid value."
   defp message("missing_" <> field, -32_602, _data), do: "#{field} is required."

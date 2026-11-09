@@ -134,8 +134,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
       assert {:unqualified, [^reason]} = Lifecycle.qualification(Map.merge(qualified, change))
     end
 
-    assert :qualified = Lifecycle.qualification(Map.merge(qualified, %{ci_status: "unknown", manual?: true}))
-    assert {:unqualified, ["ci_not_green"]} = Lifecycle.qualification(Map.merge(qualified, %{ci_status: "pending", manual?: true}))
+    # A repository without CI accepts a head whose CI reports nothing; an
+    # override also accepts pending CI. Neither accepts failing CI.
+    assert :qualified = Lifecycle.qualification(Map.merge(qualified, %{ci_status: "unknown", no_ci?: true}))
+    assert {:unqualified, ["ci_not_green"]} = Lifecycle.qualification(Map.merge(qualified, %{ci_status: "pending", no_ci?: true}))
+
+    for status <- ["unknown", "pending"],
+        do: assert(:qualified = Lifecycle.qualification(Map.merge(qualified, %{ci_status: status, ci_override?: true})))
+
+    assert {:unqualified, ["ci_not_green"]} = Lifecycle.qualification(Map.merge(qualified, %{ci_status: "failing", ci_override?: true}))
   end
 
   test "finished resolves the WorkRequest but never satisfies a dependent" do

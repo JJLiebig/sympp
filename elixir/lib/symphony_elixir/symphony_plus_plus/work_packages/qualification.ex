@@ -10,10 +10,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
       findings) is open and no input is unknown;
     * a ready package unqualifies when a predicate is known to be false, or
       its PR now targets another base branch;
-    * an unknown input (CI that reports nothing to the poller, a review host
-      or another PR the stacking check needs that can't be read) blocks
-      qualifying, and unqualifies a ready package only once its PR head has
-      moved off the head it qualified on.
+    * an unknown input (CI that reports nothing, a review host or another PR
+      the stacking check needs that can't be read) blocks qualifying, and
+      unqualifies a ready package only once its PR head has moved off the head
+      it qualified on.
+
+  CI that reports nothing counts as known only in a repository that has never
+  reported checks, and only on a manual `sync_pr` (`no_ci?`). An architect's
+  `ci_override` for the current head accepts pending or no-state CI on both
+  paths; recording a new head clears it. Failing CI is never accepted.
   """
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection
@@ -31,7 +36,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
           required(:ci_status) => String.t() | nil,
           required(:review) => review(),
           required(:head_sha) => String.t() | nil,
-          optional(:manual?) => boolean(),
+          optional(:no_ci?) => boolean(),
           optional(:base_matches?) => boolean(),
           optional(:stacked_on) => [String.t()] | :unknown
         }
@@ -68,7 +73,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
     end
   end
 
-  @doc "Records a PR snapshot: the branch, the attached PR and the synced snapshot."
+  @doc """
+  Records a PR snapshot: the branch, the attached PR and the synced snapshot.
+  A CI override recorded for another head is cleared.
+  """
   @spec record_pr(module(), Actor.t(), WorkPackage.t(), map()) :: :ok | {:error, term()}
   def record_pr(repo, %Actor{} = actor, %WorkPackage{} = package, payload) do
     branch = %{"type" => "branch", "source_tool" => "attach_branch", "branch" => payload["branch"], "head_sha" => payload["head_sha"], "observed_at" => payload["observed_at"]}
@@ -76,10 +84,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
     with {:ok, _branch} <- append_event(repo, actor, package.id, branch, "branch_attached"),
          {:ok, _attachment} <- append_event(repo, actor, package.id, Map.put(payload, "source_tool", "attach_pr"), "pr_attached"),
          {:ok, _snapshot} <- append_event(repo, actor, package.id, Map.put(payload, "source_tool", "sync_pr"), "pr_synced"),
-         {:ok, _changed?} <- PullRequestArtifact.upsert(repo, package.id, payload) do
+         {:ok, _changed?} <- PullRequestArtifact.upsert(repo, package.id, payload),
+         {:ok, _package} <- clear_ci_override(repo, package, payload["head_sha"]) do
       :ok
     end
   end
+
+  @doc "Records an architect's CI override for `head`, replacing any earlier one."
+  @spec put_ci_override(module(), WorkPackage.t(), %{reason: String.t(), by: String.t(), head: String.t()}) ::
+          {:ok, WorkPackage.t()} | {:error, term()}
+  def put_ci_override(repo, %WorkPackage{} = package, %{reason: reason, by: by, head: head}) do
+    package |> Ecto.Changeset.change(ci_override: %{"reason" => reason, "by" => by, "head" => head}) |> repo.update()
+  end
+
+  defp clear_ci_override(repo, %WorkPackage{ci_override: %{"head" => override_head}} = package, head) when override_head != head,
+    do: package |> Ecto.Changeset.change(ci_override: nil) |> repo.update()
+
+  defp clear_ci_override(_repo, %WorkPackage{} = package, _head), do: {:ok, package}
+
+  defp ci_override?(%WorkPackage{ci_override: %{"head" => head}}, head) when is_binary(head), do: true
+  defp ci_override?(%WorkPackage{}, _head), do: false
 
   @doc """
   Evaluates the predicates and readiness gates for `package` and returns the
@@ -89,7 +113,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
   def decide(repo, %WorkPackage{} = package, pr_facts, candidate_head) do
     with {:ok, state} <- PlanningRepository.get_state(repo, package.id),
          {:ok, graph} <- ExecutionGraph.evaluate(repo, package.work_request_id) do
-      facts = Map.put(pr_facts, :dependencies_delivered?, ExecutionGraph.require_ready(graph, package.id) == :ok)
+      facts =
+        pr_facts
+        |> Map.put(:dependencies_delivered?, ExecutionGraph.require_ready(graph, package.id) == :ok)
+        |> Map.put(:ci_override?, ci_override?(package, pr_facts.head_sha))
+
       gates = state |> OperationalProjection.readiness_failure_reasons() |> Enum.map(& &1["gate"])
       moved? = is_binary(candidate_head) and candidate_head != pr_facts.head_sha
       {:ok, decision(package, facts, gates, moved?)}
@@ -111,20 +139,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
     end
   end
 
-  # A manual sync accepts CI that reports no state only for the head the package
-  # qualified on.
+  # On a moved head, CI that reports no state is unproven unless the architect
+  # overrode CI for that head.
   defp definite_reasons(facts, reasons, unknown, _scope, true = _moved?) do
-    ci = if Map.get(facts, :ci_status) == "unknown", do: ["ci_unknown"], else: []
+    ci = if Map.get(facts, :ci_status) == "unknown" and not facts.ci_override?, do: ["ci_unknown"], else: []
     Enum.uniq(reasons ++ unknown ++ ci)
   end
 
   defp definite_reasons(facts, _reasons, _unknown, scope, false = _moved?), do: reasons(Lifecycle.qualification(assume_known(facts))) ++ scope
 
-  # An architect's manual sync accepts CI that reports no state; the poller
-  # treats it as unknown.
   defp unknown_inputs(facts) do
+    ci_known? = Map.get(facts, :no_ci?, false) or facts.ci_override?
+
     [
-      {Map.get(facts, :ci_status) == "unknown" and not Map.get(facts, :manual?, false), "ci_unknown"},
+      {Map.get(facts, :ci_status) == "unknown" and not ci_known?, "ci_unknown"},
       {facts.review == :unknown, "review_unknown"},
       {Map.get(facts, :stacked_on) == :unknown, "stacking_unknown"}
     ]

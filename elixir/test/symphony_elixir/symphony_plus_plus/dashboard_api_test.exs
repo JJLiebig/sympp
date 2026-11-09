@@ -2705,7 +2705,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end
   end
 
-  test "both boards show each package's worker terminal, stale observations and progress", %{repo: repo} do
+  test "both boards show each package's worker terminal, stale observations, progress and CI override", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       request = create_work_request!(repo, id: "WR-WORKER-SIGNALS")
       working = create_work_package!(repo, id: "WP-SIGNALS-WORKING", work_request_id: request.id, status: "dispatched")
@@ -2727,6 +2727,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       end
 
       repo.insert!(%Observation{work_package_id: working.id, stale: ["github"], observed_at: now})
+      override = %{"reason" => "CI is stuck on the runner queue.", "by" => "jjdev/t1", "head" => String.duplicate("a", 40)}
+      repo.update!(Ecto.Changeset.change(working, ci_override: override))
       # The factory's core sees the live worker busy.
       core_view = {:ok, %{core_id: "core-test", terminals: %{"t5" => %{"state" => "live", "status" => "working"}}}}
       Application.put_env(:symphony_elixir, :sympp_herdr_core, fn -> core_view end)
@@ -2736,7 +2738,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         working.id => %{
           "worker_terminal" => %{"address" => "jjdev/t5", "state" => "live", "status" => "working"},
           "observation_stale" => ["github"],
-          "progress" => "implementing"
+          "progress" => "implementing",
+          "ci_override" => override
         },
         exited.id => %{
           "worker_terminal" => %{"address" => "jjdev/t6", "state" => "finished", "status" => "finished"},
@@ -2749,7 +2752,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       for path <- ["/api/v1/sympp/herdr/dashboard", "/api/v1/sympp/operator/dashboard/hydrated"] do
         conn = if String.contains?(path, "/herdr/"), do: native_operator_conn(), else: local_operator_conn()
         detail = conn |> get(path) |> json_response(200) |> work_request_detail(request.id)
-        observed = Map.new(detail["work_packages"], &{&1["id"], Map.take(&1, ["worker_terminal", "observation_stale", "progress"])})
+        observed = Map.new(detail["work_packages"], &{&1["id"], Map.take(&1, ["worker_terminal", "observation_stale", "progress", "ci_override"])})
         assert observed == expected, path
       end
     end)

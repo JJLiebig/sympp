@@ -60,6 +60,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
           review_mode: String.t() | nil,
           review_id: String.t() | nil,
           launch_machine: String.t() | nil,
+          ci_override: map() | nil,
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -98,6 +99,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
     field(:review_mode, :string)
     field(:review_id, :string)
     field(:launch_machine, :string)
+    # An architect's `sync_pr` override that qualifies one head without known
+    # CI: `reason`, `by` and `head`. Recording a new head clears it.
+    field(:ci_override, :map)
 
     timestamps(type: :utc_datetime_usec)
   end

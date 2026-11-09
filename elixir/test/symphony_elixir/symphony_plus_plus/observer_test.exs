@@ -11,8 +11,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.ReviewStatus
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Qualification, WorkPackage, WorkPackageDelivery}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{WorkPackage, WorkPackageDelivery}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.TestSupport
@@ -260,6 +260,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert repo.get!(WorkPackage, package.id).status == "dispatched"
       assert %{"reasons" => reasons, "head_sha" => "head-merge"} = unqualified_event!(repo, package.id).payload
       assert "ci_unknown" in reasons
+    end
+
+    test "an architect's CI override qualifies its head through pending CI; a new head clears it", %{repo: repo} do
+      package = package!(repo, "WP-OBS-CI-OVERRIDE")
+      attach!(repo, package, 53)
+      entry = {:pr, "nextide", "repo", 53}
+      pending = %{"ci" => %{"status" => "pending", "completed" => 0, "total" => 1}}
+
+      sweep(repo, %{entry => {:ok, pr(53, "head-a", pending)}})
+      assert repo.get!(WorkPackage, package.id).status == "dispatched"
+
+      override = %{reason: "CI queue is stuck; the change is docs-only.", by: "box/t1", head: "head-a"}
+      assert {:ok, _package} = Qualification.put_ci_override(repo, repo.get!(WorkPackage, package.id), override)
+      sweep(repo, %{entry => {:ok, pr(53, "head-a", pending)}})
+      assert repo.get!(WorkPackage, package.id).status == "ready"
+      assert board_row(repo, package).work_package.ci_override == override
+
+      sweep(repo, %{entry => {:ok, pr(53, "head-b", pending)}})
+      assert repo.get!(WorkPackage, package.id).status == "dispatched"
+      assert repo.get!(WorkPackage, package.id).ci_override == nil
+      assert board_row(repo, package).work_package.ci_override == nil
     end
 
     test "a carried review whose base change still needs a targeted check doesn't count", %{repo: repo} do

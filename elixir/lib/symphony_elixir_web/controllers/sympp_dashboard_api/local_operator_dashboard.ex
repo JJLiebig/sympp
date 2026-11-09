@@ -218,6 +218,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
           :repo_signal,
           :pr_signal,
           :review_signal,
+          :ci_override,
           :review,
           :activity_signal,
           :operational_state,
