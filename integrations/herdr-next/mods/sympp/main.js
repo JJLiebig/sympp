@@ -2,8 +2,8 @@
 // goes up one. Topic and Space show the same tasks, a space only those on its repository; a task shows
 // its packages at work. A copy opened with props.job is that job's own tab. A panel copy follows
 // Herdr's focus (a job's terminal or tab, else the space, else its topic) until it is pinned. A toast
-// says when something newly needs the person. Intake and answers persist through sympp; terminal jumps
-// and "Live" both rest on a trusted execution helper's check, never on terminal labels or text. A
+// says when something newly needs the person. Intake and answers persist through sympp; chiefs
+// are "Live" only after a trusted execution helper's check, never on terminal labels or text. A
 // copy opened with props.studio is one UI
 // package's studio: its worker's terminal beside a preview, in a tab named after the package. A copy
 // opened with props.role "chief" is the Start chief dialog for props.topic; "chief-menu" is the topic
@@ -149,7 +149,8 @@ export default class Lens extends View {
     this.draft = { title: this.input("Title"), repo: this.input("owner/repository or repository path"), base_branch: this.input("Base branch"), human_description: this.input("What should this job accomplish?", true) };
     this.creation = { pending: false, error: null };
     this.answers = {};
-    this.jumps = {};
+    this.feedback = {};
+    this.ops = {};
     this.leaseId = `herdr-app-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     this.leasedAt = 0;
     cx.timer.every(TICK, (cx) => this.tick(cx));
@@ -231,9 +232,9 @@ export default class Lens extends View {
         const agents = Chrome.nextDecorations(shared(Chrome.AGENTS), Chrome.decorations(outcome.board, terminals(), this.endpoint, now), this.endpoint, now);
         if (agents) setShared(Chrome.AGENTS, agents);
         const live = outcome.board.jobs.filter((j) => j.state === "live").map((j) => {
-          const moving = j.packages.filter((p) => STAGES.includes(p.stage));
-          return { id: j.id, title: j.title, stage: STAGES[Math.max(-1, ...moving.map((p) => STAGES.indexOf(p.stage)))] ?? null,
-            needs: j.needs.length > 0, failed: moving.some((p) => p.failed) };
+          const moving = j.packages.map(Chrome.deskStage).filter(Boolean);
+          return { id: j.id, title: j.title, stage: STAGES[Math.max(-1, ...moving.map((s) => STAGES.indexOf(s)))] ?? null,
+            needs: j.needs.length > 0, failed: j.packages.some((p) => p.failed && p.stage !== "ended") };
         });
         if (JSON.stringify(shared(BOARD)) !== JSON.stringify(live)) setShared(BOARD, live);
       }
@@ -335,7 +336,7 @@ export default class Lens extends View {
       if (told[id]) continue;
       told[id] = now;
       posted = true;
-      notify({ title: need.label, body: `${need.text} · ${need.job.title}`, level: "warning", action: this.jobAction(need.job) });
+      notify({ title: need.label, body: `${need.text} · ${need.job?.title ?? need.card?.task}`, level: "warning", ...(need.job ? { action: this.jobAction(need.job) } : {}) });
     }
     if (posted) setShared("sympp.toasted", told);
   }
@@ -826,7 +827,7 @@ export default class Lens extends View {
     if (!this.studioHere(job, pkg, cx)) return this.root(t, [message(t, "Opening the studio…", null)]);
     this.studioWatch = { workers: S.workerBindings(M.bindingsFor(bindings, job.id, pkg.id)).filter((b) => b.available) };
     this.studioTick(cx, now);
-    this.landed = pkg.stage === "done";
+    this.landed = pkg.stage === "ended";
     const w = this.worker;
     const live = w.state === "live";
     const paneList = panes();
@@ -890,8 +891,12 @@ export default class Lens extends View {
     });
   }
 
+  // The recommended choice of a decision prompt starts selected.
   openAnswer(question, cx) {
-    if (!this.answers[question.key]) this.answers[question.key] = { input: this.input(question.prompt ? "Optional note" : "Your answer", true), choice: null, pending: false, error: null };
+    if (!this.answers[question.key]) {
+      const recommended = question.prompt?.options?.find((o) => o.recommended)?.id ?? null;
+      this.answers[question.key] = { input: this.input(question.prompt ? "Optional note" : "Your answer", true), choice: recommended, pending: false, error: null };
+    }
     this.answers[question.key].open = true;
     if (!question.prompt) this.answers[question.key].input.focus();
     cx.notify();
@@ -901,7 +906,7 @@ export default class Lens extends View {
     const draft = this.answers[question.key];
     cx.spawn(async (cx) => {
       const submission = C.submitAction(draft,
-        async () => C.postAction(this.endpoint, C.answerPath(question), C.answerBody(question, draft.choice, draft.input.value()), this.request),
+        async () => C.postAction(this.endpoint, question.route, C.answerBody(question, draft.choice, draft.input.value()), this.request),
         () => { draft.open = false; draft.saved = true; draft.input.set_value(""); this.retry(cx); });
       cx.notify();
       await submission;
@@ -909,24 +914,51 @@ export default class Lens extends View {
     });
   }
 
-  focusAgent(binding, cx) {
-    if (!binding?.available || this.jumps[binding.address]?.pending) return;
-    const action = this.jumps[binding.address] = { pending: false, error: null };
+  // ---------- Operator actions ----------
+
+  // An action that asks again: armed by the first click, for a few seconds.
+  arm(key, cx) {
+    this.ops[key] = { armed: true, pending: false, error: null };
+    cx.timer.after(4000, (cx) => { if (this.ops[key]?.armed && !this.ops[key].pending) { this.ops[key] = { ...this.ops[key], armed: false }; cx.notify(); } });
+    cx.notify();
+  }
+
+  // One operator POST on this factory's native routes, then a fresh read. A refusal stays beside
+  // the control that sent it.
+  operate(key, path, body, cx) {
+    const op = this.ops[key] = { ...(this.ops[key] ?? {}), armed: false };
+    if (op.pending) return;
     cx.spawn(async (cx) => {
-      const submission = C.submitAction(action, async () => {
-        await C.requireAgentAccess(this.endpoint, this.request);
-        let result;
-        try { result = await exec(binding.host.node, M.bindingCheckArgs(binding), { on: binding.machine }); }
-        catch { throw new Error("Agent helper unavailable. Check the execution host."); }
-        if (!M.checkedBinding(binding, result, terminals())) throw new Error("Agent unavailable. Refresh and try again.");
-        return M.agentDestination(binding, panes(), spaces());
-      }, destination => {
-        if (destination.pane) run("pane.focus", { pane: destination.pane });
-        else {
-          this.companion = destination.alongside;
-          run("space.select", { id: destination.space });
-          run("terminal.keep", { terminal: binding.address, place: destination.alongside ? "right" : "tab" });
-        }
+      const submission = C.submitAction(op, async () => C.postAction(this.endpoint, `${C.OPERATOR}${path}`, body, this.request), () => { delete this.ops[key]; this.retry(cx); });
+      cx.notify();
+      await submission;
+      cx.notify();
+    });
+  }
+
+  openFeedback(decision, cx) {
+    if (!this.feedback[decision.key]) this.feedback[decision.key] = { input: this.input("What should change, and why?", true), pending: false, error: null };
+    const draft = this.feedback[decision.key];
+    draft.open = true;
+    draft.input.focus();
+    cx.notify();
+  }
+
+  // Feedback goes to the decision's terminal. With `focus`, the panel also puts "Decision feedback:
+  // …" in that terminal's input, unsent, and opens it there.
+  sendFeedback(decision, focus, cx) {
+    const draft = this.feedback[decision.key];
+    const text = draft.input.value().trim();
+    if (!text) { draft.error = "Write the feedback first."; cx.notify(); return; }
+    cx.spawn(async (cx) => {
+      const submission = C.submitAction(draft, async () => {
+        await C.postAction(this.endpoint, `${C.OPERATOR}/decisions/${encodeURIComponent(decision.id)}/feedback`, { text }, this.request);
+        if (focus) await this.prefill(decision.by.address, `Decision feedback: ${text}`);
+      }, () => {
+        draft.open = false;
+        draft.input.set_value("");
+        if (focus) this.focusTerminal(decision.by.address, cx);
+        this.retry(cx);
       });
       cx.notify();
       await submission;
@@ -934,23 +966,59 @@ export default class Lens extends View {
     });
   }
 
-  // Enter on a package opens its review when it has review rounds, else its worker once a check
-  // says it is live.
+  // Pastes text into a terminal's input without pressing Enter, once the connected factory is
+  // confirmed online and the terminal runs.
+  async prefill(address, text) {
+    await C.requireAgentAccess(this.endpoint, this.request);
+    if (!this.running(address)) throw new Error(`The feedback is saved, but ${address} isn't running where Herdr can reach it.`);
+    const result = await hc(["send", "--no-submit", address, text]);
+    if (result && typeof result.code === "number" && result.code !== 0) throw new Error(`The feedback is saved, but it couldn't be put into ${address}.`);
+  }
+
+  // Whether a terminal runs where Herdr reaches it.
+  running(address) {
+    return terminals().some((k) => k.address === address && k.state === "live");
+  }
+
+  // Focuses a running terminal: its pane when one shows it, else beside the shown space on its
+  // machine. Only for the connected factory while it is online: a copied ledger's addresses may name
+  // other terminals now.
+  focusTerminal(address, cx) {
+    const key = `focus:${address}`;
+    if (this.ops[key]?.pending) return;
+    const op = this.ops[key] = { pending: true, error: null };
+    cx.spawn(async (cx) => {
+      try {
+        await C.requireAgentAccess(this.endpoint, this.request);
+        if (!this.running(address)) throw new Error(`${address} isn't running where Herdr can reach it.`);
+        const split = address.indexOf("/");
+        const destination = M.agentDestination({ address, machine: split < 0 ? null : address.slice(0, split) }, panes(), spaces());
+        if (destination.pane) run("pane.focus", { pane: destination.pane });
+        else {
+          this.companion = destination.alongside;
+          run("space.select", { id: destination.space });
+          run("terminal.keep", { terminal: address, place: destination.alongside ? "right" : "tab" });
+        }
+        delete this.ops[key];
+      } catch (caught) {
+        op.pending = false;
+        op.error = caught.message;
+        cx.timer.after(5000, (cx) => { if (this.ops[key] === op) delete this.ops[key]; cx.notify(); });
+      }
+      try { cx.notify(); } catch { /* closed meanwhile */ }
+    });
+  }
+
+  // Enter on a package opens its review when it has review rounds, else its running terminal.
   openPackage(cx) {
     const pkg = this.currentJob?.packages.find((p) => p.id === this.pkgSel);
-    if (pkg && R.roundsOf(pkg).length) {
+    if (!pkg) return false;
+    if (R.roundsOf(pkg).length) {
       this.openReview(this.currentJob.id, pkg.id, null, cx);
       return true;
     }
-    return this.openPackageAgent(cx);
-  }
-
-  openPackageAgent(cx) {
-    const job = this.currentJob;
-    if (!job || !this.pkgSel || !this.shown) return false;
-    const worker = J.participants(job, this.shown.bindings, this.agentChecks, Date.now()).find((p) => p.pkgId === this.pkgSel);
-    if (worker?.state !== "live" || this.net.data?.offline !== false) return false;
-    this.focusAgent(worker.binding, cx);
+    if (pkg.owner?.liveness !== "live") return false;
+    this.focusTerminal(pkg.owner.address, cx);
     return true;
   }
 
@@ -1063,14 +1131,14 @@ export default class Lens extends View {
     }
 
     const desk = L.deskOf(this.deskTopics(), this.spaceList());
-    this.place = L.placeJobs(board.jobs, desk, this.repoTopics);
+    this.place = L.placeJobs([...board.jobs, ...board.cards], desk, this.repoTopics);
     if (this.role === "panel" && !this.pin) this.follow(board, desk, cx);
     if (this.awaiting && board.jobs.some((job) => job.id === this.awaiting)) this.awaiting = null;
     const path = this.path = L.resolvePath(this.path, desk, board.jobs, this.awaiting);
     if (this.scoped) this.registerTab(cx, path.job ?? L.scopeTabKey(path));
     this.level = L.levelOf(path);
     const trail = L.crumbs(path, desk, board.jobs);
-    const needs = M.verdictCounts(board.jobs).needs;
+    const needs = M.verdictCounts(board.jobs, board.cards).needs;
 
     if (this.level === "job") {
       const job = board.jobs.find((j) => j.id === path.job);
@@ -1085,6 +1153,6 @@ export default class Lens extends View {
     if (this.intake) return this.root(t, [...top, O.intakeForm(this, t)]);
     const rows = L.factoryRows(board.jobs, desk, this.place).map((row) => ({ ...row, chiefs: this.chiefsOf(row, board, desk, bindings, now) }));
     this.watch("factory", rows.flatMap((row) => row.chiefs.flatMap((c) => c.agent.bindings)));
-    return this.root(t, [...top, O.factoryLevel(this, t, board.jobs, rows, now)]);
+    return this.root(t, [...top, O.factoryLevel(this, t, board, rows, now)]);
   }
 }

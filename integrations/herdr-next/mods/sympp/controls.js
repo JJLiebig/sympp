@@ -1,4 +1,6 @@
 // Native JSON actions share the backend's persisted operator contracts.
+// Operator actions (answers, decisions, Finish, Release, task phase, cards) live under this path.
+export const OPERATOR = "/api/v1/sympp/herdr";
 export function requestBody(fields) {
   const body = Object.fromEntries(["title", "repo", "base_branch", "human_description"].map((key) => [key, fields[key].trim()]));
   if (Object.values(body).some((value) => !value)) throw new Error("Fill in the title, repository, base branch and request.");
@@ -19,11 +21,6 @@ export function answerBody(question, choice, text) {
   return { answer_choice: choice, ...(note ? { answer_note: note } : {}) };
 }
 
-// The board's own answer route for an ask it reports, else the clarification question's route.
-export function answerPath(question) {
-  return question.route ?? `/api/v1/sympp/herdr/work-requests/${encodeURIComponent(question.jobId)}/questions/${encodeURIComponent(question.id)}/answer`;
-}
-
 export async function postAction(endpoint, path, body, fetcher = fetch) {
   const response = await fetcher(`${endpoint}${path}`, {
     method: "POST", headers: { accept: "application/json", "content-type": "application/json" }, body: JSON.stringify(body),
@@ -34,7 +31,8 @@ export async function postAction(endpoint, path, body, fetcher = fetch) {
   return payload;
 }
 
-// A copied ledger can retain live WR IDs; agent access belongs to the currently connected factory.
+// A copied ledger can retain live WR IDs and terminal addresses; focusing or typing into a terminal
+// belongs to the currently connected factory.
 export async function requireAgentAccess(endpoint, fetcher = fetch) {
   const response = await fetcher(`${endpoint}/api/v1/sympp/herdr/dashboard`, { headers: { accept: "application/json" } });
   const payload = await response.json().catch(() => null);

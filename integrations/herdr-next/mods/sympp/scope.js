@@ -2,29 +2,27 @@
 // narrows the tasks to its repository. Health comes from one place, each package's own evidence, so a
 // task and its drill-in can never disagree. No GPUI or Herdr imports.
 
-import { shortRepo } from "./model.js";
+import { shortRepo, LIVE_STAGES } from "./model.js";
 import { NOWHERE, spaceRepo, spaceById } from "./levels.js";
 
-const LIVE = new Set(["build", "checks", "review", "merge"]);
 const keyOf = (value) => shortRepo(value ?? "").toLowerCase();
-const isOpen = (q) => q.status === "open";
 
 // Package progress carries no inferred human attention.
 export function packageEvidence(pkg, now, needsYou = false) {
-  const live = LIVE.has(pkg.stage);
-  return { pkg, needsYou, issues: [], active: live || (pkg.stage !== "done" && needsYou) };
+  const live = LIVE_STAGES.includes(pkg.stage);
+  return { pkg, needsYou, active: live || (pkg.stage !== "ended" && needsYou) };
 }
 
 // The PR's checks as one live signal, apart from the step line: "waiting" before they start, then
 // "running", "passed" or "failed"; "unknown" when the PR's checks can't be read. Checks the PR
 // reports always show. `has_ci` comes from the local checkout's workflows, so it only decides whether
-// a repository keeps an empty slot before then.
+// a repository keeps an empty slot before then. Works for packages and cards alike.
 const CHECKS = { pending: "running", passing: "passed", failing: "failed", unavailable: "unknown" };
 const REPORTED = new Set(["running", "passed", "failed"]);
-export function ciOf(pkg) {
-  if (pkg.track === "no_pr" || pkg.stage === "done") return null;
-  const state = CHECKS[pkg.pr.checks] ?? "waiting";
-  return REPORTED.has(state) || pkg.ci === true ? state : null;
+export function ciOf(item) {
+  if (item.stage === "ended" || item.state === "merged" || item.state === "done") return null;
+  const state = CHECKS[item.pr.checks] ?? "waiting";
+  return REPORTED.has(state) || item.ci === true ? state : null;
 }
 
 // A task's checks at a glance: any failing, else any running, else passed once any passed. A task
@@ -35,88 +33,87 @@ export function taskCi(packages) {
   return ["failed", "running", "passed", "unknown"].find((s) => states.includes(s)) ?? "waiting";
 }
 
-// Where a review stands, in a word or two: GitHub once Review Suite's next action is the GitHub
-// review, else its current step. Names are Review Suite's shipped steps; others keep their own words.
-const PHASES = { "arena-base-review": "base review", "base-signoff": "base sign-off", "arena-deep-review": "deep review", "deep-signoff": "deep sign-off" };
-export function reviewPhase(pkg) {
-  if (pkg.review.status === "inspection_needed") return "caller inspection needed";
-  if (pkg.review.nextAction === "github_review") return "GitHub";
-  const step = pkg.review.steps?.find((s) => s.state === "current")?.name ?? pkg.review.step;
-  if (!step) return null;
-  const key = String(step).trim().toLowerCase();
-  return PHASES[key] ?? key.split(/[-_\s]+/).filter(Boolean).slice(0, 2).join(" ");
+// The review's mode and state in a word or two: "fast · done", "normal · round 2", "deep · findings".
+// Mode none is said plainly; no review recorded says nothing.
+export function reviewText(review) {
+  if (!review?.mode) return null;
+  if (review.mode === "none") return "no review";
+  const round = review.round > 1 ? `round ${review.round}` : null;
+  const state = review.state === "running" ? round ?? "running" : review.state === "findings" ? "findings" : review.state;
+  return [review.mode, state].filter(Boolean).join(" · ");
 }
 
-// A package in Build that no worker has taken yet.
-export const unmanned = (pkg) => pkg.stage === "build" && pkg.dispatchedAt === null && !pkg.run && !pkg.activity.actor;
+// A package dispatched whose worker terminal hasn't shown up yet.
+export const unmanned = (pkg) => pkg.stage === "launching";
 
-// A question the panel can answer: the board's own route when it gives one.
-function answerable(job, ask) {
-  const known = job.questions.find((q) => q.id === ask.id);
-  return { key: `ask:${ask.id}`, id: ask.id, kind: "ask", jobId: job.id, pkgId: ask.pkgId, text: ask.text, prompt: known?.prompt ?? null, status: "open", route: ask.route };
-}
-
+// The task's open asks, each answerable here through its own route.
 export function asksOf(job) {
-  if (Array.isArray(job.asks)) {
-    return job.asks.filter((ask) => ask.text?.trim()).map((ask) => ({
-      key: `ask:${ask.id}`, text: ask.text,
-      pkgId: ask.pkgId, question: ask.route ? answerable(job, ask) : null,
-    }));
-  }
-  const asks = [];
-  for (const need of job.needs) {
-    if (need.kind === "ask") asks.push({ key: need.key, text: need.text, question: null, pkgId: null });
-    else if (need.id) asks.push({ key: need.key, text: need.text, question: job.questions.find((q) => q.key === need.key) ?? null, pkgId: need.pkgId });
-  }
-  for (const q of job.questions.filter(isOpen)) asks.push({ key: q.key, text: q.text, question: q, pkgId: null });
-  const seen = new Set();
-  return asks.filter((ask) => {
-    const text = String(ask.text ?? "").trim().toLowerCase();
-    if (!text || seen.has(text)) return false;
-    seen.add(text);
-    return true;
-  });
+  return job.asks.map((ask) => ({ key: ask.key, text: ask.text, pkgId: ask.pkgId, by: ask.by, question: ask }));
 }
 
-// The web board's strip: one box per package, run by the architect's top-level groups in their own
-// order, each run in planned order, packages outside any group last.
+// The web board's strip: one box per package, run by phase (the first segment of each group path)
+// in the order the phases first appear, ungrouped work last. Dropped packages leave the strip.
 export function stripOf(job) {
   const counted = job.packages.filter((pkg) => pkg.outcome !== "dropped");
   const order = [...(job.phases ?? []), null];
-  const runs = order.map((phase) => ({ phase, pkgs: counted.filter((pkg) => (order.includes(pkg.phase ?? null) ? pkg.phase ?? null : null) === phase) }))
-    .filter((run) => run.pkgs.length);
+  const runs = order.map((phase) => ({ phase, pkgs: counted.filter((pkg) => (pkg.phase ?? null) === phase) })).filter((run) => run.pkgs.length);
   for (const run of runs) run.pkgs.sort((a, b) => a.seq - b.seq);
   return runs;
 }
 
-// A task shows recorded asks, progress and its place in the scope.
+// Package entries under their group paths: a phase per first segment, each nested group inside its
+// parent, in the order their packages are planned; ungrouped packages last, in a node named null.
+export function groupTree(entries) {
+  const root = { name: null, depth: -1, items: [], children: [] };
+  for (const entry of [...entries].sort((a, b) => a.pkg.seq - b.pkg.seq)) {
+    let node = root;
+    entry.pkg.group.forEach((name, depth) => {
+      let next = node.children.find((c) => c.name === name);
+      if (!next) node.children.push(next = { name, depth, items: [], children: [] });
+      node = next;
+    });
+    node.items.push(entry);
+  }
+  return [...root.children, ...(root.items.length ? [{ name: null, depth: 0, items: root.items, children: [] }] : [])];
+}
+
+// A task shows recorded asks, decisions to review, progress and its place in the scope.
 export function taskOf(job, now) {
   const asks = asksOf(job);
   const evidence = job.packages.filter((pkg) => pkg.outcome !== "dropped").map((pkg) => packageEvidence(pkg, now, asks.some((ask) => ask.pkgId === pkg.id)));
-  const unique = [];
-  const later = !asks.length && (job.lane === "backlog" || job.lane === "landed" || job.state === "settled");
-  const ci = taskCi(evidence.map((e) => e.pkg));
-  return { job, evidence, asks, issues: unique, strip: stripOf(job), total: evidence.length, ci, later, band: asks.length ? 0 : unique.length ? 1 : 2 };
+  const archived = job.lane === "archived";
+  const later = !asks.length && (archived || job.lane === "backlog" || job.lane === "landed" || job.state === "settled");
+  return { job, evidence, asks, decisions: job.decisions, strip: stripOf(job), total: evidence.length, ci: taskCi(evidence.map((e) => e.pkg)),
+    later, archived, band: asks.length ? 0 : 2 };
 }
 
-// The tasks a Topic or Space shows: every task touching it, once, in a stable order. What needs
-// the person comes first, then what went wrong, then the rest, each by when it was opened, so a
-// task never moves just because it advanced. Work settled for over a day and dormant work leave
-// for the dashboard.
-export function scopeTasks(path, desk, jobs, place, now) {
-  let touching;
+// Whether a job or card, by its repositories, touches the scope.
+function touching(path, desk, place) {
   if (path.space) {
     const found = spaceById(desk, path.space);
     const key = found ? spaceRepo(found.space) : null;
-    touching = key ? jobs.filter((job) => job.repos.some((repo) => keyOf(repo) === key)) : [];
-  } else if (path.topic === NOWHERE) {
-    touching = jobs.filter((job) => place.home(job) === NOWHERE);
-  } else {
-    touching = jobs.filter((job) => place.touches(job, path.topic));
+    return (item) => Boolean(key) && item.repos.some((repo) => keyOf(repo) === key);
   }
-  return touching.filter((job) => job.lane !== "settled" && job.lane !== "dormant")
+  if (path.topic === NOWHERE) return (item) => place.home(item) === NOWHERE;
+  return (item) => place.touches(item, path.topic);
+}
+
+// The tasks a Topic or Space shows: every task touching it, once, in a stable order. What needs
+// the person comes first, then the rest, each by when it was opened, so a task never moves just
+// because it advanced. Work settled for over a day and dormant work leave for the dashboard;
+// archived work keeps a shelf so it can be restored.
+export function scopeTasks(path, desk, jobs, place, now) {
+  return jobs.filter(touching(path, desk, place)).filter((job) => job.lane !== "settled" && job.lane !== "dormant")
     .map((job) => taskOf(job, now))
     .sort((a, b) => a.band - b.band || a.job.createdAt - b.job.createdAt || String(a.job.id).localeCompare(String(b.job.id)));
+}
+
+// The small-work cards a Topic or Space shows: working and in review first, then merged and done,
+// each newest first.
+const CARD_ORDER = { working: 0, review_ci: 0, merged: 1, done: 1 };
+export function scopeCards(path, desk, cards, place) {
+  return (cards ?? []).filter(touching(path, desk, place))
+    .sort((a, b) => CARD_ORDER[a.state] - CARD_ORDER[b.state] || (b.since ?? 0) - (a.since ?? 0));
 }
 
 // The drill-in's parts: the packages at work or waiting on the person each get a row, in planned
@@ -125,8 +122,8 @@ export function packageParts(task) {
   const bySeq = (a, b) => a.pkg.seq - b.pkg.seq;
   return {
     active: task.evidence.filter((e) => e.active).sort(bySeq),
-    landed: task.evidence.filter((e) => e.pkg.stage === "done").sort(bySeq),
-    queued: task.evidence.filter((e) => !e.active && e.pkg.stage === "queued").sort(bySeq),
+    landed: task.evidence.filter((e) => e.pkg.stage === "ended").sort(bySeq),
+    queued: task.evidence.filter((e) => !e.active && e.pkg.stage === "planned").sort(bySeq),
   };
 }
 

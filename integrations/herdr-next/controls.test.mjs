@@ -30,20 +30,17 @@ test('native origins reject embedded credentials and paths, while dashboard link
   assert.equal(M.dashboardUrl('http://localhost:4000', 'http://user:private@localhost:4000/sympp'), 'http://localhost:4000/sympp');
 });
 
-test('open questions are answerable detail, while explicit escalation needs the operator', () => {
+test('every ask is answerable at its own operator route, with its decision prompt; nothing else needs the person', () => {
   const ordinary = detail('wr1', 'owner/web');
-  ordinary.clarification_questions = [{ id: 'q1', question: 'Which order?', status: 'open', decision_prompt: prompt }];
-  const escalated = detail('wr2', 'owner/api', [{ id: 'wp2', repo: 'owner/api' }]);
-  escalated.work_request.operator_report = { human_escalation: { question: 'Budget decision?', raised_at: '2026-10-25T12:30:00Z' } };
-  const [normal, urgent] = board([ordinary, escalated]).jobs;
-  assert.equal(normal.needs[0].text, "Which order?");
-  assert.equal(normal.questions[0].id, 'q1');
-  assert.deepEqual(C.answerBody(normal.questions[0], 'api_first', ''), { answer_choice: 'api_first' });
-  assert.equal(C.answerPath(normal.questions[0]), '/api/v1/sympp/herdr/work-requests/wr1/questions/q1/answer');
-  assert.equal(C.answerPath({ ...normal.questions[0], route: '/api/v1/sympp/herdr/work-requests/w/questions/q/answer' }), '/api/v1/sympp/herdr/work-requests/w/questions/q/answer', 'an ask the board routes answers through its own route');
-  assert.equal(urgent.needs.length, 1);
-  assert.equal(urgent.needs[0].id, undefined, 'escalation text must not become a postable question');
-  assert.equal(L.needsQueue([normal, urgent]).length, 2);
+  ordinary.asks = [{ id: 'q 1', question: 'Which order?', decision_prompt: prompt, asked_by: { address: 'box/t4', role: 'architect', liveness: 'live' } }];
+  const quiet = detail('wr2', 'owner/api', [{ id: 'wp2', repo: 'owner/api', status: 'dispatched', progress: { stage: 'implementing' } }]);
+  quiet.work_request.operator_report = { human_escalation: { question: 'Budget decision?', raised_at: '2026-10-25T12:30:00Z' } };
+  const [normal, other] = board([ordinary, quiet]).jobs;
+  assert.equal(normal.needs[0].text, 'Which order?');
+  assert.equal(normal.asks[0].route, '/api/v1/sympp/herdr/asks/q%201/answer');
+  assert.deepEqual(C.answerBody(normal.asks[0], 'api_first', ''), { answer_choice: 'api_first' });
+  assert.equal(other.needs.length, 0, 'an old escalation is no ask');
+  assert.equal(L.needsQueue([normal, other]).length, 1);
 });
 
 const host = { node: 'C:\\Program Files\\nodejs\\node.exe', helper: 'C:\\Herdr Home\\tools\\sympp-herdr.js', session: 'scratch' };
@@ -200,11 +197,11 @@ test('native actions send JSON-only requests and surface persisted success or ac
   const endpoint = `http://127.0.0.1:${server.address().port}`;
   const payload = await C.postAction(endpoint, '/api/v1/sympp/herdr/work-requests', C.requestBody({ title: ' New job ', repo: 'owner/repo', base_branch: 'main', human_description: 'A bounded change' }));
   assert.equal(payload.work_request.work_request.id, 'new-job');
-  const question = { kind: 'question', jobId: 'wr/1', id: 'q 1', prompt };
-  await C.postAction(endpoint, C.answerPath(question), C.answerBody(question, 'api_first', 'Include docs'));
-  await assert.rejects(C.postAction(endpoint, C.answerPath(question), { answer: 'stale' }), /This question was answered. Refresh the job/);
+  const question = { route: '/api/v1/sympp/herdr/asks/q%201/answer', prompt };
+  await C.postAction(endpoint, question.route, C.answerBody(question, 'api_first', 'Include docs'));
+  await assert.rejects(C.postAction(endpoint, question.route, { answer: 'stale' }), /This question was answered. Refresh the job/);
   assert.equal(received[0].body.title, 'New job');
-  assert.equal(received[1].url, '/api/v1/sympp/herdr/work-requests/wr%2F1/questions/q%201/answer');
+  assert.equal(received[1].url, '/api/v1/sympp/herdr/asks/q%201/answer');
   assert.deepEqual(received[1].body, { answer_choice: 'api_first', answer_note: 'Include docs' });
   for (const req of received) {
     assert.equal(req.method, 'POST');

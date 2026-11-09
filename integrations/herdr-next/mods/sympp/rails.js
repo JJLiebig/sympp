@@ -9,11 +9,11 @@ export function roundsOf(pkg) {
   const history = new Map((pkg.review.history ?? []).map((h) => [h.n, h]));
   const reviewed = pkg.review.type || (pkg.review.status && pkg.review.status !== "unavailable") || pkg.review.startedAt !== null || history.size > 0;
   const count = Math.max(pkg.round, ...history.keys());
-  if (!reviewed || count < 1 || (pkg.stage === "queued" && count <= 1 && !history.size)) return [];
+  if (!reviewed || count < 1 || (pkg.stage === "planned" && count <= 1 && !history.size)) return [];
   return Array.from({ length: count }, (_, i) => {
     const n = i + 1;
     const h = history.get(n) ?? null;
-    const current = n === count && pkg.stage === "review" && (!h || h.finishedAt === null);
+    const current = n === count && pkg.stage === "review_ci" && (!h || h.finishedAt === null);
     const outcome = h?.outcome ? `${h.outcome}${h.findings !== null ? ` (${h.findings})` : ""}` : null;
     const took = h?.startedAt !== null && h?.startedAt !== undefined && h.finishedAt !== null ? span(h.finishedAt - h.startedAt) : null;
     return {
