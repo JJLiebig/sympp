@@ -1900,6 +1900,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert {:ok, _run} = AgentRunRepository.start_run(repo, %{work_package_id: live.id, status: "running"})
       assert {:ok, _run} = AgentRunRepository.start_run(repo, %{work_package_id: stale.id, status: "running", last_seen_at: DateTime.add(DateTime.utc_now(:microsecond), -600, :second)})
       capture_pastes!()
+      # The asker is on another core, named jjdev, so the answer goes to jjdev/t7.
+      Application.put_env(:symphony_elixir, :sympp_herdr_core, fn -> {:ok, %{core_id: "factory-core", terminals: %{}}} end)
+      on_exit(fn -> Application.put_env(:symphony_elixir, :sympp_herdr_core, nil) end)
       assert {:ok, question} = Asks.open(repo, asking_terminal("t7"), %{"work_request_id" => request.id, "question" => "Which region?"})
 
       read = fn ->
@@ -1922,6 +1925,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert_received {:pasted, "jjdev/t7", "Answer: Europe"}
       assert read.()["asks"] == []
       assert %Ask{state: "answered", answer: "Europe", answered_by: "operator", delivered_at: %DateTime{}} = repo.get!(Ask, question.id)
+    end)
+  end
+
+  test "an answer goes only to a terminal the factory can name without ambiguity", %{repo: repo} do
+    with_local_operator_endpoint(fn ->
+      request = create_work_request!(repo, id: "WR-ASK-TARGETS")
+      capture_pastes!()
+      answer = fn ask -> json_response(post(local_operator_conn(), "/api/v1/sympp/operator/asks/#{ask.id}/answer", %{answer: "Yes"}), 200)["delivery"] end
+      on_exit(fn -> Application.put_env(:symphony_elixir, :sympp_herdr_core, nil) end)
+
+      # The factory's own core sees the asker live: its bare address is enough.
+      factory_core = fn core_id, terminals ->
+        snapshot = {:ok, %{core_id: core_id, terminals: terminals}}
+        Application.put_env(:symphony_elixir, :sympp_herdr_core, fn -> snapshot end)
+      end
+
+      factory_core.("core-test", %{"t3" => %{"state" => "live"}})
+      assert {:ok, local} = Asks.open(repo, asking_terminal("t3"), %{"work_request_id" => request.id, "question" => "Local?"})
+      assert %{"state" => "delivered"} = answer.(local)
+      assert_received {:pasted, "t3", "Answer: Yes"}
+
+      # Another core without a name: a bare address could hit a terminal on the factory host.
+      factory_core.("factory-core", %{"t4" => %{"state" => "live"}})
+      unnamed = Terminal.from_meta(%{"core_id" => "core-unnamed", "terminal_id" => "t4"})
+      assert {:ok, remote} = Asks.open(repo, unnamed, %{"work_request_id" => request.id, "question" => "Remote?"})
+      assert answer.(remote) == %{"state" => "not_delivered", "reason" => "terminal_unreachable"}
+      refute_received {:pasted, _target, _text}
     end)
   end
 

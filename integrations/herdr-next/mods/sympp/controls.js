@@ -23,8 +23,9 @@ export function answerBody(question, choice, text) {
 // when it was delivered. The answer stays on the ask either way.
 const UNDELIVERED = {
   terminal_finished: "the asking terminal has finished",
+  terminal_unreachable: "sympp can't reach the asking terminal",
   no_asking_terminal: "the ask has no asking terminal",
-  send_failed: "sympp couldn't reach the asking terminal",
+  send_failed: "sending it to the asking terminal failed",
 };
 export function undeliveredNote(payload) {
   const delivery = payload?.delivery;

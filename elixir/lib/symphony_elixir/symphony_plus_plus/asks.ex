@@ -136,25 +136,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   defp deliver(_repo, %Ask{asked_by_terminal: nil} = ask), do: {:ok, ask, %{"state" => "not_delivered", "reason" => "no_asking_terminal"}}
 
   defp deliver(repo, %Ask{} = ask) do
-    finished? =
-      case Terminal.split_key(ask.asked_by_terminal) do
-        {core_id, address} -> HerdrCore.view(core_id, address, confirm: true) == :finished
-        :error -> true
-      end
+    case delivery_target(ask) do
+      {:ok, target} ->
+        if HerdrCore.paste(target, "Answer: " <> ask.answer) == :ok do
+          now = DateTime.utc_now(:microsecond)
+          repo.update_all(from(row in Ask, where: row.id == ^ask.id), set: [delivered_at: now, updated_at: now])
+          {:ok, %{ask | delivered_at: now}, %{"state" => "delivered", "to" => ask.asked_by_address}}
+        else
+          {:ok, ask, %{"state" => "not_delivered", "reason" => "send_failed"}}
+        end
 
-    cond do
-      finished? ->
-        {:ok, ask, %{"state" => "not_delivered", "reason" => "terminal_finished"}}
-
-      HerdrCore.paste(ask.asked_by_address, "Answer: " <> ask.answer) == :ok ->
-        now = DateTime.utc_now(:microsecond)
-        repo.update_all(from(row in Ask, where: row.id == ^ask.id), set: [delivered_at: now, updated_at: now])
-        {:ok, %{ask | delivered_at: now}, %{"state" => "delivered", "to" => ask.asked_by_address}}
-
-      true ->
-        {:ok, ask, %{"state" => "not_delivered", "reason" => "send_failed"}}
+      {:error, reason} ->
+        {:ok, ask, %{"state" => "not_delivered", "reason" => reason}}
     end
   end
+
+  # Only a terminal the factory can name without ambiguity is typed into: one
+  # its own herdr-core sees live (by bare address), or one on another core
+  # named `machine/address`. A bare address on another core could match an
+  # unrelated terminal on the factory host.
+  defp delivery_target(%Ask{asked_by_terminal: key, asked_by_address: address}) do
+    case Terminal.split_key(key) do
+      {core_id, terminal} -> target_in_view(HerdrCore.view(core_id, terminal, confirm: true), terminal, address)
+      :error -> {:error, "terminal_unreachable"}
+    end
+  end
+
+  defp target_in_view({:live, _record}, terminal, _address), do: {:ok, terminal}
+  defp target_in_view(:finished, _terminal, _address), do: {:error, "terminal_finished"}
+
+  defp target_in_view(:unseen, _terminal, address) when is_binary(address) do
+    if String.contains?(address, "/"), do: {:ok, address}, else: {:error, "terminal_unreachable"}
+  end
+
+  defp target_in_view(_unseen_or_unknown, _terminal, _address), do: {:error, "terminal_unreachable"}
 
   @doc "Withdraws the open asks that name these packages, which have just ended. Joins the caller's transaction."
   @spec withdraw_for_packages(repo(), [String.t()]) :: :ok

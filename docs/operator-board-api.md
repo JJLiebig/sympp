@@ -98,6 +98,7 @@ requires a nonblank `answer_note`. Without a structured prompt, submit
 author, then types `Answer: <answer>` into the asking terminal's input without
 submitting it. `delivery` reports the outcome: `{state: "delivered", to}`, or
 `{state: "not_delivered", reason}` with `reason` `terminal_finished`,
+`terminal_unreachable` (the factory can't name that terminal without ambiguity),
 `no_asking_terminal` or `send_failed`; the answer stays on the ask either way.
 An answer does not resume or unblock work by itself.
 
