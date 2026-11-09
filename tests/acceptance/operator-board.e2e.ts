@@ -22,7 +22,7 @@ test('operator sees dependency ordering, pending qualification and actual delive
   await app.open('/sympp/board');
   const goal = browser.locator(`[data-goal="${request}"]`);
   if (!candidate.recording) {
-  await screen.getByText('Not started', { exact: false }).tap();
+  await screen.getByText('Not started', { exact: false, visible: true }).tap();
   await expect(goal).toContainText('0/2 done');
 
   await client.call('dispatch_work_package', { work_package_id: first });
@@ -34,14 +34,12 @@ test('operator sees dependency ordering, pending qualification and actual delive
     await expect(screen.getByLabel('Finished goals are archived after', { exact: false })).toBeVisible();
     throw new Error('Unrecorded model action unexpectedly returned');
   }
-  if (process.env.SYMPP_BROWSER_MECHANICAL === '1') {
-    await screen.getByRole('button', 'Expanded', { exact: true }).tap();
-  } else await agent.act('Select Expanded in the Show navigation');
+  await screen.getByRole('button', 'Expanded', { exact: true }).tap();
   await expect(screen.getByRole('button', 'See all 2 packages', { exact: true })).toBeVisible();
   await screen.getByRole('button', 'See all 2 packages', { exact: true }).tap();
   await expect(goal).toContainText('Service prerequisite');
   await expect(goal).toContainText('Dependent findings');
-  await expect(goal).toContainText('queued');
+  await expect(goal).toContainText('Planned');
   await expect(goal).toContainText('0/2 done');
   await screen.getByRole('button', 'sympp settings', { exact: true }).tap();
   await expect(screen.getByLabel('Finished goals are archived after', { exact: false })).toBeVisible();
@@ -54,7 +52,8 @@ test('operator sees dependency ordering, pending qualification and actual delive
   await candidate.capture('ci-wait');
   await browser.reload();
   await screen.getByRole('button', 'Expanded', { exact: true }).tap();
-  await expect(browser.locator(`[data-goal="${request}"] ol span.font-semibold`)).toContainText('Checks');
+  await expect(goal).toContainText('Review/CI');
+  await expect(goal).toContainText('CI running');
   expect((await row(client, request, first)).delivery_outcome).toBeNull();
   expect((await client.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.completed_at).toBeNull();
   expect((await row(client, request, first)).work_package.runtime_state['active?']).toBe(false);
@@ -64,6 +63,7 @@ test('operator sees dependency ordering, pending qualification and actual delive
   await browser.reload();
   await screen.getByRole('button', 'Expanded', { exact: true }).tap();
   await expect(goal).toContainText('0/2 done');
+  await expect(goal).toContainText('Ready');
   expect((await row(client, request, first)).merge_eligibility.eligible).toBe(true);
 
   provider!.set(401, pr(401, head('a'), { state: 'MERGED', mergedAt: new Date().toISOString(), mergeCommit: { oid: head('f') } }));
@@ -76,7 +76,7 @@ test('operator sees dependency ordering, pending qualification and actual delive
   await close(client, second);
   await candidate.capture('finished');
   await browser.reload();
-  await expect(goal).toContainText('All 2 packages have landed');
+  await expect(goal).toContainText('All 2 packages have ended.');
   await expect(screen.getByRole('heading', 'Landed · last 24 hours')).toBeVisible();
   expect((await client.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.completed_at).toBeTruthy();
 
@@ -95,7 +95,7 @@ test('operator sees dependency ordering, pending qualification and actual delive
   } finally { db.close(); }
   await candidate.capture('provider-review-wait');
   await browser.reload();
-  await expect(browser.locator(`[data-goal="${reviewing}"] ol span.font-semibold`)).toContainText('Review');
+  await expect(browser.locator(`[data-goal="${reviewing}"]`)).toContainText('fast · running');
   expect((await row(reviewClient, reviewing, reviewWp)).delivery_outcome).toBeNull();
 });
 
@@ -111,14 +111,15 @@ test('operator attention differs from explicit blockers and settings/archive act
   await candidate.capture('operator-needed');
   await app.open('/sympp/board');
   const goal = browser.locator(`[data-goal="${request}"]`);
-  await expect(goal).toContainText('Approve the bounded scope?');
+  await expect(screen.getByText('Approve the bounded scope?', { visible: true })).toBeVisible();
+  await expect(goal).toContainText('Needs you');
   await expect(browser.locator('title')).toHaveText(/^\(1\)\s/);
   expect((await row(client, request, wp)).work_package.blocker_state['active?']).toBe(false);
   await client.call('set_blocker', { work_package_id: wp, blocker_id: 'schema', active: true, summary: 'Required schema missing.' });
   await client.call('resolve_ask', { ask_id: ask, to: 'withdrawn' });
   await candidate.capture('blocker-without-escalation');
   await browser.reload();
-  await expect(goal).not.toContainText('Approve the bounded scope?');
+  await expect(screen.getByText('Approve the bounded scope?')).toHaveCount(0);
   await expect(browser.locator('title')).toHaveText(/^(?!\(\d+\))\S/);
   expect((await row(client, request, wp)).work_package.blocker_state['active?']).toBe(true);
 
@@ -136,13 +137,13 @@ test('operator attention differs from explicit blockers and settings/archive act
   await screen.getByRole('button', 'Actions for Operator choice', { exact: true }).tap();
   await screen.getByRole('button', 'Archive', { exact: false }).tap();
   await screen.getByRole('button', 'Archive? Click again', { exact: false }).tap();
-  await expect(goal).toHaveCount(0);
+  await expect(goal).toContainText('archived');
   expect((await client.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.archived_at).toBeTruthy();
-  // The candidate UI has no restore control. Exercise the supported operator
-  // route mechanically, then prove the restored request returns to the UI.
-  expect((await client.operator(`/api/v1/sympp/operator/work-requests/${request}/restore`, {})).status).toBe(200);
-  await browser.reload();
-  await expect(goal).toContainText('All 1 packages have landed');
+  await screen.getByText('Archived', { exact: false, visible: true }).tap();
+  await screen.getByRole('button', 'Actions for Operator choice', { exact: true }).tap();
+  await screen.getByRole('button', 'Restore', { exact: false }).tap();
+  await screen.getByRole('button', 'Restore? Click again', { exact: false }).tap();
+  await expect(goal).toContainText('All 1 packages have ended.');
   expect((await client.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.archived_at).toBeNull();
 
   const intake = await client.operator('/api/v1/sympp/operator/work-requests', {
@@ -152,6 +153,6 @@ test('operator attention differs from explicit blockers and settings/archive act
   expect(intake.status).toBe(201);
   const intakeId = intake.body.work_request.work_request.id;
   await browser.reload();
-  await screen.getByText('Not started', { exact: false }).tap();
+  await screen.getByText('Not started', { exact: false, visible: true }).tap();
   await expect(browser.locator(`[data-goal="${intakeId}"]`)).toContainText('Operator intake');
 });

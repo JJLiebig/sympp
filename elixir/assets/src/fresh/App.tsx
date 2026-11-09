@@ -9,7 +9,7 @@ import { Briefing } from "./briefing";
 import { Cards, visibleCards } from "./cards";
 import { Decisions } from "./decisions";
 import { applyDemo, demoLedger, type DemoLedger } from "./mock";
-import { buildBoard, liveCountAt, viewAt, type Archived, type Board, type HistoryEvent, type Hydrated, type Settings } from "./model";
+import { buildBoard, liveCountAt, openAt, viewAt, type Archived, type Board, type HistoryEvent, type Hydrated, type Settings } from "./model";
 import { focusGoal, smoothly } from "./motion";
 import { ActContext, send, type OperatorAction } from "./operator";
 import { Outline } from "./outline";
@@ -186,7 +186,7 @@ function useShaped(data: Loaded | null, at: number, since: number, area: string 
   const shown = area ? views.filter((view) => view.goal.area[0] === area) : views;
   // Phases has nothing to add until a goal on the board is grouped, so it is offered only then.
   const grouped = lanesOf(views, at).main.some((view) => view.goal.pkgs.some((pkg) => pkg.group));
-  return { views, changes, asks: data?.board.asks.filter((ask) => ask.from <= at) ?? [], areas, shown, shownCards: area ? cards.filter((card) => card.area[0] === area) : cards, lanes: lanesOf(shown, at), grouped };
+  return { views, changes, asks: data?.board.asks.filter((ask) => openAt(ask, at)) ?? [], areas, shown, shownCards: area ? cards.filter((card) => card.area[0] === area) : cards, lanes: lanesOf(shown, at), grouped };
 }
 
 // A board that has never loaded shows only that it is reading, or why it could not.

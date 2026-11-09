@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { applyDemo, demoLedger } from "./mock";
-import { buildBoard, viewAt, type Hydrated } from "./model";
+import { buildBoard, openAt, viewAt, type Hydrated } from "./model";
 import { refusalText } from "./operator";
 
 const NOW = Date.parse("2026-11-09T12:00:00Z");
@@ -24,7 +24,7 @@ describe("the hydrated board as the board reads it", () => {
     const answered = applyDemo(ledger, { kind: "answer", askId: "ask-slack", answer: { text: "Added." } }, NOW);
     const { board } = buildBoard(answered.hydrated, {}, answered.archived);
 
-    expect(board.asks.map((ask) => ask.id).sort()).toEqual(["ask-release", "ask-vod"]);
+    expect(board.asks.filter((ask) => openAt(ask, NOW)).map((ask) => ask.id).sort()).toEqual(["ask-release", "ask-vod"]);
     expect(board.asks.find((ask) => ask.id === "ask-vod")).toMatchObject({ cardId: "card-jjdesktop-t6vv", goalId: null });
     expect(board.asks.find((ask) => ask.id === "ask-release")).toMatchObject({ redirect: "Neither: tell the architect what to do instead", choices: [{ id: "owner-only" }, { id: "owner-and-workers" }] });
     expect(board.decisions.find((decision) => decision.id === "dec-recap-share")).toMatchObject({ state: "feedback", undelivered: "terminal_finished" });
@@ -54,6 +54,14 @@ describe("the hydrated board as the board reads it", () => {
     expect(live.unseen.pkg).toMatchObject({ owner: { liveness: "unknown" }, review: { mode: "deep", state: "unknown", round: 2 } });
     expect(live.upstream).toMatchObject({ stage: "ready", pkg: { ci: "passing", pr: { repo: "up/app", open: true } } });
     expect(view.done.map((pkg) => [pkg.id, pkg.outcome])).toEqual([["old", "completed"]]);
+  });
+});
+
+describe("replaying the past", () => {
+  it("shows an answered ask only while it was open", () => {
+    const board = read({ work_request_details: [{ work_request: { id: "wr", phase: "active", inserted_at: "2026-11-09T08:00:00Z" }, asks: [{ id: "a", work_request_id: "wr", state: "answered", asked_at: "2026-11-09T10:00:00Z", resolved_at: "2026-11-09T11:00:00Z" }] }] });
+    const open = (at: string) => viewAt(board, Date.parse(at))[0]?.asks.map((ask) => ask.id);
+    expect([open("2026-11-09T09:30:00Z"), open("2026-11-09T10:30:00Z"), open("2026-11-09T11:30:00Z")]).toEqual([[], ["a"], []]);
   });
 });
 

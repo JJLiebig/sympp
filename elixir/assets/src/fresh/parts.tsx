@@ -66,8 +66,8 @@ const CI: Record<Ci, { label: string; tone: string; icon: typeof Check }> = {
 function reviewLabel(review: Review): { text: string; tone: string } {
   if (review.mode === "none") return { text: "none", tone: "text-faint" };
   const words = (state: string) => (review.mode ? `${review.mode} · ${state}` : state);
-  const round = review.round > 1 ? ` · round ${review.round}` : "";
-  if (review.state === "running") return { text: review.mode ? `${review.mode}${round}` : `running${round}`, tone: "text-review" };
+  // A running first round says so; a later one says which round, which implies it is running.
+  if (review.state === "running") return { text: words(review.round > 1 ? `round ${review.round}` : "running"), tone: "text-review" };
   if (review.state === "findings") return { text: words("findings"), tone: "text-checks" };
   if (review.state === "done") return { text: words("done"), tone: "text-merge/80" };
   if (review.state === "unknown") return { text: words("unknown"), tone: "text-faint" };

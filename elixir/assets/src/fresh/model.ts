@@ -58,7 +58,8 @@ export type Goal = { id: string; title: string; area: string[]; repo: string; ba
 // A question for the operator. Its subject is a goal (optionally one of its packages) or a card.
 // With choices the answer is one of them; `redirect` names the extra choice of answering in free text instead.
 export type Choice = { id: string; label: string; description: string | null; pros: string[]; cons: string[] };
-export type Ask = { id: string; question: string; details: string | null; from: number; by: Terminal | null; goalId: string | null; pkgId: string | null; cardId: string | null; choices: Choice[]; redirect: string | null };
+// `until` is when it was answered or withdrawn; null while it is open. A replay shows it only in between.
+export type Ask = { id: string; question: string; details: string | null; from: number; until: number | null; by: Terminal | null; goalId: string | null; pkgId: string | null; cardId: string | null; choices: Choice[]; redirect: string | null };
 // Why feedback did not reach the terminal that recorded the decision. "delivering" means it is still being typed.
 export type Undelivered = "delivering" | "delivery_interrupted" | "terminal_finished" | "terminal_unreachable" | "send_failed" | "no_recording_terminal";
 // A product call a chief or architect flagged for review.
@@ -99,7 +100,7 @@ type Deployments = Record<string, { dev?: Observed | null; prod?: Observed | nul
 type Written = { text?: string | null; written_at?: string | null };
 export type OperatorReport = { brief?: Written | null; eta?: Written | null; parking?: { reason?: string | null; parked_at?: string | null; resumed_at?: string | null } | null };
 export type Prompt = { tl_dr?: string | null; details?: string | null; custom_redirect_label?: string | null; options?: Array<{ id: string; label?: string | null; answer?: string | null; description?: string | null; pros?: string[] | null; cons?: string[] | null }> | null };
-export type AskEntry = { id: string; work_request_id?: string | null; work_package_id?: string | null; card_id?: string | null; question?: string | null; decision_prompt?: Prompt | null; state?: string | null; asked_by?: string | null; asked_at?: string | null };
+export type AskEntry = { id: string; work_request_id?: string | null; work_package_id?: string | null; card_id?: string | null; question?: string | null; decision_prompt?: Prompt | null; state?: string | null; asked_by?: string | null; asked_at?: string | null; resolved_at?: string | null };
 export type DecisionEntry = { id: string; work_request_id: string; decision?: string | null; rationale?: string | null; recorded_by?: string | null; created_at?: string | null; review_state?: string | null; feedback?: string | null; undelivered_reason?: string | null };
 export type Request = { id: string; title?: string | null; phase?: string | null; repo?: string | null; repo_display?: string | null; base_branch?: string | null; inserted_at?: string | null; completed_at?: string | null; operator_completed_at?: string | null; archived_at?: string | null; worked_on?: Owned | null; operator_report?: OperatorReport | null; area_path?: string[] | null; default_branch?: string | null; deployments?: Deployments | null };
 export type Detail = { work_request: Request; work_packages?: Slice[]; asks?: AskEntry[]; decisions_to_review?: DecisionEntry[] };
@@ -153,7 +154,7 @@ export function buildBoard(hydrated: Hydrated, history: Record<string, HistoryEv
     board: {
       goals,
       cards: cards.map((card) => cardOf(card, areas, now)),
-      asks: asks.filter((ask) => (ask.state ?? "open") === "open").map((ask) => askOf(ask, now)),
+      asks: asks.map((ask) => askOf(ask, now)),
       decisions: details.flatMap((detail) => (detail.decisions_to_review ?? []).map((entry) => decisionOf(entry, now))),
       readAt: now,
     },
@@ -203,6 +204,7 @@ function askOf(entry: AskEntry, now: number): Ask {
     question: entry.question ?? "",
     details: prompt?.details || null,
     from: ms(entry.asked_at) ?? now,
+    until: closedAt(entry, now),
     by: addressed(entry.asked_by),
     goalId: entry.work_request_id ?? null,
     pkgId: entry.work_package_id ?? null,
@@ -210,6 +212,12 @@ function askOf(entry: AskEntry, now: number): Ask {
     choices,
     redirect: choices.length > 0 ? prompt?.custom_redirect_label || null : null,
   };
+}
+
+// An answered or withdrawn ask without a recorded time was never open as far as a replay can tell.
+function closedAt(entry: AskEntry, now: number) {
+  if ((entry.state ?? "open") === "open") return null;
+  return ms(entry.resolved_at) ?? ms(entry.asked_at) ?? now;
 }
 
 function choicesOf(prompt: Prompt | null | undefined): Choice[] {
@@ -263,7 +271,9 @@ function cardSince(entry: CardEntry, state: CardState) {
 // A card's review is read by the id its terminal was labelled with; its mode is not reported.
 function cardReviewOf(review: CardEntry["review"]): Review | null {
   if (!review) return null;
-  const state = review.state === "done" ? "done" : review.state === "unknown" ? "unknown" : (REVIEW_STATES[review.status ?? ""] ?? null);
+  // The backend has already checked the status against the PR's current head: a passed review of an older head is pending, not done.
+  if (review.state === "done" || review.state === "unknown") return { mode: null, state: review.state, round: 0 };
+  const state = review.status === "passed" ? null : (REVIEW_STATES[review.status ?? ""] ?? null);
   return { mode: null, state, round: 0 };
 }
 
@@ -457,7 +467,7 @@ function goalViewAt(goal: Goal, board: Board, at: number): GoalView {
   const live = views.filter((view) => view.stage !== "planned" && view.stage !== "ended");
   const queued = views.filter((view) => view.stage === "planned").map((view) => view.pkg);
   const done = views.filter((view) => view.stage === "ended").map((view) => view.pkg);
-  const asks = board.asks.filter((ask) => ask.goalId === goal.id && ask.from <= at);
+  const asks = board.asks.filter((ask) => ask.goalId === goal.id && openAt(ask, at));
   const phase = at >= board.readAt ? goal.phase : phaseAt(goal, at, live.length, queued.length, done);
 
   return { goal, live, queued, done, asks, ask: asks[0] ?? null, phase, lastMoveAt: Math.max(goal.createdAt, ...views.map((view) => view.since)) };
@@ -472,6 +482,11 @@ function phaseAt(goal: Goal, at: number, live: number, queued: number, ended: Pk
   if (queued > 0) return "planned";
   const counted = ended.filter((pkg) => pkg.outcome !== "skipped");
   return counted.length === 0 || counted.some((pkg) => !RESOLVES[pkg.outcome ?? "abandoned"]) ? "unresolved" : "done";
+}
+
+// Whether the ask was waiting for the operator at `at`.
+export function openAt(ask: Ask, at: number) {
+  return ask.from <= at && (ask.until === null || at < ask.until);
 }
 
 // The ended packages that keep a goal from resolving.
