@@ -20,8 +20,13 @@ const STATE: Record<Shown, { label: string; tone: string; pip: string }> = {
 const ROW = `${CARD_GRID} rounded px-2 py-1 odd:bg-white/[0.035]`;
 
 // Ended cards drop off a day after they merged or their terminal finished; dismissed ones right away.
+// A replay shows a card only once it exists, and an ended one only from its ending.
 export function visibleCards(cards: Card[], at: number): Array<Card & { state: Shown }> {
-  return cards.filter((card): card is Card & { state: Shown } => card.state === "working" || card.state === "review_ci" || ((card.state === "merged" || card.state === "done") && at - card.since < DAY));
+  return cards.filter((card): card is Card & { state: Shown } => {
+    if (card.from > at) return false;
+    if (card.state === "working" || card.state === "review_ci") return true;
+    return (card.state === "merged" || card.state === "done") && at >= card.since && at - card.since < DAY;
+  });
 }
 
 // Small work a chief handed to a child terminal, with no WorkRequest behind it.

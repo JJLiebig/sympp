@@ -69,7 +69,8 @@ export type Undelivered = "delivering" | "delivery_interrupted" | "terminal_fini
 export type Decision = { id: string; goalId: string; text: string; rationale: string | null; by: Terminal | null; at: number; state: "recorded" | "acknowledged" | "feedback"; feedback: string | null; undelivered: Undelivered | null };
 // Small work without a WorkRequest: a chief's child terminal with a branch or a PR. `since` is when it reached its state.
 export type CardState = "working" | "review_ci" | "merged" | "done" | "dismissed";
-export type Card = { id: string; task: string; repo: string; area: string[]; branch: string; by: Terminal | null; pr: Pr | null; ci: Ci | null; review: Review | null; state: CardState; since: number; stale: Stale[] };
+// `from` is when the card first appeared.
+export type Card = { id: string; task: string; repo: string; area: string[]; branch: string; by: Terminal | null; pr: Pr | null; ci: Ci | null; review: Review | null; state: CardState; from: number; since: number; stale: Stale[] };
 // `readAt` is when the backend was read: the goals' phases describe that moment.
 export type Board = { goals: Goal[]; cards: Card[]; asks: Ask[]; decisions: Decision[]; readAt: number };
 
@@ -261,6 +262,7 @@ function cardOf(entry: CardEntry, areas: Map<string, string[]>, now: number): Ca
     ...cardPrOf(entry.pr, repo),
     review: cardReviewOf(entry.review),
     state,
+    from: ms(entry.since) ?? now,
     since: cardSince(entry, state) ?? now,
     stale: staleOf(entry.stale),
   };
