@@ -203,7 +203,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
 
     * a live worker terminal (labels `sympp.role=worker` and
       `sympp.work_package_id`) whose package is in `work_package_ids` starts
-      working on that package, unless another live terminal already does;
+      working on that package, unless another live terminal already does; one
+      first seen already finished is recorded as having worked on it;
     * a live row whose terminal is on this core and is finished or no longer
       listed ends (`terminal_finished`), if it started before `read_at`, when
       the snapshot was read: a terminal that started later can't be in it.
@@ -223,9 +224,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
 
     wanted = MapSet.new(work_package_ids)
 
-    for {address, %{"state" => "live", "labels" => %{"sympp.role" => "worker", "sympp.work_package_id" => package_id}}} <- terminals,
+    for {address, %{"state" => state, "labels" => %{"sympp.role" => "worker", "sympp.work_package_id" => package_id}}} <- terminals,
         MapSet.member?(wanted, package_id) do
-      start_worker(repo, package_id, %Terminal{
+      start_worker(repo, package_id, state, %Terminal{
         key: Terminal.key(core_id, address),
         core_id: core_id,
         address: address,
@@ -237,29 +238,38 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
     :ok
   end
 
-  defp start_worker(repo, package_id, %Terminal{} = terminal) do
-    case live_row(repo, "work_package", package_id) do
-      nil ->
-        row = %WorkedOn{
-          id: Id.random("wo"),
-          subject_kind: "work_package",
-          subject_id: package_id,
-          terminal_key: terminal.key,
-          display_address: terminal.display_address,
-          role: "worker",
-          state: "live",
-          started_at: DateTime.utc_now(:microsecond)
-        }
+  # A worker first seen already finished (it started and exited between two
+  # reads) is recorded as finished, unless the package has worker rows already.
+  defp start_worker(repo, package_id, "live", %Terminal{} = terminal) do
+    if live_row(repo, "work_package", package_id), do: :ok, else: insert_worker(repo, package_id, terminal, "live")
+  end
 
-        changeset = Ecto.Changeset.unique_constraint(Ecto.Changeset.change(row), [:subject_kind, :subject_id], name: :sympp_worked_on_one_live_per_subject_index)
+  defp start_worker(repo, package_id, _finished, %Terminal{} = terminal) do
+    seen? = repo.exists?(from(row in WorkedOn, where: row.subject_kind == "work_package" and row.subject_id == ^package_id))
+    if seen?, do: :ok, else: insert_worker(repo, package_id, terminal, "finished")
+  end
 
-        case repo.insert(changeset) do
-          {:ok, _row} -> DashboardPubSub.broadcast_changed()
-          {:error, _conflict} -> :ok
-        end
+  defp insert_worker(repo, package_id, %Terminal{} = terminal, state) do
+    now = DateTime.utc_now(:microsecond)
 
-      %WorkedOn{} ->
-        :ok
+    row = %WorkedOn{
+      id: Id.random("wo"),
+      subject_kind: "work_package",
+      subject_id: package_id,
+      terminal_key: terminal.key,
+      display_address: terminal.display_address,
+      role: "worker",
+      state: state,
+      started_at: now
+    }
+
+    row = if state == "finished", do: %{row | finish_reason: "terminal_finished", finished_at: now}, else: row
+
+    changeset = Ecto.Changeset.unique_constraint(Ecto.Changeset.change(row), [:subject_kind, :subject_id], name: :sympp_worked_on_one_live_per_subject_index)
+
+    case repo.insert(changeset) do
+      {:ok, _row} -> DashboardPubSub.broadcast_changed()
+      {:error, _conflict} -> :ok
     end
   end
 

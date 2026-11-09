@@ -355,6 +355,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert next_action.() == "inspect_worker"
     end
 
+    test "a worker that started and exited between two reads still counts as exited", %{repo: repo} do
+      package = package!(repo, "WP-OBS-QUICK-WORKER")
+      worker = %{"state" => "finished", "labels" => %{"sympp.role" => "worker", "sympp.work_package_id" => package.id}}
+
+      Observer.observe_terminals(repo, {:ok, %{core_id: "core-1", terminals: %{"t8" => worker}}})
+      Observer.observe_terminals(repo, {:ok, %{core_id: "core-1", terminals: %{"t8" => worker}}})
+
+      assert [%WorkedOn{state: "finished", finish_reason: "terminal_finished"}] = repo.all(WorkedOn)
+      assert board_row(repo, package).operational_state.activity_signal["next_action"] == "inspect_worker"
+    end
+
     test "terminals the factory's core reports finished end their rows; other cores' rows stay", %{repo: repo} do
       package = package!(repo, "WP-OBS-OWNERS")
       seen = owner!(repo, package.work_request_id, "core-1/t1")
