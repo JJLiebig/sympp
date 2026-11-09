@@ -1,5 +1,5 @@
 import { Check, Circle, type LucideIcon } from "lucide-react";
-import { createContext, useContext, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { createContext, useContext, useState, type MouseEvent } from "react";
 
 import { ActButton } from "./actions";
 import { span, waitsOnOthers, type Goal, type Phase as GoalPhase, type GoalView, type Pkg, type PkgView, type Stage } from "./model";
@@ -343,17 +343,19 @@ export function PhaseBadge({ small, view }: { small?: boolean; view: GoalView })
   );
 }
 
-// Shown while someone waits on the operator for this goal. It takes you to the question.
+// Shown while someone waits on the operator for this goal. It sits inside the goal's toggle, so it is status text
+// there, not a control of its own: a click on it is a pointer shortcut to the question, which keyboards reach
+// through the Needs you list and the header's status.
 export function NeedsYouFlag({ view }: { view: GoalView }) {
   const ask = view.ask;
   if (!ask) return null;
-  const jump = (event: MouseEvent | KeyboardEvent) => {
+  const jump = (event: MouseEvent) => {
     event.stopPropagation();
     spotlight(`[data-ask="${CSS.escape(ask.id)}"]`);
   };
 
   return (
-    <span className="flex shrink-0 items-center gap-1.5 rounded px-1.5 py-0.5 text-xs font-semibold text-you hover:bg-you/10" role="link" tabIndex={0} onClick={jump} onKeyDown={(event) => (event.key === "Enter" ? jump(event) : undefined)}>
+    <span className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded px-1.5 py-0.5 text-xs font-semibold text-you hover:bg-you/10" onClick={jump}>
       <span className="size-1.5 animate-pulse rounded-full bg-you" />
       Needs you{view.asks.length > 1 ? ` · ${view.asks.length}` : ""}
     </span>
