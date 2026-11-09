@@ -110,7 +110,8 @@ export function boardPayload() {
           operator_report: { brief: { text: 'Token API is building; the UI waits on it and on your call.', written_at: at(60) } },
         },
         product_tree: { execution_graph: { effective_edges: [{ prerequisite_work_package_id: 'x-api', dependent_work_package_id: 'x-web' }] } },
-        asks: [ask('esc-1', 'Ship tokens before the API?', 'vps/t2', 240)],
+        // Carried over from before asks had terminals: nobody to deliver the answer to.
+        asks: [ask('esc-1', 'Ship tokens before the API?', null, 240)],
         work_packages: [
           pkg('x-api', 'Token API', 1, 'dispatched', going('implementing', 120, { repo: 'owner/api', dispatched_by: { kind: 'chief', domain: 'Herdr' }, worker_terminal: worker('vps/t11') })),
           pkg('x-web', 'Token UI', 2, 'planned', { dependency_signal: { unmet_work_package_ids: ['x-api'] } }),

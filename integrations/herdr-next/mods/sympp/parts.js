@@ -83,7 +83,7 @@ export function askBlock(v, t, ask, { where = [], id = ask.key, goTo = null } = 
       .child(div().w(2).flex_none().self_stretch().rounded(1).bg(signal().you))
       .child(v_flex().flex_1().min_w(0).pl(12).gap(4)
         .when(where.length > 0 || Boolean(ask.by), (el) => el.child(h_flex().gap(8).items_center()
-          .child(context(t, where, id, goTo)).child(ownerChip(v, t, ask.by, `ask-${id}`))))
+          .child(context(t, where, id, goTo)).when(Boolean(ask.by), (x) => x.child(ownerChip(v, t, ask.by, `ask-${id}`)))))
         .child(h_flex().gap(10).items_center()
           .child(div().flex_1().min_w(0).py(1).text_size(13.5).line_height("19px").text_color(t.foreground).child(ask.text))
           .when(!open && Boolean(action), (el) => el.child(action)))))
@@ -99,7 +99,7 @@ export function decisionBlock(v, t, d, { where = [], goTo = null } = {}) {
   const draft = v.feedback[d.key];
   const open = Boolean(draft?.open);
   const ack = v.ops[`ack:${d.id}`];
-  const head = h_flex().gap(8).items_center().child(context(t, where, d.key, goTo)).child(ownerChip(v, t, d.by, `decision-${d.id}`));
+  const head = h_flex().gap(8).items_center().child(context(t, where, d.key, goTo)).when(Boolean(d.by), (x) => x.child(ownerChip(v, t, d.by, `decision-${d.id}`)));
   const body = v_flex().gap(2)
     .child(div().text_size(13.5).line_height("19px").text_color(t.foreground).child(d.text))
     .when(Boolean(d.rationale), (el) => el.child(div().text_size(12).line_height("17px").text_color(t.muted).child(d.rationale)));
@@ -164,7 +164,7 @@ export function cardRow(v, t, card, ci) {
       .child(div().size(8).flex_none().rounded(2).bg(tone))
       .child(div().flex_1().min_w(0).truncate().text_size(13).text_color(settled ? t.muted : t.foreground).child(card.task))
       .when(Boolean(ci), (el) => el.child(ci))
-      .child(ownerChip(v, t, card.owner, `card-${card.id}`))
+      .when(Boolean(card.owner), (x) => x.child(ownerChip(v, t, card.owner, `card-${card.id}`)))
       .child(Button.new(`dismiss-card-${card.id}`).flex().flex_none().items_center().justify_center().size(18).rounded(4).cursor_pointer()
         .text_color(t.dim).hover((s) => s.bg(tint(t.foreground, "14")).text_color(t.foreground)).disabled(Boolean(op?.pending))
         .accessibility_label(`Dismiss ${card.task}`).tooltip("Dismiss")

@@ -41,8 +41,9 @@ test('every view module parses as a standard ES module', async () => {
 test('the factory lists every ask with its answer in place, the decisions to review, and one row per Herdr topic', skip, async (t) => {
   const view = await render(t, { props: {}, width: 1400 });
   for (const id of ['lens-overview', 'breadcrumb', 'crumb-factory', 'factory-main', 'factory-aside', 'needs-queue', 'topic-rows',
-    'topic-t-herdr', 'topic-t-tools', 'topic-t-live', 'topic-unsorted', 'ask-ask:esc-1', 'answer-ask:esc-1', 'owner-ask-ask:esc-1'])
+    'topic-t-herdr', 'topic-t-tools', 'topic-t-live', 'topic-unsorted', 'ask-ask:esc-1', 'answer-ask:esc-1', 'owner-ask-ask:q1'])
     assert.ok(view.has(id), id);
+  assert.equal(view.has('owner-ask-ask:esc-1'), false, 'an ask with no asking terminal names none');
   assert.ok(view.text('Shared tokens · Personal Tools · unblocks 2') && view.text('web · shares 1 job with Personal Tools') && view.text('Quiet'));
   assert.ok(view.text("You're needed in 2"));
   assert.equal(view.has('decision-queue'), false, 'no decisions, no list');

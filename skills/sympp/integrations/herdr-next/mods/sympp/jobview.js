@@ -26,8 +26,8 @@ export function answerForm(v, t, question) {
   return v_flex().id(`question-${question.key}`).gap(8).py(10)
     .child(v_flex().gap(8)
       .when(Boolean(prompt), (form) => form
-        .child(div().text_size(13).font_medium().child(prompt.tl_dr))
-        .child(div().text_size(12).text_color(t.muted).child(prompt.details))
+        .when(Boolean(prompt.tl_dr), (x) => x.child(div().text_size(13).font_medium().child(prompt.tl_dr)))
+        .when(Boolean(prompt.details), (x) => x.child(div().text_size(12).text_color(t.muted).child(prompt.details)))
         .children((prompt.options ?? []).map((o) => option(o.id, o.label, o.description, o.pros, o.cons, o.answer)))
         .child(option("__custom_redirect__", prompt.custom_redirect_label || "Another direction")))
       .child(field(t, prompt ? draft.choice === "__custom_redirect__" ? "Your direction" : "Note (optional)" : "Your answer", draft.input, true))
