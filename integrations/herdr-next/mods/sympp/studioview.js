@@ -2,7 +2,7 @@
 // studio tab sits the worker's terminal; a native preview is its own pane below this one, which then
 // shrinks to its header.
 //
-// s: { pkg, worker: { state, provider }, place: placement() result or null, kind: "web" | "native" |
+// s: { pkg, worker: { state }, place: placement() result or null, kind: "web" | "native" |
 //   "none", url, native: { state, error, builtAt }, landed, strip }
 
 import { div } from "gpui-kit";
@@ -17,9 +17,8 @@ export function studioView(v, t, s) {
 }
 
 function workerLine(s) {
-  const who = s.worker.provider ?? "Worker";
   if (s.landed) return "Landed";
-  if (s.worker.state === "live") return s.place?.step === "elsewhere" ? `${who} · in another tab` : `${who} · Live`;
+  if (s.worker.state === "live") return s.place?.step === "elsewhere" ? "Worker · in another tab" : "Worker · Live";
   if (s.worker.state === "checking") return "Checking the worker…";
   return s.worker.state === "none" ? "No worker started for this package" : "The worker isn't running";
 }
@@ -40,7 +39,7 @@ function header(v, t, s) {
       .child(button(t, "studio-move", "Move here", (cx) => v.moveWorker(cx), { strong: true, glyph: "terminal", tip: "Move the worker's terminal into this studio" }))
       .child(button(t, "studio-go", "Go to it", (cx) => v.goToWorker(cx), { tip: "Show the worker where it is" })))
     .when(s.kind === "web" && s.strip, (el) => el.child(openButton(v, t, s.url)))
-    .when(!live && !s.landed, (el) => el.child(button(t, "studio-retry", v.workerChecking ? "Checking…" : "Retry", (cx) => v.retry(cx), { tip: "Check the worker again (R)", disabled: v.workerChecking })));
+    .when(!live && !s.landed, (el) => el.child(button(t, "studio-retry", v.reading ? "Checking…" : "Retry", (cx) => v.retry(cx), { tip: "Check the worker again (R)", disabled: v.reading })));
   return h_flex().id("studio-head").flex_none().px(14).py(9).gap(10).items_center().min_w(0).border_b(1).border_color(t.border)
     .child(v_flex().flex_1().min_w(0).gap(2)
       .child(div().truncate().text_size(13).font_semibold().text_color(t.foreground).child(s.pkg.title))

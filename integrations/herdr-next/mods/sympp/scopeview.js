@@ -298,7 +298,7 @@ function progress(v, t, pkg, now) {
 
 // Behind a click on a package: its review and its studio.
 function pkgActions(v, t, job, pkg, ctx) {
-  const ui = typeof v.openStudio === "function" && St.uiPackage(job, pkg, ctx.bindings, ctx.terminals);
+  const ui = typeof v.openStudio === "function" && St.uiPackage(pkg, ctx.terminals, (address) => v.local(address));
   const list = [
     R.roundsOf(pkg).length ? ghost(t, `review-${pkg.id}`, "Review", (cx) => (v.review?.pkgId === pkg.id ? v.closeReview(cx) : v.openReview(job.id, pkg.id, null, cx)), { glyph: "message-circle", strong: v.review?.pkgId === pkg.id }) : null,
     ui ? ghost(t, `studio-${pkg.id}`, "Studio", (cx) => v.openStudio(job, pkg, cx), { glyph: "monitor" }) : null,

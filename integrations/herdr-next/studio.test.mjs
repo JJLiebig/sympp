@@ -15,9 +15,9 @@ import { buildPreview } from './preview.mjs';
 const here = dirname(fileURLToPath(import.meta.url));
 const board = () => M.parseBoard(boardPayload());
 const job = (id) => board().jobs.find((j) => j.id === id);
-const worker = (address, labels = {}) => ({
-  address, pid: 7, state: 'live',
-  labels: { 'sympp.launch_id': 'l1', 'sympp.core_id': 'c1', 'sympp.pid': '7', 'sympp.receipt': 'C:/r.json', 'sympp.work_request_id': 'wr-pr', 'sympp.work_package_id': 'wp-build', ...labels },
+// A worker as `hc run` starts it from a dispatch's launch line, in Herdr's terminal list.
+const worker = (address, labels = {}, extra = {}) => ({
+  address, state: 'live', cwd: 'C:/code/wt/wp-build', labels: { 'sympp.role': 'worker', 'sympp.work_package_id': 'wp-build', ...labels }, ...extra,
 });
 
 test('UI work is a package titled with UI as a word or one whose worker published a preview', () => {
@@ -27,11 +27,26 @@ test('UI work is a package titled with UI as a word or one whose worker publishe
   assert.equal(S.isUiWork(pkg(cross, 'x-web')), true, '"Token UI"');
   assert.equal(S.isUiWork({ title: 'UI studio tab: agent pane, live preview' }), true);
   for (const title of ['GUI toolkit bump', 'Build pipeline', 'Fluid layout']) assert.equal(S.isUiWork({ title }), false, title);
-  const terminals = [worker('t1', { 'sympp.preview_url': 'http://127.0.0.1:5173/' })];
-  const bindings = M.discoverBindings({ local: { node: 'node', helper: 'h' } }, terminals);
-  assert.equal(S.uiPackage(pr, pkg(pr, 'wp-build'), bindings, terminals), true, 'a published preview marks the package');
-  assert.equal(S.uiPackage(pr, pkg(pr, 'wp-build'), bindings, [worker('t1')]), false);
-  assert.equal(S.uiPackage(pr, { ...pkg(pr, 'wp-build'), title: 'Stage UI', stage: 'ended' }, bindings, terminals), false, 'landed work gets no studio');
+  // The fixture's factory names the worker box/t8; on the box core Herdr lists it as t8.
+  const local = (address) => M.localAddress(address, 'box');
+  const terminals = [worker('t8', { 'sympp.preview_url': 'http://127.0.0.1:5173/' })];
+  const build = pkg(pr, 'wp-build');
+  assert.equal(S.uiPackage(build, terminals, local), true, 'a preview the factory-seen worker published marks the package');
+  assert.equal(S.uiPackage(build, [worker('t8')], local), false);
+  assert.equal(S.uiPackage(build, terminals), false, 'only the terminal the factory names counts');
+  assert.equal(S.uiPackage({ ...build, title: 'Stage UI', stage: 'ended' }, terminals, local), false, 'landed work gets no studio');
+});
+
+test("the studio's worker is the terminal the factory sees live on the package, while Herdr runs it here", () => {
+  const pr = job('wr-pr');
+  const build = pr.packages.find((p) => p.id === 'wp-build');
+  const local = (address) => M.localAddress(address, 'box');
+  assert.deepEqual(S.studioWorker(build, [worker('t8')], local), { state: 'live', address: 't8', cwd: 'C:/code/wt/wp-build' }, 'a local worker previews from its folder');
+  assert.deepEqual(S.studioWorker(build, [worker('box/t8')]), { state: 'live', address: 'box/t8', cwd: null }, 'one on another machine has no folder here');
+  assert.equal(S.studioWorker(build, [worker('t8', {}, { foreground: { cwd: 'C:/code/wt/moved' } })], local).cwd, 'C:/code/wt/moved', 'where the worker is now, when its terminal reports it');
+  assert.equal(S.studioWorker(build, [worker('t8', {}, { state: 'finished' })], local).state, 'gone', 'a finished terminal is no worker');
+  assert.equal(S.studioWorker({ ...build, owner: { ...build.owner, liveness: 'unknown' } }, [worker('t8')], local).state, 'gone', 'nor one the factory no longer sees');
+  assert.equal(S.studioWorker(pr.packages.find((p) => p.id === 'wp-queued'), [worker('t8')], local).state, 'none', 'no worker yet');
 });
 
 test('only an http(s) preview a worker published is shown', () => {

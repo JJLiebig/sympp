@@ -197,11 +197,11 @@ export default class StudioCase extends View {
 `;
 
 test('a studio shows a published preview with Open, says when there is none, and shrinks over a native one', skip, async (t) => {
-  const base = { pkg: { title: 'Token UI' }, worker: { state: 'live', provider: 'Claude' }, place: { step: null }, kind: 'none', url: null, native: { state: 'idle', error: null, builtAt: null }, landed: false, strip: false };
+  const base = { pkg: { title: 'Token UI' }, worker: { state: 'live' }, place: { step: null }, kind: 'none', url: null, native: { state: 'idle', error: null, builtAt: null }, landed: false, strip: false };
   const draw = (s) => render(t, {}, studioCase({ ...base, ...s }));
   const web = await draw({ kind: 'web', url: 'http://127.0.0.1:5173/' });
   assert.ok(web.has('studio-head') && web.has('studio-card') && web.has('studio-open'));
-  assert.ok(web.text('Token UI') && web.text('Claude · Live') && web.text('http://127.0.0.1:5173/') && web.text('Preview'));
+  assert.ok(web.text('Token UI') && web.text('Worker · Live') && web.text('http://127.0.0.1:5173/') && web.text('Preview'));
   const none = await draw({});
   assert.ok(none.text("The agent hasn't published a preview yet"));
   assert.equal(none.has('studio-card') || none.has('studio-open'), false);
@@ -211,8 +211,8 @@ test('a studio shows a published preview with Open, says when there is none, and
   const failed = await draw({ kind: 'native', native: { state: 'error', error: 'SyntaxError: Unexpected token', builtAt: null } });
   assert.ok(failed.text("The preview didn't build") && failed.text('SyntaxError: Unexpected token'));
   const elsewhere = await draw({ place: { step: 'elsewhere', pane: 'p7', tab: 'tb5' } });
-  assert.ok(elsewhere.has('studio-move') && elsewhere.has('studio-go') && elsewhere.text('Claude · in another tab'));
-  const waiting = await draw({ worker: { state: 'gone', provider: null } });
+  assert.ok(elsewhere.has('studio-move') && elsewhere.has('studio-go') && elsewhere.text('Worker · in another tab'));
+  const waiting = await draw({ worker: { state: 'gone' } });
   assert.ok(waiting.text('Waiting for the worker') && waiting.has('studio-retry') && waiting.text("The worker isn't running"));
   const landed = await draw({ landed: true });
   assert.ok(landed.text('Landed'));

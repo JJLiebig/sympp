@@ -117,7 +117,7 @@ export default class Lens extends View {
     this.ownConnection = Boolean(own.endpoint);
     const studio = own.studio;
     this.studio = typeof studio?.job === "string" && typeof studio?.pkg === "string" ? { job: studio.job, pkg: studio.pkg } : null;
-    this.worker = { state: "checking", at: 0 };
+    this.worker = { state: "checking" };
     this.native = { state: "idle", error: null, builtAt: null, dev: null, cwd: null };
     // Whether this package's preview copy is known gone; one may be left from before Herdr
     // restarted, so a studio ends it before building afresh.
@@ -199,7 +199,6 @@ export default class Lens extends View {
     const watch = this.withChiefs(this.agentWatch);
     if (watch && !this.checking && (this.checkedFor !== watch.key || now - this.checkedAt >= cadence)) this.checkAgents(watch, cx);
     if (now - this.sweptAt >= SWEEP) this.sweep(cx);
-    if (this.studio) this.studioTick(cx, now);
     if (!busy && now - this.painted >= REPAINT) {
       this.painted = now;
       cx.notify();
@@ -246,7 +245,7 @@ export default class Lens extends View {
         this.holdLease(outcome.board, now, cx);
         if (this.ownConnection) this.shareConnection();
         this.announce(outcome.board);
-        const agents = Chrome.nextDecorations(shared(Chrome.AGENTS), Chrome.decorations(outcome.board, terminals(), this.endpoint, now, (a) => this.here(a)), this.endpoint, now);
+        const agents = Chrome.nextDecorations(shared(Chrome.AGENTS), Chrome.decorations(outcome.board, terminals(), this.endpoint, now, (a) => this.local(a)), this.endpoint, now);
         if (agents) setShared(Chrome.AGENTS, agents);
         const live = outcome.board.jobs.filter((j) => j.state === "live").map((j) => {
           const moving = j.packages.map(Chrome.deskStage).filter(Boolean);
@@ -386,7 +385,6 @@ export default class Lens extends View {
 
   retry(cx) {
     if (this.studio) {
-      this.worker = { ...this.worker, at: 0 };
       this.buildPreview(cx);
     }
     this.net = { ...this.net, attemptAt: null };
@@ -652,50 +650,25 @@ export default class Lens extends View {
     });
   }
 
-  // Checks the worker when first seen, again within the live window, and sooner while it isn't live.
-  studioTick(cx, now) {
-    const watch = this.studioWatch;
-    if (!watch || this.workerChecking) return;
-    if (!watch.workers.length) {
-      if (this.worker.state !== "none") { this.worker = { state: "none", at: now }; cx.notify(); }
-      return;
-    }
-    // A verified worker whose exact binding is gone (a replacement launch) is checked again now.
-    const b = this.worker.binding;
-    if (this.worker.state === "live" && !watch.workers.some((w) => w.address === b.address && w.launchId === b.launchId && w.pid === b.pid)) {
-      this.worker = { state: "checking", at: 0 };
-    }
-    if (this.worker.at && now - this.worker.at < (this.worker.state === "live" ? J.LIVE_FOR : M.POLL.live)) return;
-    this.checkWorker(watch.workers, cx);
-  }
-
-  // The worker is the package's first binding the trusted helper verifies; its receipt names its worktree.
-  checkWorker(workers, cx) {
-    this.workerChecking = true;
-    cx.spawn(async (cx) => {
-      let found = null;
-      for (const b of workers) {
-        try {
-          const result = await exec(b.host.node, M.bindingCheckArgs(b), { on: b.machine });
-          if (M.checkedBinding(b, result, terminals())) { found = { binding: b, receipt: JSON.parse(result.stdout) }; break; }
-        } catch { /* try the next binding */ }
-      }
-      this.workerChecking = false;
-      if (!found || found.binding.address !== this.worker.binding?.address) this.swapped = false;
+  // The package's worker as the factory sees it, where Herdr runs it; a different terminal is placed
+  // afresh.
+  findWorker(pkg) {
+    const found = S.studioWorker(pkg, terminals(), (address) => this.local(address));
+    if (found.address !== this.worker.address) {
+      this.swapped = false;
       this.keeping = false;
-      this.worker = found ? { state: "live", ...found, at: Date.now() } : { state: "gone", at: Date.now() };
-      try { cx.notify(); } catch { /* closed while checking */ }
-    });
+    }
+    this.worker = found;
   }
 
-  // Puts the verified worker beside the studio: a pane on the right, then swapped to the left once.
-  arrange(place, binding, cx) {
+  // Puts the worker beside the studio: a pane on the right, then swapped to the left once.
+  arrange(place, address, cx) {
     const pane = this.here.pane;
     if (place.step === "keep" && !this.keeping) {
       this.keeping = true;
       cx.spawn(async () => {
         run("pane.focus", { pane });
-        run("terminal.keep", { terminal: binding.address, place: "right" });
+        run("terminal.keep", { terminal: address, place: "right" });
       });
     } else if (place.step === "swap") {
       this.swapped = true;
@@ -709,14 +682,14 @@ export default class Lens extends View {
   }
 
   moveWorker(cx) {
-    const address = this.worker.binding?.address;
+    const address = this.worker.address;
     if (!address) return;
     this.keeping = false;
     cx.spawn(async () => run("terminal.park", { terminal: address }));
   }
 
   goToWorker(_cx) {
-    const pane = panes().find((p) => p.terminal === this.worker.binding?.address);
+    const pane = panes().find((p) => p.terminal === this.worker.address);
     if (pane) run("pane.focus", { pane: pane.pane });
   }
 
@@ -724,10 +697,9 @@ export default class Lens extends View {
     if (url) cx.open_url(url);
   }
 
-  // The local worktree the verified worker previews from, or null: a remote worker, or no folder.
+  // The local worktree the worker previews from, or null: a remote worker, or no folder.
   previewSource() {
-    const { binding, receipt } = this.worker;
-    return typeof receipt?.cwd === "string" && receipt.cwd && !binding.machine ? receipt.cwd : null;
+    return this.worker.cwd ?? null;
   }
 
   // A local worker's sympp worktree: its Herdr view built on sample data as this package's preview
@@ -735,13 +707,15 @@ export default class Lens extends View {
   startPreview(cwd, job, cx) {
     const generation = (this.previewRun ?? 0) + 1;
     this.previewRun = generation;
-    if (!cwd) {
+    // Node from this machine's trusted host configuration runs the worktree's preview builder.
+    const node = (this.hosts ?? shared("sympp.hosts"))?.local?.node ?? null;
+    if (!cwd || !node) {
       this.native = { state: "none", error: null, builtAt: null, dev: null, cwd: null };
       this.registerStudio(cx);
       return;
     }
     this.ended = false;
-    this.native = { state: "building", error: null, builtAt: null, dev: S.devName(this.studio.pkg), cwd, node: this.worker.binding.host.node, base: `origin/${job.baseBranch || "main"}` };
+    this.native = { state: "building", error: null, builtAt: null, dev: S.devName(this.studio.pkg), cwd, node, base: `origin/${job.baseBranch || "main"}` };
     this.registerStudio(cx);
     this.buildPreview(cx);
     this.watchPreview(generation, cx);
@@ -841,7 +815,7 @@ export default class Lens extends View {
     return false;
   }
 
-  studioLevel(t, board, bindings, now, cx) {
+  studioLevel(t, board, now, cx) {
     const job = board.jobs.find((j) => j.id === this.studio.job);
     const pkg = job?.packages.find((p) => p.id === this.studio.pkg);
     if (!pkg) {
@@ -850,30 +824,29 @@ export default class Lens extends View {
       ]), O.floatingStatus(this, t, now)]);
     }
     if (!this.studioHere(job, pkg, cx)) return this.root(t, [message(t, "Opening the studio…", null)]);
-    this.studioWatch = { workers: S.workerBindings(M.bindingsFor(bindings, job.id, pkg.id)).filter((b) => b.available) };
-    this.studioTick(cx, now);
+    this.findWorker(pkg);
     this.landed = pkg.stage === "ended";
     const w = this.worker;
     const live = w.state === "live";
     const paneList = panes();
-    const place = live ? S.placement(paneList, this.here.tab, this.here.pane, w.binding.address, this.swapped) : null;
+    const place = live ? S.placement(paneList, this.here.tab, this.here.pane, w.address, this.swapped) : null;
     const dev = S.devName(this.studio.pkg);
     const devPane = paneList.find((p) => p.tab === this.here.tab && p.mod === dev) ?? null;
     if (this.landed) this.endPreview(devPane, cx);
     else if (live) {
-      this.arrange(place, w.binding, cx);
+      this.arrange(place, w.address, cx);
       const cwd = this.previewSource();
       const restart = this.native.state === "idle" || this.native.cwd !== cwd;
       if ((restart || this.native.state === "none") && this.endPreview(devPane, cx) && restart) this.startPreview(cwd, job, cx);
     }
-    const url = live ? S.previewUrlOf(terminals().find((k) => k.address === w.binding.address)) : null;
+    const url = live ? S.previewUrlOf(terminals().find((k) => k.address === w.address)) : null;
     const kind = this.landed ? "none" : S.previewKind({ url, native: this.native.state });
     this.studioUrl = kind === "web" ? url : null;
     // Not while it closes: the resize would land on the studio pane once it has the column's place.
     this.fitStrip(Boolean(devPane) && !this.closingDev, cx);
     if (kind === "native") this.previewPane(devPane, cx);
     return this.root(t, [studioView(this, t, {
-      pkg, worker: { state: w.state, provider: w.binding?.provider ?? null }, place, kind, url,
+      pkg, worker: { state: w.state }, place, kind, url,
       native: this.native, landed: this.landed, strip: Boolean(devPane) && !this.closingDev,
     }), O.floatingStatus(this, t, now)]);
   }
@@ -995,12 +968,12 @@ export default class Lens extends View {
 
   // Whether a terminal runs where Herdr reaches it.
   running(address) {
-    const here = this.here(address);
+    const here = this.local(address);
     return terminals().some((k) => k.address === here && k.state === "live");
   }
 
   // A factory address as Herdr names it here.
-  here(address) {
+  local(address) {
     return M.localAddress(address, this.coreName);
   }
 
@@ -1009,7 +982,7 @@ export default class Lens extends View {
   // other terminals now.
   focusTerminal(given, cx) {
     const key = `focus:${given}`;
-    const address = this.here(given);
+    const address = this.local(given);
     if (this.ops[key]?.pending) return;
     const op = this.ops[key] = { pending: true, error: null };
     cx.spawn(async (cx) => {
@@ -1094,7 +1067,7 @@ export default class Lens extends View {
   studioPackage() {
     const job = this.currentJob;
     const pkg = job?.packages.find((p) => p.id === this.pkgSel);
-    return pkg && this.shown && S.uiPackage(job, pkg, this.shown.bindings, terminals()) ? pkg : null;
+    return pkg && this.shown && S.uiPackage(pkg, terminals(), (address) => this.local(address)) ? pkg : null;
   }
 
   root(t, children) {
@@ -1102,11 +1075,13 @@ export default class Lens extends View {
       .track_focus(this.keys)
       .on_mouse_down("left", (_e, cx) => { this.keys.focus(); cx.notify(); })
       .on_key_down((e, cx) => this.onKey(e, cx))
+      .on_size_change((size, cx) => { if (size.width !== this.width) { this.width = size.width; cx.notify(); } })
       .children(children.filter(Boolean));
   }
 
+  // The view's own width once drawn; a tab beside Herdr's sidebar is narrower than the window.
   viewportWidth() {
-    return window.viewport_size().width;
+    return this.width ?? window.viewport_size().width;
   }
 
   // Each render may start a fade (scopeview.js); its next step is a one-shot wake, never a loop.
@@ -1144,7 +1119,7 @@ export default class Lens extends View {
     }
     const bindings = this.bindingsOf(board);
 
-    if (this.studio) return this.studioLevel(t, board, bindings, now, cx);
+    if (this.studio) return this.studioLevel(t, board, now, cx);
 
     if (this.pinned) {
       this.registerTab(cx, this.pinned);
