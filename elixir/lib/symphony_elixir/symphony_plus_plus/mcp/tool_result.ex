@@ -153,7 +153,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
     do: {key, compact_status_payload(value, ["id", "status", "summary", "idempotency_key"])}
 
   defp compact_tool_entry("decision_log_entry", key, value),
-    do: {key, compact_status_payload(value, ["id", "sequence", "source_type", "source_id", "decision", "created_by"])}
+    do: {key, compact_status_payload(value, ["id", "sequence", "source_type", "source_id", "decision", "created_by", "flagged", "review_state"])}
 
   defp compact_tool_entry("work_package_delivery", key, value),
     do:

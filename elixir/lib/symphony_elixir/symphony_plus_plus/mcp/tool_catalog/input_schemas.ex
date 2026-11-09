@@ -5,8 +5,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{WorkPackage, WorkPackageDelivery}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{DecisionLogEntry, Phase, WorkRequest}
 
-  @local_operator_provenance_max_length 512
-  @local_operator_text_max_length 4_000
   @type tool_name :: String.t()
   @type input_schema :: map()
 
@@ -38,30 +36,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   end
 
   @spec local_operator_tool_input_schema(tool_name()) :: input_schema()
-  def local_operator_tool_input_schema("record_work_request_operator_decision") do
-    schema(
-      %{
-        "work_request_id" => described_string_schema("Target WorkRequest id."),
-        "decision" =>
-          described_string_schema("Non-secret decision summary text. Redacted before storage and response.")
-          |> Map.put("maxLength", @local_operator_text_max_length),
-        "rationale" =>
-          markdown_string_schema("Non-secret Markdown rationale for the decision.")
-          |> Map.put("maxLength", @local_operator_text_max_length),
-        "scope_impact" =>
-          markdown_string_schema("Non-secret Markdown note on scope or delivery impact.")
-          |> Map.put("maxLength", @local_operator_text_max_length),
-        "created_by" =>
-          described_string_schema("Optional provenance override. Defaults to the calling terminal.")
-          |> Map.put("maxLength", @local_operator_provenance_max_length),
-        "source_id" =>
-          described_string_schema("Optional local source id, such as a PR review or operator note id.")
-          |> Map.put("maxLength", @local_operator_provenance_max_length)
-      },
-      ["work_request_id", "decision", "rationale", "scope_impact"]
-    )
-  end
-
   def local_operator_tool_input_schema("summarize_failed_mcp_calls"), do: schema(%{}, [])
 
   @doc """
@@ -222,7 +196,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "rationale" => markdown_string_schema("Human-facing decision rationale in Markdown."),
         "scope_impact" => markdown_string_schema("Human-facing scope impact note in Markdown."),
         "created_by" => string_schema(),
-        "source_id" => string_schema()
+        "source_id" => string_schema(),
+        "flag" =>
+          boolean_schema()
+          |> Map.put(
+            "description",
+            "Flag an in-scope product call for the operator to review (default false). Their feedback is typed into your terminal as \"Decision feedback: ...\" without being submitted."
+          )
       },
       ["work_request_id", "source_type", "decision", "rationale", "scope_impact"]
     )

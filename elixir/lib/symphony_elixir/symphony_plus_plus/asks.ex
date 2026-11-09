@@ -137,38 +137,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
 
   # The factory types `Answer: …` into the asking terminal's composer without
   # pressing Enter, so the agent sees it on its next turn and a person can
-  # still edit it. A finished or unknown terminal keeps the answer on the ask.
+  # still edit it. A finished or unreachable terminal keeps the answer on the ask.
   defp deliver(_repo, %Ask{asked_by_terminal: nil} = ask), do: {:ok, ask, %{"state" => "not_delivered", "reason" => "no_asking_terminal"}}
 
   defp deliver(repo, %Ask{} = ask) do
-    case delivery_target(ask) do
-      {:ok, target} ->
-        if HerdrCore.paste(target, "Answer: " <> ask.answer) == :ok do
-          now = DateTime.utc_now(:microsecond)
-          repo.update_all(from(row in Ask, where: row.id == ^ask.id), set: [delivered_at: now, updated_at: now])
-          {:ok, %{ask | delivered_at: now}, %{"state" => "delivered", "to" => ask.asked_by_address}}
-        else
-          {:ok, ask, %{"state" => "not_delivered", "reason" => "send_failed"}}
-        end
+    case HerdrCore.deliver(ask.asked_by_terminal, "Answer: " <> ask.answer) do
+      :ok ->
+        now = DateTime.utc_now(:microsecond)
+        repo.update_all(from(row in Ask, where: row.id == ^ask.id), set: [delivered_at: now, updated_at: now])
+        {:ok, %{ask | delivered_at: now}, %{"state" => "delivered", "to" => ask.asked_by_address}}
 
       {:error, reason} ->
         {:ok, ask, %{"state" => "not_delivered", "reason" => reason}}
     end
   end
-
-  # Answers are typed only into a terminal the factory's own herdr-core sees
-  # live. Herdr machine names are local aliases, so a terminal on another core
-  # can't be addressed safely from here; its answer stays on the ask.
-  defp delivery_target(%Ask{asked_by_terminal: key}) do
-    case Terminal.split_key(key) do
-      {core_id, terminal} -> target_in_view(HerdrCore.view(core_id, terminal, confirm: true), terminal)
-      :error -> {:error, "terminal_unreachable"}
-    end
-  end
-
-  defp target_in_view({:live, _record}, terminal), do: {:ok, terminal}
-  defp target_in_view(:finished, _terminal), do: {:error, "terminal_finished"}
-  defp target_in_view(_unseen_or_unknown, _terminal), do: {:error, "terminal_unreachable"}
 
   @doc "Withdraws the open asks that name these packages, which have just ended. Joins the caller's transaction."
   @spec withdraw_for_packages(repo(), [String.t()]) :: :ok

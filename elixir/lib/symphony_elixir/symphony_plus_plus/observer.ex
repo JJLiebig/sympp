@@ -154,8 +154,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   defp attached_pr(repo, %WorkPackage{} = package) do
     with {:ok, state} <- PlanningRepository.get_state(repo, package.id),
          {:ok, current} <- PullRequestProgress.current_pr_state(state.progress_events) do
-      # The attaching event's sequence tells a newer `sync_pr` of the same PR apart.
-      Map.put(current.ref, :sequence, current.sequence)
+      # The attaching event's sequence tells a newer `sync_pr` of the same PR
+      # apart; who wrote it tells whether the architect has synced it since.
+      by_observer? = Enum.any?(state.progress_events, &(&1.sequence == current.sequence and &1.actor_id == Actor.observer().id))
+      current.ref |> Map.put(:sequence, current.sequence) |> Map.put(:by_observer?, by_observer?)
     else
       _missing -> nil
     end
@@ -176,8 +178,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     end
   end
 
-  # A closed PR is no longer watched; `sync_pr` attaches a new one.
-  defp closed?(%Observation{pr: %{"state" => "closed", "number" => number, "repository" => repository}}, ref),
+  # A closed PR is no longer watched, until the architect syncs it again (it
+  # may have been reopened) or `sync_pr` attaches another one.
+  defp closed?(%Observation{pr: %{"state" => "closed", "number" => number, "repository" => repository}}, %{by_observer?: true} = ref),
     do: number == ref.number and String.downcase(repository) == String.downcase(ref.repository)
 
   defp closed?(_observation, _ref), do: false

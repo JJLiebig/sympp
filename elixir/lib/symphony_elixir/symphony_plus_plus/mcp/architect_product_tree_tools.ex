@@ -26,6 +26,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -49,22 +50,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, scope_impact} <- required_argument(arguments, "scope_impact"),
          {:ok, created_by} <- optional_string_argument(arguments, "created_by", terminal_name(terminal)),
          {:ok, source_id} <- optional_string_argument(arguments, "source_id"),
+         {:ok, flag} <- flag_argument(arguments),
          {:ok, _work_request, _filters, scope} <- scoped_work_request(config.repo, work_request_id),
          {:ok, decision_record} <-
            WorkRequestService.record_decision(
              config.repo,
              work_request_id,
-             optional_put(
-               %{
-                 "source_type" => source_type,
-                 "decision" => decision,
-                 "rationale" => rationale,
-                 "scope_impact" => scope_impact,
-                 "created_by" => created_by
-               },
-               "source_id",
-               source_id
-             )
+             %{
+               "source_type" => source_type,
+               "decision" => decision,
+               "rationale" => rationale,
+               "scope_impact" => scope_impact,
+               "created_by" => created_by,
+               "recorded_by_terminal" => terminal.key,
+               "recorded_by_address" => terminal.display_address
+             }
+             |> optional_put("source_id", source_id)
+             |> Map.merge(DecisionFeedback.record_attrs(flag))
            ),
          {:ok, updated_work_request} <- WorkRequestScope.scoped_work_request(config.repo, work_request_id) do
       {:ok,
@@ -125,6 +127,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
       {:tool_error, reason} -> invalid_params_error(tool, reason)
       {:error, :not_found} -> not_found_error(tool)
       {:error, reason} -> architect_error(reason, tool)
+    end
+  end
+
+  defp flag_argument(arguments) do
+    case Map.get(arguments, "flag", false) do
+      flag when is_boolean(flag) -> {:ok, flag}
+      _flag -> {:tool_error, "invalid_flag"}
     end
   end
 

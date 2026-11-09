@@ -19,7 +19,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   ]
   @solo_tools SoloTools.tool_names()
   @bootstrap_tools ["create_work_request"]
-  @local_operator_tools ["record_work_request_operator_decision", "summarize_failed_mcp_calls"]
+  @local_operator_tools ["summarize_failed_mcp_calls"]
   @architect_tools [
     "list_work_requests",
     "read_work_request",

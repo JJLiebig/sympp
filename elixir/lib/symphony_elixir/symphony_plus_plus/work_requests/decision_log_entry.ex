@@ -11,6 +11,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry do
   @foreign_key_type :string
 
   @source_types ["human", "architect", "operator", "ask_pro_advisory"]
+  @review_states ["recorded", "acknowledged", "feedback"]
 
   @type t :: %__MODULE__{
           id: String.t() | nil,
@@ -23,6 +24,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry do
           scope_impact: String.t() | nil,
           created_by: String.t() | nil,
           created_at: DateTime.t() | nil,
+          flagged: boolean(),
+          review_state: String.t() | nil,
+          feedback: String.t() | nil,
+          reviewed_at: DateTime.t() | nil,
+          undelivered_reason: String.t() | nil,
+          recorded_by_terminal: String.t() | nil,
+          recorded_by_address: String.t() | nil,
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -37,6 +45,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry do
     field(:scope_impact, :string)
     field(:created_by, :string)
     field(:created_at, :utc_datetime_usec)
+    field(:flagged, :boolean, default: false)
+    field(:review_state, :string)
+    field(:feedback, :string)
+    field(:reviewed_at, :utc_datetime_usec)
+    field(:undelivered_reason, :string)
+    field(:recorded_by_terminal, :string)
+    field(:recorded_by_address, :string)
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -70,7 +85,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry do
       :rationale,
       :scope_impact,
       :created_by,
-      :created_at
+      :created_at,
+      :flagged,
+      :review_state,
+      :recorded_by_terminal,
+      :recorded_by_address
     ])
     |> validate_required([
       :id,
@@ -85,6 +104,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry do
     ])
     |> validate_number(:sequence, greater_than: 0)
     |> validate_inclusion(:source_type, @source_types)
+    |> validate_inclusion(:review_state, @review_states)
   end
 
   defp normalize_keys(attrs) when is_map(attrs) do

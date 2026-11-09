@@ -163,7 +163,11 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     end
   end
 
-  defp native_attention_detail(detail), do: Map.put(detail, :asks, native_asks(detail))
+  defp native_attention_detail(detail) do
+    detail
+    |> Map.put(:asks, native_asks(detail))
+    |> Map.put(:decisions_to_review, native_decisions_to_review(detail))
+  end
 
   # Keep this projection aligned with parseBoard/buildJob/buildPackage in Herdr's model.js.
   # The web inspector continues to receive the complete detail projection.
@@ -173,7 +177,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
 
   defp native_detail(detail) do
     detail
-    |> Map.take([:work_request, :work_packages, :product_tree, :asks])
+    |> Map.take([:work_request, :work_packages, :product_tree, :asks, :decisions_to_review])
     |> Map.update!(
       :work_request,
       &Map.take(&1, [
@@ -241,6 +245,19 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
       }
     end
   end
+
+  @doc false
+  @spec native_decisions_to_review(map()) :: [map()]
+  def native_decisions_to_review(detail) do
+    for decision <- detail.decisions_to_review do
+      base = "/api/v1/sympp/herdr/decisions/#{URI.encode_www_form(decision.id)}"
+      Map.merge(decision, native_decision_routes(decision.next_action, base))
+    end
+  end
+
+  defp native_decision_routes("ack or feedback", base), do: %{ack_route: base <> "/ack", feedback_route: base <> "/feedback"}
+  defp native_decision_routes("dismiss", base), do: %{dismiss_route: base <> "/dismiss"}
+  defp native_decision_routes(_wait, _base), do: %{}
 
   defp native_product_tree(tree) do
     tree

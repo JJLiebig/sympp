@@ -15,6 +15,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   `{:ok, %{core_id: id, terminals: %{address => record}}}` (tests).
   """
 
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
+
   @cache_key {__MODULE__, :snapshot}
   @labels_key {__MODULE__, :labels}
   @cache_ms 15_000
@@ -86,6 +88,37 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
       _unnamed ->
         {:ok, host} = :inet.gethostname()
         to_string(host)
+    end
+  end
+
+  @doc """
+  Types text into a recorded terminal's input without submitting it, for
+  operator answers and decision feedback. `terminal_key` is the terminal's key
+  (core id plus address).
+
+  Text is typed only into a terminal the factory's own core sees live. Herdr
+  machine names are local aliases, so a terminal on another core can't be
+  addressed safely from here. Otherwise the reason is `terminal_finished`,
+  `terminal_unreachable` or `send_failed`.
+  """
+  @spec deliver(String.t(), String.t()) :: :ok | {:error, String.t()}
+  def deliver(terminal_key, text) when is_binary(terminal_key) and is_binary(text) do
+    with {:ok, address} <- delivery_target(terminal_key) do
+      if paste(address, text) == :ok, do: :ok, else: {:error, "send_failed"}
+    end
+  end
+
+  defp delivery_target(terminal_key) do
+    case Terminal.split_key(terminal_key) do
+      {core_id, address} ->
+        case view(core_id, address, confirm: true) do
+          {:live, _record} -> {:ok, address}
+          :finished -> {:error, "terminal_finished"}
+          _unseen_or_unknown -> {:error, "terminal_unreachable"}
+        end
+
+      :error ->
+        {:error, "terminal_unreachable"}
     end
   end
 

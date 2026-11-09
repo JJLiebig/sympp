@@ -1983,6 +1983,93 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
+  test "the operator reviews flagged decisions: ack, feedback typed into the recorder, and dismissing an undelivered marker", %{repo: repo} do
+    with_local_operator_endpoint(fn ->
+      request = create_work_request!(repo, id: "WR-DECISION-REVIEW")
+      capture_pastes!()
+      # The factory's own core sees the recording terminal t7 live; t9 has finished.
+      factory_view = {:ok, %{core_id: "core-test", terminals: %{"t7" => %{"state" => "live"}}}}
+      Application.put_env(:symphony_elixir, :sympp_herdr_core, fn -> factory_view end)
+      on_exit(fn -> Application.put_env(:symphony_elixir, :sympp_herdr_core, nil) end)
+
+      flag = fn id, address ->
+        terminal = asking_terminal(address)
+        attrs = decision_attrs(id: id, flagged: true, review_state: "recorded", recorded_by_terminal: terminal.key, recorded_by_address: terminal.display_address)
+        assert {:ok, _decision} = WorkRequestRepository.record_decision(repo, request.id, attrs)
+      end
+
+      flag.("WRD-REVIEW-LIVE", "t7")
+      flag.("WRD-REVIEW-GONE", "t9")
+      flag.("WRD-REVIEW-ACK", "t7")
+      assert {:ok, _plain} = WorkRequestRepository.record_decision(repo, request.id, decision_attrs(id: "WRD-REVIEW-PLAIN"))
+
+      to_review = fn ->
+        board = native_operator_conn() |> get("/api/v1/sympp/herdr/dashboard") |> json_response(200)
+        board["work_request_details"] |> Enum.find(&(&1["work_request"]["id"] == request.id)) |> Map.fetch!("decisions_to_review") |> Map.new(&{&1["id"], &1})
+      end
+
+      review = to_review.()
+      assert Map.keys(review) |> Enum.sort() == ["WRD-REVIEW-ACK", "WRD-REVIEW-GONE", "WRD-REVIEW-LIVE"]
+      assert %{"review_state" => "recorded", "recorded_by" => "jjdev/t7", "next_action" => "ack or feedback", "feedback_route" => feedback_route} = review["WRD-REVIEW-LIVE"]
+
+      missing = native_operator_conn() |> post(feedback_route, Jason.encode!(%{text: "  "})) |> json_response(422)
+      assert missing["error"]["code"] == "missing_feedback"
+
+      delivered = native_operator_conn() |> post(feedback_route, Jason.encode!(%{text: "Keep the EU default."})) |> json_response(200)
+      assert %{"review_state" => "feedback", "delivery" => %{"state" => "delivered", "to" => "jjdev/t7"}} = delivered
+      assert_received {:pasted, "t7", "Decision feedback: Keep the EU default."}
+
+      gone = local_operator_conn() |> post("/api/v1/sympp/operator/decisions/WRD-REVIEW-GONE/feedback", %{text: "Use the cheaper plan."}) |> json_response(200)
+      assert gone["delivery"] == %{"state" => "not_delivered", "reason" => "terminal_finished"}
+      refute_received {:pasted, _target, _text}
+
+      acked = local_operator_conn() |> post("/api/v1/sympp/operator/decisions/WRD-REVIEW-ACK/ack") |> json_response(200)
+      assert acked["review_state"] == "acknowledged"
+
+      # Only the undelivered feedback still needs the operator.
+      assert %{
+               "WRD-REVIEW-GONE" => %{
+                 "review_state" => "feedback",
+                 "feedback" => "Use the cheaper plan.",
+                 "undelivered_reason" => "terminal_finished",
+                 "next_action" => "dismiss",
+                 "dismiss_route" => dismiss_route
+               }
+             } =
+               to_review.()
+
+      refuse = fn path ->
+        error = local_operator_conn() |> post("/api/v1/sympp/operator/decisions/" <> path, %{text: "Again"}) |> json_response(409)
+        Map.take(error["error"], ["code", "state", "next_action"])
+      end
+
+      assert refuse.("WRD-REVIEW-ACK/ack") == %{"code" => "decision_transition_refused", "state" => "acknowledged", "next_action" => "none"}
+      assert refuse.("WRD-REVIEW-GONE/feedback") == %{"code" => "decision_transition_refused", "state" => "feedback", "next_action" => "dismiss"}
+      assert refuse.("WRD-REVIEW-PLAIN/ack") == %{"code" => "decision_transition_refused", "state" => "not_flagged", "next_action" => "none: only flagged decisions are reviewed"}
+      assert refuse.("WRD-REVIEW-LIVE/dismiss") == %{"code" => "decision_transition_refused", "state" => "feedback", "next_action" => "none"}
+
+      assert %{"ok" => true} = native_operator_conn() |> post(dismiss_route, "{}") |> json_response(200)
+      assert to_review.() == %{}
+      assert %DecisionLogEntry{feedback: "Use the cheaper plan.", undelivered_reason: nil} = repo.get!(DecisionLogEntry, "WRD-REVIEW-GONE")
+
+      # Feedback still being typed can't be dismissed; one whose send never finished reads as interrupted.
+      sending = fn id, seconds_ago ->
+        reviewed_at = DateTime.add(DateTime.utc_now(:microsecond), -seconds_ago, :second)
+        flag.(id, "t7")
+        changes = [review_state: "feedback", feedback: "Typed", undelivered_reason: "delivering", reviewed_at: reviewed_at]
+        repo.update!(Ecto.Changeset.change(repo.get!(DecisionLogEntry, id), changes))
+      end
+
+      sending.("WRD-REVIEW-SENDING", 1)
+      sending.("WRD-REVIEW-STUCK", 120)
+      assert %{"WRD-REVIEW-SENDING" => sending_entry, "WRD-REVIEW-STUCK" => %{"undelivered_reason" => "delivery_interrupted", "dismiss_route" => _route}} = to_review.()
+      assert %{"undelivered_reason" => "delivering", "next_action" => "wait: the feedback is being typed"} = sending_entry
+      refute Map.has_key?(sending_entry, "dismiss_route")
+      assert refuse.("WRD-REVIEW-SENDING/dismiss")["next_action"] == "wait: the feedback is being typed"
+      assert %{"ok" => true} = local_operator_conn() |> post("/api/v1/sympp/operator/decisions/WRD-REVIEW-STUCK/dismiss") |> json_response(200)
+    end)
+  end
+
   test "Herdr reads the complete execution graph and current worker sessions over direct loopback", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       work_request = create_work_request!(repo, id: "WR-HERDR-DETAIL")
@@ -2156,7 +2243,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
         for path <- [
               "/api/v1/sympp/herdr/work-requests",
-              "/api/v1/sympp/herdr/asks/missing/answer"
+              "/api/v1/sympp/herdr/asks/missing/answer",
+              "/api/v1/sympp/herdr/decisions/missing/feedback"
             ] do
           mutation =
             native_operator_conn()
@@ -2172,7 +2260,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         for method <- [:post, :options],
             path <- [
               "/api/v1/sympp/herdr/work-requests",
-              "/api/v1/sympp/herdr/asks/missing/answer"
+              "/api/v1/sympp/herdr/asks/missing/answer",
+              "/api/v1/sympp/herdr/decisions/missing/feedback"
             ] do
           request =
             native_operator_conn()

@@ -232,44 +232,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
       schema = ToolCatalog.local_operator_tool_input_schema(name)
 
       case validate_tool_required_arguments(schema, arguments) do
-        :ok -> validate_local_operator_argument_values(name, schema, arguments)
+        :ok -> {:ok, arguments}
         {:error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => reason}}
       end
     end
   end
-
-  defp validate_local_operator_argument_values(name, schema, arguments) do
-    properties = Map.get(schema, "properties", %{})
-
-    arguments
-    |> Enum.find_value(:ok, fn {key, value} ->
-      case validate_local_operator_argument_value(properties, key, value) do
-        :ok -> nil
-        {:error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => reason}}
-      end
-    end)
-    |> case do
-      :ok -> {:ok, arguments}
-      error -> error
-    end
-  end
-
-  defp validate_local_operator_argument_value(properties, key, value) do
-    case Map.get(properties, key, %{}) do
-      %{"type" => "string"} = property -> validate_local_operator_string_argument(key, value, property)
-      _property -> :ok
-    end
-  end
-
-  defp validate_local_operator_string_argument(key, value, property) when is_binary(value) do
-    max_length = Map.get(property, "maxLength")
-
-    if is_integer(max_length) and String.length(value) > max_length,
-      do: {:error, "#{key}_too_long"},
-      else: :ok
-  end
-
-  defp validate_local_operator_string_argument(key, _value, _property), do: {:error, "invalid_#{key}"}
 
   defp validate_architect_arguments(name, arguments) do
     allowed = MapSet.new(allowed_architect_argument_keys(name))

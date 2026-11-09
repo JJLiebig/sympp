@@ -1,5 +1,5 @@
 {
-  "mcp_contract_fingerprint": "ccc10d382cd4ce7f93f26c2f96aa436bf29594fa7afa8ebdbc4602cd5cd53d45",
+  "mcp_contract_fingerprint": "d6b1dc65c1dc6b668dc1a0b26c0b2faa0a81ebf6e092cc3ee3a21db67d42e73c",
   "tool_sets": {
     "owner_gated_tools": [
       "set_blocker",
@@ -47,7 +47,6 @@
       "edit_plan",
       "skip_work_package",
       "dispatch_work_package",
-      "record_work_request_operator_decision",
       "summarize_failed_mcp_calls"
     ]
   },

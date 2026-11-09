@@ -200,6 +200,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert "pr_not_open" in reasons
 
       Observer.sweep(repo, snapshot: fn entries -> assert entries == [] end, review: &no_review/2)
+
+      # Once the architect syncs the PR again (here: reopened), it is watched again.
+      attach!(repo, package, 80, "head-a")
+      sweep(repo, %{{:pr, "nextide", "repo", 80} => {:ok, pr(80, "head-a")}})
+      assert repo.get!(Observation, package.id).pr["state"] == "open"
     end
   end
 

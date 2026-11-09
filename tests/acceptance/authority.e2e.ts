@@ -11,7 +11,7 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
   const uninitialized = await fresh.raw(tool('create_work_request', {}));
   expect(uninitialized.status).toBe(400);
   expect(uninitialized.body.error.data.reason).toBe('missing_session_id');
-  expect((await fresh.raw(tool('record_work_request_operator_decision', {}))).body.error.data.reason).toBe('missing_session_id');
+  expect((await fresh.raw(tool('record_decision', {}))).body.error.data.reason).toBe('missing_session_id');
   const init = { jsonrpc: '2.0', id: 1, method: 'initialize', params: initialize };
   const list = { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} };
   const concurrent = Array.from({ length: 20 }, () => new Client(endpoint, factory.receipt));
@@ -84,6 +84,7 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
   const nativeActions = [
     '/api/v1/sympp/herdr/work-requests',
     '/api/v1/sympp/herdr/asks/missing/answer',
+    '/api/v1/sympp/herdr/decisions/missing/feedback',
   ];
   for (const action of nativeActions) {
     for (const headers of [
@@ -122,8 +123,8 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
   expect(omittedHealthArgs.result.structuredContent.caller.access).toBe('write');
   expect((await fresh.rpc('tools/call', { name: 'sympp.health', arguments: { unexpected: true } })).error.data.reason).toBe('invalid_tool_arguments');
   for (const headers of [{ origin: 'https://example.invalid' }, { 'x-forwarded-for': '127.0.0.1' }]) {
-    const ambient = { work_request_id: id, decision: 'Denied ambient decision', rationale: 'Ambient', scope_impact: 'None', created_by: 'attacker' };
-    expect((await fresh.raw(tool('record_work_request_operator_decision', ambient), headers)).status).toBe(403);
+    const ambient = { work_request_id: id, source_type: 'operator', decision: 'Denied ambient decision', rationale: 'Ambient', scope_impact: 'None', created_by: 'attacker' };
+    expect((await fresh.raw(tool('record_decision', ambient), headers)).status).toBe(403);
   }
   expect((await fresh.call('read_work_request', { detail: 'full', work_request_id: id })).decision_log_entries).toEqual([]);
   for (const batch of [[], [list], [init, list]]) {
@@ -455,36 +456,57 @@ test('asks and decisions preserve provenance and redact their responses', async 
   expect(JSON.stringify(persisted)).not.toContain('raw_secret_synthetic');
 });
 
-test('explicit trusted local decisions are open to any Herdr terminal and stay redacted', async ({ processes }) => {
+test('any Herdr terminal flags a decision, redacted, and the operator reviews it over HTTP', async ({ processes }) => {
   const factory = processes.factory();
   const architect = await factory.client();
-  const request = await architect.request('Local operator notes');
-  const decisionArgs = { work_request_id: request, decision: 'Use sk-synthetic-note-decision',
+  const request = await architect.request('Decision feedback');
+  const decisionArgs = { work_request_id: request, source_type: 'architect', decision: 'Use sk-synthetic-note-decision',
     rationale: 'Context sk-synthetic-note-rationale', scope_impact: 'Bounded sk-synthetic-note-scope' };
-  // A terminal that does not own the WorkRequest may still record an operator decision.
+  // A terminal that does not own the WorkRequest may still flag a decision.
   const other = await factory.client();
-  const note = await other.call('record_work_request_operator_decision', decisionArgs);
-  expect(note.decision_log_entry.source_type).toBe('operator');
-  expect(note.decision_log_entry.created_by).toBe(other.address);
-  expect(note.decision_log_entry.decision).toBe('Use [REDACTED]');
-  expect(JSON.stringify(note)).not.toContain('sk-synthetic');
+  const flagged = await other.call('record_decision', { ...decisionArgs, flag: true });
+  expect(flagged.decision_log_entry).toMatchObject({ created_by: other.address, decision: 'Use [REDACTED]', flagged: true, review_state: 'recorded' });
+  expect(JSON.stringify(flagged)).not.toContain('sk-synthetic');
   const observer = await factory.client();
-  const localDecision = await observer.call('record_work_request_operator_decision', {
+  const plain = await observer.call('record_decision', {
     ...decisionArgs, source_id: 'ghp_syntheticdecision', created_by: 'operator sk-synthetic-decision-author',
   });
-  expect(localDecision.decision_log_entry.source_id).toBe('[REDACTED]');
-  expect(localDecision.decision_log_entry.created_by).toBe('operator [REDACTED]');
-  await observer.reject('record_work_request_operator_decision', { ...decisionArgs, work_request_id: 'missing-request', created_by: 'operator' }, 'not_found');
-  await (await factory.client(null)).reject('record_work_request_operator_decision', decisionArgs, 'read_only_outside_herdr');
+  expect(plain.decision_log_entry.source_id).toBe('[REDACTED]');
+  expect(plain.decision_log_entry.created_by).toBe('operator [REDACTED]');
+  expect(plain.decision_log_entry.review_state).toBeUndefined();
+  await observer.reject('record_decision', { ...decisionArgs, work_request_id: 'missing-request' }, 'not_found');
+  await (await factory.client(null)).reject('record_decision', { ...decisionArgs, flag: true }, 'read_only_outside_herdr');
   // Decisions never take ownership.
   expect((await observer.call('sympp.health')).caller.owns).toEqual([]);
   const persisted = await architect.call('read_work_request', { detail: 'full', work_request_id: request });
-  const stored = persisted.decision_log_entries.find((entry: any) => entry.id === note.decision_log_entry.id);
-  expect(stored.decision).toBe('Use [REDACTED]');
-  expect(stored.rationale).toBe('Context [REDACTED]');
-  expect(stored.scope_impact).toBe('Bounded [REDACTED]');
+  const stored = persisted.decision_log_entries.find((entry: any) => entry.id === flagged.decision_log_entry.id);
+  expect(stored).toMatchObject({ decision: 'Use [REDACTED]', rationale: 'Context [REDACTED]', scope_impact: 'Bounded [REDACTED]' });
   expect(JSON.stringify(stored)).not.toContain('sk-synthetic');
-  expect(persisted.decision_log_entries.map((entry: any) => entry.id)).toContain(localDecision.decision_log_entry.id);
+
+  // The board lists the flagged decision; plain decisions are not reviewed.
+  const toReview = async () => (await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated'))
+    .work_request_details.find((detail: any) => detail.work_request.id === request).decisions_to_review;
+  expect((await toReview()).map((entry: any) => entry.id)).toEqual([flagged.decision_log_entry.id]);
+  const decisionPath = (id: string, action: string) => `/api/v1/sympp/operator/decisions/${id}/${action}`;
+  const refused = await architect.operator(decisionPath(plain.decision_log_entry.id, 'ack'), {});
+  expect(refused.status).toBe(409);
+  expect(refused.body.error).toMatchObject({ state: 'not_flagged' });
+  expect((await architect.operator(decisionPath(flagged.decision_log_entry.id, 'feedback'), { text: ' ' })).status).toBe(422);
+  const feedback = await architect.operator(decisionPath(flagged.decision_log_entry.id, 'feedback'), { text: 'Prefer sk-synthetic-feedback the bounded option.' });
+  expect(feedback.status).toBe(200);
+  expect(feedback.body.review_state).toBe('feedback');
+  // The synthetic recording terminal isn't on the factory's own herdr-core, so the feedback stays on the decision, marked undelivered.
+  expect(feedback.body.delivery).toEqual({ state: 'not_delivered', reason: 'terminal_unreachable' });
+  const [undelivered] = await toReview();
+  expect(undelivered).toMatchObject({ review_state: 'feedback', feedback: 'Prefer [REDACTED] the bounded option.', undelivered_reason: 'terminal_unreachable', next_action: 'dismiss' });
+  const again = await architect.operator(decisionPath(flagged.decision_log_entry.id, 'ack'), {});
+  expect(again.status).toBe(409);
+  expect(again.body.error).toMatchObject({ state: 'feedback', next_action: 'dismiss' });
+  expect((await architect.raw({}, {}, 'POST', decisionPath(flagged.decision_log_entry.id, 'dismiss').replace('/operator/', '/herdr/'))).status).toBe(200);
+  expect(await toReview()).toEqual([]);
+  const read = await other.call('read_work_request', { detail: 'full', work_request_id: request });
+  expect(read.decision_log_entries.find((entry: any) => entry.id === flagged.decision_log_entry.id))
+    .toMatchObject({ review_state: 'feedback', feedback: 'Prefer [REDACTED] the bounded option.' });
 });
 
 test('architect descendant planning stays owned through terminal closeout and request archive', async ({ processes }) => {

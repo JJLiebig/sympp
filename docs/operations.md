@@ -128,7 +128,8 @@ output.
    an architect).
 2. Give an architect the WorkRequest id; its first plan write makes its terminal
    the owner.
-3. Answer the asks the board shows as Needs you.
+3. Answer the asks the board shows as Needs you, and acknowledge or give
+   feedback on the decisions agents flag for review.
 4. Let the architect plan WorkPackages, optional group paths and dependencies.
 5. Dispatch dependency-ready WorkPackages to isolated workers.
 6. Merge reviewed pull requests.

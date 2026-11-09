@@ -32,6 +32,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
@@ -1088,6 +1089,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       scope_impact: redacted_text(decision.scope_impact),
       created_by: redacted_text(decision.created_by),
       created_at: timestamp(decision.created_at),
+      flagged: decision.flagged,
+      review_state: decision.review_state,
+      feedback: redacted_text(decision.feedback),
+      reviewed_at: timestamp(decision.reviewed_at),
+      undelivered_reason: DecisionFeedback.undelivered_reason(decision),
       inserted_at: timestamp(decision.inserted_at),
       updated_at: timestamp(decision.updated_at)
     }
