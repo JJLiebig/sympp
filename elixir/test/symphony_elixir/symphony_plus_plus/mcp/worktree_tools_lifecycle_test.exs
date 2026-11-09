@@ -345,6 +345,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeToolsLifecycleTest do
     assert replay["launch_line"] == launched["launch_line"]
     assert repo.get!(WorkPackage, reviewed.id).launch_machine == "factory"
 
+    # A contract edit while dispatched doesn't move the recorded worktree off its branch.
+    assert {:ok, _package} = WorkPackageRepository.update(repo, reviewed.id, %{branch_pattern: "feat/renamed"})
+    edited = dispatch.(reviewed, %{"review_mode" => "fast", "target_repo_root" => fixture.repo_root, "machine" => "factory"})
+    assert {edited["worktree"]["path"], edited["worktree"]["branch"]} == {worktree, "feat/reviewed"}
+
     # Mode none mints no id and gives the worker no review step.
     none = dispatch.(unreviewed, %{"review_mode" => "none", "agent" => "claude", "target_repo_root" => fixture.repo_root})
     assert none["work_package"]["review_id"] == nil

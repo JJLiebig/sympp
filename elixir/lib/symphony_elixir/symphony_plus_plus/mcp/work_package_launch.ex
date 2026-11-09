@@ -50,7 +50,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
 
   defp prepare_worktree(config, terminal, %WorkPackage{} = work_package, explicit_root) do
     with {:ok, target_repo_root} <- WorktreeScope.prepare_target_repo_root(explicit_root, work_package, config),
-         {:ok, branch} <- WorktreeScope.prepare_branch(work_package),
+         {:ok, branch} <- worktree_branch(work_package),
          {:ok, result} <-
            WorkPackageService.prepare_worktree(config.repo, work_package.id, %{
              "target_repo_root" => target_repo_root,
@@ -59,6 +59,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
            }),
          {:ok, _event} <- append_audit(config.repo, terminal, work_package.id, result) do
       {:ok, result}
+    end
+  end
+
+  # A recorded worktree keeps its branch, even if the branch pattern changed
+  # since; only a new worktree derives one.
+  defp worktree_branch(%WorkPackage{worktree_path: path} = work_package) do
+    case WorktreeScope.live_branch(path) do
+      {:ok, branch} -> {:ok, branch}
+      {:error, _missing_or_invalid} -> WorktreeScope.prepare_branch(work_package)
     end
   end
 
