@@ -103,13 +103,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
     repo.exists?(from(row in "sympp_repositories_with_ci", where: row.repository == ^String.downcase(repository)))
   end
 
-  defp note_repository_ci(repo, %{"repository" => repository, "check_summary" => %{"status" => status}})
-       when is_binary(repository) and status in ["passing", "failing", "pending"] do
+  @doc "Marks a snapshot's repository as having CI when the snapshot reports checks."
+  @spec note_repository_ci(module(), map()) :: :ok
+  def note_repository_ci(repo, %{"repository" => repository, "check_summary" => %{"status" => status}})
+      when is_binary(repository) and status in ["passing", "failing", "pending"] do
     repo.insert_all("sympp_repositories_with_ci", [%{repository: String.downcase(repository)}], on_conflict: :nothing)
     :ok
   end
 
-  defp note_repository_ci(_repo, _payload), do: :ok
+  def note_repository_ci(_repo, _payload), do: :ok
 
   @doc "Records an architect's CI override for `head`, replacing any earlier one."
   @spec put_ci_override(module(), WorkPackage.t(), %{reason: String.t(), by: String.t(), head: String.t()}) ::

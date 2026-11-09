@@ -107,6 +107,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
            {:ok, candidate_head} <- Qualification.candidate_head(repo, current),
            :ok <- Qualification.record_pr(repo, actor, current, payload),
            {:ok, current} <- put_ci_override(repo, current, override, payload),
+           pr_facts = put_no_ci(repo, pr_facts, payload),
            {:ok, decision} <- decide(repo, current, pr_facts, candidate_head, payload),
            {:ok, updated} <- Qualification.apply_decision(repo, actor, current, decision, payload["head_sha"]) do
         result(updated, payload, decision, pr_facts)
@@ -154,22 +155,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     pr_state = metadata |> Map.get("state") |> normalize_state()
     review = if merged?, do: :none, else: Qualification.review(work_package, payload["head_sha"])
 
-    ci_status = get_in(payload, ["check_summary", "status"])
-
     %{
-      no_ci?: ci_status == "unknown" and not repository_has_ci?(repo, payload["repository"]),
       pr_state: pr_state,
       pr_draft?: Map.get(metadata, "draft") == true,
-      ci_status: ci_status,
+      ci_status: get_in(payload, ["check_summary", "status"]),
       review: review,
       head_sha: payload["head_sha"],
       stacked_on: if(merged? or pr_state != "open", do: [], else: stacking(repo, work_package, metadata, payload))
     }
   end
 
-  # A repository whose identity is unknown is assumed to have CI.
-  defp repository_has_ci?(repo, repository) when is_binary(repository), do: Qualification.repository_has_ci?(repo, repository)
-  defp repository_has_ci?(_repo, _repository), do: true
+  # CI that reports nothing counts as known only in a repository that has never
+  # reported checks; read in the transaction that decides. A repository whose
+  # identity is unknown is assumed to have CI.
+  defp put_no_ci(repo, %{ci_status: "unknown"} = pr_facts, %{"repository" => repository}) when is_binary(repository),
+    do: Map.put(pr_facts, :no_ci?, not Qualification.repository_has_ci?(repo, repository))
+
+  defp put_no_ci(_repo, pr_facts, _payload), do: pr_facts
 
   defp stacking(repo, work_package, metadata, payload) do
     own = %{work_package_id: work_package.id, repository: payload["repository"], number: payload["number"], commits: metadata["commits"]}
