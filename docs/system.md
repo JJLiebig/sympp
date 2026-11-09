@@ -61,8 +61,9 @@ worker reporting cadence.
 
 Asks are the only "Needs you". Any Herdr terminal opens one with `ask` on a
 WorkRequest, optionally naming a package and a decision prompt. An ask is
-`open` until it is `answered` or `withdrawn`. The operator answers on the board
-(HTTP), and the factory types `Answer: <answer>` into the asking terminal's
+`open` until it is `answered` or `withdrawn`. Both boards show open asks as
+Needs you. The operator answers in the Herdr panel or through the operator HTTP
+route, and the factory types `Answer: <answer>` into the asking terminal's
 input without submitting it; a terminal that has finished keeps the answer on
 the ask. The asker or the WorkRequest owner records an answer given in
 conversation, or withdraws the ask, with `resolve_ask`, optionally recording a
