@@ -392,6 +392,9 @@ jobs:
               --notes "Prebuilt sympp runtime artifacts for ${GITHUB_SHA}."
           fi
 
+      - name: Prune old runtime builds
+        run: python3 scripts/prune-sympp-runtime-assets.py
+
       - name: Upload platform release assets
         shell: bash
         run: |
