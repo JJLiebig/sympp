@@ -105,6 +105,22 @@ test("a task's own tab has no way back, and missing or unreadable tasks say so",
   assert.ok(stale.has('pkg-wp-review') && stale.has('read-status'), 'the last good read stays, with a status mark');
 });
 
+// Herdr runs every mod in one runtime, so a preview that replaced Date.now would stop every mod's clock.
+test("the preview draws at the sample's moment without touching the app's clock", skip, async (t) => {
+  const main = `${previewMain({ props: { job: 'wr-pr' }, width: 1400 }).replace('export default class Preview', 'class Preview')}
+const REAL = Date.now;
+export default class ClockCase extends Preview {
+  init(p, cx) {
+    super.init(p, cx);
+    if (Date.now !== REAL) throw new Error("the preview replaced Date.now");
+  }
+}
+`;
+  const view = await render(t, {}, main);
+  assert.ok(view.has('pkg-wp-review'));
+  assert.equal(view.out.includes('Last read'), false, "the sample's read is fresh at the sample's moment");
+});
+
 test('a selected UI package offers its studio; other packages do not', skip, async (t) => {
   for (const width of [1400, 700]) {
     const ui = await render(t, { props: { job: 'wr-cross' }, width, pkg: 'x-web', expanded: ['Up next:wr-cross'] });

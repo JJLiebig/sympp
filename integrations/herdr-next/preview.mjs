@@ -26,20 +26,20 @@ const CASE = ${JSON.stringify(spec)};
 const SAMPLE = Object.assign(new Error("This preview runs on sample data; nothing is saved."), { userMessage: "This preview runs on sample data; nothing is saved." });
 export default class Preview extends Lens {
   init(_p, cx) {
-    // Ages and timings are drawn at the sample's moment, not the machine's clock.
-    Date.now = () => NOW;
     super.init({ endpoint: "http://127.0.0.1:4000", ...CASE.props }, cx);
     this.request = async () => { throw SAMPLE; };
-    const now = Date.now();
-    this.net = M.fetchSucceeded(this.net, M.parseBoard(boardPayload()), now);
-    if (CASE.board) this.net = M.fetchSucceeded(this.net, M.parseBoard(variantPayload(CASE.board)), now);
-    if (CASE.error) this.net = M.fetchFailed(this.net, CASE.error, now);
+    this.net = M.fetchSucceeded(this.net, M.parseBoard(boardPayload()), NOW);
+    if (CASE.board) this.net = M.fetchSucceeded(this.net, M.parseBoard(variantPayload(CASE.board)), NOW);
+    if (CASE.error) this.net = M.fetchFailed(this.net, CASE.error, NOW);
     if (CASE.path) this.path = { topic: null, space: null, job: null, ...CASE.path };
     if (CASE.pin) this.pin = true;
     if (CASE.pkg) this.pkgSel = CASE.pkg;
     if (CASE.review) this.review = CASE.review;
     if (CASE.expanded) this.expanded = new Set(CASE.expanded);
   }
+  // Ages and timings are drawn at the sample's moment. Herdr runs every mod in one runtime, so the
+  // app's clock (Date.now) stays untouched.
+  now() { return NOW; }
   tick() {}
   openInTab() {}
   openStudio() {}
