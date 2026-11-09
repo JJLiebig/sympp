@@ -287,13 +287,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       assert get_in(mcp_tool(repo, "t1", "sync_pr", url_only), ["result", "structuredContent", "work_package", "status"]) == "ready"
       assert repo.get!(WorkPackage, approved_slice.id).ci_override == nil
 
-      # Failing CI is never overridden.
+      # Failing CI is never overridden: the failure is still recorded and
+      # unqualifies the package, and the error says why.
       FakeGitHubClient.put_response("nextide/repo", 412, Map.put(green, "check_summary", %{"status" => "failure"}))
       failing = mcp_tool(repo, "t1", "sync_pr", Map.put(url_only, "ci_override", reason))
-      assert %{"code" => "ci_failing", "state" => "ready", "message" => message} = get_in(failing, ["error", "data"])
+      assert %{"code" => "ci_failing", "state" => "dispatched", "message" => message} = get_in(failing, ["error", "data"])
       assert message =~ "never skips failing checks"
       assert repo.get!(WorkPackage, approved_slice.id).ci_override == nil
       FakeGitHubClient.put_response("nextide/repo", 412, green)
+      assert get_in(mcp_tool(repo, "t1", "sync_pr", url_only), ["result", "structuredContent", "work_package", "status"]) == "ready"
 
       # Each qualification predicate that stops holding unqualifies the ready package;
       # a green sync of the current head qualifies it again.

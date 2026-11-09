@@ -41,8 +41,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
          :ok <- require_merge_evidence(payload),
          pr_facts = pr_facts(repo, work_package, metadata, payload),
          override = ci_override && %{reason: ci_override, by: actor.id, head: payload["head_sha"]},
-         :ok <- require_overridable(override, pr_facts),
-         {:ok, result} <- persist(repo, actor, work_package, payload, pr_facts, override) do
+         failing? = pr_facts.ci_status == "failing" and pr_facts.pr_state == "open",
+         {:ok, result} <- persist(repo, actor, work_package, payload, pr_facts, if(failing?, do: nil, else: override)),
+         :ok <- require_overridable(override, failing?) do
       if PullRequestProgress.merged?(payload) do
         MergeReconciler.reconcile_work_package(repo, work_package.id, pr_payload: payload, client: DryClient, metadata: payload)
       else
@@ -93,9 +94,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     end
   end
 
-  # An override covers CI that hasn't reported, never CI that failed.
-  defp require_overridable(%{}, %{ci_status: "failing", pr_state: "open"}), do: {:error, :ci_failing}
-  defp require_overridable(_override, _pr_facts), do: :ok
+  # An override covers CI that hasn't reported, never CI that failed. The failing
+  # snapshot is still recorded and applied; only the override is refused.
+  defp require_overridable(%{}, true = _failing?), do: {:error, :ci_failing}
+  defp require_overridable(_override, _failing?), do: :ok
 
   defp persist(repo, actor, work_package, payload, pr_facts, override) do
     repo.transaction(fn ->
