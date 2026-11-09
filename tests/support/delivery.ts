@@ -57,6 +57,11 @@ export class Provider {
     this.terminals.set(record.address, { labels: {}, ...this.terminals.get(record.address), ...record });
   }
 
+  // A client's own Herdr terminal is live unless the journey says otherwise.
+  readonly clientTerminal = (address: string) => {
+    if (!this.terminals.has(address)) this.terminal({ address, state: 'live' });
+  };
+
   private gh(argv: string[]): Reply {
     if (JSON.stringify(argv) === JSON.stringify(['auth', 'status', '--hostname', 'github.com'])) {
       return { stdout: 'Synthetic protocol available', exitCode: 0 };
@@ -198,7 +203,7 @@ async function delivery(watcher: boolean, use: (value: Delivery) => Promise<void
     const started = await provider.start(root);
     const options = {
       ...(watcher ? { watcher: started.endpoint } : {}),
-      onTerminal: (address: string) => { if (!provider.terminals.has(address)) provider.terminal({ address, state: 'live' }); },
+      onTerminal: provider.clientTerminal,
     };
     current = new Factory(root, started, options);
     const restart = async () => {
