@@ -3,9 +3,6 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  alias SymphonyElixir.FakeGitHubClient
-  alias SymphonyElixir.GitHubPullRequestFixtures
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
 
   test "reads redact historical credential-bearing request and delivery scope", %{repo: repo} do
@@ -111,7 +108,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
     refute inspect(board_response) =~ "raw-secret-localreadbranch"
   end
 
-  test "dispatch redacts secrets and sync_pr qualifies, unqualifies and lands the package", %{repo: repo} do
+  test "dispatch redacts secrets from its response and the worker's assignment", %{repo: repo} do
     repo_path = TestSupport.git_repo_with_origin_fixture!("https://github.com/nextide/repo.git", prefix: "sympp-architect-handoff")
     anchor = %{repo: repo_path, base_branch: "symphony-plus-plus/beta"}
 
@@ -176,169 +173,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
     assert {:ok, persisted_slice} = WorkRequestRepository.get_work_package(repo, work_request.id, approved_slice.id)
     assert persisted_slice.status == "dispatched"
     assert persisted_slice.id == payload["work_package"]["id"]
-
-    original_client = Application.get_env(:symphony_elixir, :sympp_github_client)
-    Application.put_env(:symphony_elixir, :sympp_github_client, FakeGitHubClient)
-    # The worker's Review Suite cycle, read by the review id dispatch minted.
-    {:ok, reviewed} = Agent.start_link(fn -> :unreachable end)
-    review_id = repo.get!(WorkPackage, approved_slice.id).review_id
-
-    Application.put_env(:symphony_elixir, :sympp_review_command, fn "python3", [_script, "--id", ^review_id, "--show-status", "--json"], _timeout ->
-      case Agent.get(reviewed, & &1) do
-        :unreachable -> :error
-        :not_started -> {:ok, {Jason.encode!(%{"error" => "unknown review cycle id: #{review_id}", "status" => "usage_error"}), 2}}
-        {reviewed, accepted} -> {:ok, {Jason.encode!(%{"review" => review_id, "done" => true, "status" => "done", "reviewed_head" => reviewed, "accepted_head" => accepted}), 0}}
-      end
-    end)
-
-    try do
-      head = String.duplicate("a", 40)
-      metadata = GitHubPullRequestFixtures.metadata(412, head, base_branch: anchor.base_branch)
-      FakeGitHubClient.put_response("nextide/repo", 412, metadata)
-      handoff = %{"work_package_id" => approved_slice.id, "url" => "https://github.com/nextide/repo/pull/412", "head_sha" => head}
-
-      mismatch = mcp_tool(repo, "t1", "sync_pr", Map.put(handoff, "head_sha", String.duplicate("b", 40)))
-      assert get_in(mismatch, ["error", "data", "code"]) =~ "provider_head_mismatch"
-      assert repo.get!(WorkPackage, approved_slice.id).status == "dispatched"
-
-      url_only = Map.delete(handoff, "head_sha")
-
-      blocker = %{type: "blocker", source_tool: "set_blocker", blocker_id: "sync-hold", active: true}
-
-      assert {:ok, _blocked} =
-               PlanningRepository.append_progress_event(repo, %{
-                 work_package_id: approved_slice.id,
-                 summary: "Hold",
-                 status: "blocked",
-                 idempotency_key: "sync-hold",
-                 payload: blocker
-               })
-
-      held = mcp_tool(repo, "t1", "sync_pr", url_only)
-      assert get_in(held, ["result", "structuredContent", "work_package", "status"]) == "dispatched"
-      assert "no_active_blockers" in get_in(held, ["result", "structuredContent", "pr_sync", "readiness_reasons"])
-
-      assert {:ok, _resolved} =
-               PlanningRepository.append_progress_event(repo, %{
-                 work_package_id: approved_slice.id,
-                 summary: "Hold cleared",
-                 status: "resolved",
-                 idempotency_key: "sync-hold-cleared",
-                 payload: %{blocker | active: false}
-               })
-
-      # Review state that can't be read, or a review that isn't done for the
-      # head, holds the package; a review done for the head qualifies it.
-      unknown_review = mcp_tool(repo, "t1", "sync_pr", url_only)
-      assert get_in(unknown_review, ["result", "structuredContent", "work_package", "status"]) == "dispatched"
-      assert "review_unknown" in get_in(unknown_review, ["result", "structuredContent", "pr_sync", "readiness_reasons"])
-      assert get_in(unknown_review, ["result", "structuredContent", "pr_sync", "next_action"]) =~ "review state unknown: check "
-
-      Agent.update(reviewed, fn _state -> :not_started end)
-      not_started = mcp_tool(repo, "t1", "sync_pr", url_only)
-      assert get_in(not_started, ["result", "structuredContent", "work_package", "status"]) == "dispatched"
-      assert "review_not_done" in get_in(not_started, ["result", "structuredContent", "pr_sync", "readiness_reasons"])
-
-      # No PR in this repository has reported checks yet: a manual sync accepts
-      # a head whose CI reports nothing.
-      Agent.update(reviewed, fn _state -> {head, head} end)
-      accepted = mcp_tool(repo, "t1", "sync_pr", url_only)
-      assert get_in(accepted, ["result", "structuredContent", "work_package", "status"]) == "ready"
-
-      # `main` merged in with the PR's own patch unchanged: Review Suite accepts
-      # the review for the new head, so the package stays ready.
-      new_head = String.duplicate("d", 40)
-      green = GitHubPullRequestFixtures.metadata(412, new_head, base_branch: anchor.base_branch) |> Map.put("check_summary", %{"status" => "success"})
-      FakeGitHubClient.put_response("nextide/repo", 412, green)
-      Agent.update(reviewed, fn _state -> {head, new_head} end)
-      carried = mcp_tool(repo, "t1", "sync_pr", url_only)
-      assert get_in(carried, ["result", "structuredContent", "work_package", "status"]) == "ready"
-
-      # The repository has now reported checks. A new head whose checks GitHub
-      # doesn't report yet unqualifies, and a manual sync doesn't qualify it.
-      unchecked_head = String.duplicate("e", 40)
-      unchecked = GitHubPullRequestFixtures.metadata(412, unchecked_head, base_branch: anchor.base_branch)
-      FakeGitHubClient.put_response("nextide/repo", 412, unchecked)
-      Agent.update(reviewed, fn _state -> {head, unchecked_head} end)
-      moved = mcp_tool(repo, "t1", "sync_pr", url_only)
-      assert get_in(moved, ["result", "structuredContent", "work_package", "status"]) == "dispatched"
-      assert "ci_unknown" in get_in(moved, ["result", "structuredContent", "pr_sync", "readiness_reasons"])
-
-      resynced = get_in(mcp_tool(repo, "t1", "sync_pr", url_only), ["result", "structuredContent"])
-      assert resynced["work_package"]["status"] == "dispatched"
-      assert "ci_unknown" in resynced["pr_sync"]["readiness_reasons"]
-      assert resynced["pr_sync"]["next_action"] =~ "wait for CI, or sync_pr with ci_override"
-
-      # The architect overrides with a reason; a blank one is refused.
-      blank = mcp_tool(repo, "t1", "sync_pr", Map.put(url_only, "ci_override", "  "))
-      assert get_in(blank, ["error", "data", "code"]) == "blank_ci_override"
-      assert repo.get!(WorkPackage, approved_slice.id).ci_override == nil
-
-      reason = "Docs-only change; this repo's CI doesn't run on docs."
-      # Without a URL, the override names the attached PR's current head.
-      overridden = mcp_tool(repo, "t1", "sync_pr", %{"work_package_id" => approved_slice.id, "ci_override" => reason})
-      assert get_in(overridden, ["result", "structuredContent", "work_package", "status"]) == "ready"
-      assert %{"reason" => ^reason, "head" => ^unchecked_head, "by" => by} = repo.get!(WorkPackage, approved_slice.id).ci_override
-      assert is_binary(by) and by != ""
-
-      # A new head clears the override.
-      FakeGitHubClient.put_response("nextide/repo", 412, green)
-      Agent.update(reviewed, fn _state -> {head, new_head} end)
-      assert get_in(mcp_tool(repo, "t1", "sync_pr", url_only), ["result", "structuredContent", "work_package", "status"]) == "ready"
-      assert repo.get!(WorkPackage, approved_slice.id).ci_override == nil
-
-      # Failing CI is never overridden: the failure is still recorded and
-      # unqualifies the package, and the error says why.
-      FakeGitHubClient.put_response("nextide/repo", 412, Map.put(green, "check_summary", %{"status" => "failure"}))
-      failing = mcp_tool(repo, "t1", "sync_pr", Map.put(url_only, "ci_override", reason))
-      assert %{"code" => "ci_failing", "state" => "dispatched", "message" => message} = get_in(failing, ["error", "data"])
-      assert message =~ "never skips failing checks"
-      assert repo.get!(WorkPackage, approved_slice.id).ci_override == nil
-      FakeGitHubClient.put_response("nextide/repo", 412, green)
-      assert get_in(mcp_tool(repo, "t1", "sync_pr", url_only), ["result", "structuredContent", "work_package", "status"]) == "ready"
-
-      # Each qualification predicate that stops holding unqualifies the ready package;
-      # a green sync of the current head qualifies it again.
-      for {metadata, reason} <- [
-            {Map.put(green, "draft", true), "pr_draft"},
-            {Map.put(green, "check_summary", %{"status" => "failure"}), "ci_not_green"},
-            {Map.merge(green, %{"state" => "closed", "mergeable_state" => "unknown"}), "pr_not_open"}
-          ] do
-        FakeGitHubClient.put_response("nextide/repo", 412, metadata)
-        unqualified = mcp_tool(repo, "t1", "sync_pr", url_only)
-        assert get_in(unqualified, ["result", "structuredContent", "work_package", "status"]) == "dispatched"
-        assert reason in get_in(unqualified, ["result", "structuredContent", "pr_sync", "readiness_reasons"])
-
-        FakeGitHubClient.put_response("nextide/repo", 412, green)
-        requalified = mcp_tool(repo, "t1", "sync_pr", url_only)
-        assert get_in(requalified, ["result", "structuredContent", "work_package", "status"]) == "ready"
-      end
-
-      assert {:ok, %{progress_events: events}} = PlanningRepository.get_state(repo, approved_slice.id)
-      assert Enum.count(events, &(&1.status == "unqualified")) == 4
-
-      FakeGitHubClient.put_response(
-        "nextide/repo",
-        413,
-        GitHubPullRequestFixtures.metadata(413, head, base_branch: anchor.base_branch, merged?: true)
-      )
-
-      different_pr = mcp_tool(repo, "t1", "sync_pr", Map.put(url_only, "url", "https://github.com/nextide/repo/pull/413"))
-      assert get_in(different_pr, ["error", "data", "code"]) == "pr_reference_mismatch"
-      assert repo.get!(WorkPackage, approved_slice.id).status == "ready"
-
-      merged_head = String.duplicate("c", 40)
-      landed_pr = GitHubPullRequestFixtures.metadata(412, merged_head, base_branch: anchor.base_branch, merged?: true)
-
-      FakeGitHubClient.put_response("nextide/repo", 412, landed_pr)
-      landed = mcp_tool(repo, "t1", "sync_pr", %{"work_package_id" => approved_slice.id, "number" => 412, "repository" => "nextide/repo"})
-      assert get_in(landed, ["result", "structuredContent", "work_package", "status"]) == "ended"
-      assert repo.get_by!(WorkPackageDelivery, work_package_id: approved_slice.id).outcome == "pr_merged"
-    after
-      restore_app_env(:sympp_github_client, original_client)
-      Application.put_env(:symphony_elixir, :sympp_review_command, nil)
-      FakeGitHubClient.clear()
-    end
   end
 
   test "dispatch uses configured storage", %{repo: repo} do

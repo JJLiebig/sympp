@@ -37,6 +37,19 @@ export async function repository(root: string, name: string) {
   return { origin, checkout };
 }
 
+// A checkout of github.com/example/service on `branch`, with no fetchable
+// remote. Without `originHead` its base comes from the `origin/main` ref alone.
+export async function githubCheckout(root: string, name: string, branch: string, originHead = true) {
+  const dir = join(root, 'checkouts', name);
+  await git(root, root, 'init', '--quiet', '--initial-branch', 'main', dir);
+  await git(root, dir, 'commit', '--quiet', '--allow-empty', '-m', 'root');
+  await git(root, dir, 'remote', 'add', 'origin', 'https://github.com/example/service.git');
+  await git(root, dir, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+  if (originHead) await git(root, dir, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+  if (branch !== 'main') await git(root, dir, 'checkout', '--quiet', '-b', branch);
+  return { dir, switch: (next: string) => git(root, dir, 'checkout', '--quiet', '-b', next) };
+}
+
 export async function workPackage(client: Client, origin: string, branch: string) {
   await client.request(`Worktree ${branch}`, 'beta', origin);
   const [id] = (await client.addPackages([contract('Owned worktree', { branch_pattern: branch })]));
