@@ -14,7 +14,7 @@ defmodule SymphonyElixirWeb.FactoryAccessPlug do
   def call(conn, _opts) do
     cond do
       not FactoryService.enabled?() or loopback?(conn.remote_ip) -> conn
-      tailnet?(conn.remote_ip) and not forwarded?(conn) -> authorize_tailnet(conn)
+      direct_tailnet?(conn) -> authorize_tailnet(conn)
       not (valid_token?(conn) or valid_board_code?(conn) or valid_board_cookie?(conn)) -> deny(conn, 401)
       forwarded?(conn) -> deny(conn, 403)
       true -> authenticate(conn)
@@ -23,6 +23,8 @@ defmodule SymphonyElixirWeb.FactoryAccessPlug do
 
   @spec authenticated?(Conn.t()) :: boolean()
   def authenticated?(conn), do: conn.private[:sympp_remote_authenticated] == true
+
+  defp direct_tailnet?(conn), do: tailnet?(conn.remote_ip) and not forwarded?(conn)
 
   defp authorize_tailnet(conn) do
     if conn.method in ["GET", "HEAD", "OPTIONS"] or Conn.get_req_header(conn, "origin") == [] or cookie_origin?(conn) do
