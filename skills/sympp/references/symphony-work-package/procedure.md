@@ -10,7 +10,7 @@ No worker MCP call is required to start or deliver work.
 Workers make no sympp calls and hold no ledger authority. Every write is owned by
 the terminal that owns the WorkRequest, normally the architect; a worker's write
 fails `owned_by_other_terminal`. When ledger context helps, any trusted session
-may read `read_work_request`, `read_plan`, `read_task_plan`, or the
+may read `read_work_request` (its `plan` and `package` views) or the
 `sympp://work-packages/<id>/<document>.md` resources. Return everything else in
 the normal handoff.
 

@@ -14,19 +14,22 @@ This guide describes implemented behavior. The approved beta direction is in
 | Entity | Purpose |
 |---|---|
 | WorkRequest | Product goal, repository, base branch, constraints, clarification, decisions, plan, and delivery state. |
-| Group | Optional title and nesting boundary inside a WorkRequest; no lifecycle or manual completion step. |
 | WorkPackage | Canonical bounded assignment from architect planning through worker execution and delivery. |
 | Solo Session | Optional persistent plans, progress, findings, decisions, blockers, and validation for ordinary single-agent work. |
 
 A WorkPackage owns its goal, file scope, delivery repository/base, acceptance
-criteria, optional validation/stop/review context, worktree, branch, PR,
-progress, findings, readiness, blockers, and terminal delivery evidence.
+criteria, optional validation/stop/review context, optional group path,
+worktree, branch, PR, progress, findings, readiness, blockers, and terminal
+delivery evidence.
 Dispatch activates that record; it does not create a second execution record.
 
-Simple WorkRequests contain WorkPackages directly. Do not create a Group merely
-to wrap one package. Dependencies between packages or Groups expand into one
-effective package graph for cycle detection, unmet prerequisites, and dispatch
-readiness. Visual card order and grouping do not create dependencies.
+A package's group is a text path such as `Backend / Billing`; the boards nest a
+path under its first segment. Groups have no records of their own, and simple
+WorkRequests leave packages ungrouped. Dependencies between packages form one
+effective graph for cycle detection, unmet prerequisites, and dispatch
+readiness. Visual card order and grouping do not create dependencies. The
+architect changes the plan with one atomic `edit_plan` call per change and reads
+it with `read_work_request` views.
 
 A WorkRequest's phase is derived on read from its packages and their endings;
 only the operator overrides are stored. The first match wins: `archived`
@@ -92,7 +95,7 @@ development. See [Runtime](runtime.md) for lifecycle and installation details.
 
 | Layer | Owns |
 |---|---|
-| Ledger | Requests, Groups, packages, questions, decisions, dependencies, ownership, progress, and delivery evidence. |
+| Ledger | Requests, packages, questions, decisions, dependencies, ownership, progress, and delivery evidence. |
 | MCP | Discovery, reads, owner-gated mutations, dispatch, readiness, and recovery. |
 | Dashboard | Human projection of ledger, GitHub state, and runtime activity. |
 | Plugin packages | Installation, launchers, and authoritative agent procedures. |
@@ -119,14 +122,13 @@ artifact does not duplicate schemas.
 
 ### Qualified candidate dependencies
 
-An architect can set `candidate_head_sha` on `upsert_dependency` after qualifying
-that exact backend WorkPackage head through its native checks and review handoff.
-The prerequisite must be one WorkPackage; the dependent may be a Group. A current
-pin plus the backend's `ready` status and matching branch/PR head enables
+An architect can set `candidate_head_sha` with an `edit_plan` `set_dependency`
+op after qualifying that exact backend WorkPackage head through its native checks
+and review handoff. A current pin plus the backend's `ready` status and matching branch/PR head enables
 wiring and technical review before backend merge. Readiness alone does not prove
 checks or review passed. Without a pin, dispatch waits for actual delivered scope,
 including all required successors; skipped or abandoned attempts do not count.
-Overlapping dependency constraints all apply. Set the pin to `null` to remove it.
+Set the pin to `null` to remove it.
 
 Consumed backend selections belong to the dependent candidate's existing progress
 history. The [WorkPackage procedure](../packages/sympp/skills/symphony-work-package/SKILL.md#candidate-inputs)
@@ -140,8 +142,7 @@ to qualify the delivered input. Dependencies
 that have never carried a candidate pin continue to require only delivery.
 
 
-`read_plan` exposes each expanded
-constraint. A changed pin or candidate head makes affected input provenance stale.
+The plan view of `read_work_request` exposes each dependency's constraints. A changed pin or candidate head makes affected input provenance stale.
 After qualifying the new input, append its selection for the current dependent head;
 other edges retain their valid selections. Repinning never refreshes old evidence.
 Ready packages remain immutable: create and qualify a successor before retiring the
@@ -164,7 +165,7 @@ for remediation, including after the backend eventually delivers.
 MCP dispatch and delivery-board reads default to compact summaries. Dispatch
 returns an `assignment_uri`; the architect reads that authorized resource and
 passes the JSON bootstrap to the worker. `detail: "full"` on dispatch returns
-the complete bootstrap inline; on `read_delivery_board` it restores all nested
+the complete bootstrap inline; on the board view of `read_work_request` it restores all nested
 package and delivery evidence. Structured results remain JSON and agent text
 uses TOON. See the [architect procedure](../packages/sympp/skills/symphony-architect/SKILL.md#dispatch).
 `reconcile_work_request` defaults to counts plus proposed, applied and error

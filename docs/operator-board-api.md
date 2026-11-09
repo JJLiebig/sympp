@@ -1,8 +1,9 @@
 # Operator board API
 
 `GET /api/v1/sympp/herdr/dashboard` is the optional native-client read of the
-same hydrated board projection as the browser endpoint below. It includes the
-canonical product tree, attention, package/delivery signals and which terminal
+same hydrated board projection as the browser endpoint below. It includes each
+request's packages with their group paths, the execution graph, attention,
+package/delivery signals and which terminal
 works on each request (`worked_on`, below).
 The normal standalone web board and its authorization are unchanged.
 
@@ -50,7 +51,7 @@ ownership, audit or business state. Subscribe to
 
 `GET /api/v1/sympp/herdr/work-requests/:work_request_id` uses the same native
 read authority and never runs ledger migrations. It returns the request's
-clarification questions, packages, product tree, execution graph,
+clarification questions, packages, execution graph,
 attention keys and current worker sessions. `decision_logs` contains every
 decision for that request, newest first, with the existing decision entry shape;
 `summary.decision_count` remains the total. Browser detail enrichment still
@@ -185,10 +186,11 @@ Example package fragment (invented repository):
 }
 ```
 
-Use `work_request_details[].product_tree`: `root_node_ids` and each node's
-`parent_id` describe nesting; `position` orders siblings, while `root_node_ids`
-provides the ordered root identifiers. Nodes include empty groups and `work_package_ids`; root packages appear
-in `root_work_package_ids`. Each `work_request` carries its derived `phase`
+Each package's `group` is its group path, such as `Backend / Billing`, or null.
+Path segments are separated by `" / "`; a path nests under its first segment,
+and groups appear in the order their first planned package does.
+`work_request_details[].product_tree.execution_graph` holds the effective
+dependency edges. Each `work_request` carries its derived `phase`
 (`intake`, `planned`, `active`, `unresolved`, `done` or `archived`),
 `completed_at` (when its work became done: the operator's completion or its
 latest package ending, otherwise null), `operator_completed_at`, `archived_at`
