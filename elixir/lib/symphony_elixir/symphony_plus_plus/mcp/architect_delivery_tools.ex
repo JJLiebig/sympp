@@ -73,12 +73,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
          {:ok, work_request_id} <- work_request_id_argument(config.repo, arguments),
          {:ok, work_request, _work_package} <- WorkRequestScope.work_package_scope(config.repo, work_request_id, work_package_id),
          :ok <- require_successor_in_work_request(config.repo, work_request, attrs),
-         {:ok, {delivery, cleanup_work_package, closeout_context}} <-
-           mutate_product_tree(config.repo, work_request_id, tool, terminal_name(terminal), fn ->
-             DeliveryCloseout.record_in_transaction(config.repo, work_request_id, work_package_id, attrs)
-           end),
-         _delivery_broadcast_result <- DashboardPubSub.broadcast_changed(),
-         :ok <- DeliveryCloseout.cleanup_after_commit(config.repo, cleanup_work_package, delivery, closeout_context),
+         {:ok, delivery} <- close(config.repo, work_request_id, work_package_id, attrs, terminal),
          {:ok, work_package} <- WorkPackageRepository.get(config.repo, work_package_id) do
       {:ok,
        ToolResult.tool_result(%{
@@ -90,6 +85,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
       {:tool_error, reason} -> invalid_params_error(tool, reason)
       {:error, :not_found} -> not_found_error(tool)
       {:error, reason} -> close_error(reason)
+    end
+  end
+
+  # The same close repeated, by any terminal, returns the ending it recorded;
+  # only the outcome and its evidence identify it.
+  defp close(repo, work_request_id, work_package_id, attrs, terminal) do
+    existing = repo.get_by(WorkPackageDelivery, work_package_id: work_package_id)
+
+    if existing && same_close?(existing, attrs),
+      do: {:ok, existing},
+      else: record_close(repo, work_request_id, work_package_id, attrs, terminal)
+  end
+
+  defp same_close?(%WorkPackageDelivery{outcome: outcome} = existing, %{"outcome" => outcome} = attrs) do
+    outcome |> close_fields() |> Map.values() |> Enum.all?(&(Map.get(existing, String.to_existing_atom(&1)) == attrs[&1]))
+  end
+
+  defp same_close?(_existing, _attrs), do: false
+
+  defp record_close(repo, work_request_id, work_package_id, attrs, terminal) do
+    with {:ok, {delivery, cleanup_work_package, closeout_context}} <-
+           mutate_product_tree(repo, work_request_id, "close_work_package", terminal_name(terminal), fn ->
+             DeliveryCloseout.record_in_transaction(repo, work_request_id, work_package_id, attrs)
+           end) do
+      DashboardPubSub.broadcast_changed()
+      :ok = DeliveryCloseout.cleanup_after_commit(repo, cleanup_work_package, delivery, closeout_context)
+      {:ok, delivery}
     end
   end
 

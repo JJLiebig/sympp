@@ -132,7 +132,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert repo.get!(WorkPackage, other_package.id).status == "ended"
     assert {:ok, %{phase: "done"}} = SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase.load_one(repo, repo.get!(WorkRequest, other_request.id))
 
-    conflict = record_delivery(repo, terminal, %{"work_package_id" => other_slice.id, "outcome" => "finished", "idempotency_key" => "finish-other-again"})
+    # Another architect repeating the same finish gets the same ending back.
+    replay = record_delivery(repo, "t3", %{"work_package_id" => other_slice.id, "outcome" => "finished"})
+    assert get_in(replay, ["result", "structuredContent", "work_package_delivery"]) == get_in(finished, ["result", "structuredContent", "work_package_delivery"])
+
+    conflict = record_delivery(repo, "t2", %{"work_package_id" => other_slice.id, "outcome" => "abandoned", "rationale" => "Dropped."})
 
     assert %{"code" => "delivery_outcome_conflict", "outcome" => "finished", "state" => "ended", "next_action" => "none"} =
              get_in(conflict, ["error", "data"])

@@ -73,7 +73,7 @@ test('candidate pins allow dispatch but current pins and dependent inputs gate m
   expect((await architect.call('dispatch_work_package', { work_package_id: ui })).work_package.status).toBe('dispatched');
   const contextBefore = (await plan(architect, request)).dependencies.find((dependency: any) => dependency.id === pin);
   const invalidContext = await architect.rpc('tools/call', architect.toolParams('edit_plan', { ops: [{ op: 'set_dependency', from: ui, to: backend, reason: '' }] }));
-  expect(invalidContext.error?.data).toMatchObject({ reason: 'invalid_field', field: 'reason', op_index: 0 });
+  expect(invalidContext.error?.data).toMatchObject({ code: 'invalid_field', field: 'reason', op_index: 0 });
   const contextAfter = (await plan(architect, request)).dependencies.find((dependency: any) => dependency.id === pin);
   expect(contextAfter).toEqual(contextBefore);
   expect(contextAfter.reason).toBe('Require delivered scope.');

@@ -27,7 +27,7 @@ test('competing terminals end with one owner, Release hands over and ownership s
   const winner = contenders[won];
   const loser = contenders[1 - won];
   const refused = results[1 - won].error.data;
-  expect(refused.reason).toBe('owned_by_other_terminal');
+  expect(refused.code).toBe('owned_by_other_terminal');
   expect(refused.owner.address).toBe(winner.address);
   expect(refused.next_action).toBe(`ask ${winner.address}, or wait until it finishes`);
   expect((await winner.call('read_work_request', { detail: 'full', work_request_id: request })).work_request.operator_report.brief.text).toBe(`Contender ${won}`);

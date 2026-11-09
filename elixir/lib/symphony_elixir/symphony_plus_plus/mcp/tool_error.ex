@@ -101,6 +101,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolError do
   defp message("ending_not_allowed", _code, %{"outcome" => outcome}), do: "This package can't close as #{outcome} in its current state."
   defp message("not_found", _code, _data), do: "Nothing with that id exists."
   defp message("unexpected_argument", _code, %{"arguments" => [_ | _] = names}), do: "Unknown arguments: #{Enum.join(names, ", ")}."
+  defp message("invalid_field", _code, %{"field" => field}), do: "#{field} has an invalid value."
   defp message("missing_" <> field, -32_602, _data), do: "#{field} is required."
   defp message("invalid_" <> field, -32_602, _data), do: "#{field} has an invalid value."
   defp message(_reason, code, _data), do: class_message(code)
