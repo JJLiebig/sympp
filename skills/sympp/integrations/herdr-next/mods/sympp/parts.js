@@ -120,7 +120,7 @@ export function decisionBlock(v, t, d, { where = [], goTo = null } = {}) {
 
 function undelivered(v, t, d) {
   const op = v.ops[`dismiss:${d.id}`];
-  return h_flex().gap(8).mt(2).px(8).py(5).rounded(5).items_center().border(1).border_color(tint(t.foreground, "1a"))
+  const row = h_flex().gap(8).mt(2).px(8).py(5).rounded(5).items_center().border(1).border_color(tint(t.foreground, "1a"))
     .child(div().flex_none().px(5).rounded(3).text_size(10.5).font_semibold().text_color(signal().checks).bg(tint(signal().checks, "1f")).child("Undelivered"))
     .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child(`“${d.feedback ?? ""}”`))
     .child(Button.new(`dismiss-feedback-${d.id}`).flex().flex_none().items_center().justify_center().size(18).rounded(4).cursor_pointer()
@@ -128,6 +128,7 @@ function undelivered(v, t, d) {
       .accessibility_label("Dismiss").tooltip("Dismiss: the feedback stays on the decision")
       .on_click((_e, cx) => { cx.stop_propagation(); v.operate(`dismiss:${d.id}`, d.routes.dismiss, {}, cx); })
       .child(svg(icon("x")).size(11).flex_none()));
+  return op?.error ? v_flex().gap(4).child(row).child(div().text_size(11.5).text_color(signal().fail).child(op.error)) : row;
 }
 
 // The factory delivers feedback to the terminal that made the call. While that terminal runs here,
