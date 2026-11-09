@@ -49,8 +49,8 @@ export function Rest({ at, lanes }: { at: number; lanes: Lanes }) {
     <>
       <Landed at={at} views={lanes.landed} />
       <Shelf age="parked" at={at} hint="set aside by the architect" label="Parked" views={lanes.parked} />
-      <Shelf cleanup age="idle" at={at} hint="started, then nothing for two weeks or more" label="Dormant" views={lanes.dormant} />
-      <Shelf cleanup age="waiting" at={at} hint="no package has started" label="Not started" views={lanes.backlog} />
+      <Shelf age="idle" at={at} hint="started, then nothing for two weeks or more" label="Dormant" views={lanes.dormant} />
+      <Shelf age="waiting" at={at} hint="no package has started" label="Not started" views={lanes.backlog} />
       <Shelf cleanup age="done" at={at} hint="done more than a day ago" label="Settled" views={lanes.settled} />
       <Shelf age="archived" at={at} label="Archived" views={lanes.archived} />
     </>
@@ -85,7 +85,7 @@ function Landed({ at, views }: { at: number; views: GoalView[] }) {
 
 // The architect or chief working on a goal.
 export function GoalOwner({ className, view }: { className?: string; view: GoalView }) {
-  return <Owner className={className} owner={view.goal.owner} subject={{ goalId: view.goal.id }} />;
+  return <Owner className={className} goalId={view.goal.id} owner={view.goal.owner} />;
 }
 
 // Every package has ended but not all of them landed: say which, and offer the operator's two ways out.

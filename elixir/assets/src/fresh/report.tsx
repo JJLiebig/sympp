@@ -368,13 +368,13 @@ export function PkgLine({ at, view }: { at: number; view: PkgView }) {
     <div ref={ref} className={ROW}>
       <Pip stage={view.stage} failed={view.failed} />
       <span className="truncate text-sm">{pkg.title}</span>
-      <CiCell ci={pkg.ci} />
+      <CiCell ci={pkg.ci} stale={pkg.stale.includes("github")} />
       <ReviewCell review={pkg.review} />
       <StageSteps view={view} />
       <StageLabel view={view} />
       <StageTime at={at} view={view} />
       <PrLink pr={pkg.pr} repo={pkg.goalRepo} />
-      <Owner owner={pkg.owner} subject={{ pkgId: pkg.id }} />
+      <Owner owner={pkg.owner} />
       {waitsOnOthers(pkg) ? <ActButton action={{ kind: "finish", pkgId: pkg.id }} confirm="Finish?" label="Finish" tone="text-ink" /> : <span />}
     </div>
   );

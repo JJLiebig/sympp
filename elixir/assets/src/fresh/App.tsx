@@ -8,8 +8,8 @@ import { lanesOf, Rest } from "./board";
 import { Briefing } from "./briefing";
 import { Cards, visibleCards } from "./cards";
 import { Decisions } from "./decisions";
-import { applyDemo, demoBoard } from "./mock";
-import { buildBoard, liveCountAt, viewAt, type Board, type HistoryEvent, type Hydrated, type Settings } from "./model";
+import { applyDemo, demoLedger, type DemoLedger } from "./mock";
+import { buildBoard, liveCountAt, viewAt, type Archived, type Board, type HistoryEvent, type Hydrated, type Settings } from "./model";
 import { focusGoal, smoothly } from "./motion";
 import { ActContext, send, type OperatorAction } from "./operator";
 import { Outline } from "./outline";
@@ -48,7 +48,8 @@ const START = {
 };
 
 // `replayable` is true on a snapshot, which carries recorded history; a backend only knows the present.
-type Loaded = { board: Board; now: number; busiest: number; samples: number[]; replayable: boolean; settings: Settings };
+// The demo keeps its ledger, so actions change it the way the backend would.
+type Loaded = { board: Board; now: number; busiest: number; samples: number[]; replayable: boolean; settings: Settings; demo?: DemoLedger };
 
 export function App() {
   const [data, setData] = useState<Loaded | null>(null);
@@ -169,7 +170,7 @@ export function App() {
 // The demo applies actions to its own invented work; a backend is told, then read again.
 function useOperator(read: () => void, setData: (update: (current: Loaded | null) => Loaded | null) => void) {
   return useCallback(async (action: OperatorAction) => {
-    if (DEMO) return smoothly(() => setData((current) => (current ? { ...current, board: applyDemo(current.board, action, current.now) } : current)));
+    if (DEMO) return smoothly(() => setData((current) => (current?.demo ? demoRead(applyDemo(current.demo, action, current.now), current.now) : current)));
     await send(action);
     read();
   }, [read, setData]);
@@ -199,19 +200,24 @@ function Lost({ failure }: { failure: string | null }) {
   return <span className="whitespace-nowrap text-xs text-fail" title={failure}>Connection lost · showing the last read</span>;
 }
 
+function demoRead(demo: DemoLedger, now: number): Loaded {
+  return { board: buildBoard(demo.hydrated, {}, demo.archived).board, now, busiest: now, samples: [], replayable: false, settings: {}, demo };
+}
+
 async function load(): Promise<Loaded> {
   if (DEMO) {
     const now = Date.now();
-    return { board: demoBoard(now, LINKED.get("demo") === "quiet"), now, busiest: now, samples: [], replayable: false, settings: {} };
+    return demoRead(demoLedger(now, LINKED.get("demo") === "quiet"), now);
   }
-  const [hydrated, history, local] = await Promise.all([
+  const [hydrated, archived, history, local] = await Promise.all([
     ledger(),
+    shelf(),
     sketchOnly<Record<string, HistoryEvent[]>>("/__snapshot/history"),
     sketchOnly<{ areas?: AreaRule[]; samples?: SampleRule[] }>("/__snapshot/local"),
   ]);
   setAreas(local?.areas ?? []);
   setSamples(local?.samples ?? []);
-  const { board, now } = buildBoard(hydrated, history ?? {});
+  const { board, now } = buildBoard(hydrated, history ?? {}, archived);
   // Against a backend there is no history to replay: the board shows the present.
   const settings = hydrated.settings ?? {};
   if (!history) return { board, now, busiest: now, samples: [], replayable: false, settings };
@@ -227,6 +233,12 @@ async function ledger(): Promise<Hydrated> {
   const response = await fetch(api("/dashboard/hydrated"), { headers: { accept: "application/json" } });
   if (!response.ok) throw new Error(`Could not read the ledger (${response.status})`);
   return (await response.json()) as Hydrated;
+}
+
+// Archived goals are read separately. Without them the board still shows everything else.
+async function shelf(): Promise<Archived | null> {
+  const response = await fetch(api("/dashboard?surface=archived"), { headers: { accept: "application/json" } }).catch(() => null);
+  return response?.ok ? ((await response.json()) as Archived) : null;
 }
 
 // These routes exist on the snapshot server only, so only a development server is asked.

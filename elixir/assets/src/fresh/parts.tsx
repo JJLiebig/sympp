@@ -45,7 +45,9 @@ export function StageSteps({ view }: { view: PkgView }) {
   );
 }
 
+// A worker that finished without opening a PR leaves its package implementing with nobody on it.
 export function StageLabel({ view }: { view: PkgView }) {
+  if (view.pkg.exited && view.stage === "implementing") return <span className="truncate whitespace-nowrap font-mono text-[11px] font-semibold text-checks" title="The worker finished without opening a PR">Exited</span>;
   return <span className={`truncate whitespace-nowrap font-mono text-[11px] font-semibold ${view.failed ? "text-fail" : STAGE[view.stage].text}`}>{STAGE[view.stage].label}</span>;
 }
 
@@ -60,18 +62,28 @@ const CI: Record<Ci, { label: string; tone: string; icon: typeof Check }> = {
   failing: { label: "CI failing", tone: "text-fail", icon: X },
 };
 
+// The mode, then the state. A card's review has no known mode, so it shows the state alone.
 function reviewLabel(review: Review): { text: string; tone: string } {
   if (review.mode === "none") return { text: "none", tone: "text-faint" };
+  const words = (state: string) => (review.mode ? `${review.mode} · ${state}` : state);
   const round = review.round > 1 ? ` · round ${review.round}` : "";
-  if (review.state === "running") return { text: `${review.mode}${round}`, tone: "text-review" };
-  if (review.state === "findings") return { text: `${review.mode} · findings`, tone: "text-checks" };
-  if (review.state === "done") return { text: `${review.mode} · done`, tone: "text-merge/80" };
-  if (review.state === "unknown") return { text: `${review.mode} · unknown`, tone: "text-faint" };
-  return { text: review.mode, tone: "text-faint" };
+  if (review.state === "running") return { text: review.mode ? `${review.mode}${round}` : `running${round}`, tone: "text-review" };
+  if (review.state === "findings") return { text: words("findings"), tone: "text-checks" };
+  if (review.state === "done") return { text: words("done"), tone: "text-merge/80" };
+  if (review.state === "unknown") return { text: words("unknown"), tone: "text-faint" };
+  return { text: review.mode ?? "pending", tone: "text-faint" };
 }
 
-// The PR's checks. An empty cell keeps its column.
-export function CiCell({ ci }: { ci: Ci | null }) {
+// The PR's checks. An empty cell keeps its column. When GitHub could not be read, the last result is not shown as current.
+export function CiCell({ ci, stale = false }: { ci: Ci | null; stale?: boolean }) {
+  if (stale) {
+    return (
+      <span className="flex min-w-0 items-center gap-1 whitespace-nowrap font-mono text-[11px] text-faint" title="GitHub could not be read on the last look">
+        <CircleDashed aria-hidden className="size-3 shrink-0" />
+        <span className="truncate">CI unknown</span>
+      </span>
+    );
+  }
   if (!ci) return <span />;
   const check = CI[ci];
   return (

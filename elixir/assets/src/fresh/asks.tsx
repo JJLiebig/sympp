@@ -3,7 +3,7 @@ import { useId, useState } from "react";
 import { readOnly } from "./api";
 import { span, type Ask, type Board, type Choice } from "./model";
 import { focusGoal } from "./motion";
-import { useAct } from "./operator";
+import { REDIRECT, useAct, type Answer } from "./operator";
 import { Owner } from "./owner";
 
 // What the ask is about: its goal, the package within it, or the card it came from.
@@ -50,28 +50,35 @@ function AskItem({ ask, at, board }: { ask: Ask; at: number; board: Board }) {
         <Owner owner={ask.by} />
         <span className="font-mono text-[11px] text-faint">{span(at - ask.from)} ago</span>
       </p>
-      <p className="col-span-2 max-w-[75ch] text-[15px] leading-snug text-ink">{ask.question}</p>
+      <div className="col-span-2 max-w-[75ch]">
+        <p className="text-[15px] leading-snug text-ink">{ask.question}</p>
+        {ask.details ? <p className="mt-0.5 text-sm text-dim">{ask.details}</p> : null}
+      </div>
       {readOnly ? null : <AnswerForm ask={ask} />}
     </li>
   );
 }
 
-// A free answer, or one of the asker's choices with an optional note. A failed send keeps what was entered.
+// A free answer, or one of the asker's choices with an optional note. The asker may also offer to take
+// a free answer instead of its choices; the note is then the answer. A failed send keeps what was entered.
 function AnswerForm({ ask }: { ask: Ask }) {
   const act = useAct();
   const id = useId();
-  const [choice, setChoice] = useState<string | null>(ask.choices.find((entry) => entry.recommended)?.id ?? null);
+  const [choice, setChoice] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const chosen = ask.choices.length > 0;
-  const ready = chosen ? choice !== null : text.trim() !== "";
+  const redirecting = choice === REDIRECT;
+  // With a choice the text is a note, unless the choice is to answer in free text.
+  const noting = chosen && !redirecting;
+  const { answer, ready } = draft(chosen, choice, text.trim());
 
   const submit = async () => {
     setBusy(true);
     setFailure(null);
     try {
-      await act({ kind: "answer", askId: ask.id, answer: text.trim(), choice });
+      await act({ kind: "answer", askId: ask.id, answer });
     } catch (caught) {
       setFailure(caught instanceof Error ? caught.message : "The backend refused this.");
       setBusy(false);
@@ -86,16 +93,17 @@ function AnswerForm({ ask }: { ask: Ask }) {
           {ask.choices.map((entry) => (
             <ChoiceOption key={entry.id} choice={entry} group={id} picked={choice === entry.id} onPick={() => setChoice(entry.id)} />
           ))}
+          {ask.redirect ? <ChoiceOption choice={{ id: REDIRECT, label: ask.redirect, description: null, pros: [], cons: [] }} group={id} picked={redirecting} onPick={() => setChoice(REDIRECT)} /> : null}
         </fieldset>
       ) : null}
       <div className="flex items-start gap-2">
-        <label className="sr-only" htmlFor={`${id}-text`}>{chosen ? "Note" : "Answer"}</label>
+        <label className="sr-only" htmlFor={`${id}-text`}>{noting ? "Note" : "Answer"}</label>
         <textarea
           aria-invalid={failure ? true : undefined}
           className={`min-h-9 flex-1 resize-y rounded border bg-panel px-3 py-2 text-sm text-ink placeholder:text-faint focus:outline-none focus:ring-2 focus:ring-you/60 ${failure ? "border-fail" : "border-line"}`}
           disabled={busy}
           id={`${id}-text`}
-          placeholder={chosen ? "Add a note" : "Your answer"}
+          placeholder={noting ? "Add a note" : "Your answer"}
           rows={1}
           value={text}
           onChange={(event) => setText(event.target.value)}
@@ -112,22 +120,31 @@ function AnswerForm({ ask }: { ask: Ask }) {
   );
 }
 
+// What the form would send, and whether it is complete: a choice, a free-text choice with its text, or free text.
+function draft(chosen: boolean, choice: string | null, text: string): { answer: Answer; ready: boolean } {
+  if (!chosen) return { answer: { text }, ready: text !== "" };
+  return { answer: { choice: choice ?? "", note: text }, ready: choice !== null && (choice !== REDIRECT || text !== "") };
+}
+
 function ChoiceOption({ choice, group, onPick, picked }: { choice: Choice; group: string; onPick: () => void; picked: boolean }) {
+  const detailed = choice.description || choice.pros.length > 0 || choice.cons.length > 0;
   return (
     <label className={`block cursor-pointer rounded border px-3 py-2 text-sm ${picked ? "border-you/70 bg-you/[0.06]" : "border-line hover:border-dim"}`}>
       <span className="flex items-center gap-2">
         <input checked={picked} className="accent-[var(--color-you)]" name={group} type="radio" onChange={onPick} />
         <span className="font-medium text-ink">{choice.label}</span>
-        {choice.recommended ? <span className="ml-auto text-[11px] font-semibold text-you">Recommended</span> : null}
       </span>
-      <span className="mt-1.5 grid gap-0.5 pl-5 text-xs">
-        {choice.pros.map((pro) => (
-          <span key={pro} className="text-dim"><span className="mr-1.5 font-mono text-merge">+</span>{pro}</span>
-        ))}
-        {choice.cons.map((con) => (
-          <span key={con} className="text-dim"><span className="mr-1.5 font-mono text-fail">−</span>{con}</span>
-        ))}
-      </span>
+      {detailed ? (
+        <span className="mt-1.5 grid gap-0.5 pl-5 text-xs">
+          {choice.description ? <span className="text-dim">{choice.description}</span> : null}
+          {choice.pros.map((pro) => (
+            <span key={pro} className="text-dim"><span className="mr-1.5 font-mono text-merge">+</span>{pro}</span>
+          ))}
+          {choice.cons.map((con) => (
+            <span key={con} className="text-dim"><span className="mr-1.5 font-mono text-fail">−</span>{con}</span>
+          ))}
+        </span>
+      ) : null}
     </label>
   );
 }

@@ -3,7 +3,7 @@ import { useId, useState, type MouseEvent } from "react";
 
 import { ActButton } from "./actions";
 import { readOnly } from "./api";
-import { span, type Board, type Decision } from "./model";
+import { span, type Board, type Decision, type Undelivered as Reason } from "./model";
 import { focusGoal } from "./motion";
 import { useAct } from "./operator";
 import { Owner } from "./owner";
@@ -13,7 +13,7 @@ const ROW = "grid grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-2 py-3 pr-2";
 // Product calls chiefs and architects flagged for review, and feedback that could not reach its terminal.
 // They follow the questions' layout, in neutral tones: these calls are made already and only want a reaction.
 export function Decisions({ at, board, decisions }: { at: number; board: Board; decisions: Decision[] }) {
-  const shown = decisions.filter((entry) => entry.state === "recorded" || (entry.state === "feedback" && entry.delivered === false && !entry.dismissed));
+  const shown = decisions.filter((entry) => entry.state === "recorded" || (entry.state === "feedback" && entry.undelivered !== null));
   if (shown.length === 0) return null;
   const waiting = shown.filter((entry) => entry.state === "recorded").length;
 
@@ -41,18 +41,22 @@ function DecisionItem({ at, board, decision }: { at: number; board: Board; decis
   const [writing, setWriting] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const undelivered = decision.state === "feedback";
+  // Feedback still being typed into its terminal can't be dismissed yet.
+  const typing = decision.undelivered === "delivering";
   const dismiss = () => act({ kind: "dismiss_feedback", decisionId: decision.id }).catch((caught: unknown) => setFailure(caught instanceof Error ? caught.message : "The backend refused this."));
   // The whole row answers a click: a decision opens its feedback form, undelivered feedback is dismissed.
   const onRow = (event: MouseEvent) => {
     if (readOnly || !rowClick(event)) return;
-    if (undelivered) void dismiss();
+    if (undelivered) {
+      if (!typing) void dismiss();
+    }
     else setWriting(true);
   };
-  const clickable = !readOnly && (undelivered || !writing);
+  const clickable = !readOnly && (undelivered ? !typing : !writing);
 
   return (
     <li className={`${ROW} ${clickable ? "cursor-pointer hover:bg-white/[0.025]" : ""}`} onClick={onRow}>
-      <Subject goal={goal} topic={decision.by.topic} />
+      <Subject goal={goal} />
       <p className="flex items-center justify-end gap-3">
         <Owner owner={decision.by} />
         <span className="font-mono text-[11px] text-faint">{span(at - decision.at)} ago</span>
@@ -68,11 +72,11 @@ function DecisionItem({ at, board, decision }: { at: number; board: Board; decis
   );
 }
 
-// The chief's topic, or the goal's area, and the goal the decision belongs to.
-function Subject({ goal, topic }: { goal: Board["goals"][number] | undefined; topic: string | null | undefined }) {
+// The goal's area, and the goal the decision belongs to.
+function Subject({ goal }: { goal: Board["goals"][number] | undefined }) {
   return (
     <p className="flex min-w-0 items-baseline gap-3 text-xs">
-      <span className="shrink-0 uppercase tracking-[0.12em] text-faint">{topic ?? goal?.area[0]}</span>
+      <span className="shrink-0 uppercase tracking-[0.12em] text-faint">{goal?.area[0]}</span>
       {goal ? (
         <button className="min-w-0 truncate text-dim hover:text-ink" type="button" onClick={() => focusGoal(goal.id)}>
           {goal.title}
@@ -95,14 +99,24 @@ function Reactions({ decision, onFeedback }: { decision: Decision; onFeedback: (
   );
 }
 
-// Feedback that reached nobody, because the terminal that recorded the decision had finished.
+const REASON: Record<Reason, string> = {
+  delivering: "Being typed into its terminal",
+  delivery_interrupted: "The factory stopped while typing it",
+  terminal_finished: "Its terminal has finished",
+  terminal_unreachable: "Its terminal is not on the factory's machine",
+  send_failed: "Typing it into its terminal failed",
+  no_recording_terminal: "No terminal recorded this decision",
+};
+
+// Feedback that reached nobody: the reason shows on hover. It stays readable on the decision after a dismiss.
 function Undelivered({ decision, failure, onDismiss }: { decision: Decision; failure: string | null; onDismiss: () => void }) {
+  const typing = decision.undelivered === "delivering";
   return (
     <div className="col-span-2 flex max-w-[880px] items-center gap-3 rounded border border-line bg-panel px-3 py-2 text-sm">
-      <span className="shrink-0 rounded-full border border-checks/50 px-1.5 text-[11px] font-semibold text-checks">Undelivered</span>
+      <span className="shrink-0 rounded-full border border-checks/50 px-1.5 text-[11px] font-semibold text-checks" title={decision.undelivered ? REASON[decision.undelivered] : undefined}>{typing ? "Sending" : "Undelivered"}</span>
       <span className="min-w-0 flex-1 text-ink">“{decision.feedback}”</span>
       {failure ? <span className="shrink-0 text-xs text-fail">{failure}</span> : null}
-      {readOnly ? null : (
+      {readOnly || typing ? null : (
         <button aria-label="Dismiss undelivered feedback" className="flex size-6 shrink-0 items-center justify-center rounded text-faint hover:bg-line hover:text-ink" title="Dismiss" type="button" onClick={onDismiss}>
           <X className="size-3.5" />
         </button>
@@ -118,6 +132,7 @@ function FeedbackForm({ decision, onCancel }: { decision: Decision; onCancel: ()
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  const label = decision.by ? `Feedback for ${decision.by.address}` : "Feedback";
 
   const submit = async () => {
     setBusy(true);
@@ -133,14 +148,14 @@ function FeedbackForm({ decision, onCancel }: { decision: Decision; onCancel: ()
   return (
     <form className="col-span-2 max-w-[880px] space-y-2" onSubmit={(event) => { event.preventDefault(); if (text.trim()) void submit(); }}>
       <div className="flex items-start gap-2">
-        <label className="sr-only" htmlFor={id}>Feedback for {decision.by.address}</label>
+        <label className="sr-only" htmlFor={id}>{label}</label>
         <textarea
           autoFocus
           aria-invalid={failure ? true : undefined}
           className={`min-h-9 flex-1 resize-y rounded border bg-panel px-3 py-2 text-sm text-ink placeholder:text-faint focus:outline-none focus:ring-2 focus:ring-ink/40 ${failure ? "border-fail" : "border-line"}`}
           disabled={busy}
           id={id}
-          placeholder={`Feedback for ${decision.by.address}`}
+          placeholder={label}
           rows={1}
           value={text}
           onChange={(event) => setText(event.target.value)}
