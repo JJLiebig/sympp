@@ -59,6 +59,8 @@ const CONNECTION = "sympp.connection";
 // furthest a live package reached; and their ask to show one in the panel, { job, at }.
 const BOARD = "sympp.board";
 const OPEN = "sympp.open";
+// For desk-tabs' link beside the sympp panel button: the board's address, null when there is none.
+const DASHBOARD = "sympp.dashboard_url";
 // For the spaces sidebar's chief button: each Herdr topic's chiefs, { [topic id]: [{ domain,
 // terminal }] }, terminal only while the helper confirms the chief live.
 const CHIEFS = "sympp.chiefs";
@@ -243,7 +245,10 @@ export default class Lens extends View {
         this.outage = false;
         this.startFailed = false;
         this.holdLease(outcome.board, now, cx);
-        if (this.ownConnection) this.shareConnection();
+        if (this.ownConnection) {
+          this.shareConnection();
+          if ((shared(DASHBOARD) ?? null) !== this.dashboard) setShared(DASHBOARD, this.dashboard);
+        }
         this.announce(outcome.board);
         const agents = Chrome.nextDecorations(shared(Chrome.AGENTS), Chrome.decorations(outcome.board, terminals(), this.endpoint, now, (a) => this.local(a)), this.endpoint, now);
         if (agents) setShared(Chrome.AGENTS, agents);

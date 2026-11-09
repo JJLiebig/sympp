@@ -98,6 +98,9 @@ The desk mods currently consume:
 - `shared('sympp.board')`: array of live jobs `{ id, title, stage, needs, failed }`,
   where stage is the furthest active package stage or null. desk-status renders
   these and writes `shared('sympp.open')` as `{ job, at }` to select a job in sympp.
+- `shared('sympp.dashboard_url')`: the web board's address, or null when there is
+  none. A sympp view with its own connection publishes it after each good read;
+  desk-tabs links to it beside the sympp panel button.
 - Icons under `mods/sympp/`: `glyph.svg`, `glyph-dark.svg`,
   `stage-build.svg`, `stage-checks.svg`, `stage-review.svg`, `stage-merge.svg`,
   `stage-landed.svg`, `needs.svg`, `glyph-ui.svg`, `glyph-ui-dark.svg`,
