@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { appendFile, chmod, copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { appendFile, chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { expect, test as base } from 'e2e';
@@ -114,4 +114,26 @@ export async function close(client: Client, wp: string, outcome = 'completed_no_
 
 export async function sync(client: Client, wp: string, number: number, sha: string) {
   return client.call('sync_pr', { work_package_id: wp, url: prUrl(number), head_sha: sha });
+}
+
+// External Review Suite stand-in at the installed skill's fixed path under the
+// candidate's home. The factory finds and runs it as a subprocess unchanged;
+// `answer` sets what it prints and its exit status, and every argv is recorded.
+export async function installReviewSuite(home: string) {
+  const directory = join(home, '.agents/skills/review-suite/plugins/review-suite/scripts');
+  await mkdir(directory, { recursive: true });
+  const answerPath = join(directory, 'answer.json');
+  const receipt = join(directory, 'calls.jsonl');
+  await writeFile(join(directory, 'review.py'), `import json, sys
+with open(${JSON.stringify(receipt)}, 'a', encoding='utf-8') as calls:
+    calls.write(json.dumps(sys.argv[1:]) + '\\n')
+with open(${JSON.stringify(answerPath)}, encoding='utf-8') as source:
+    answer = json.load(source)
+print(json.dumps(answer['stdout']))
+raise SystemExit(answer['status'])
+`);
+  return {
+    answer: (stdout: object, status = 0) => writeFile(answerPath, JSON.stringify({ stdout, status })),
+    calls: async () => (await readFile(receipt, 'utf8')).trim().split('\n').map((line) => JSON.parse(line)),
+  };
 }

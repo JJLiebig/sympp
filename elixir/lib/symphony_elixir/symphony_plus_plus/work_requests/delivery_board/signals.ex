@@ -377,7 +377,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
       dependencies_met?: unmet == [],
       progress: progress(summary),
       attention?: checks_failing? or review[:status] in ["inspection_needed", "failed"],
-      worker_idle?: match?(%{status: "idle"}, terminal)
+      # A worker that is idle or has exited can't act on failing CI or findings.
+      worker_idle?: match?(%{status: "idle"}, terminal) or match?(%{state: "finished"}, terminal)
     }
 
     %{action: action, actor: actor} = Lifecycle.next_action(work_package, facts)

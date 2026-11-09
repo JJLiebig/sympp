@@ -1913,6 +1913,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     unattended = Signals.activity(package, %{pr_signal: failing_pr, worker_terminal: idle_terminal}, %{key: "dispatched"}, [])
     assert unattended["next_actor"] == "architect"
     assert unattended["next_action"] == "inspect_worker"
+    exited_terminal = %{state: "finished", status: "finished"}
+    abandoned = Signals.activity(package, %{pr_signal: failing_pr, worker_terminal: exited_terminal}, %{key: "dispatched"}, [])
+    assert {abandoned["next_actor"], abandoned["next_action"]} == {"architect", "inspect_worker"}
   end
 
   test "native asks omit textless waits and resolved escalations" do

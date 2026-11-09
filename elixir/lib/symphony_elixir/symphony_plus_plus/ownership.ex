@@ -205,16 +205,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
       `sympp.work_package_id`) whose package is in `work_package_ids` starts
       working on that package, unless another live terminal already does;
     * a live row whose terminal is on this core and is finished or no longer
-      listed ends (`terminal_finished`).
+      listed ends (`terminal_finished`), if it started before `read_at`, when
+      the snapshot was read: a terminal that started later can't be in it.
 
   Rows of terminals on other cores are left alone: their liveness is unknown.
   """
-  @spec observe_core(repo(), String.t(), String.t() | nil, %{String.t() => map()}, [String.t()]) :: :ok
-  def observe_core(repo, core_id, core_name, terminals, work_package_ids) when is_binary(core_id) and is_map(terminals) do
+  @spec observe_core(repo(), String.t(), String.t() | nil, %{String.t() => map()}, [String.t()], DateTime.t()) :: :ok
+  def observe_core(repo, core_id, core_name, terminals, work_package_ids, read_at) when is_binary(core_id) and is_map(terminals) do
     finished? = fn address -> not match?(%{"state" => "live"}, Map.get(terminals, address)) end
 
     ended =
-      repo.all(from(worked_on in WorkedOn, where: worked_on.state == "live"))
+      repo.all(from(worked_on in WorkedOn, where: worked_on.state == "live" and worked_on.started_at < ^read_at))
       |> Enum.filter(fn row -> match?({^core_id, _address}, Terminal.split_key(row.terminal_key)) and finished?.(elem(Terminal.split_key(row.terminal_key), 1)) end)
       |> Enum.map(& &1.id)
 

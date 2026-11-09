@@ -2,7 +2,7 @@ import { expect } from 'e2e';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { contract } from '../support/factory.js';
-import { close, head, pr, prUrl, row, sync, test } from '../support/delivery.js';
+import { close, head, installReviewSuite, pr, prUrl, row, sync, test } from '../support/delivery.js';
 
 test('deployment observations cover every delivered revision and preserve completion through rollback and unavailable history', async ({ delivery: { factory, provider } }) => {
   const architect = await factory.client();
@@ -127,6 +127,35 @@ test('separate repository deployments preserve live attempt time and no-PR work 
   await close(architect, investigation);
   const final = await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated');
   expect(final.work_request_details.find((detail: any) => detail.work_request.id === onlyNoPr).work_request.deployments).toBeUndefined();
+});
+
+test('installed Review Suite state for the review id gates qualification', async ({ delivery: { factory, provider } }) => {
+  const architect = await factory.client();
+  const request = await architect.request('Reviewed delivery');
+  const [wp] = (await architect.addPackages([contract('Reviewed change')]));
+  const reviewId = (await architect.call('dispatch_work_package', { work_package_id: wp, review_mode: 'fast' })).work_package.review_id;
+  expect(reviewId).toMatch(/^rvw_[0-9a-f]{16}$/);
+  provider.set(110, pr(110, head('a')));
+
+  // No provider installed: the review state is unknown and names where to look.
+  const unknown = await architect.call('sync_pr', { work_package_id: wp, url: prUrl(110) });
+  expect(unknown.pr_sync.readiness_reasons).toContain('review_unknown');
+  expect(unknown.pr_sync.next_action).toMatch(/^review state unknown: check /);
+
+  const review = await installReviewSuite(factory.home);
+  await review.answer({ error: `unknown review cycle id: ${reviewId}`, status: 'usage_error' }, 2);
+  const notStarted = await architect.call('sync_pr', { work_package_id: wp, url: prUrl(110) });
+  expect(notStarted.pr_sync.readiness_reasons).toContain('review_not_done');
+  expect((await row(architect, request, wp)).raw_status).toBe('dispatched');
+
+  await review.answer({ review: reviewId, done: true, status: 'done', head: head('b'), progress: '1/1' });
+  const otherHead = await architect.call('sync_pr', { work_package_id: wp, url: prUrl(110) });
+  expect(otherHead.pr_sync.readiness_reasons).toContain('review_not_done');
+
+  await review.answer({ review: reviewId, done: true, status: 'done', head: head('a'), progress: '1/1' });
+  const done = await architect.call('sync_pr', { work_package_id: wp, url: prUrl(110) });
+  expect(done.work_package.status).toBe('ready');
+  for (const argv of await review.calls()) expect(argv).toEqual(['--id', reviewId, '--show-status', '--json']);
 });
 
 test('ordinary PR handoff observes pending qualification then reconciles an exact external merge once', async ({ delivery: { factory, provider } }) => {

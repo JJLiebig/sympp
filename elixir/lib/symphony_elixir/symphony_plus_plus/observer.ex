@@ -103,9 +103,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   """
   @spec observe_terminals(module(), {:ok, map()} | :unavailable | nil) :: :ok
   def observe_terminals(repo, snapshot \\ nil) do
+    # Only rows that started before the snapshot was read can be judged by it.
+    read_at = DateTime.utc_now(:microsecond)
+
     case snapshot || HerdrCore.refresh() do
       {:ok, %{core_id: core_id, terminals: terminals} = core} ->
-        Ownership.observe_core(repo, core_id, Map.get(core, :core_name), terminals, in_flight_ids(repo))
+        Ownership.observe_core(repo, core_id, Map.get(core, :core_name), terminals, in_flight_ids(repo), read_at)
 
       _unavailable ->
         :ok

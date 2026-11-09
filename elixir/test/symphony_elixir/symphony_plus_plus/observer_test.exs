@@ -361,6 +361,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert %WorkedOn{state: "finished", finish_reason: "terminal_finished"} = repo.get!(WorkedOn, seen.id)
       assert %WorkedOn{state: "live"} = repo.get!(WorkedOn, unseen.id)
     end
+
+    test "a terminal that took ownership after the snapshot was read isn't ended by it", %{repo: repo} do
+      package = package!(repo, "WP-OBS-LATE-OWNER")
+      read_at = DateTime.utc_now(:microsecond)
+      late = owner!(repo, package.work_request_id, "core-1/t5")
+
+      Ownership.observe_core(repo, "core-1", nil, %{}, [], read_at)
+
+      assert %WorkedOn{state: "live"} = repo.get!(WorkedOn, late.id)
+    end
   end
 
   describe "Review Suite state" do
