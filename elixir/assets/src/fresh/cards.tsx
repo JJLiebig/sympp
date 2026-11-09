@@ -9,8 +9,9 @@ import { Owner } from "./owner";
 import { CARD_GRID, CiCell, PrLink, ReviewCell } from "./parts";
 
 const DAY = 24 * 3600e3;
-const ORDER: Record<CardState, number> = { review_ci: 0, working: 1, merged: 2, done: 3 };
-const STATE: Record<CardState, { label: string; tone: string; pip: string }> = {
+type Shown = Exclude<CardState, "dismissed">;
+const ORDER: Record<Shown, number> = { review_ci: 0, working: 1, merged: 2, done: 3 };
+const STATE: Record<Shown, { label: string; tone: string; pip: string }> = {
   working: { label: "Working", tone: "text-build", pip: "bg-build" },
   review_ci: { label: "Review/CI", tone: "text-review", pip: "bg-review" },
   merged: { label: "Merged", tone: "text-merge/80", pip: "bg-merge/40" },
@@ -19,12 +20,12 @@ const STATE: Record<CardState, { label: string; tone: string; pip: string }> = {
 const ROW = `${CARD_GRID} rounded px-2 py-1 odd:bg-white/[0.035]`;
 
 // Ended cards drop off a day after they merged or their terminal finished; dismissed ones right away.
-export function visibleCards(cards: Card[], at: number) {
-  return cards.filter((card) => !card.dismissed && (card.state === "working" || card.state === "review_ci" || at - card.since < DAY));
+export function visibleCards(cards: Card[], at: number): Array<Card & { state: Shown }> {
+  return cards.filter((card): card is Card & { state: Shown } => card.state === "working" || card.state === "review_ci" || ((card.state === "merged" || card.state === "done") && at - card.since < DAY));
 }
 
 // Small work a chief handed to a child terminal, with no WorkRequest behind it.
-export function Cards({ at, cards }: { at: number; cards: Card[] }) {
+export function Cards({ at, cards }: { at: number; cards: Array<Card & { state: Shown }> }) {
   if (cards.length === 0) return null;
   const merged = cards.filter((card) => card.state === "merged");
 
@@ -43,7 +44,7 @@ export function Cards({ at, cards }: { at: number; cards: Card[] }) {
   );
 }
 
-function CardRow({ at, card }: { at: number; card: Card }) {
+function CardRow({ at, card }: { at: number; card: Card & { state: Shown } }) {
   const meta = STATE[card.state];
   const ended = card.state === "merged" || card.state === "done";
 
@@ -54,13 +55,13 @@ function CardRow({ at, card }: { at: number; card: Card }) {
       <span className="truncate font-mono text-[11px] text-faint" title={`${card.repo} · ${card.branch}`}>
         {card.repo.split("/").pop()} · {card.branch}
       </span>
-      <CiCell ci={card.ci} />
+      <CiCell ci={card.ci} stale={card.stale.includes("github")} />
       <ReviewCell review={card.review} />
       <PrLink pr={card.pr} repo={card.repo} />
       <span className={`whitespace-nowrap font-mono text-[11px] font-semibold ${meta.tone}`} title={`${meta.label} for ${span(at - card.since)}`}>
         {meta.label}
       </span>
-      <Owner owner={card.by} subject={{ cardId: card.id }} />
+      <Owner owner={card.by} />
       <Dismiss card={card} />
     </div>
   );

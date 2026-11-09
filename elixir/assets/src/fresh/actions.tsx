@@ -16,8 +16,10 @@ function actionsFor(phase: Phase, moving: number): Action[] {
   const archive: Action = { key: "archive", label: "Archive", hint: `Take it off the board. It can be restored.${running}`, confirm: "Archive?" };
   const restore: Action = { key: "restore", label: "Restore", hint: "Put it back on the board.", confirm: "Restore?" };
   const remove: Action = { key: "delete", label: "Delete", hint: `Remove it for good, with its history, its packages and their worktrees.${running}`, confirm: "Delete for good?" };
+  // Only a done or unresolved goal can be archived; anything still open is completed first.
   if (phase === "archived") return [restore, remove];
-  return phase === "done" ? [archive, remove] : [complete, archive, remove];
+  if (phase === "done") return [archive, remove];
+  return phase === "unresolved" ? [complete, archive, remove] : [complete, remove];
 }
 
 // A button for one operator action. With `confirm` it takes a second click. A refusal shows next to it.
