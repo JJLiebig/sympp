@@ -95,10 +95,10 @@ async function main() {
         response.writeHead(200, { "Content-Type": "application/json" });
         return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: {
           code: message.params.name === "test.removed" ? -32601 : ["test.arguments", "test.conflict"].includes(message.params.name) ? -32602 : -32000,
-          message: "original error", data: { tool: message.params.name, reason: message.params.name === "test.conflict" ? "idempotency_conflict" : message.params.arguments?.removed_argument ? "unexpected_argument" : "invalid_tool_arguments" },
+          message: "original error", data: { code: message.params.name === "test.conflict" ? "idempotency_conflict" : message.params.arguments?.removed_argument ? "unexpected_argument" : "invalid_tool_arguments" },
         } }));
       }
-      const key = message.params && message.params.name === "record_work_package_delivery" && message.params.arguments.idempotency_key;
+      const key = message.params && message.params.name === "close_work_package" && message.params.arguments.idempotency_key;
       if (message.params && message.params.name === "test.forward") forwardSessions.push(request.headers["mcp-session-id"]);
       if (key) {
         const requests = deliveryRequests.get(key) || [];
@@ -109,7 +109,7 @@ async function main() {
         deliverySessions.set(key, sessions);
         if (key === "replay-success" && requests.length === 1) {
           response.writeHead(200, { "Content-Type": "application/json", "Mcp-Session-Id": "test-session" });
-          return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: "Server error", data: { reason: "ledger_unavailable" } } }));
+          return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: "Server error", data: { code: "ledger_unavailable" } } }));
         }
         if (key === "replay-failure") {
           const reason = requests.length === 1 ? "first_transient" : "second_transient";
@@ -185,23 +185,23 @@ async function main() {
   assert.equal(response.result.content[0].text, "forwarded");
 
   responsePromise = readResponse(3);
-  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "record_work_package_delivery", arguments: { idempotency_key: "replay-success" } } })}\n`);
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "close_work_package", arguments: { idempotency_key: "replay-success" } } })}\n`);
   assert.equal((await responsePromise).result.content[0].text, "forwarded");
   assert.equal(deliveryRequests.get("replay-success").length, 2);
   assert.equal(new Set(deliveryRequests.get("replay-success")).size, 1);
 
   responsePromise = readResponse(4);
-  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "record_work_package_delivery", arguments: { idempotency_key: "replay-failure" } } })}\n`);
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "close_work_package", arguments: { idempotency_key: "replay-failure" } } })}\n`);
   assert.equal(JSON.parse((await responsePromise).error.data.detail).error.data.reason, "second_transient");
   assert.equal(deliveryRequests.get("replay-failure").length, 2);
 
   responsePromise = readResponse(5);
-  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "record_work_package_delivery", arguments: { idempotency_key: "session-recovery" } } })}\n`);
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "close_work_package", arguments: { idempotency_key: "session-recovery" } } })}\n`);
   assert.equal((await responsePromise).result.content[0].text, "forwarded");
   assert.deepEqual(deliverySessions.get("session-recovery"), ["test-session", "test-session", "recovered-session"]);
 
   responsePromise = readResponse(6);
-  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "record_work_package_delivery", arguments: { idempotency_key: "successful-recovery" } } })}\n`);
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "close_work_package", arguments: { idempotency_key: "successful-recovery" } } })}\n`);
   assert.equal((await responsePromise).result.content[0].text, "forwarded");
   responsePromise = readResponse(7);
   bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "test.forward", arguments: {} } })}\n`);
@@ -250,7 +250,7 @@ async function main() {
     const error = (await responsePromise).error;
     if (name === "test.denied" || name === "test.unchanged" || name === "test.conflict") assert.equal(error.message, "original error");
     else assert.match(error.message, /was updated.*restart the session/);
-    assert.equal(error.data.tool, name);
+    assert.equal(error.data.code, name === "test.conflict" ? "idempotency_conflict" : "invalid_tool_arguments");
   }
 }
 

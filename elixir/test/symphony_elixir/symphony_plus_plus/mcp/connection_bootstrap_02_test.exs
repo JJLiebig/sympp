@@ -12,7 +12,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
     contract = @contract_path |> File.read!() |> Jason.decode!()
     tool_sets = Map.fetch!(contract, "tool_sets")
 
-    tools = :full |> ToolCatalog.startup_tool_specs(Config.default(mode: :http)) |> Enum.map(& &1["name"])
+    tools = ToolCatalog.tools()
 
     assert Map.keys(contract) |> Enum.sort() == ["mcp_contract_fingerprint", "tool_sets", "version"]
     assert Map.fetch!(contract, "version") == 8
@@ -64,15 +64,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
     end
   end
 
-  test "tools list returns Codex-compatible top-level input schemas for every surface", %{repo: repo} do
-    for profile <- [:full, :architect],
-        tool <- ToolCatalog.startup_tool_specs(profile, test_mcp_config(repo)) do
+  test "tools list returns Codex-compatible top-level input schemas" do
+    for tool <- ToolCatalog.tool_specs() do
       schema = Map.fetch!(tool, "inputSchema")
 
-      assert schema["type"] == "object", "#{profile} #{tool["name"]} inputSchema must be a top-level object"
+      assert schema["type"] == "object", "#{tool["name"]} inputSchema must be a top-level object"
 
       forbidden = Map.take(schema, @codex_forbidden_top_level_schema_keys)
-      assert forbidden == %{}, "#{profile} #{tool["name"]} has Codex-rejected top-level schema keys: #{inspect(Map.keys(forbidden))}"
+      assert forbidden == %{}, "#{tool["name"]} has Codex-rejected top-level schema keys: #{inspect(Map.keys(forbidden))}"
     end
   end
 end

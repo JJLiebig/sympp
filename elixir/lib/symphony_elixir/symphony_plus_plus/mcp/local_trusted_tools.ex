@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedTools do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, FailedCall}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.Config
   alias SymphonyElixir.SymphonyPlusPlus.Repo
 
   @spec authorize(map(), String.t()) :: :ok | {:error, integer(), String.t(), map()}
@@ -30,11 +30,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedTools do
 
   def authorize(%{config: %Config{mode: :http}}, tool),
     do: {:error, -32_001, "Unauthorized", %{"tool" => tool, "reason" => "local_daemon_trust_required"}}
-
-  @spec failed_call_summary(Config.t()) :: map()
-  def failed_call_summary(%Config{} = config) do
-    Map.put(FailedCall.summary(), "capture_enabled", FailedCall.capture_enabled?(config))
-  end
 
   @spec require_database(Config.t()) :: :ok | {:error, atom()}
   def require_database(%Config{repo: repo, database: database}) do

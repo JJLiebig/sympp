@@ -13,6 +13,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery do
   # Outcomes callers can record. "legacy" exists only on rows the lifecycle
   # migration wrote for packages that ended before ending rows were required.
   @outcomes ["pr_merged", "finished", "completed_no_pr", "superseded", "abandoned", "skipped"]
+  # Outcomes close_work_package records. Merges are recorded from GitHub.
+  @close_outcomes ["skipped", "completed_no_pr", "superseded", "abandoned", "finished"]
   @legacy_outcome "legacy"
 
   @evidence_contract %{
@@ -94,6 +96,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery do
 
   @spec outcomes() :: [String.t()]
   def outcomes, do: @outcomes
+
+  @spec close_outcomes() :: [String.t()]
+  def close_outcomes, do: @close_outcomes
 
   @spec legacy_outcome() :: String.t()
   def legacy_outcome, do: @legacy_outcome

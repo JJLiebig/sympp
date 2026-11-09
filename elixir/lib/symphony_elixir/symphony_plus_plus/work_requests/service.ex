@@ -5,7 +5,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Service, as: WorkPackageService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout
@@ -60,27 +59,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
   def record_work_package_delivery(repo, work_request_id, work_package_id, attrs),
     do: notify_dashboard(DeliveryCloseout.record(repo, work_request_id, work_package_id, attrs))
 
-  @spec skip_work_package(Repository.repo(), String.t(), String.t()) ::
-          {:ok, WorkPackage.t()} | {:error, error()}
-  def skip_work_package(repo, work_request_id, id) do
-    attrs = %{"outcome" => "skipped", "idempotency_key" => "skip_work_package:" <> id}
-
-    repo.transaction(fn ->
-      with {:ok, {_delivery, _work_package, _closeout_context}} <-
-             DeliveryCloseout.record_in_transaction(repo, work_request_id, id, attrs),
-           {:ok, work_package} <- Repository.get_work_package(repo, work_request_id, id) do
-        work_package
-      else
-        {:error, reason} -> repo.rollback(reason)
-      end
-    end)
-    |> normalize_transaction_result()
-    |> tap(fn result -> if match?({:ok, _work_package}, result), do: WorktreeCleanupQueue.wake() end)
-    |> notify_dashboard()
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
   @spec list_decisions(Repository.repo(), String.t()) :: {:ok, [DecisionLogEntry.t()]} | {:error, error()}
   def list_decisions(repo, work_request_id), do: Repository.list_decisions(repo, work_request_id)
 
@@ -103,20 +81,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
           {:ok, Completion.retention_summary()}
           | {:error, Completion.retention_error()}
   def retention_pass(repo, opts \\ []), do: Completion.retention_pass(repo, opts)
-
-  defp normalize_transaction_result({:ok, value}), do: {:ok, value}
-  defp normalize_transaction_result({:error, reason}), do: {:error, reason}
-
-  defp normalize_exqlite_error(error) do
-    message = Exception.message(error)
-    normalized_message = String.downcase(message)
-
-    if String.contains?(normalized_message, "busy") or String.contains?(normalized_message, "locked") do
-      {:error, :database_busy}
-    else
-      {:error, {:storage_failed, message}}
-    end
-  end
 
   defp notify_dashboard({:ok, _value} = result) do
     :ok = DashboardPubSub.broadcast_changed()

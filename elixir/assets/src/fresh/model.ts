@@ -86,7 +86,6 @@ export type Settings = {
   work_request_never_started_archive_after_days?: number;
   card_retention_days?: number;
   open_dashboard_on_boot?: boolean;
-  capture_failed_mcp_calls?: boolean;
 };
 export type Hydrated = { generated_at?: string; settings?: Settings | null; work_request_details?: Detail[] };
 type Timed = { event: HistoryEvent; at: number };

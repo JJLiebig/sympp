@@ -160,7 +160,7 @@ async function handlePost(snapshot: Snapshot, route: string, req: IncomingMessag
 }
 
 function changeSettings(snapshot: Snapshot, _id: string, body: Json) {
-  const changes = pick(body, ["work_request_archive_after_days", "work_request_never_started_archive_after_days", "card_retention_days", "open_dashboard_on_boot", "capture_failed_mcp_calls"]);
+  const changes = pick(body, ["work_request_archive_after_days", "work_request_never_started_archive_after_days", "card_retention_days", "open_dashboard_on_boot"]);
   snapshot.hydrated.settings = { ...snapshot.hydrated.settings, ...changes };
   return { settings: snapshot.hydrated.settings };
 }

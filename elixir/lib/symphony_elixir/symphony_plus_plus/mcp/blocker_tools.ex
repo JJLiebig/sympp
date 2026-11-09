@@ -31,7 +31,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerTools do
   end
 
   defp result({:error, :not_found}), do: {:error, -32_004, "Not found", %{"tool" => "set_blocker", "reason" => "not_found"}}
-  defp result({:error, :work_request_archived}), do: ErrorDetails.lifecycle_error("set_blocker", :work_request_archived, %{"phase" => "archived"})
+  defp result({:error, :work_request_archived}), do: ErrorDetails.lifecycle_error("set_blocker", :work_request_archived, %{"state" => "archived"})
 
   defp result({:error, :work_package_ended}),
     do: precondition("work_package_ended", "ended", "The package has ended; its blockers were cleared.")

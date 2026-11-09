@@ -24,7 +24,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
       })
 
     assert get_in(response, ["error", "code"]) == -32_004
-    assert get_in(response, ["error", "data", "reason"]) == "not_found"
+    assert get_in(response, ["error", "data", "code"]) == "not_found"
   end
 
   test "dispatch prepares from the package delivery base and reports a divergent package branch", %{repo: repo} do

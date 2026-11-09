@@ -87,9 +87,8 @@ defmodule SymphonyElixirWeb.MCPHTTPPlug do
 
   defp dispatch_payload(conn, payload, local_daemon_trusted?) do
     config = mcp_config(configured_repo(), local_daemon_trusted?)
-    started_at = FailedCall.monotonic_now()
 
-    FailedCall.protect(config, payload, :endpoint, started_at, fn ->
+    FailedCall.protect(config, payload, :endpoint, fn ->
       with :ok <- reject_batch_payload(payload),
            {:ok, state_key} <- request_state_key(conn, payload),
            :ok <- require_session_for_followup(payload, state_key),
@@ -97,27 +96,18 @@ defmodule SymphonyElixirWeb.MCPHTTPPlug do
         send_transport_result(conn, result, state_key)
       else
         {:error, :batch_not_supported} ->
-          :ok =
-            FailedCall.observe_error(
-              config,
-              payload,
-              -32_600,
-              "Invalid Request",
-              %{"reason" => "batch_not_supported"},
-              :endpoint,
-              started_at
-            )
+          :ok = FailedCall.observe_error(config, payload, "batch_not_supported", :endpoint)
 
           send_json_rpc_error(conn, 400, :batch_not_supported)
 
         {:error, :invalid_session_id, ^payload} ->
-          send_observed_json_rpc_error(conn, config, payload, started_at, 400, :invalid_session_id)
+          send_observed_json_rpc_error(conn, config, payload, 400, :invalid_session_id)
 
         {:error, :missing_session_id, ^payload} ->
-          send_observed_json_rpc_error(conn, config, payload, started_at, 400, :missing_session_id)
+          send_observed_json_rpc_error(conn, config, payload, 400, :missing_session_id)
 
         {:error, :ledger_unavailable, ^payload} ->
-          send_observed_json_rpc_error(conn, config, payload, started_at, 503, :ledger_unavailable)
+          send_observed_json_rpc_error(conn, config, payload, 503, :ledger_unavailable)
       end
     end)
   end
@@ -240,12 +230,12 @@ defmodule SymphonyElixirWeb.MCPHTTPPlug do
     send_json(conn, status, json_rpc_error(id, reason))
   end
 
-  defp send_observed_json_rpc_error(conn, config, payload, started_at, status, reason) do
+  defp send_observed_json_rpc_error(conn, config, payload, status, reason) do
     response =
       payload
       |> request_id()
       |> json_rpc_error(reason)
-      |> then(&FailedCall.observe_response(config, payload, &1, :endpoint, started_at))
+      |> then(&FailedCall.observe_response(config, payload, &1, :endpoint))
 
     send_json(conn, status, response)
   end

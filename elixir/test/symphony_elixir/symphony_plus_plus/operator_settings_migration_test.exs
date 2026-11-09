@@ -35,8 +35,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettingsMigrationTest do
 
         assert @migration_version in Ecto.Migrator.run(Repo, Migrations.all(), :up, all: true, log: false)
         assert {:ok, after_upgrade} = Repository.get(Repo)
-        # The Solo retention setting became the card retention setting and kept its value.
-        expected = before |> Map.delete(:solo_session_delete_after_days) |> Map.merge(%{card_retention_days: 45, work_request_archive_after_days: unquote(expected_days)})
+        # The Solo retention setting became the card retention setting and kept its value;
+        # failed-call capture is always on, so its setting is gone.
+        expected = before |> Map.drop([:solo_session_delete_after_days, :capture_failed_mcp_calls]) |> Map.merge(%{card_retention_days: 45, work_request_archive_after_days: unquote(expected_days)})
         assert Map.take(Map.from_struct(after_upgrade), Map.keys(expected)) == expected
         assert after_upgrade.work_request_never_started_archive_after_days == 30
 

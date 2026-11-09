@@ -183,7 +183,7 @@ export class Client {
 
   async reject(name: string, args: object, reason: string) {
     const response = await this.tool(name, args);
-    expect(response.error?.data?.reason).toBe(reason);
+    expect(response.error?.data?.code).toBe(reason);
     return response.error.data;
   }
 

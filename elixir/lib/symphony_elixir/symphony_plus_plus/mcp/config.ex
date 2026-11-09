@@ -5,7 +5,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Config do
 
   @default_repo_root __DIR__ |> Path.join("../../../../..") |> Path.expand()
   @source_revision_key {__MODULE__, :source_revision}
-  @surface_profiles ~w(full architect)a
 
   @enforce_keys [:mode, :repo, :version]
   defstruct [
@@ -15,7 +14,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Config do
     :source_revision,
     :database,
     :repo_root,
-    surface_profile: :full,
     health_ledger_mode: :live,
     local_daemon_trusted: false
   ]
@@ -27,7 +25,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Config do
           source_revision: String.t() | nil,
           database: String.t() | nil,
           repo_root: String.t() | nil,
-          surface_profile: :full | :architect,
           health_ledger_mode: :live | :configured_identity,
           local_daemon_trusted: boolean()
         }
@@ -36,7 +33,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Config do
     database: :string,
     mode: :string,
     repo_root: :string,
-    surface_profile: :string,
     help: :boolean
   ]
 
@@ -49,7 +45,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Config do
       source_revision: Keyword.get_lazy(opts, :source_revision, &source_revision/0),
       database: Keyword.get(opts, :database),
       repo_root: Keyword.get(opts, :repo_root),
-      surface_profile: surface_profile!(Keyword.get(opts, :surface_profile, System.get_env("SYMPP_MCP_SURFACE_PROFILE"))),
       health_ledger_mode: Keyword.get(opts, :health_ledger_mode, :live),
       local_daemon_trusted: Keyword.get(opts, :local_daemon_trusted, false)
     }
@@ -87,7 +82,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Config do
   @spec usage() :: String.t()
   def usage do
     [
-      "Usage: mix sympp.mcp [--mode stdio] [--database <sqlite-path>] [--repo-root <path>] [--surface-profile <full|architect>]",
+      "Usage: mix sympp.mcp [--mode stdio] [--database <sqlite-path>] [--repo-root <path>]",
       Repo.default_database_help_text()
     ]
     |> Enum.join("\n")
@@ -95,50 +90,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Config do
 
   defp parse_options(opts) do
     with {:ok, mode} <- parse_mode(Keyword.get(opts, :mode, "stdio")),
-         {:ok, repo_root} <- optional_nonblank(opts, :repo_root),
-         {:ok, surface_profile} <- parse_surface_profile(Keyword.get(opts, :surface_profile, System.get_env("SYMPP_MCP_SURFACE_PROFILE"))) do
+         {:ok, repo_root} <- optional_nonblank(opts, :repo_root) do
       {:ok,
        default(
          mode: mode,
          database: Keyword.get(opts, :database),
-         repo_root: expand_optional_path(repo_root),
-         surface_profile: surface_profile
+         repo_root: expand_optional_path(repo_root)
        )}
     end
   end
 
   defp parse_mode("stdio"), do: {:ok, :stdio}
   defp parse_mode(_mode), do: {:error, "Only STDIO MCP mode is supported for SYMPP-P3-001.\n#{usage()}"}
-
-  defp parse_surface_profile(nil), do: {:ok, :full}
-
-  defp parse_surface_profile(profile) when is_atom(profile) do
-    if profile in @surface_profiles, do: {:ok, profile}, else: {:error, usage()}
-  end
-
-  defp parse_surface_profile(profile) when is_binary(profile) do
-    profile = profile |> String.trim() |> String.downcase()
-
-    case profile do
-      "default" ->
-        {:ok, :full}
-
-      profile ->
-        case Enum.find(@surface_profiles, &(Atom.to_string(&1) == profile)) do
-          nil -> {:error, usage()}
-          profile -> {:ok, profile}
-        end
-    end
-  end
-
-  defp parse_surface_profile(_profile), do: {:error, usage()}
-
-  defp surface_profile!(profile) do
-    case parse_surface_profile(profile) do
-      {:ok, profile} -> profile
-      {:error, _usage} -> raise ArgumentError, "invalid sympp MCP surface profile"
-    end
-  end
 
   defp optional_nonblank(opts, key) do
     case Keyword.fetch(opts, key) do

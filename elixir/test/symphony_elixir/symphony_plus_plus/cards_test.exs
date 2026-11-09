@@ -153,16 +153,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CardsTest do
     assert repo.get!(Ask, get_in(asked, ["result", "structuredContent", "ask", "id"])).state == "withdrawn"
 
     refused = mcp_tool(repo, "t1", "ask", %{"question" => "After dismissal?"})
-    assert %{"reason" => "no_open_card", "state" => "no_card"} = get_in(refused, ["error", "data"])
+    assert %{"code" => "no_open_card", "state" => "no_card"} = get_in(refused, ["error", "data"])
   end
 
   test "an ask on a card is answered by the operator and typed into the asking terminal", %{repo: repo} do
     no_card = mcp_tool(repo, "t1", "ask", %{"question" => "Before any branch?"})
-    assert %{"reason" => "no_open_card", "next_action" => next_action} = get_in(no_card, ["error", "data"])
+    assert %{"code" => "no_open_card", "next_action" => next_action} = get_in(no_card, ["error", "data"])
     assert next_action =~ "work_request_id"
 
     package_only = mcp_tool(repo, "t1", "ask", %{"work_package_id" => "WP-ANY", "question" => "Which package?"})
-    assert get_in(package_only, ["error", "data", "reason"]) == "missing_work_request_id"
+    assert get_in(package_only, ["error", "data", "code"]) == "missing_work_request_id"
 
     terminals = [chief("t0"), child("t1", "t0")]
     sweep(repo, terminals, %{head("feature-1") => {:ok, nil}})
@@ -171,7 +171,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CardsTest do
 
     decision = %{"source_type" => "human", "decision" => "Yes", "rationale" => "Asked", "scope_impact" => "None"}
     with_decision = mcp_tool(repo, "t1", "resolve_ask", %{"ask_id" => ask_id, "to" => "answered", "answer" => "Yes", "decision" => decision})
-    assert get_in(with_decision, ["error", "data", "reason"]) == "decision_needs_work_request"
+    assert get_in(with_decision, ["error", "data", "code"]) == "decision_needs_work_request"
 
     Application.put_env(:symphony_elixir, :sympp_herdr_core, fn -> core(terminals) end)
     parent = self()

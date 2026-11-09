@@ -32,11 +32,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerAndLocalOperatorToolsTest d
     assert [%{summary: "Waiting for the production key"}] = active_blockers.()
 
     missing_summary = set.("t1", %{"blocker_id" => "other", "active" => true})
-    assert get_in(missing_summary, ["error", "data", "reason"]) == "missing_summary"
+    assert get_in(missing_summary, ["error", "data", "code"]) == "missing_summary"
 
     # Another terminal does not own the WorkRequest.
     foreign = set.("t2", %{"blocker_id" => "needs-key", "active" => false})
-    assert get_in(foreign, ["error", "data", "reason"]) == "owned_by_other_terminal"
+    assert get_in(foreign, ["error", "data", "code"]) == "owned_by_other_terminal"
     assert [_still_active] = active_blockers.()
 
     cleared = set.("t1", %{"blocker_id" => "needs-key", "active" => false})
@@ -47,9 +47,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerAndLocalOperatorToolsTest d
 
     assert get_in(set.("t1", %{"blocker_id" => "needs-key", "active" => false}), ["result", "structuredContent", "changed"]) == false
     unknown = set.("t1", %{"blocker_id" => "never-declared", "active" => false})
-    assert get_in(unknown, ["error", "data", "reason"]) == "blocker_not_found"
+    assert get_in(unknown, ["error", "data", "code"]) == "blocker_not_found"
 
-    assert get_in(set.("t1", %{"blocker_id" => "needs-key"}), ["error", "data", "reason"]) =~ "active"
+    assert get_in(set.("t1", %{"blocker_id" => "needs-key"}), ["error", "data", "code"]) =~ "active"
   end
 
   test "ending a package clears its blockers and withdraws its asks; neither can be set on it afterwards", %{repo: repo} do
@@ -77,10 +77,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerAndLocalOperatorToolsTest d
     assert %{state: "open"} = repo.get!(SymphonyElixir.SymphonyPlusPlus.Asks.Ask, sibling_ask_id)
 
     refused_blocker = mcp_tool(repo, "t1", "set_blocker", %{"work_package_id" => ending.id, "blocker_id" => "b2", "active" => true, "summary" => "Late"})
-    assert get_in(refused_blocker, ["error", "data"]) |> Map.take(["reason", "state"]) == %{"reason" => "work_package_ended", "state" => "ended"}
+    assert get_in(refused_blocker, ["error", "data"]) |> Map.take(["code", "state"]) == %{"code" => "work_package_ended", "state" => "ended"}
 
     refused_ask = mcp_tool(repo, "t3", "ask", %{"work_request_id" => work_request.id, "work_package_id" => ending.id, "question" => "Too late?"})
-    assert get_in(refused_ask, ["error", "data", "reason"]) == "work_package_ended"
+    assert get_in(refused_ask, ["error", "data", "code"]) == "work_package_ended"
   end
 
   defp progress_events!(repo, work_package_id) do
@@ -104,7 +104,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerAndLocalOperatorToolsTest d
       )
 
     assert get_in(implicit_state_response, ["error", "code"]) == -32_001
-    assert get_in(implicit_state_response, ["error", "data", "reason"]) == "local_mcp_session_required"
+    assert get_in(implicit_state_response, ["error", "data", "code"]) == "local_mcp_session_required"
 
     remote_config = %{local_mcp_config(repo) | database: "https://ledger.example.test/mcp?token=ghp_localreadsecret"}
 
@@ -120,7 +120,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerAndLocalOperatorToolsTest d
       )
 
     assert get_in(remote_response, ["error", "code"]) == -32_001
-    assert get_in(remote_response, ["error", "data", "reason"]) == "local_database_required"
+    assert get_in(remote_response, ["error", "data", "code"]) == "local_database_required"
     refute inspect(remote_response) =~ "ghp_localreadsecret"
 
     remote_list_response =
@@ -135,7 +135,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerAndLocalOperatorToolsTest d
       )
 
     assert get_in(remote_list_response, ["error", "code"]) == -32_001
-    assert get_in(remote_list_response, ["error", "data", "reason"]) == "local_database_required"
+    assert get_in(remote_list_response, ["error", "data", "code"]) == "local_database_required"
     refute inspect(remote_list_response) =~ "ghp_localreadsecret"
   end
 end

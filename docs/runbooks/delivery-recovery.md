@@ -13,17 +13,21 @@ merged, usually within a minute. When it doesn't:
 2. If the factory never saw the PR (opened from a fork or in an upstream
    repository), attach it with `sync_pr` and its `url`; the merge is then recorded.
 3. If the merge still isn't recorded because its evidence doesn't match the
-   package (repository or base branch), call `record_work_package_delivery` with
-   `outcome: "pr_merged"` and one matching `evidence.pr_merged` object.
+   package (repository or base branch), close the package with
+   `close_work_package` `outcome: "completed_no_pr"` and `evidence` that names the
+   merged PR and why it didn't match.
 
 ## Other Terminal Outcomes
 
-- `completed_no_pr`: direct evidence for successful work that required no pull
-  request.
-- `superseded`: successor WorkPackage id and reason.
-- `abandoned`: rationale explaining why the package will not be delivered.
+Close these with `close_work_package` from the terminal that owns the WorkRequest:
 
-Record the terminal outcome directly from the terminal that owns the WorkRequest.
+- `completed_no_pr`: `evidence` for successful work that required no pull
+  request.
+- `superseded`: `successor_work_package_id` and `rationale`.
+- `abandoned`: `rationale` explaining why the package will not be delivered.
+- `skipped`: a planned package that won't be done.
+- `finished`: the PR waits on someone else; any chief or architect may finish.
+
 Ending a package resolves its blockers and queues its worktree cleanup.
 
 ## Rules

@@ -26,12 +26,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AskToolsTest do
     refute mcp_tool(repo, "t1", "set_report", %{"work_request_id" => work_request.id, "brief" => "Planning"})["error"]
 
     stranger = mcp_tool(repo, "t2", "resolve_ask", %{"ask_id" => ask["id"], "to" => "answered", "answer" => "US"})
-    assert %{"reason" => "not_asker_or_owner", "state" => "open"} = get_in(stranger, ["error", "data"])
+    assert %{"code" => "not_asker_or_owner", "state" => "open"} = get_in(stranger, ["error", "data"])
 
     # A decision that fails validation rolls the answer back.
     bad_decision = %{"source_type" => "bot", "decision" => "Europe", "rationale" => "Cheaper", "scope_impact" => "None"}
     rejected = mcp_tool(repo, "t1", "resolve_ask", %{"ask_id" => ask["id"], "to" => "answered", "answer" => "Europe", "decision" => bad_decision})
-    assert get_in(rejected, ["error", "data", "reason"]) == "invalid_decision"
+    assert get_in(rejected, ["error", "data", "code"]) == "invalid_decision"
     assert %Ask{state: "open", answer: nil} = repo.get!(Ask, ask["id"])
     assert repo.aggregate(DecisionLogEntry, :count) == 0
 
@@ -42,12 +42,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AskToolsTest do
     assert source_id == ask["id"]
 
     again = mcp_tool(repo, "t1", "resolve_ask", %{"ask_id" => ask["id"], "to" => "withdrawn"})
-    assert %{"reason" => "ask_not_open", "state" => "answered"} = get_in(again, ["error", "data"])
+    assert %{"code" => "ask_not_open", "state" => "answered"} = get_in(again, ["error", "data"])
 
     other = mcp_tool(repo, "t3", "ask", %{"work_request_id" => work_request.id, "question" => "Need a staging key?"})
     other_id = get_in(other, ["result", "structuredContent", "ask", "id"])
     missing_answer = mcp_tool(repo, "t1", "resolve_ask", %{"ask_id" => other_id, "to" => "answered"})
-    assert get_in(missing_answer, ["error", "data", "reason"]) == "missing_answer"
+    assert get_in(missing_answer, ["error", "data", "code"]) == "missing_answer"
 
     withdrawn = mcp_tool(repo, "t1", "resolve_ask", %{"ask_id" => other_id, "to" => "withdrawn"})
     assert %{"state" => "withdrawn", "answered_by" => "testbox/t1"} = get_in(withdrawn, ["result", "structuredContent", "ask"])
@@ -60,7 +60,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AskToolsTest do
     work_request = create_work_request!(repo, id: "WR-ASK-ARCHIVED")
 
     outside = mcp_tool(repo, nil, "ask", %{"work_request_id" => work_request.id, "question" => "Anyone?"})
-    assert get_in(outside, ["error", "data", "reason"]) == "read_only_outside_herdr"
+    assert get_in(outside, ["error", "data", "code"]) == "read_only_outside_herdr"
 
     asked = mcp_tool(repo, "t3", "ask", %{"work_request_id" => work_request.id, "question" => "Before archive?"})
     ask_id = get_in(asked, ["result", "structuredContent", "ask", "id"])
@@ -72,11 +72,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AskToolsTest do
           {"resolve_ask", %{"ask_id" => ask_id, "to" => "withdrawn"}}
         ] do
       refused = mcp_tool(repo, "t3", name, arguments)
-      assert get_in(refused, ["error", "data", "reason"]) == "work_request_archived"
-      assert get_in(refused, ["error", "data", "recovery", "next_action"]) == "restore"
+      assert get_in(refused, ["error", "data", "code"]) == "work_request_archived"
+      assert get_in(refused, ["error", "data", "next_action"]) == "restore"
     end
 
-    assert get_in(mcp_tool(repo, "t3", "ask", %{"work_request_id" => "WR-MISSING", "question" => "?"}), ["error", "data", "reason"]) == "not_found"
+    assert get_in(mcp_tool(repo, "t3", "ask", %{"work_request_id" => "WR-MISSING", "question" => "?"}), ["error", "data", "code"]) == "not_found"
   end
 
   test "an operator-completed WorkRequest takes no new asks", %{repo: repo} do
@@ -84,7 +84,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AskToolsTest do
     repo.update!(Ecto.Changeset.change(work_request, operator_completed_at: DateTime.utc_now(:microsecond)))
 
     refused = mcp_tool(repo, "t3", "ask", %{"work_request_id" => work_request.id, "question" => "After completion?"})
-    assert get_in(refused, ["error", "data", "reason"]) == "work_request_completed"
+    assert get_in(refused, ["error", "data", "code"]) == "work_request_completed"
     assert get_in(refused, ["error", "data", "state"]) == "done"
   end
 end

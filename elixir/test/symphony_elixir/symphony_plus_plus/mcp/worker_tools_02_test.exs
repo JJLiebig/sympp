@@ -49,7 +49,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
 
     archived = mcp_tool(repo, "t1", "set_blocker", %{"work_package_id" => package.id, "blocker_id" => "secondary-access", "active" => false})
 
-    assert get_in(archived, ["error", "data", "reason"]) == "work_request_archived"
-    assert get_in(archived, ["error", "data", "recovery", "next_action"]) == "restore"
+    assert get_in(archived, ["error", "data", "code"]) == "work_request_archived"
+    assert get_in(archived, ["error", "data", "next_action"]) == "restore"
   end
 end

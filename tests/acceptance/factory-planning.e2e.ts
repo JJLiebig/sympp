@@ -63,7 +63,7 @@ test('skipping every planned package leaves the goal unfinished in persisted and
   const architect = await factory.client();
   const request = await architect.request('Skipped scope');
   const ids = await architect.addPackages([contract('Retired first scope'), contract('Retired second scope')]);
-  for (const work_package_id of ids) await architect.call('skip_work_package', { work_package_id });
+  for (const work_package_id of ids) await architect.call('close_work_package', { work_package_id, outcome: 'skipped' });
   const detail = (await architect.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request;
   expect(detail.phase).toBe('unresolved');
   expect(detail.completed_at).toBeNull();

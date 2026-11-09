@@ -147,6 +147,14 @@ the artifact fingerprint and complete tool-name sets for non-Elixir release
 smoke tests. A runtime test keeps those names aligned with `ToolCatalog`; the
 artifact does not duplicate schemas.
 
+Every chief, architect or card terminal is served the same 14 tools, one schema
+each; worker terminals get none. A refused tool call's `error.data` carries
+`code`, `message`, `state` (the actual WorkPackage status, WorkRequest phase or
+ask state, or `null` when the call names nothing that exists) and
+`next_action`. Protocol and session errors keep their `reason`. Failed tool calls
+are counted per day, tool, reason and layer in the ledger, without arguments;
+`summarize_failed_mcp_calls` reads the counts.
+
 ### Qualified candidate dependencies
 
 An architect can set `candidate_head_sha` with an `edit_plan` `set_dependency`

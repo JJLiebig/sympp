@@ -90,7 +90,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     HTTPStateStore.reset!()
     Repo.delete_all(OperatorSettings)
     Repo.delete_all(WorkedOn)
-    FailedCall.reset()
+    Repo.delete_all(FailedCall.Count)
     :ok
   end
 
@@ -206,8 +206,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       cookie = hd(String.split(set_cookie, ";"))
       browser = [{"cookie", cookie}, {"origin", "http://100.123.207.19:4000"}]
       path = "/api/v1/sympp/operator/settings"
-      result = post_json(%{"capture_failed_mcp_calls" => true}, browser, Keyword.put(remote, :path, path)) |> json_response(200)
-      assert result["settings"]["capture_failed_mcp_calls"] == true
+      result = post_json(%{"open_dashboard_on_boot" => false}, browser, Keyword.put(remote, :path, path)) |> json_response(200)
+      assert result["settings"]["open_dashboard_on_boot"] == false
       assert get_local("/api/v1/sympp/operator/dashboard/hydrated", browser, remote).status == 200
       assert get_local("/mcp/readiness", browser, remote).status == 401
       assert post_json(initialize_request("cookie-mcp"), browser, remote).status == 401
@@ -311,11 +311,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     assert replay["result"]["structuredContent"]["work_package"]["review_id"] == hd(review_ids)
 
     other_mode = terminal_call(client, "t1", "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => package_id, "review_mode" => "deep"})
-    assert other_mode["error"]["data"]["reason"] == "review_mode_conflict"
+    assert other_mode["error"]["data"]["code"] == "review_mode_conflict"
     assert other_mode["error"]["data"]["review_mode"] == "fast"
 
     other_terminal = terminal_call(client, "t2", "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => blocked_id, "review_mode" => "fast"})
-    assert other_terminal["error"]["data"]["reason"] == "owned_by_other_terminal"
+    assert other_terminal["error"]["data"]["code"] == "owned_by_other_terminal"
 
     parent = self()
 
@@ -334,7 +334,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
     try do
       busy = terminal_call(client, "t1", "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => blocked_id, "review_mode" => "fast"})
-      assert busy["error"]["data"]["reason"] == "database_busy"
+      assert busy["error"]["data"]["code"] == "database_busy"
       assert busy["error"]["data"]["remediation"] =~ "Read the WorkPackage status"
     after
       send(writer.pid, :release_writer)
@@ -375,7 +375,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       |> with_terminal("t2")
       |> post_json(headers)
 
-    assert json_response(refused, 200)["error"]["data"]["reason"] == "owned_by_other_terminal"
+    assert json_response(refused, 200)["error"]["data"]["code"] == "owned_by_other_terminal"
     assert get_resp_header(refused, "sympp-herdr-binding") == []
 
     # A write naming only the package binds the terminal to the package's WorkRequest.
@@ -854,52 +854,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     end)
   end
 
-  test "POST /mcp observes failed tool requests and notifications once at the endpoint boundary" do
-    assert {:ok, _settings} = OperatorSettingsRepository.update(Repo, %{"capture_failed_mcp_calls" => true})
+  test "POST /mcp counts failed tool requests and notifications once at the endpoint boundary" do
+    request = post_json(tool_call_request("private-endpoint-id", "sympp.health", %{"bearer" => "request-secret"}))
+    assert get_in(json_response(request, 400), ["error", "data", "reason"]) == "missing_session_id"
 
-    {request, request_log} =
-      with_log(fn -> post_json(tool_call_request("private-endpoint-id", "sympp.health", %{"bearer" => "request-secret"})) end)
-
-    request_error = json_response(request, 400)
-    diagnostic_id = get_in(request_error, ["error", "data", "diagnostic_id"])
-    assert diagnostic_id =~ ~r/^mcpdiag_[0-9a-f]{16}$/
-    assert [request_event] = diagnostic_events(request_log)
-    assert request_event["failure_layer"] == "endpoint"
-    assert request_event["failure_reason"] == "missing_session_id"
-    assert request_event["diagnostic_id"] == diagnostic_id
-
-    {notification, notification_log} =
-      with_log(fn -> post_json(tool_call_notification("sympp.health", %{"bearer" => "notification-secret"})) end)
-
+    notification = post_json(tool_call_notification("sympp.health", %{"bearer" => "notification-secret"}))
     assert get_in(json_response(notification, 400), ["error", "data", "reason"]) == "missing_session_id"
-    assert [notification_event] = diagnostic_events(notification_log)
-    assert notification_event["failure_layer"] == "endpoint"
-    refute request_log =~ "private-endpoint-id"
-    refute request_log =~ "request-secret"
-    refute notification_log =~ "notification-secret"
+
+    assert [%{tool: "sympp.health", reason: "missing_session_id", layer: "endpoint", count: 2} = row] = Repo.all(FailedCall.Count)
+    refute inspect(row) =~ "secret"
   end
 
-  test "POST /mcp observes each failed tool item in a rejected batch once" do
-    assert {:ok, _settings} = OperatorSettingsRepository.update(Repo, %{"capture_failed_mcp_calls" => true})
-
+  test "POST /mcp counts each failed tool item in a rejected batch once" do
     payload = [
       tool_call_request("private-batch-id", "sympp.health", %{"bearer" => "request-secret"}),
       tool_call_notification("read_work_request", %{"bearer" => "notification-secret"}),
       tools_list_request("ignored-protocol-item")
     ]
 
-    {conn, log} = with_log(fn -> post_json(payload) end)
+    assert json_response(post_json(payload), 400) == json_rpc_error(nil, -32_600, "Invalid Request", "batch_not_supported")
 
-    assert json_response(conn, 400) == json_rpc_error(nil, -32_600, "Invalid Request", "batch_not_supported")
-    assert events = diagnostic_events(log)
-    assert length(events) == 2
-    assert Enum.all?(events, &(&1["failure_layer"] == "endpoint"))
-    assert Enum.all?(events, &(&1["failure_reason"] == "batch_not_supported"))
-    assert events |> Enum.map(& &1["diagnostic_id"]) |> Enum.uniq() |> length() == 2
-    assert events |> Enum.map(& &1["tool_name"]) |> Enum.sort() == ["read_work_request", "sympp.health"]
-    refute log =~ "private-batch-id"
-    refute log =~ "request-secret"
-    refute log =~ "notification-secret"
+    assert Repo.all(FailedCall.Count) |> Enum.map(&{&1.tool, &1.reason, &1.layer, &1.count}) |> Enum.sort() == [
+             {"read_work_request", "batch_not_supported", "endpoint", 1},
+             {"sympp.health", "batch_not_supported", "endpoint", 1}
+           ]
   end
 
   test "remote peers and malformed header bytes cannot create MCP state" do
@@ -1057,16 +1035,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     |> get_in(["result", "tools"])
     |> Enum.map(& &1["name"])
     |> Enum.sort()
-  end
-
-  defp diagnostic_events(log) do
-    log
-    |> String.split("\n")
-    |> Enum.filter(&String.contains?(&1, ~s("event":"sympp_failed_mcp_call")))
-    |> Enum.map(fn line ->
-      {json_start, 1} = :binary.match(line, "{")
-      line |> binary_part(json_start, byte_size(line) - json_start) |> Jason.decode!()
-    end)
   end
 
   defp resource_uris(payload) do

@@ -2,19 +2,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, Response, ToolCatalog}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.Response
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer, as: PlanningRenderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
 
   @version_resource "sympp://health/version"
   @agent_text_mime_type "text/vnd.toon"
-
-  @doc "The tools this server lists for its surface profile."
-  @spec tool_specs(Config.t()) :: [map()]
-  def tool_specs(%Config{} = config), do: ToolCatalog.startup_tool_specs(config.surface_profile, config)
-
-  @spec tool_names(Config.t()) :: [String.t()]
-  def tool_names(%Config{} = config), do: Enum.map(tool_specs(config), & &1["name"])
 
   @spec resource_specs() :: [map()]
   def resource_specs do

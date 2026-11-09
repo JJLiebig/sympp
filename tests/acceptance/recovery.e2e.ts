@@ -1,5 +1,5 @@
 import { expect } from 'e2e';
-import { readFile, realpath } from 'node:fs/promises';
+import { realpath } from 'node:fs/promises';
 import { Client, contract, herdr, nextTerminal } from '../support/factory.js';
 import { initialize, packages, snapshot, test, tool } from '../support/authority.js';
 
@@ -124,37 +124,30 @@ test('backend restart keeps the ledger and its owner but a different ledger refu
   expect(denied.body.error.data.reason).toBe('unknown_state_key');
   const fresh = await outsider.client();
   expect(await realpath(outsider.database)).not.toBe(ledgerPath);
-  expect((await fresh.rpc('tools/call', { name: 'read_work_request', arguments: { detail: 'full', work_request_id: request } })).error.data.reason).toBe('not_found');
+  expect((await fresh.rpc('tools/call', { name: 'read_work_request', arguments: { detail: 'full', work_request_id: request } })).error.data.code).toBe('not_found');
   expect((await fresh.call('sympp.health')).caller.owns).toEqual([]);
   expect((await recovered.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).blockers.filter((entry: any) => entry.id === 'restart-once' && entry.active)).toHaveLength(1);
 });
 
-test('failed-call capture is opt-in redacted and immediately disabled through operator settings', async ({ processes }) => {
+test('failed calls are counted durably by tool and reason, never with their arguments', async ({ processes }) => {
   const factory = processes.factory();
   const client = await factory.client();
   const secret = 'Bearer synthetic-diagnostic-secret';
-  const payload = tool('set_blocker', { nested: { authorization: secret }, [secret]: secret });
-  const disabled = await client.raw(payload);
-  expect(disabled.body.error.data.diagnostic_id).toBeUndefined();
-  expect((await client.call('summarize_failed_mcp_calls')).total_failures).toBe(0);
-  expect((await client.operator('/api/v1/sympp/operator/settings', { capture_failed_mcp_calls: true })).status).toBe(200);
-  const enabled = await client.raw(payload);
-  const diagnostic = enabled.body.error.data.diagnostic_id;
-  expect(diagnostic).toMatch(/^mcpdiag_[0-9a-f]{16}$/);
-  expect(JSON.stringify(enabled.body)).not.toContain('synthetic-diagnostic-secret');
-  await expect.poll(async () => (await readFile(factory.logPath, 'utf8')).includes(diagnostic)).toBe(true);
-  const log = await readFile(factory.logPath, 'utf8');
-  expect(log).not.toContain('synthetic-diagnostic-secret');
-  expect(log).toContain('sympp_failed_mcp_call');
-  expect(log).toContain('read_only_outside_herdr');
-  expect(log).toContain('unauthorized');
+  const denied = await client.raw(tool('set_blocker', { nested: { authorization: secret }, [secret]: secret }));
+  expect(denied.body.error.data).toMatchObject({ code: 'read_only_outside_herdr', state: null });
+  expect(typeof denied.body.error.data.message).toBe('string');
+  expect(typeof denied.body.error.data.next_action).toBe('string');
+  expect(JSON.stringify(denied.body)).not.toContain('synthetic-diagnostic-secret');
+  expect((await client.raw(tool(`missing-${secret}`, {}))).body.error.data.code).toBe('method_not_found');
   const summary = await client.call('summarize_failed_mcp_calls');
-  expect(summary.total_failures).toBe(1);
+  expect(summary.total).toBe(2);
+  expect(summary.failures.map(({ tool: name, reason, layer, count }: any) => ({ tool: name, reason, layer, count }))
+    .sort((a: any, b: any) => a.tool.localeCompare(b.tool))).toEqual([
+    { tool: 'set_blocker', reason: 'read_only_outside_herdr', layer: 'tool', count: 1 },
+    { tool: 'unknown', reason: 'method_not_found', layer: 'tool', count: 1 },
+  ]);
   expect(JSON.stringify(summary)).not.toContain('synthetic-diagnostic-secret');
-  expect((await client.call('summarize_failed_mcp_calls')).total_failures).toBe(1);
-  expect((await client.operator('/api/v1/sympp/operator/settings', { capture_failed_mcp_calls: false })).status).toBe(200);
-  expect((await client.raw(payload)).body.error.data.diagnostic_id).toBeUndefined();
-  expect((await client.call('summarize_failed_mcp_calls')).total_failures).toBe(1);
+  expect((await client.call('summarize_failed_mcp_calls', { tool: 'set_blocker' })).total).toBe(1);
 });
 
 test('STDIO initialization serves trusted local reads, refuses writes outside Herdr and respects ownership', async ({ processes }) => {
@@ -184,17 +177,17 @@ test('STDIO initialization serves trusted local reads, refuses writes outside He
   expect((await peer.request('tools/call', { name: 'read_work_request', arguments: { detail: 'full', work_request_id: request } })).structuredContent.work_request.id).toBe(request);
   const resource = await peer.request('resources/read', { uri: `sympp://work-packages/${wp}/task_plan.md` });
   expect(resource.contents[0].mimeType).toBe('text/vnd.toon');
-  expect((await peer.rawRequest('tools/call', { name: 'create_work_request', arguments: createArgs })).error.data.reason).toBe('read_only_outside_herdr');
+  expect((await peer.rawRequest('tools/call', { name: 'create_work_request', arguments: createArgs })).error.data.code).toBe('read_only_outside_herdr');
   const meta = { herdr: herdr('t-stdio') };
   const created = (await peer.request('tools/call', { name: 'create_work_request', arguments: createArgs, _meta: meta })).structuredContent;
   expect(created.worked_on.address).toBe('acceptance/t-stdio');
   const blocker = { work_package_id: wp, blocker_id: 'stdio-foreign', active: true, summary: 'Not the owner' };
-  expect((await peer.rawRequest('tools/call', { name: 'set_blocker', arguments: blocker, _meta: meta })).error.data.reason).toBe('owned_by_other_terminal');
-  expect((await peer.rawRequest('tools/call', { name: 'set_blocker', arguments: blocker })).error.data.reason).toBe('read_only_outside_herdr');
+  expect((await peer.rawRequest('tools/call', { name: 'set_blocker', arguments: blocker, _meta: meta })).error.data.code).toBe('owned_by_other_terminal');
+  expect((await peer.rawRequest('tools/call', { name: 'set_blocker', arguments: blocker })).error.data.code).toBe('read_only_outside_herdr');
   const note = await peer.rawRequest('tools/call', { name: 'record_decision', arguments: {
     work_request_id: request, source_type: 'operator', decision: 'Untrusted operator', rationale: 'STDIO', scope_impact: 'None', created_by: 'stdio-worker',
   } });
-  expect(note.error.data.reason).toBe('read_only_outside_herdr');
+  expect(note.error.data.code).toBe('read_only_outside_herdr');
   expect((await architect.call('read_work_request', { detail: 'full', work_request_id: request })).decision_log_entries).toEqual([]);
   expect((await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).progress.map((entry: any) => entry.summary)).not.toContain('Not the owner');
 });
@@ -252,11 +245,11 @@ test('STDIO protocol errors and batches cannot smuggle identity across requests'
     batchTool(925, 'read_work_request', { work_request_id: 'foreign' }),
   ]);
   expect(denied[0].error.data.reason).toBe('request_must_be_object');
-  expect(denied[1].error.data.reason).toBe('read_only_outside_herdr');
-  expect(denied[2].error.data.reason).toBe('owned_by_other_terminal');
+  expect(denied[1].error.data.code).toBe('read_only_outside_herdr');
+  expect(denied[2].error.data.code).toBe('owned_by_other_terminal');
   expect(denied[3].result.structuredContent.blocker.summary).toBe('batch-owner');
-  expect(denied[4].error.data.reason).toBe('read_only_outside_herdr');
-  expect(denied[5].error.data.reason).toBe('not_found');
+  expect(denied[4].error.data.code).toBe('read_only_outside_herdr');
+  expect(denied[5].error.data.code).toBe('not_found');
   const summaries = (await architect.inspect(`/api/v1/sympp/operator/work-packages/${first}`)).progress.map((entry: any) => entry.summary);
   expect(summaries).toContain('batch-owner');
   for (const key of ['batch-before', 'batch-other', 'batch-after']) expect(summaries).not.toContain(key);

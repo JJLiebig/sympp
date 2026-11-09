@@ -83,20 +83,15 @@ does not determine role. Ordinary workers still own their review cycle.
 
 ## Terminal evidence
 
-Record other terminal outcomes with `record_work_package_delivery`:
+End a package without a merge with `close_work_package`:
 
-- `outcome: "pr_merged"`: `evidence` is
-  `{"pr_merged":{"pr_url":"...","pr_merged_at":"...","merge_commit_sha":"..."}}`.
-  `pr_number` and `pr_repository` are optional inside `pr_merged`.
-- `outcome: "completed_no_pr"`: `evidence` is
-  `{"completed_no_pr":{"no_pr_evidence":"..."}}`.
-- `outcome: "superseded"`: `evidence` is
-  `{"superseded":{"successor_work_package_id":"...","superseded_reason":"..."}}`.
-- `outcome: "abandoned"`: `evidence` is
-  `{"abandoned":{"abandoned_rationale":"..."}}`. Allowed while `dispatched` or `ready`.
-- `outcome: "finished"` or `"skipped"`: no `evidence`. `finished` needs a
-  `dispatched` or `ready` package; `skipped` needs a `planned` one.
+- `outcome: "completed_no_pr"` with `evidence`: how it was delivered without a PR.
+- `outcome: "superseded"` with `successor_work_package_id` (same WorkRequest) and
+  `rationale`. Allowed from any open status.
+- `outcome: "abandoned"` with `rationale`. Allowed while `dispatched` or `ready`.
+- `outcome: "finished"`: the PR waits on someone else. Needs a `dispatched` or
+  `ready` package.
+- `outcome: "skipped"`: needs a `planned` package.
 
-`superseded` is allowed from any open status; the other endings need a
-dispatched or ready package. A second ending with different evidence is refused
-with the outcome already recorded.
+Repeating the same close changes nothing. A different close of an ended package
+is refused with the outcome already recorded.

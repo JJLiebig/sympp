@@ -26,7 +26,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
       )
 
     assert get_in(implicit_state_response, ["error", "code"]) == -32_001
-    assert get_in(implicit_state_response, ["error", "data", "reason"]) == "local_mcp_session_required"
+    assert get_in(implicit_state_response, ["error", "data", "code"]) == "local_mcp_session_required"
 
     remote_config = %{local_mcp_config(repo) | database: "https://ledger.example.test/mcp?token=ghp_createworksecret"}
 
@@ -42,7 +42,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
       )
 
     assert get_in(remote_response, ["error", "code"]) == -32_001
-    assert get_in(remote_response, ["error", "data", "reason"]) == "local_database_required"
+    assert get_in(remote_response, ["error", "data", "code"]) == "local_database_required"
     refute inspect(remote_response) =~ "ghp_createworksecret"
 
     memory_response =
@@ -57,7 +57,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
       )
 
     assert get_in(memory_response, ["error", "code"]) == -32_001
-    assert get_in(memory_response, ["error", "data", "reason"]) == "file_backed_database_required"
+    assert get_in(memory_response, ["error", "data", "code"]) == "file_backed_database_required"
   end
 
   test "WorkRequest read tools list every WorkRequest, redact output and never write", %{repo: repo} do
@@ -173,7 +173,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
 
     missing_response = mcp_tool(repo, nil, "read_work_request", %{"detail" => "full", "work_request_id" => "WR-MCP-WR-MISSING"})
     assert get_in(missing_response, ["error", "code"]) == -32_004
-    assert get_in(missing_response, ["error", "data", "reason"]) == "not_found"
+    assert get_in(missing_response, ["error", "data", "code"]) == "not_found"
 
     assert {
              repo.aggregate(WorkRequest, :count),
@@ -186,14 +186,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
 
   test "WorkRequest list rejects repository scope arguments and unknown statuses", %{repo: repo} do
     repo_argument_response = mcp_tool(repo, nil, "list_work_requests", %{"repo" => "nextide/other"})
-    assert get_in(repo_argument_response, ["error", "data", "reason"]) == "unexpected_argument"
+    assert get_in(repo_argument_response, ["error", "data", "code"]) == "unexpected_argument"
     assert get_in(repo_argument_response, ["error", "data", "arguments"]) == ["repo"]
 
     branch_argument_response = mcp_tool(repo, nil, "list_work_requests", %{"base_branch" => "other"})
-    assert get_in(branch_argument_response, ["error", "data", "reason"]) == "unexpected_argument"
+    assert get_in(branch_argument_response, ["error", "data", "code"]) == "unexpected_argument"
     assert get_in(branch_argument_response, ["error", "data", "arguments"]) == ["base_branch"]
 
     invalid_phase_response = mcp_tool(repo, nil, "list_work_requests", %{"phase" => "merged"})
-    assert get_in(invalid_phase_response, ["error", "data", "reason"]) == "invalid_phase"
+    assert get_in(invalid_phase_response, ["error", "data", "code"]) == "invalid_phase"
   end
 end

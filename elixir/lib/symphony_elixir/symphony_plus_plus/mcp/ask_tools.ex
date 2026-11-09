@@ -64,7 +64,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AskTools do
     do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => "decision_needs_work_request", "next_action" => "Resolve a card's ask without a decision."}}
 
   defp error(tool, :not_found), do: {:error, -32_004, "Not found", %{"tool" => tool, "reason" => "not_found"}}
-  defp error(tool, :work_request_archived), do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"phase" => "archived"})
+  defp error(tool, :work_request_archived), do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"state" => "archived"})
 
   defp error(tool, :work_package_ended),
     do: precondition(tool, "work_package_ended", "ended", "The package has ended; ask on the WorkRequest without work_package_id.")

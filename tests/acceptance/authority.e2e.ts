@@ -121,7 +121,7 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
   const omittedHealthArgs = await fresh.rpc('tools/call', { name: 'sympp.health' });
   expect(omittedHealthArgs.result.structuredContent.status).toBe('ok');
   expect(omittedHealthArgs.result.structuredContent.caller.access).toBe('write');
-  expect((await fresh.rpc('tools/call', { name: 'sympp.health', arguments: { unexpected: true } })).error.data.reason).toBe('invalid_tool_arguments');
+  expect((await fresh.rpc('tools/call', { name: 'sympp.health', arguments: { unexpected: true } })).error.data.code).toBe('invalid_tool_arguments');
   for (const headers of [{ origin: 'https://example.invalid' }, { 'x-forwarded-for': '127.0.0.1' }]) {
     const ambient = { work_request_id: id, source_type: 'operator', decision: 'Denied ambient decision', rationale: 'Ambient', scope_impact: 'None', created_by: 'attacker' };
     expect((await fresh.raw(tool('record_decision', ambient), headers)).status).toBe(403);
@@ -170,7 +170,7 @@ test('ownership lets every terminal read any request but refuses writes to anoth
     ['edit_plan', { work_request_id: other, ops: [{ op: 'add_package', ...contract('Stolen') }] }],
     ['dispatch_work_package', { work_request_id: other, work_package_id: otherWp }],
     ['dispatch_work_package', { work_package_id: otherWp }],
-    ['record_work_package_delivery', { work_request_id: other, work_package_id: otherWp, outcome: 'completed_no_pr', idempotency_key: 'foreign-close', evidence: { completed_no_pr: { no_pr_evidence: 'Refuse foreign closeout' } } }],
+    ['close_work_package', { work_package_id: otherWp, outcome: 'completed_no_pr', evidence: 'Refuse foreign closeout' }],
   ] as const) {
     const refused = await architect.reject(name, args, 'owned_by_other_terminal');
     expect(refused.owner.address).toBe(peer.address);
@@ -182,7 +182,6 @@ test('ownership lets every terminal read any request but refuses writes to anoth
     const denied = await architect.reject('resolve_ask', { ask_id: question.id, ...fields }, 'not_asker_or_owner');
     expect(JSON.stringify(denied)).not.toContain(other);
   }
-  await architect.reject('skip_work_package', { work_request_id: own, work_package_id: otherWp }, 'not_found');
   // A package of another WorkRequest is unknown to this plan, whichever op names it.
   for (const op of [
     { op: 'update_package', work_package_id: otherWp, expected_revision: 1, patch: { title: 'Stolen' } },
@@ -231,9 +230,7 @@ test('ownership lets every terminal read any request but refuses writes to anoth
   const baseBoard = await sameRepoReader.board(own, 'full');
   expect(baseBoard.work_packages.find((entry: any) => entry.id === alternateBase).work_package.id).toBe(alternateBase);
   expect(baseBoard.work_packages.find((entry: any) => entry.id === ownWp).work_package.id).toBe(ownWp);
-  await sameRepoReader.reject('record_work_package_delivery', { work_request_id: own, work_package_id: ownWp, outcome: 'completed_no_pr',
-    idempotency_key: 'wrong-delivery-base', evidence: { completed_no_pr: { no_pr_evidence: 'Refuse hidden-base closeout' } },
-  }, 'owned_by_other_terminal');
+  await sameRepoReader.reject('close_work_package', { work_package_id: ownWp, outcome: 'completed_no_pr', evidence: 'Refuse hidden-base closeout' }, 'owned_by_other_terminal');
 
   for (const [repo, branch] of [['foreign/service', 'beta'], ['example/service', 'other-branch']]) {
     const outsider = await factory.client();

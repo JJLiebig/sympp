@@ -7,36 +7,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
   @type tool_call_result :: {:ok, arguments()} | {:error, integer(), String.t(), map()}
   @type tool_error :: {:tool_error, String.t()}
 
-  @spec local_operator_tool_arguments(map(), String.t()) :: tool_call_result()
-  def local_operator_tool_arguments(params, name) do
+  @doc """
+  Checks a call's arguments against the tool's one input schema: unknown keys
+  are refused (sync_pr and dispatch_work_package drop them), and required
+  arguments must be present with the right type.
+  """
+  @spec tool_arguments(map(), String.t()) :: tool_call_result()
+  def tool_arguments(params, name) do
     case Map.get(params, "arguments", %{}) do
-      arguments when is_map(arguments) ->
-        validate_local_operator_arguments(name, arguments)
-
-      _arguments ->
-        {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "invalid_tool_arguments"}}
-    end
-  end
-
-  @spec architect_tool_arguments(map(), String.t()) :: tool_call_result()
-  def architect_tool_arguments(params, name) do
-    case Map.get(params, "arguments", %{}) do
-      arguments when is_map(arguments) ->
-        validate_architect_arguments(name, arguments)
-
-      _arguments ->
-        {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "invalid_tool_arguments"}}
-    end
-  end
-
-  @spec bootstrap_tool_arguments(map(), String.t()) :: tool_call_result()
-  def bootstrap_tool_arguments(params, name) do
-    case Map.get(params, "arguments", %{}) do
-      arguments when is_map(arguments) ->
-        validate_bootstrap_arguments(name, arguments)
-
-      _arguments ->
-        {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "invalid_tool_arguments"}}
+      arguments when is_map(arguments) -> validate_arguments(name, arguments)
+      _arguments -> {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "invalid_tool_arguments"}}
     end
   end
 
@@ -193,22 +173,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
     schema
     |> Map.get("required", [])
     |> Enum.find_value(:ok, fn key ->
-      case validate_required_architect_argument(arguments, properties, key) do
+      case validate_required_argument(arguments, properties, key) do
         :ok -> nil
         {:error, reason} -> {:error, reason}
       end
     end)
   end
 
-  defp validate_local_operator_arguments(name, arguments) do
-    allowed = MapSet.new(allowed_local_operator_argument_keys(name))
+  defp validate_arguments(name, arguments) do
+    schema = ToolCatalog.input_schema(name)
+    allowed = schema |> Map.get("properties", %{}) |> Map.keys() |> MapSet.new()
+    arguments = if name in ["sync_pr", "dispatch_work_package"], do: Map.take(arguments, MapSet.to_list(allowed)), else: arguments
     unexpected = arguments |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
 
     if unexpected != [] do
       {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "unexpected_argument", "arguments" => unexpected}}
     else
-      schema = ToolCatalog.local_operator_tool_input_schema(name)
-
       case validate_tool_required_arguments(schema, arguments) do
         :ok -> {:ok, arguments}
         {:error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => reason}}
@@ -216,118 +196,49 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
     end
   end
 
-  defp validate_architect_arguments(name, arguments) do
-    allowed = MapSet.new(allowed_architect_argument_keys(name))
-    arguments = if name in ["sync_pr", "dispatch_work_package"], do: Map.take(arguments, MapSet.to_list(allowed)), else: arguments
-    unexpected = arguments |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
-
-    if unexpected != [] do
-      {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "unexpected_argument", "arguments" => unexpected}}
-    else
-      case validate_tool_required_arguments(ToolCatalog.architect_tool_input_schema(name), arguments) do
-        :ok -> {:ok, arguments}
-        {:error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => reason}}
-      end
-    end
-  end
-
-  defp validate_bootstrap_arguments(name, arguments) do
-    allowed = MapSet.new(allowed_bootstrap_argument_keys(name))
-    unexpected = arguments |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
-
-    if unexpected != [] do
-      {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "unexpected_argument", "arguments" => unexpected}}
-    else
-      validation_arguments = bootstrap_validation_arguments(name, arguments)
-
-      case validate_tool_required_arguments(ToolCatalog.bootstrap_tool_input_schema(name), validation_arguments) do
-        :ok -> {:ok, arguments}
-        {:error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => reason}}
-      end
-    end
-  end
-
-  defp allowed_local_operator_argument_keys(name) do
-    name
-    |> ToolCatalog.local_operator_tool_input_schema()
-    |> Map.get("properties", %{})
-    |> Map.keys()
-  end
-
-  defp allowed_architect_argument_keys(name) do
-    name
-    |> ToolCatalog.architect_tool_input_schema()
-    |> Map.get("properties", %{})
-    |> Map.keys()
-  end
-
-  defp allowed_bootstrap_argument_keys(name) do
-    name
-    |> ToolCatalog.bootstrap_tool_input_schema()
-    |> Map.get("properties", %{})
-    |> Map.keys()
-  end
-
-  defp bootstrap_validation_arguments("create_work_request", arguments) do
-    if blank_argument?(Map.get(arguments, "description")) and nonblank_argument?(Map.get(arguments, "human_description")) do
-      Map.put(arguments, "description", Map.get(arguments, "human_description"))
-    else
-      arguments
-    end
-  end
-
-  defp bootstrap_validation_arguments(_name, arguments), do: arguments
-
-  defp blank_argument?(value) when is_binary(value), do: String.trim(value) == ""
-  defp blank_argument?(nil), do: true
-  defp blank_argument?(_value), do: false
-
-  defp nonblank_argument?(value) when is_binary(value), do: String.trim(value) != ""
-  defp nonblank_argument?(_value), do: false
-
-  defp validate_required_architect_argument(arguments, properties, key) do
+  defp validate_required_argument(arguments, properties, key) do
     case Map.fetch(arguments, key) do
       :error -> {:error, "missing_#{key}"}
       {:ok, nil} -> {:error, "missing_#{key}"}
-      {:ok, value} -> validate_required_architect_argument_value(properties, key, value)
+      {:ok, value} -> validate_required_argument_value(properties, key, value)
     end
   end
 
-  defp validate_required_architect_argument_value(properties, key, value) do
+  defp validate_required_argument_value(properties, key, value) do
     case get_in(properties, [key, "type"]) do
-      "string" -> validate_required_architect_string_argument(key, value)
-      "object" -> validate_required_architect_object_argument(key, value)
-      "array" -> validate_required_architect_array_argument_value(properties, key, value)
-      "integer" -> validate_required_architect_integer_argument(properties, key, value)
+      "string" -> validate_required_string_argument(key, value)
+      "object" -> validate_required_object_argument(key, value)
+      "array" -> validate_required_array_argument_value(properties, key, value)
+      "integer" -> validate_required_integer_argument(properties, key, value)
       "boolean" when is_boolean(value) -> :ok
       _type -> {:error, "invalid_#{key}"}
     end
   end
 
-  defp validate_required_architect_string_argument(key, value) when is_binary(value) do
+  defp validate_required_string_argument(key, value) when is_binary(value) do
     if String.trim(value) == "", do: {:error, "missing_#{key}"}, else: :ok
   end
 
-  defp validate_required_architect_string_argument(key, _value), do: {:error, "invalid_#{key}"}
+  defp validate_required_string_argument(key, _value), do: {:error, "invalid_#{key}"}
 
-  defp validate_required_architect_object_argument(_key, value) when is_map(value), do: :ok
-  defp validate_required_architect_object_argument(key, _value), do: {:error, "invalid_#{key}"}
+  defp validate_required_object_argument(_key, value) when is_map(value), do: :ok
+  defp validate_required_object_argument(key, _value), do: {:error, "invalid_#{key}"}
 
-  defp validate_required_architect_integer_argument(properties, key, value) when is_integer(value) do
+  defp validate_required_integer_argument(properties, key, value) when is_integer(value) do
     minimum = properties |> Map.get(key, %{}) |> Map.get("minimum")
 
     if is_integer(minimum) and value < minimum, do: {:error, "invalid_#{key}"}, else: :ok
   end
 
-  defp validate_required_architect_integer_argument(_properties, key, _value), do: {:error, "invalid_#{key}"}
+  defp validate_required_integer_argument(_properties, key, _value), do: {:error, "invalid_#{key}"}
 
-  defp validate_required_architect_array_argument_value(properties, key, values) when is_list(values) do
-    validate_required_architect_array_argument(properties, key, values)
+  defp validate_required_array_argument_value(properties, key, values) when is_list(values) do
+    validate_required_array_argument(properties, key, values)
   end
 
-  defp validate_required_architect_array_argument_value(_properties, key, _value), do: {:error, "invalid_#{key}"}
+  defp validate_required_array_argument_value(_properties, key, _value), do: {:error, "invalid_#{key}"}
 
-  defp validate_required_architect_array_argument(properties, key, values) do
+  defp validate_required_array_argument(properties, key, values) do
     cond do
       properties |> Map.get(key, %{}) |> Map.get("minItems", 0) > 0 and values == [] ->
         {:error, "missing_#{key}"}
