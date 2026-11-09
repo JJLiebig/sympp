@@ -81,10 +81,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
 
   defp require_work_request_target(schema), do: schema
 
-  defp architect_schema("read_task_plan") do
-    schema(%{"work_package_id" => string_schema()}, ["work_package_id"])
-  end
-
   defp architect_schema("update_task_plan") do
     schema(
       %{
@@ -125,30 +121,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   end
 
   defp architect_schema("read_work_request") do
-    schema(%{"work_request_id" => string_schema(), "detail" => payload_detail_schema()}, ["work_request_id"])
-  end
-
-  defp architect_schema("read_plan") do
     schema(
       %{
-        "work_request_id" => described_string_schema("Scoped WorkRequest id to project."),
-        "detail" => payload_detail_schema(),
+        "work_request_id" => string_schema(),
         "view" =>
-          ToolCatalog.work_request_product_tree_views()
+          ToolCatalog.work_request_views()
           |> string_enum_schema()
-          |> Map.put("description", "Projection size. Defaults to groups_with_work_package_refs.")
-      },
-      ["work_request_id"]
-    )
-  end
-
-  defp architect_schema("read_delivery_board") do
-    schema(
-      %{
-        "work_request_id" => current_work_request_id_schema(),
+          |> Map.merge(%{
+            "default" => "overview",
+            "description" =>
+              "overview: request, packages and next actions; plan: packages by group, dependencies and the execution graph; board: delivery state and evidence; package: one package's contract, dependencies and task plan."
+          }),
+        "work_package_id" => described_string_schema("Required for view: package."),
         "detail" => payload_detail_schema()
       },
-      []
+      ["work_request_id"]
     )
   end
 
@@ -317,53 +304,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  defp architect_schema("slice_work_request") do
+  defp architect_schema("edit_plan") do
     schema(
       %{
-        "work_request_id" => current_work_request_id_schema(),
-        "work_packages" => %{
+        "work_request_id" => string_schema(),
+        "ops" => %{
           "type" => "array",
           "minItems" => 1,
-          "items" => work_package_contract_schema()
+          "description" =>
+            "Applied in order in one transaction; any failure rolls back the whole edit. " <>
+              "A package reference is a WorkPackage id or the key of an earlier add_package.",
+          "items" => %{
+            "oneOf" => [
+              add_package_op_schema(),
+              update_package_op_schema(),
+              set_dependency_op_schema(),
+              remove_dependency_op_schema()
+            ]
+          }
         }
       },
-      ["work_packages"]
-    )
-  end
-
-  defp architect_schema("update_work_package") do
-    schema(
-      %{
-        "work_request_id" => current_work_request_id_schema(),
-        "work_package_id" => nonblank_string_schema(),
-        "expected_contract_revision" => positive_integer_schema(),
-        "patch" => work_package_contract_patch_schema()
-      },
-      ["work_package_id", "expected_contract_revision", "patch"]
-    )
-  end
-
-  defp architect_schema("upsert_group"), do: upsert_group_schema()
-
-  defp architect_schema("delete_group") do
-    schema(
-      %{
-        "work_request_id" => current_work_request_id_schema(),
-        "group_id" => nonblank_string_schema()
-      },
-      ["group_id"]
-    )
-  end
-
-  defp architect_schema("upsert_dependency"), do: upsert_dependency_schema()
-
-  defp architect_schema("delete_dependency") do
-    schema(
-      %{
-        "work_request_id" => current_work_request_id_schema(),
-        "dependency_id" => nonblank_string_schema()
-      },
-      ["dependency_id"]
+      ["work_request_id", "ops"]
     )
   end
 
@@ -437,8 +398,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     %{"type" => "object", "additionalProperties" => false, "properties" => properties, "required" => required}
   end
 
-  defp always_validate(schema, constraint), do: Map.merge(schema, %{"if" => %{}, "then" => constraint})
-
   defp scoped_properties(properties), do: Map.put(properties, "work_package_id", string_schema())
 
   defp progress_properties(:explicit) do
@@ -462,7 +421,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   defp nonblank_string_schema, do: %{"type" => "string", "minLength" => 1, "pattern" => "\\S"}
   defp boolean_schema, do: %{"type" => "boolean"}
   defp integer_schema, do: %{"type" => "integer"}
-  defp nonnegative_integer_schema, do: %{"type" => "integer", "minimum" => 0}
   defp positive_integer_schema, do: %{"type" => "integer", "minimum" => 1}
 
   defp pr_number_schema do
@@ -473,12 +431,48 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   defp markdown_nullable_string_schema(description), do: Map.put(nullable_string_schema(), "description", description)
   defp object_schema, do: %{"type" => "object", "additionalProperties" => true}
 
-  defp work_package_contract_schema do
-    schema(
-      work_package_contract_properties(),
-      ["title", "goal", "acceptance_criteria"]
-    )
+  defp add_package_op_schema do
+    work_package_contract_properties()
+    |> Map.merge(%{
+      "op" => %{"const" => "add_package"},
+      "key" => described_string_schema("Optional name later ops in this edit use to refer to the new package."),
+      "depends_on" => described_string_array_schema("Package references the new package depends on.")
+    })
+    |> schema(["op", "title", "goal", "acceptance_criteria", "validation_steps", "stop_conditions"])
     |> Map.put("additionalProperties", true)
+  end
+
+  defp update_package_op_schema do
+    schema(
+      %{
+        "op" => %{"const" => "update_package"},
+        "work_package_id" => nonblank_string_schema(),
+        "expected_revision" => positive_integer_schema(),
+        "patch" => work_package_contract_patch_schema()
+      },
+      ["op", "work_package_id", "expected_revision", "patch"]
+    )
+  end
+
+  defp set_dependency_op_schema do
+    schema(
+      %{
+        "op" => %{"const" => "set_dependency"},
+        "from" => described_string_schema("Package reference that depends on `to`."),
+        "to" => described_string_schema("Package reference that must be delivered first."),
+        "candidate_head_sha" => %{
+          "type" => ["string", "null"],
+          "pattern" => "^[0-9a-fA-F]{40}$",
+          "description" => "Optional head of `to`, qualified by native checks and review, that `from` may build on before `to` merges. null removes the pin."
+        },
+        "reason" => described_string_schema("Optional reason for the dependency.")
+      },
+      ["op", "from", "to"]
+    )
+  end
+
+  defp remove_dependency_op_schema do
+    schema(%{"op" => %{"const" => "remove_dependency"}, "from" => nonblank_string_schema(), "to" => nonblank_string_schema()}, ["op", "from", "to"])
   end
 
   defp work_package_contract_patch_schema do
@@ -488,7 +482,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
 
   defp work_package_contract_properties do
     %{
-      "group_id" => nullable_string_schema(),
+      "group" => nullable_string_schema() |> Map.put("description", "Group path such as \"Backend / Billing\"; null or blank for none."),
       "title" => task_title_schema(),
       "goal" => nonblank_string_schema(),
       "kind" => Map.put(string_enum_schema(WorkPackage.kinds()), "default", "standard_pr"),
@@ -515,63 +509,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
       },
       "required" => ["type"]
     }
-  end
-
-  defp dependency_endpoint_schema do
-    %{
-      "type" => "object",
-      "additionalProperties" => false,
-      "properties" => %{
-        "kind" => string_enum_schema(["work_package", "group"]),
-        "id" => nonblank_string_schema()
-      },
-      "required" => ["kind", "id"]
-    }
-  end
-
-  defp upsert_group_schema do
-    schema(
-      %{
-        "work_request_id" => current_work_request_id_schema(),
-        "group_id" => described_string_schema("Optional existing Group id. Omit to create a Group."),
-        "title" => nonblank_string_schema(),
-        "description" => markdown_nullable_string_schema("Optional human-facing Group description."),
-        "kind" => described_string_schema("Optional loose organization hint such as capability, milestone, or risk."),
-        "parent_group_id" => nullable_string_schema() |> Map.put("description", "Optional parent Group id; pass null to move the Group to the WorkRequest root."),
-        "position" => nonnegative_integer_schema(),
-        "created_by" => described_string_schema("Optional architect identity for audit display.")
-      },
-      []
-    )
-    |> always_validate(%{
-      "allOf" => [
-        %{"anyOf" => [%{"required" => ["group_id"]}, %{"required" => ["title"]}]},
-        %{
-          "anyOf" => Enum.map(["title", "description", "kind", "parent_group_id", "position"], &%{"required" => [&1]})
-        }
-      ]
-    })
-  end
-
-  defp upsert_dependency_schema do
-    schema(
-      %{
-        "work_request_id" => current_work_request_id_schema(),
-        "dependency_id" => described_string_schema("Optional existing dependency id. Omit to create a dependency."),
-        "dependent" => dependency_endpoint_schema(),
-        "prerequisite" => dependency_endpoint_schema(),
-        "candidate_head_sha" => %{
-          "type" => ["string", "null"],
-          "pattern" => "^[0-9a-fA-F]{40}$",
-          "description" => "Optional exact head of a concrete prerequisite WorkPackage qualified by the caller using native checks/review. Enables wiring before delivery; null removes the pin."
-        },
-        "reason" => markdown_string_schema("Why this dependency exists."),
-        "decision_ref" => object_schema(),
-        "created_by" => described_string_schema("Optional architect identity for audit display.")
-      },
-      ["dependent", "prerequisite"]
-    )
-    |> always_validate(%{"anyOf" => [%{"required" => ["reason"]}, %{"required" => ["decision_ref"]}]})
   end
 
   defp decision_prompt_schema do

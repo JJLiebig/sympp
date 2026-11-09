@@ -3,14 +3,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments,
     only: [
-      optional_list_argument: 2,
-      optional_nonnegative_integer_argument: 2,
-      optional_positive_integer_argument: 2,
       optional_object_argument: 2,
       optional_string_argument: 2,
       optional_string_argument: 3,
-      required_argument: 2,
-      required_object: 2
+      required_argument: 2
     ]
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.Payloads, only: [json_safe_payload: 1]
@@ -28,6 +24,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
@@ -38,19 +35,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   @tools [
     "ask_question",
     "record_decision",
-    "slice_work_request",
-    "update_work_package",
-    "upsert_group",
-    "delete_group",
-    "upsert_dependency",
-    "delete_dependency",
+    "edit_plan",
     "skip_work_package"
-  ]
-  @required_work_package_string_fields ["title", "goal"]
-  @required_work_package_array_fields [
-    "acceptance_criteria",
-    "validation_steps",
-    "stop_conditions"
   ]
 
   @spec tools() :: [String.t()]
@@ -136,196 +122,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  def call("slice_work_request", %Config{} = config, terminal, arguments) do
-    tool = "slice_work_request"
+  def call("edit_plan", %Config{} = config, terminal, arguments) do
+    tool = "edit_plan"
+    created_by = terminal_name(terminal)
 
     with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, work_packages} <- optional_list_argument(arguments, "work_packages"),
-         :ok <- require_work_package_batch(work_packages),
-         {:ok, work_request, _filters, scope} <-
-           scoped_work_request(config.repo, work_request_id),
-         :ok <- require_work_package_authoring_status(work_request),
-         :ok <- require_complete_work_package_contracts(work_packages),
-         {:ok, {result, detail}} <-
-           mutate_product_tree_with_projection(
-             config.repo,
-             work_request_id,
-             tool,
-             terminal_name(terminal),
-             fn ->
-               WorkRequestService.slice_work_request(
-                 config.repo,
-                 work_request_id,
-                 Enum.map(work_packages, &internal_work_package_contract/1)
-               )
-             end
-           ) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_package_ids" => Enum.map(result.work_packages, & &1.id),
-         "product_tree_revision" => json_safe_payload(detail.product_tree.latest_revision),
-         "scope" => scope
-       })}
-    else
-      {:tool_error, reason} -> invalid_params_error(tool, reason)
-      {:error, %Ecto.Changeset{} = changeset} -> changeset_invalid_params_error(tool, "invalid_work_package", changeset)
-      {:error, :not_found} -> not_found_error(tool)
-      {:error, reason} -> architect_error(reason, tool)
-    end
-  end
-
-  def call("update_work_package", %Config{} = config, terminal, arguments) do
-    tool = "update_work_package"
-
-    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
-         {:ok, expected_revision} <- optional_positive_integer_argument(arguments, "expected_contract_revision"),
-         {:ok, patch} <- required_object(arguments, "patch"),
-         :ok <- require_positive_revision(expected_revision),
-         {:ok, work_request, work_package, _filters, scope} <-
-           scoped_work_package(config.repo, work_request_id, work_package_id),
-         :ok <- require_contract_revision(work_package, expected_revision),
-         :ok <- require_work_package_authoring_status(work_request, work_package.contract_revision),
-         :ok <- require_mutable_work_package_contract(work_package),
-         :ok <- require_complete_work_package_contracts([effective_work_package_contract(work_package, patch)]),
-         {:ok, work_package} <-
-           mutate_product_tree(config.repo, work_request_id, tool, terminal_name(terminal), fn ->
-             update_work_package(
-               config.repo,
-               work_request_id,
-               work_package_id,
-               expected_revision,
-               internal_work_package_contract(patch)
-             )
+         {:ok, ops} <- edit_plan_ops(arguments),
+         {:ok, _work_request, _filters, scope} <- scoped_work_request(config.repo, work_request_id),
+         {:ok, {applied, graph}} <-
+           mutate_product_tree(config.repo, work_request_id, tool, created_by, fn ->
+             apply_plan_edit(config.repo, work_request_id, ops, created_by)
            end) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_package_id" => work_package.id,
-         "contract_revision" => work_package.contract_revision,
-         "scope" => scope,
-         "status" => %{"work_package_status" => work_package.status}
-       })}
+      WorkRequestService.notify_plan_changed()
+      {:ok, ToolResult.agent_tool_result(%{"applied" => applied, "plan" => graph, "scope" => scope})}
     else
       {:tool_error, reason} -> invalid_params_error(tool, reason)
-      {:error, %Ecto.Changeset{} = changeset} -> changeset_invalid_params_error(tool, "invalid_work_package", changeset)
       {:error, :not_found} -> not_found_error(tool)
+      {:error, {:op_failed, index, op, reason}} -> edit_plan_op_error(index, op, reason)
+      {:error, {:work_request_terminal, phase}} -> architect_error({:work_request_terminal, phase, nil}, tool)
       {:error, reason} -> architect_error(reason, tool)
     end
-  end
-
-  def call("upsert_group", %Config{} = config, terminal, arguments) do
-    tool = "upsert_group"
-    parent_group_id_supplied? = Map.has_key?(arguments, "parent_group_id")
-    description_supplied? = Map.has_key?(arguments, "description")
-
-    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, group_id} <- optional_string_argument(arguments, "group_id"),
-         {:ok, title} <- optional_string_argument(arguments, "title"),
-         {:ok, description} <- optional_string_argument(arguments, "description"),
-         {:ok, kind} <- optional_string_argument(arguments, "kind"),
-         {:ok, parent_group_id} <- optional_string_argument(arguments, "parent_group_id"),
-         {:ok, position} <- optional_nonnegative_integer_argument(arguments, "position"),
-         {:ok, created_by} <- optional_string_argument(arguments, "created_by", terminal_name(terminal)),
-         :ok <-
-           require_group_mutation(
-             group_id,
-             title,
-             description_supplied?,
-             kind,
-             parent_group_id_supplied?,
-             position
-           ),
-         {:ok, work_request, _filters, scope} <-
-           scoped_work_request(config.repo, work_request_id),
-         :ok <- require_work_package_authoring_status(work_request),
-         attrs =
-           %{"work_request_id" => work_request_id}
-           |> optional_put("id", group_id)
-           |> optional_put("title", title)
-           |> optional_put_present("description", description, description_supplied?)
-           |> optional_put("node_kind", kind)
-           |> optional_put_present("parent_id", parent_group_id, parent_group_id_supplied?)
-           |> optional_put("position", position)
-           |> optional_put("created_by", created_by),
-         {:ok, {group, detail}} <-
-           mutate_product_tree_with_projection(config.repo, work_request_id, tool, created_by, fn ->
-             ProductTree.upsert_node(config.repo, attrs)
-           end) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
-         "group" => WorkRequestPayloads.group(group),
-         "product_tree" => WorkRequestPayloads.public_product_tree(detail.product_tree),
-         "scope" => scope
-       })}
-    else
-      {:tool_error, reason} -> invalid_params_error(tool, reason)
-      {:error, %Ecto.Changeset{} = changeset} -> changeset_invalid_params_error(tool, "invalid_group", changeset)
-      {:error, :not_found} -> not_found_error(tool)
-      {:error, reason} -> architect_error(reason, tool)
-    end
-  end
-
-  def call("delete_group", %Config{} = config, terminal, arguments) do
-    mutate_graph_record(config, terminal, arguments, "delete_group", "group_id", fn work_request_id, group_id ->
-      ProductTree.delete_group(config.repo, work_request_id, group_id)
-    end)
-  end
-
-  def call("upsert_dependency", %Config{} = config, terminal, arguments) do
-    tool = "upsert_dependency"
-
-    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, dependency_id} <- optional_string_argument(arguments, "dependency_id"),
-         {:ok, candidate_head_sha} <- optional_string_argument(arguments, "candidate_head_sha"),
-         {:ok, dependent} <- required_object(arguments, "dependent"),
-         {:ok, prerequisite} <- required_object(arguments, "prerequisite"),
-         {:ok, {source_kind, source_id}} <- dependency_endpoint(dependent),
-         {:ok, {target_kind, target_id}} <- dependency_endpoint(prerequisite),
-         {:ok, reason} <- optional_string_argument(arguments, "reason"),
-         {:ok, decision_ref} <- optional_object_argument(arguments, "decision_ref"),
-         {:ok, created_by} <- optional_string_argument(arguments, "created_by", terminal_name(terminal)),
-         {:ok, work_request, _filters, scope} <-
-           scoped_work_request(config.repo, work_request_id),
-         :ok <- require_work_package_authoring_status(work_request),
-         attrs =
-           %{
-             "work_request_id" => work_request_id,
-             "source_kind" => source_kind,
-             "source_id" => source_id,
-             "target_kind" => target_kind,
-             "target_id" => target_id,
-             "kind" => "depends_on"
-           }
-           |> optional_put("id", dependency_id)
-           |> optional_put_present("candidate_head_sha", candidate_head_sha, Map.has_key?(arguments, "candidate_head_sha"))
-           |> optional_put("reason", reason)
-           |> optional_put("decision_ref", decision_ref)
-           |> optional_put("created_by", created_by),
-         {:ok, {dependency, detail}} <-
-           mutate_product_tree_with_projection(config.repo, work_request_id, tool, created_by, fn ->
-             ProductTree.upsert_dependency_edge(config.repo, attrs)
-           end) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
-         "dependency" => WorkRequestPayloads.dependency_intent(dependency),
-         "product_tree" => WorkRequestPayloads.public_product_tree(detail.product_tree),
-         "product_tree_revision" => json_safe_payload(detail.product_tree.latest_revision),
-         "scope" => scope
-       })}
-    else
-      {:tool_error, reason} -> invalid_params_error(tool, reason)
-      {:error, %Ecto.Changeset{} = changeset} -> changeset_invalid_params_error(tool, "invalid_dependency", changeset)
-      {:error, :not_found} -> not_found_error(tool)
-      {:error, reason} -> architect_error(reason, tool)
-    end
-  end
-
-  def call("delete_dependency", %Config{} = config, terminal, arguments) do
-    mutate_graph_record(config, terminal, arguments, "delete_dependency", "dependency_id", fn work_request_id, dependency_id ->
-      ProductTree.delete_dependency_edge(config.repo, work_request_id, dependency_id)
-    end)
   end
 
   def call("skip_work_package", %Config{} = config, terminal, arguments) do
@@ -354,61 +170,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  defp mutate_graph_record(%Config{} = config, terminal, arguments, tool, id_key, mutation_fun) do
-    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, id} <- required_argument(arguments, id_key),
-         {:ok, work_request, _filters, scope} <-
-           scoped_work_request(config.repo, work_request_id),
-         :ok <- require_work_package_authoring_status(work_request),
-         created_by = terminal_name(terminal),
-         {:ok, {deleted, detail}} <-
-           mutate_product_tree_with_projection(config.repo, work_request_id, tool, created_by, fn ->
-             mutation_fun.(work_request_id, id)
-           end) do
-      payload =
-        %{
-          "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
-          "deleted" => deleted_graph_record_payload(tool, deleted),
-          "product_tree" => WorkRequestPayloads.public_product_tree(detail.product_tree),
-          "scope" => scope
-        }
-
-      payload =
-        if tool == "delete_dependency",
-          do: Map.put(payload, "product_tree_revision", json_safe_payload(detail.product_tree.latest_revision)),
-          else: payload
-
-      {:ok, ToolResult.tool_result(payload)}
-    else
-      {:tool_error, reason} -> invalid_params_error(tool, reason)
-      {:error, :not_found} -> not_found_error(tool)
-      {:error, reason} -> architect_error(reason, tool)
-    end
-  end
-
-  defp deleted_graph_record_payload("delete_group", result) do
-    %{
-      "group_id" => result.group.id,
-      "parent_group_id" => result.parent_group_id,
-      "moved_group_count" => result.moved_group_count,
-      "moved_work_package_count" => result.moved_work_package_count,
-      "removed_dependency_count" => result.removed_dependency_count
-    }
-  end
-
-  defp deleted_graph_record_payload("delete_dependency", dependency) do
-    WorkRequestPayloads.dependency_intent(dependency)
-  end
-
-  defp require_contract_revision(%WorkPackage{contract_revision: revision}, revision), do: :ok
-
-  defp require_contract_revision(%WorkPackage{} = work_package, _expected_revision) do
-    {:error, {:contract_revision_conflict, work_package.status, work_package.contract_revision}}
-  end
-
-  defp require_work_package_authoring_status(%WorkRequest{} = work_request),
-    do: require_work_package_authoring_status(work_request, nil)
-
   defp require_work_package_authoring_status(%WorkRequest{archived_at: %DateTime{}}, revision),
     do: {:error, {:work_request_archived, revision}}
 
@@ -425,36 +186,96 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  defp update_work_package(repo, work_request_id, work_package_id, expected_revision, patch) do
-    case WorkRequestService.update_work_package(repo, work_request_id, work_package_id, expected_revision, patch) do
-      {:error, reason} when reason in [:stale_status, :invalid_status, :contract_frozen] ->
-        with {:ok, work_package} <- WorkRequestService.get_work_package(repo, work_request_id, work_package_id),
-             :ok <- require_contract_revision(work_package, expected_revision),
-             :ok <- require_mutable_work_package_contract(work_package) do
-          {:error, reason}
-        end
-
-      result ->
-        result
+  defp edit_plan_ops(arguments) do
+    case Map.get(arguments, "ops") do
+      [_ | _] = ops -> if Enum.all?(ops, &is_map/1), do: {:ok, ops}, else: {:tool_error, "invalid_ops"}
+      _ops -> {:tool_error, "invalid_ops"}
     end
   end
 
-  defp require_group_mutation(nil, title, _description_supplied?, _kind, _parent_supplied?, _position) do
-    if filled_string?(title), do: :ok, else: {:tool_error, "missing_title"}
+  defp apply_plan_edit(repo, work_request_id, ops, created_by) do
+    with {:ok, applied} <- WorkRequestService.edit_plan(repo, work_request_id, ops, created_by),
+         {:ok, graph} <- effective_graph(repo, work_request_id) do
+      {:ok, {applied, graph}}
+    end
   end
 
-  defp require_group_mutation(_group_id, title, description_supplied?, kind, parent_supplied?, position) do
-    if Enum.any?([title, kind], &filled_string?/1) or description_supplied? or parent_supplied? or is_integer(position),
-      do: :ok,
-      else: {:tool_error, "missing_group_mutation"}
+  # Names the failing operation, what state blocked it and what to do next. The
+  # whole edit was rolled back.
+  defp edit_plan_op_error(index, op, %Ecto.Changeset{} = changeset) do
+    {:error, code, message, data} = changeset_invalid_params_error("edit_plan", "invalid_work_package", changeset)
+    {:error, code, message, Map.merge(data, op_error_fields(index, op, "Fix the listed fields and resend the whole edit."))}
   end
 
-  defp dependency_endpoint(%{"kind" => kind, "id" => id})
-       when kind in ["group", "work_package"] and is_binary(id) and id != "" do
-    {:ok, {if(kind == "group", do: "product_node", else: kind), id}}
+  defp edit_plan_op_error(index, op, reason) do
+    {details, next_action} = op_error_details(reason)
+    data = %{"tool" => "edit_plan", "reason" => op_error_reason(reason)} |> Map.merge(details) |> Map.merge(op_error_fields(index, op, next_action))
+    {:error, -32_602, "Invalid params", data}
   end
 
-  defp dependency_endpoint(_endpoint), do: {:tool_error, "invalid_dependency_endpoint"}
+  defp op_error_fields(index, op, next_action) do
+    %{"op_index" => index, "op" => op, "next_action" => next_action, "applied" => "none: the whole edit was rolled back"}
+  end
+
+  defp op_error_reason({reason, _detail}) when is_atom(reason), do: Atom.to_string(reason)
+  defp op_error_reason({reason, _first, _second}) when is_atom(reason), do: Atom.to_string(reason)
+  defp op_error_reason(reason), do: reason_text(reason)
+
+  defp op_error_details({:invalid_op, ops}), do: {%{"allowed_ops" => ops}, "Set op to one of the allowed ops."}
+  defp op_error_details({:invalid_field, field}), do: {%{"field" => field}, "Give #{field} a valid value."}
+  defp op_error_details({:duplicate_key, key}), do: {%{"key" => key}, "Use a key not already used by an earlier add_package."}
+
+  defp op_error_details({:unknown_work_package, ref}),
+    do: {%{"work_package_ref" => ref}, "Use a WorkPackage id from read_work_request view: plan, or the key of an earlier add_package."}
+
+  defp op_error_details({:self_dependency, id}), do: {%{"work_package_id" => id}, "A package cannot depend on itself."}
+
+  defp op_error_details({:incomplete_contract, missing}),
+    do: {%{"missing" => missing}, "Give title and goal, and acceptance_criteria, validation_steps and stop_conditions as lists of strings."}
+
+  defp op_error_details({:revision_conflict, status, revision}),
+    do: {%{"state" => status, "current_revision" => revision}, "Re-read with read_work_request view: package, then retry with expected_revision #{revision}."}
+
+  defp op_error_details({:contract_frozen, revision}),
+    do:
+      {%{"state" => "ready", "current_revision" => revision},
+       "A ready package's contract is frozen. Add a successor with edit_plan add_package, then end this one with record_work_package_delivery outcome: superseded."}
+
+  defp op_error_details({:work_package_ended, revision}),
+    do: {%{"state" => "ended", "current_revision" => revision}, "An ended package cannot change. Add a successor with edit_plan add_package."}
+
+  defp op_error_details({:dependency_not_found, from, to}), do: {%{"from" => from, "to" => to}, "Nothing to remove: #{from} does not depend on #{to}."}
+  defp op_error_details(:open_questions), do: {%{}, "Answer or close the open clarification questions, then resend the edit."}
+  defp op_error_details(:invalid_work_package), do: {%{"allowed_kinds" => WorkPackage.kinds()}, "Use an executable package kind."}
+  defp op_error_details(:database_busy), do: {%{}, "Another write held the ledger. Resend the edit."}
+  defp op_error_details(_reason), do: {%{}, "Fix the operation and resend the whole edit."}
+
+  # The plan after the edit: each package with its group, status, revision and
+  # what it depends on, plus any cycles.
+  defp effective_graph(repo, work_request_id) do
+    with {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request_id),
+         {:ok, graph} <- ExecutionGraph.evaluate(repo, work_request_id, work_packages) do
+      depends_on =
+        Enum.group_by(graph.effective_edges, & &1.dependent_work_package_id, & &1.prerequisite_work_package_id)
+
+      ready_ids = MapSet.new(graph.dependency_ready_work_package_ids)
+
+      packages =
+        Enum.map(work_packages, fn package ->
+          %{
+            "id" => package.id,
+            "title" => package.title,
+            "group" => package.group,
+            "status" => package.status,
+            "revision" => package.contract_revision,
+            "depends_on" => Map.get(depends_on, package.id, []),
+            "next_action" => Lifecycle.next_action(package, %{dependencies_met?: MapSet.member?(ready_ids, package.id)}).action
+          }
+        end)
+
+      {:ok, %{"work_packages" => packages} |> optional_put("cycles", if(graph.cycles == [], do: nil, else: graph.cycles))}
+    end
+  end
 
   defp mutate_product_tree(repo, work_request_id, tool, created_by, mutation_fun) do
     run_architect_transaction(repo, fn ->
@@ -462,18 +283,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
            {:ok, result} <- mutation_fun.(),
            {:ok, _revision} <- record_current_product_tree_revision(repo, work_request_id, tool, created_by) do
         {:ok, result}
-      end
-    end)
-  end
-
-  defp mutate_product_tree_with_projection(repo, work_request_id, tool, created_by, mutation_fun) do
-    run_architect_transaction(repo, fn ->
-      with :ok <- require_unarchived_in_transaction(repo, work_request_id),
-           {:ok, result} <- mutation_fun.(),
-           {:ok, detail} <- Dashboard.work_request_detail(repo, work_request_id),
-           {:ok, _revision} <- record_product_tree_revision(repo, work_request_id, tool, created_by, detail) do
-        product_tree = ProductTree.project(repo, work_request_id, detail.work_packages)
-        {:ok, {result, %{detail | product_tree: product_tree}}}
       end
     end)
   end
@@ -537,12 +346,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     |> Map.delete("execution_graph")
   end
 
-  defp product_tree_revision_reason("slice_work_request"), do: "WorkRequest sliced into canonical WorkPackages through MCP."
-  defp product_tree_revision_reason("update_work_package"), do: "WorkPackage contract updated through MCP."
-  defp product_tree_revision_reason("upsert_group"), do: "Group content or placement changed through MCP."
-  defp product_tree_revision_reason("delete_group"), do: "Group removed through MCP."
-  defp product_tree_revision_reason("upsert_dependency"), do: "Execution dependency changed through MCP."
-  defp product_tree_revision_reason("delete_dependency"), do: "Execution dependency removed through MCP."
+  defp product_tree_revision_reason("edit_plan"), do: "Plan edited through MCP."
   defp product_tree_revision_reason("skip_work_package"), do: "WorkPackage skipped in product tree through MCP."
 
   defp run_architect_transaction(repo, fun) do
@@ -568,9 +372,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   defp optional_put(attrs, _key, nil), do: attrs
   defp optional_put(attrs, key, value), do: Map.put(attrs, key, value)
 
-  defp optional_put_present(attrs, key, value, true), do: Map.put(attrs, key, value)
-  defp optional_put_present(attrs, _key, _value, false), do: attrs
-
   defp terminal_name(%Terminal{display_address: address}), do: address
 
   defp scoped_work_request(repo, work_request_id) do
@@ -589,55 +390,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
         error
     end
   end
-
-  defp filled_string?(value), do: is_binary(value) and String.trim(value) != ""
-
-  defp require_work_package_batch([first | rest]) when is_map(first) do
-    if Enum.all?(rest, &is_map/1), do: :ok, else: {:tool_error, "invalid_work_packages"}
-  end
-
-  defp require_work_package_batch(_work_packages), do: {:tool_error, "invalid_work_packages"}
-
-  defp require_complete_work_package_contracts(work_packages) do
-    if Enum.all?(work_packages, &complete_work_package_contract?/1) do
-      :ok
-    else
-      {:tool_error, "invalid_work_packages"}
-    end
-  end
-
-  defp complete_work_package_contract?(work_package) do
-    Enum.all?(@required_work_package_string_fields, &filled_string?(Map.get(work_package, &1))) and
-      Enum.all?(@required_work_package_array_fields, &string_list?(Map.get(work_package, &1)))
-  end
-
-  defp effective_work_package_contract(work_package, patch) do
-    %{
-      "title" => work_package.title,
-      "goal" => work_package.goal,
-      "allowed_file_globs" => work_package.allowed_file_globs,
-      "acceptance_criteria" => work_package.acceptance_criteria,
-      "validation_steps" => work_package.validation_steps,
-      "stop_conditions" => work_package.stop_conditions
-    }
-    |> Map.merge(patch)
-  end
-
-  defp internal_work_package_contract(contract) do
-    if Map.has_key?(contract, "group_id") do
-      contract
-      |> Map.put("product_tree_node_id", Map.get(contract, "group_id"))
-      |> Map.delete("group_id")
-    else
-      contract
-    end
-  end
-
-  defp string_list?(values) when is_list(values), do: Enum.all?(values, &filled_string?/1)
-  defp string_list?(_values), do: false
-
-  defp require_positive_revision(revision) when is_integer(revision) and revision > 0, do: :ok
-  defp require_positive_revision(_revision), do: {:tool_error, "invalid_contract_revision"}
 
   defp architect_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
   defp architect_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)

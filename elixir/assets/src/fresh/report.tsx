@@ -295,7 +295,7 @@ export function PhasePackages({ all, at, state }: { all: boolean; at: number; st
         <div key={sub.id}>
           <p className="flex items-baseline gap-3 px-2 pb-0.5 pt-1.5 text-xs text-dim">
             <span className="min-w-0 flex-1 truncate">{sub.title}</span>
-            <span className="shrink-0 font-mono text-faint">{sub.ids.size === 0 ? "not sliced yet" : `${state.done.filter((pkg) => sub.ids.has(pkg.id)).length}/${sub.ids.size}`}</span>
+            {sub.ids.size > 0 ? <span className="shrink-0 font-mono text-faint">{`${state.done.filter((pkg) => sub.ids.has(pkg.id)).length}/${sub.ids.size}`}</span> : null}
           </p>
           <div className="pl-3">
             <Lines all={all} at={at} keep={(id) => sub.ids.has(id)} state={state} />

@@ -2,7 +2,7 @@ import { expect } from 'e2e';
 import { contract, test, type Client } from '../support/factory.js';
 
 async function packageState(architect: Client, request: string, wp: string) {
-  const board = await architect.call('read_delivery_board', { detail: 'full', work_request_id: request });
+  const board = await architect.call('read_work_request', { view: 'board', detail: 'full', work_request_id: request });
   return board.delivery_board.work_packages.find((entry: any) => entry.work_package.id === wp).work_package;
 }
 
@@ -36,16 +36,13 @@ test('human answers retain decision provenance and stale replay cannot append a 
   expect(decision.scope_impact).toBe(args.scope_impact);
   expect(read.clarification_questions[0].answer).toBe(args.answer);
   expect(read.work_request.phase).toBe('intake');
-  expect((await architect.call('slice_work_request', {
-    work_packages: [contract('Approved outcome', { goal: `Implement decision ${decision.id}` })],
-  })).work_package_ids).toHaveLength(1);
+  expect((await architect.addPackages([contract('Approved outcome', { goal: `Implement decision ${decision.id}` })]))).toHaveLength(1);
 });
 
 test('questions, operator reports and review waits preserve explicit package blockers and sibling state', async ({ factory }) => {
   const architect = await factory.client();
   const id = await architect.request('Decision versus blocker');
-  const sliced = await architect.call('slice_work_request', { work_packages: [contract('Affected work'), contract('Sibling work')] });
-  const [affected, sibling] = sliced.work_package_ids;
+  const [affected, sibling] = await architect.addPackages([contract('Affected work'), contract('Sibling work')]);
   await architect.call('dispatch_work_package', { work_package_id: affected });
   await architect.call('dispatch_work_package', { work_package_id: sibling });
   const initial = await packageState(architect, id, affected);

@@ -1086,12 +1086,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert fanout_detail.product_tree.execution_graph.available
       assert length(fanout_detail.product_tree.execution_graph.effective_edges) == 6
       assert length(fanout_detail.product_tree.execution_graph.topological_order) == 6
-      assert fanout_detail.product_tree.root_work_package_ids == ["WP-FANOUT-PLAYTEST"]
+      assert for(package <- fanout_detail.work_packages, is_nil(package.group), do: package.id) == ["WP-FANOUT-PLAYTEST"]
 
       assert {:ok, [kraken_detail]} = Dashboard.work_request_board_details(Repo, ["WR-FIXTURE-KRAKEN-SCALE"])
       assert length(kraken_detail.work_packages) == 49
       refute Map.has_key?(kraken_detail, :delivery_board)
-      assert length(kraken_detail.product_tree.nodes) == 10
+      assert kraken_detail.work_packages |> Enum.map(& &1.group) |> Enum.uniq() |> length() == 10
       assert length(kraken_detail.product_tree.execution_graph.effective_edges) == 11
 
       kraken_edges =
@@ -1153,7 +1153,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert recovery_detail.product_tree.summary.blocker_count == 1
 
       assert {:ok, dense_tree} = ProductTree.tree_for_work_request(Repo, "WR-FIXTURE-DENSE")
-      assert length(dense_tree.nodes) == 3
+      assert {:ok, dense_packages} = WorkRequestRepository.list_work_packages(Repo, "WR-FIXTURE-DENSE")
+      assert dense_packages |> Enum.map(& &1.group) |> Enum.uniq() |> length() == 3
       assert length(dense_tree.dependency_edges) == 18
       assert Repo.all(AgentRun) |> length() == 7
 
@@ -1966,13 +1967,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  WorkRequestRepository.record_decision(repo, work_request.id, decision_attrs(id: "WRD-HERDR-DETAIL-#{sequence}"))
       end
 
-      assert {:ok, group} = ProductTree.create_node(repo, %{id: "group-herdr", work_request_id: work_request.id, title: "Delivery"})
-
       active =
         create_work_package!(repo,
           id: "WP-HERDR-ACTIVE",
           work_request_id: work_request.id,
-          product_tree_node_id: group.id,
+          group: "Delivery / Runtime",
           status: "dispatched",
           owner_id: "accountable-owner"
         )
@@ -1981,7 +1980,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         create_work_package!(repo,
           id: "WP-HERDR-DOWNSTREAM",
           work_request_id: work_request.id,
-          product_tree_node_id: group.id,
+          group: "Delivery",
           status: "planned"
         )
 
@@ -2081,7 +2080,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert packages[terminal.id]["activity_signal"]["current_actor"] == nil
       assert packages[terminal.id]["activity_signal"]["observation_state"] == "unknown"
 
-      assert payload["attention_keys"] == ["group:#{group.id}", "work_package:#{active.id}"]
+      assert payload["attention_keys"] == ["group:Delivery", "group:Delivery / Runtime", "work_package:#{active.id}"]
 
       assert :ok = OperatorDashboardOpener.ensure_started()
       opener = :sys.get_state(OperatorDashboardOpener)
@@ -2101,7 +2100,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                    |> json_response(200)
 
                  detail = Enum.find(board["work_request_details"], &(&1["work_request"]["id"] == work_request.id))
-                 assert Enum.any?(detail["product_tree"]["nodes"], &(&1["id"] == group.id))
+                 assert Enum.find(detail["work_packages"], &(&1["id"] == active.id))["group"] == "Delivery / Runtime"
                  signal = Enum.find(board["work_packages"], &(&1["id"] == active.id))
                  assert signal["active_agent_run"]["id"] == active_run.id
                  assert board["runtime"] == %{"offline" => false, "repos_root" => nil}

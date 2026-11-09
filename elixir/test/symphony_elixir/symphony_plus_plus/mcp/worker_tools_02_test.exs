@@ -28,8 +28,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
                "title" => "Inspect descendant"
              })
 
-    read_response = mcp_tool(repo, nil, "read_task_plan", %{"work_package_id" => package.id})
-    version = get_in(read_response, ["result", "structuredContent", "version"])
+    read_response = mcp_tool(repo, nil, "read_work_request", %{"work_request_id" => work_request.id, "view" => "package", "work_package_id" => package.id})
+    version = get_in(read_response, ["result", "structuredContent", "task_plan", "version"])
     assert is_integer(version)
 
     finding_response =

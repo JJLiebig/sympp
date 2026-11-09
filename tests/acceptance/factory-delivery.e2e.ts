@@ -9,7 +9,7 @@ import { repository } from '../support/worktree-git.js';
 test('deployment observations cover every delivered revision and preserve completion through rollback and unavailable history', async ({ delivery: { factory, provider } }) => {
   const architect = await factory.client();
   const request = await architect.request('Deployment truth');
-  const ids = (await architect.call('slice_work_request', { work_packages: [contract('First revision'), contract('Second revision')] })).work_package_ids;
+  const ids = (await architect.addPackages([contract('First revision'), contract('Second revision')]));
   const configRoot = join(factory.home, '.agents', 'splusplus');
   await mkdir(configRoot, { recursive: true });
   const configure = (workflow: string) => writeFile(join(configRoot, 'operator-board.json'), JSON.stringify({
@@ -93,10 +93,10 @@ test('deployment observations cover every delivered revision and preserve comple
 test('separate repository deployments preserve live attempt time and no-PR work has no invented revision', async ({ delivery: { factory, provider } }) => {
   const architect = await factory.client();
   const request = await architect.request('Independent deployments');
-  const [service, client, noPr] = (await architect.call('slice_work_request', { work_packages: [
+  const [service, client, noPr] = (await architect.addPackages([
     contract('Service deployment'), contract('Client deployment', { repo: 'example/client', base_branch: 'integration' }),
     contract('Accepted investigation', { kind: 'investigation' }),
-  ] })).work_package_ids;
+  ]));
   for (const wp of [service, client, noPr]) await architect.call('dispatch_work_package', { work_package_id: wp });
   await close(architect, noPr);
   for (const [wp, number, repo, base] of [[service, 720, 'example/service', 'beta'], [client, 721, 'example/client', 'integration']] as const) {
@@ -124,7 +124,7 @@ test('separate repository deployments preserve live attempt time and no-PR work 
   expect(current.deployments['example/client'].prod.at).toBe('2026-10-10T10:30:00Z');
   expect(current.deployments['example/client'].dev).toBeUndefined();
   const onlyNoPr = await architect.request('No deployed revision');
-  const [investigation] = (await architect.call('slice_work_request', { work_packages: [contract('No code delivery', { kind: 'investigation' })] })).work_package_ids;
+  const [investigation] = (await architect.addPackages([contract('No code delivery', { kind: 'investigation' })]));
   await architect.call('dispatch_work_package', { work_package_id: investigation });
   await close(architect, investigation);
   const final = await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated');
@@ -139,7 +139,7 @@ for (const status of [
   const repo = await repository(factory.root, 'review-observation');
   const architect = await factory.client();
   const request = await architect.request('Review observation', 'beta', repo.origin);
-  const [wp] = (await architect.call('slice_work_request', { work_packages: [contract('Observed review', { review: { type: 'review-suite', args: { mode: 'fast' } } })] })).work_package_ids;
+  const [wp] = (await architect.addPackages([contract('Observed review', { review: { type: 'review-suite', args: { mode: 'fast' } } })]));
   await architect.call('dispatch_work_package', { work_package_id: wp });
   await architect.call('prepare_work_package_worktree', { work_package_id: wp, target_repo_root: repo.checkout });
   await installReviewProvider({ root: factory.root, factory }, status);
@@ -159,7 +159,7 @@ for (const status of [
 test('ordinary PR handoff observes pending qualification then reconciles an exact external merge once', async ({ delivery: { factory, provider } }) => {
   const architect = await factory.client();
   const request = await architect.request('Qualified delivery');
-  const [wp] = (await architect.call('slice_work_request', { work_packages: [contract('Service change')] })).work_package_ids;
+  const [wp] = (await architect.addPackages([contract('Service change')]));
   const dispatch = await architect.call('dispatch_work_package', { detail: 'full', work_package_id: wp, future_field: 'ignored' });
   expect(dispatch.worker_bootstrap.type).toBe('assignment');
   const detail = () => architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`);
@@ -211,12 +211,12 @@ test('ordinary PR handoff observes pending qualification then reconciles an exac
   expect(delivered.delivery.merge_commit_sha).toBe(head('f'));
   expect(Date.parse(delivered.delivery.pr_merged_at)).toBe(Date.parse(mergeTime));
   expect(await completion()).toBeTruthy();
-  const revision = (await architect.call('read_plan', { detail: 'full', work_request_id: request })).product_tree.latest_revision;
+  const revision = (await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision;
   await architect.call('sync_pr', { work_package_id: wp });
   const replay = await architect.call('reconcile_work_request', { work_request_id: request, apply: true });
   expect(replay.reconciliation.applied_count).toBe(0);
   expect((await row(architect, request, wp)).delivery).toEqual(delivered.delivery);
-  expect((await architect.call('read_plan', { detail: 'full', work_request_id: request })).product_tree.latest_revision).toEqual(revision);
+  expect((await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision).toEqual(revision);
   const calls = provider.calls.filter(({ argv }) => argv[0] === 'pr');
   expect(calls.length).toBeGreaterThan(0);
   for (const { argv } of calls) {
@@ -228,7 +228,7 @@ test('ordinary PR handoff observes pending qualification then reconciles an exac
 test('provider errors and incomplete or wrong-head evidence cannot complete a dispatched package', async ({ delivery: { factory, provider } }) => {
   const architect = await factory.client();
   const request = await architect.request('Untrusted delivery evidence');
-  const [wp] = (await architect.call('slice_work_request', { work_packages: [contract('Evidence refusal')] })).work_package_ids;
+  const [wp] = (await architect.addPackages([contract('Evidence refusal')]));
   await architect.call('dispatch_work_package', { work_package_id: wp });
   const handoff = { work_package_id: wp, url: prUrl(102), head_sha: head('a') };
   await architect.reject('sync_pr', { ...handoff, url: 'https://example.invalid/not-a-pr' }, 'invalid_pr_url');
@@ -294,9 +294,7 @@ test('provider errors and incomplete or wrong-head evidence cannot complete a di
 test('typed no-PR closeout resolves blockers once and terminal packages cannot reactivate', async ({ delivery: { factory } }) => {
   const architect = await factory.client();
   const request = await architect.request('No code needed');
-  const [wp, abandoned, remaining] = (await architect.call('slice_work_request', {
-    work_packages: [contract('Findings', { repo: 'example/client', base_branch: 'integration' }), contract('Unstarted attempt'), contract('Remaining work')],
-  })).work_package_ids;
+  const [wp, abandoned, remaining] = (await architect.addPackages([contract('Findings', { repo: 'example/client', base_branch: 'integration' }), contract('Unstarted attempt'), contract('Remaining work')]));
   for (const id of [wp, abandoned]) {
     await architect.call('dispatch_work_package', { work_package_id: id });
     await architect.call('append_progress', { work_package_id: id, summary: 'An explicit prerequisite is missing.', idempotency_key: `block-${id}`, payload: { type: 'blocker', active: true, blocker_id: 'prerequisite' } });
@@ -345,9 +343,9 @@ test('typed no-PR closeout resolves blockers once and terminal packages cannot r
   expect(scoped.work_package.repo).toBe('example/client');
   expect(scoped.work_package.base_branch).toBe('integration');
   expect((await architect.call('read_work_request', { detail: 'full', work_request_id: request })).work_request.base_branch).toBe('beta');
-  const revision = (await architect.call('read_plan', { detail: 'full', work_request_id: request })).product_tree.latest_revision;
+  const revision = (await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision;
   expect((await close(architect, wp)).work_package_delivery.id).toBe(result.work_package_delivery.id);
-  expect((await architect.call('read_plan', { detail: 'full', work_request_id: request })).product_tree.latest_revision).toEqual(revision);
+  expect((await architect.call('read_work_request', { view: 'plan', detail: 'full', work_request_id: request })).plan.latest_revision).toEqual(revision);
   const conflict = await architect.rpc('tools/call', { name: 'record_work_package_delivery', arguments: {
     work_package_id: wp, outcome: 'completed_no_pr', idempotency_key: `close-${wp}`,
     evidence: { completed_no_pr: { no_pr_evidence: 'Replace original evidence' } },
@@ -361,7 +359,7 @@ test('typed no-PR closeout resolves blockers once and terminal packages cannot r
     expect(before.work_package.blocker_state['active?']).toBe(false);
     await architect.call('resolve_blocker', { work_package_id: id, blocker_id: 'prerequisite', resolution: 'Closeout accepted.', summary: 'Already resolved.', idempotency_key: `terminal-resolution-${id}` });
     expect((await row(architect, request, id)).raw_status).toBe(status);
-    await architect.reject('update_work_package', { work_package_id: id, expected_contract_revision: 1, patch: { title: 'Reactivate' } }, 'work_package_terminal');
+    await architect.reject('edit_plan', { ops: [{ op: 'update_package', work_package_id: id, expected_revision: 1, patch: { title: 'Reactivate' } }] }, 'work_package_ended');
     await architect.reject('skip_work_package', { work_package_id: id }, 'work_package_terminal');
     expect((await row(architect, request, id)).delivery).toEqual(before.delivery);
   }
@@ -373,7 +371,7 @@ test('typed no-PR closeout resolves blockers once and terminal packages cannot r
 test('blocked handoff accepts new PR and head observations without reviving an older candidate', async ({ delivery: { factory, provider } }) => {
   const architect = await factory.client();
   const request = await architect.request('Replacement PR observation');
-  const [wp] = (await architect.call('slice_work_request', { work_packages: [contract('Changing candidate')] })).work_package_ids;
+  const [wp] = (await architect.addPackages([contract('Changing candidate')]));
   await architect.call('dispatch_work_package', { work_package_id: wp });
   await architect.call('append_progress', { work_package_id: wp, summary: 'An ordinary wait is not a blocker.', idempotency_key: 'ordinary-wait', payload: { type: 'waiting', active: true, source_tool: 'report_blocker', blocker_id: 'ordinary' } });
   await architect.call('append_progress', { work_package_id: wp, summary: 'Resolve scope before accepting handoff.', idempotency_key: 'block-scope', payload: { type: 'blocker', active: true, blocker_id: 'scope' } });
@@ -418,7 +416,7 @@ test('blocked handoff accepts new PR and head observations without reviving an o
 test('architect integration holds gate a ready PR without reopening work or changing reviewed evidence', async ({ delivery: { factory, provider } }) => {
   const architect = await factory.client();
   const request = await architect.request('Final integration authority');
-  const [wp, sibling] = (await architect.call('slice_work_request', { work_packages: [contract('Held delivery'), contract('Independent delivery')] })).work_package_ids;
+  const [wp, sibling] = (await architect.addPackages([contract('Held delivery'), contract('Independent delivery')]));
   for (const [id, number] of [[wp, 801], [sibling, 802]] as const) {
     await architect.call('dispatch_work_package', { work_package_id: id });
     provider.set(number, pr(number, head('a')));

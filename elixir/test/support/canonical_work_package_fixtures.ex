@@ -73,7 +73,7 @@ defmodule CanonicalWorkPackageFixtures do
     repo.update!(
       Ecto.Changeset.change(target,
         work_request_id: planned.work_request_id,
-        product_tree_node_id: planned.product_tree_node_id,
+        group: planned.group,
         sequence: planned.sequence,
         goal: planned.goal,
         forbidden_file_globs: planned.forbidden_file_globs,

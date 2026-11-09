@@ -152,7 +152,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:error, :work_request_archived} =
              PlanningRepository.append_progress_event(repo, %{work_package_id: package.id, summary: "Late note", status: "recorded", idempotency_key: "late"})
 
-    assert {:error, :work_request_archived} = Repository.slice_work_request(repo, request.id, [work_package_attrs(id: "WRS-ARCHIVED-NEW")])
+    assert {:error, :work_request_archived} = Repository.add_work_package(repo, request.id, work_package_attrs(id: "WRS-ARCHIVED-NEW"))
     assert {:error, :work_request_archived} = Service.complete(repo, request.id)
     assert {:ok, ^archived} = Repository.get(repo, request.id)
     assert {:ok, [_only_package]} = Repository.list_work_packages(repo, request.id)

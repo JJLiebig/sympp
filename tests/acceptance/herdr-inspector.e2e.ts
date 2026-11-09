@@ -8,14 +8,8 @@ import { head, pr, row, sync } from '../support/delivery.js';
 test('compiled inspector binds and pins actual request detail without stealing focus or inventing a worker', async ({ candidate, app, browser }) => {
   const { client, factory, provider } = candidate;
   const request = await client.request('Bound inspector request');
-  const [wp, left, right] = (await client.call('slice_work_request', { work_packages: [contract('Inspector findings'), contract('Inspector API'), contract('Inspector UI')] })).work_package_ids;
-  let leftDependency!: string;
-  for (const dependent of [left, right]) {
-    const result = await client.call('upsert_dependency', {
-      dependent: { kind: 'work_package', id: dependent }, prerequisite: { kind: 'work_package', id: wp }, reason: 'Findings must land before follow-up work.',
-    });
-    if (dependent === left) leftDependency = result.dependency.id;
-  }
+  const [wp, left, right] = (await client.addPackages([contract('Inspector findings'), contract('Inspector API'), contract('Inspector UI')]));
+  await client.call('edit_plan', { ops: [left, right].map((from) => ({ op: 'set_dependency', from, to: wp, reason: 'Findings must land before follow-up work.' })) });
   await client.call('dispatch_work_package', { work_package_id: wp });
   const otherClient = await factory!.client();
   const other = await otherClient.request('Other inspector request');
@@ -60,11 +54,9 @@ test('compiled inspector binds and pins actual request detail without stealing f
     provider!.set(402, pr(402, head('a')));
     await sync(client, wp, 402, head('a'));
     await expect.poll(() => host.screen).toContain('Ready to merge');
-    const pin = (await client.call('upsert_dependency', {
-      dependency_id: leftDependency,
-      dependent: { kind: 'work_package', id: left }, prerequisite: { kind: 'work_package', id: wp },
-      candidate_head_sha: head('a'), reason: 'Qualify against the findings candidate before delivery.',
-    })).dependency.id;
+    await client.call('edit_plan', { ops: [{ op: 'set_dependency', from: left, to: wp, candidate_head_sha: head('a'), reason: 'Qualify against the findings candidate before delivery.' }] });
+    const pin = (await client.call('read_work_request', { work_request_id: request, view: 'plan' })).plan.dependencies
+      .find((dependency: any) => dependency.from === left && dependency.to === wp).id;
     await client.call('dispatch_work_package', { work_package_id: left });
     provider!.set(403, pr(403, head('b')));
     await sync(client, left, 403, head('b'));

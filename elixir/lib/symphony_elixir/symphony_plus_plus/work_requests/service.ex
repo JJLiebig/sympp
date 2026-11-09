@@ -10,6 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlanEdit
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -52,21 +53,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
   @spec record_decision(Repository.repo(), String.t(), map()) :: {:ok, DecisionLogEntry.t()} | {:error, error()}
   def record_decision(repo, work_request_id, attrs), do: notify_dashboard(Repository.record_decision(repo, work_request_id, attrs))
 
-  @spec slice_work_request(Repository.repo(), String.t(), [map()]) ::
-          {:ok, %{work_request: WorkRequest.t(), work_packages: [WorkPackage.t()]}} | {:error, error()}
-  def slice_work_request(repo, work_request_id, work_packages),
-    do: notify_dashboard(Repository.slice_work_request(repo, work_request_id, work_packages))
+  @doc """
+  Applies plan operations atomically. The caller notifies the dashboard with
+  `notify_plan_changed/0` once its own transaction has committed.
+  """
+  @spec edit_plan(Repository.repo(), String.t(), [map()], String.t() | nil) :: {:ok, [map()]} | {:error, term()}
+  def edit_plan(repo, work_request_id, ops, created_by), do: PlanEdit.run(repo, work_request_id, ops, created_by)
+
+  @spec notify_plan_changed() :: :ok
+  def notify_plan_changed, do: DashboardPubSub.broadcast_changed()
 
   @spec list_work_packages(Repository.repo(), String.t()) :: {:ok, [WorkPackage.t()]} | {:error, error()}
   def list_work_packages(repo, work_request_id), do: Repository.list_work_packages(repo, work_request_id)
 
   @spec get_work_package(Repository.repo(), String.t(), String.t()) :: {:ok, WorkPackage.t()} | {:error, error()}
   def get_work_package(repo, work_request_id, id), do: Repository.get_work_package(repo, work_request_id, id)
-
-  @spec update_work_package(Repository.repo(), String.t(), String.t(), pos_integer(), map()) ::
-          {:ok, WorkPackage.t()} | {:error, error()}
-  def update_work_package(repo, work_request_id, id, expected_revision, attrs),
-    do: notify_dashboard(Repository.update_work_package(repo, work_request_id, id, expected_revision, attrs))
 
   @spec record_work_package_delivery(Repository.repo(), String.t(), String.t(), map()) ::
           {:ok, WorkPackageDelivery.t()} | {:error, error()}

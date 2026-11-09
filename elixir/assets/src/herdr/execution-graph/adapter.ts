@@ -1,10 +1,5 @@
 import type { WorkRequestDetail, WorkRequestPackage } from "../work-request";
-import type {
-  ProductTreeDependencyEdge,
-  ProductTreeDependencyEndpoint,
-  ProductTreeExecutionGraph,
-  ProductTreeNode,
-} from "../product-tree";
+import type { ProductTreeDependencyEdge, ProductTreeDependencyEndpoint, ProductTreeExecutionGraph } from "../product-tree";
 
 import type { WorkRequestExecutionGraphModel } from "./model";
 
@@ -25,7 +20,7 @@ export function workRequestExecutionGraphModel(
     available: graphAvailable(graph),
     base_repo: firstValue(detail.work_request.repo_key, detail.work_request.repo),
     base_branch: detail.work_request.base_branch,
-    groups: list(productTree?.nodes).map(mapGroup),
+    groups: groupsOf(list(detail.work_packages)),
     work_packages: workPackageIds.map((id) => mapWorkPackage(id, slices.get(id))),
     dependency_intents: list(productTree?.dependency_edges).flatMap(mapDependencyIntent),
     effective_edges: list(graph?.effective_edges),
@@ -48,20 +43,22 @@ function mapDependencyIntent(edge: ProductTreeDependencyEdge) {
 function mapDependencyEndpoint(endpoint?: ProductTreeDependencyEndpoint) {
   const id = endpoint?.id?.trim();
   if (!id) return undefined;
-  if (endpoint?.kind === "work_package") return { kind: "work_package" as const, id };
-  if (endpoint?.kind === "product_node") return { kind: "group" as const, id };
-  return undefined;
+  return endpoint?.kind === "work_package" ? { kind: "work_package" as const, id } : undefined;
 }
 
-function mapGroup(group: ProductTreeNode) {
-  return {
-    id: group.id,
-    parent_group_id: group.parent_id,
-    title: group.title,
-    description: group.description,
-    position: group.position,
-    work_package_ids: group.work_package_ids,
-  };
+// A package's group is a path such as "Backend / Billing". Each prefix is a group, keyed by its path and
+// nested under the one before it, positioned by the first planned package that names it.
+function groupsOf(slices: WorkRequestPackage[]) {
+  const groups = new Map<string, { id: string; parent_group_id: string | null; title: string; position: number; work_package_ids: string[] }>();
+  for (const slice of [...slices].sort((left, right) => (left.sequence ?? 0) - (right.sequence ?? 0))) {
+    const names = slice.group ? slice.group.split(" / ") : [];
+    names.forEach((name, depth) => {
+      const id = names.slice(0, depth + 1).join(" / ");
+      if (!groups.has(id)) groups.set(id, { id, parent_group_id: depth > 0 ? names.slice(0, depth).join(" / ") : null, title: name, position: groups.size, work_package_ids: [] });
+    });
+    if (slice.group) groups.get(slice.group)?.work_package_ids.push(slice.id);
+  }
+  return [...groups.values()];
 }
 
 function mapWorkPackage(id: string, slice?: WorkRequestPackage) {
@@ -85,7 +82,7 @@ function workPackageReference(slice?: WorkRequestPackage) {
 }
 
 function sliceReference(slice?: WorkRequestPackage) {
-  return { group_id: slice?.product_tree_node_id, sequence: slice?.sequence };
+  return { group_id: slice?.group, sequence: slice?.sequence };
 }
 
 function workPackageSignals(slice?: WorkRequestPackage) {

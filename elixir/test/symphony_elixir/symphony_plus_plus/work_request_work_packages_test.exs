@@ -23,7 +23,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
 
   alias SymphonyElixir.SymphonyPlusPlus.CreateWork
   alias SymphonyElixir.SymphonyPlusPlus.Planning.{Artifact, Finding, PlanNode, ProgressEvent}
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Node
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -49,7 +48,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
     repo.delete_all(WorkPackageDelivery)
     repo.delete_all(ClarificationQuestion)
     repo.delete_all(WorkPackage)
-    repo.delete_all(Node)
     repo.delete_all(WorkRequest)
     :ok
   end
@@ -100,7 +98,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
   end
 
   defp slice_one!(repo, work_request_id, attrs \\ package_attrs()) do
-    assert {:ok, %{work_packages: [package]}} = Repository.slice_work_request(repo, work_request_id, [attrs])
+    assert {:ok, package} = Repository.add_work_package(repo, work_request_id, attrs)
     package
   end
 
