@@ -19,7 +19,7 @@ const VIEW = 'integrations/herdr-next/mods';
 
 // The copy's entry: the view with the sample board already read and its timer and new tabs
 // stubbed. Its operator actions play on the sample board in memory (fixture.js applyDemo), so the
-// preview can be clicked through; a reload starts over. It never focuses or types into a terminal.
+// preview can be clicked through; a reload starts over. It never focuses a terminal.
 // The drawn-structure tests use it too, with a case that pins width and place.
 export function previewMain(spec = {}) {
   return `import Lens from "./lens.js";
@@ -61,7 +61,6 @@ export default class Preview extends Lens {
     this.ops["focus:" + address] = { error: "Sample data: this would open " + address + "." };
     cx.notify();
   }
-  async prefill() {}
   // Every sample terminal counts as running, so Focus shows where it would.
   running() { return true; }
   viewportWidth() { return CASE.width ?? super.viewportWidth(); }

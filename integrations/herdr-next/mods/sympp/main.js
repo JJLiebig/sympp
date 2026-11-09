@@ -925,11 +925,11 @@ export default class Lens extends View {
 
   // One operator POST on this factory's native routes, then a fresh read. A refusal stays beside
   // the control that sent it.
-  operate(key, path, body, cx) {
+  operate(key, path, body, cx, after = null) {
     const op = this.ops[key] = { ...(this.ops[key] ?? {}), armed: false };
     if (op.pending) return;
     cx.spawn(async (cx) => {
-      const submission = C.submitAction(op, async () => C.postAction(this.endpoint, `${C.OPERATOR}${path}`, body, this.request), () => { delete this.ops[key]; this.retry(cx); });
+      const submission = C.submitAction(op, async () => C.postAction(this.endpoint, `${C.OPERATOR}${path}`, body, this.request), () => { delete this.ops[key]; after?.(cx); this.retry(cx); });
       cx.notify();
       await submission;
       cx.notify();
@@ -944,8 +944,8 @@ export default class Lens extends View {
     cx.notify();
   }
 
-  // Feedback goes to the decision's terminal. With `focus`, the panel also puts "Decision feedback:
-  // …" in that terminal's input, unsent, and opens it there.
+  // The factory delivers feedback to the decision's terminal. With `focus`, the panel then opens
+  // that terminal, where the feedback arrives.
   sendFeedback(decision, focus, cx) {
     const draft = this.feedback[decision.key];
     const text = draft.input.value().trim();
@@ -953,7 +953,6 @@ export default class Lens extends View {
     cx.spawn(async (cx) => {
       const submission = C.submitAction(draft, async () => {
         await C.postAction(this.endpoint, `${C.OPERATOR}/decisions/${encodeURIComponent(decision.id)}/feedback`, { text }, this.request);
-        if (focus) await this.prefill(decision.by.address, `Decision feedback: ${text}`);
       }, () => {
         draft.open = false;
         draft.input.set_value("");
@@ -964,15 +963,6 @@ export default class Lens extends View {
       await submission;
       cx.notify();
     });
-  }
-
-  // Pastes text into a terminal's input without pressing Enter, once the connected factory is
-  // confirmed online and the terminal runs.
-  async prefill(address, text) {
-    await C.requireAgentAccess(this.endpoint, this.request);
-    if (!this.running(address)) throw new Error(`The feedback is saved, but ${address} isn't running where Herdr can reach it.`);
-    const result = await hc(["send", "--no-submit", address, text]);
-    if (result && typeof result.code === "number" && result.code !== 0) throw new Error(`The feedback is saved, but it couldn't be put into ${address}.`);
   }
 
   // Whether a terminal runs where Herdr reaches it.

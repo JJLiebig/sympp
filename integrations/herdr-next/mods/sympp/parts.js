@@ -126,8 +126,8 @@ function undelivered(v, t, d) {
       .child(svg(icon("x")).size(11).flex_none()));
 }
 
-// Feedback goes to the terminal that made the call. While that terminal runs, Focus opens it with
-// "Decision feedback: …" already in its input, for the person to send.
+// The factory delivers feedback to the terminal that made the call. While that terminal runs here,
+// Focus sends it and opens that terminal.
 function feedbackForm(v, t, d, draft) {
   const role = d.by?.role === "architect" ? "architect" : "chief";
   const reachable = d.by?.liveness === "live" && v.running(d.by.address);
@@ -136,7 +136,7 @@ function feedbackForm(v, t, d, draft) {
     .when(Boolean(draft.error), (el) => el.child(div().role("alert").text_size(12).text_color(signal().fail).child(draft.error)))
     .child(h_flex().gap(6).flex_wrap()
       .child(button(t, `send-feedback-${d.id}`, draft.pending ? "Sending…" : "Send", (cx) => v.sendFeedback(d, false, cx), { strong: true, disabled: draft.pending }))
-      .when(reachable, (el) => el.child(button(t, `focus-feedback-${d.id}`, `Focus ${role}`, (cx) => v.sendFeedback(d, true, cx), { disabled: draft.pending, tip: `Send, then open the ${role} with the feedback in its input` })))
+      .when(reachable, (el) => el.child(button(t, `focus-feedback-${d.id}`, `Focus ${role}`, (cx) => v.sendFeedback(d, true, cx), { disabled: draft.pending, tip: `Send, then open the ${role}` })))
       .child(button(t, `cancel-feedback-${d.id}`, "Cancel", (cx) => { draft.open = false; v.keys.focus(); cx.notify(); }, { disabled: draft.pending })));
 }
 
@@ -186,14 +186,16 @@ export function phaseBadge(t, phase, id) {
 }
 
 // The person's calls on a whole task: Complete and Archive while it is open, Archive once it is
-// done, Restore once archived. Complete asks again; archiving is undone by Restore.
+// done, Restore once archived, and Delete. Complete and Delete ask again; Restore undoes Archive.
 export function phaseActions(v, t, job) {
   const path = `/work-requests/${encodeURIComponent(job.id)}`;
   const go = (step) => (cx) => v.operate(`${step}:${job.id}`, `${path}/${step}`, {}, cx);
-  const error = ["complete", "archive", "restore"].map((step) => v.ops[`${step}:${job.id}`]?.error).find(Boolean);
+  const error = ["complete", "archive", "restore", "delete"].map((step) => v.ops[`${step}:${job.id}`]?.error).find(Boolean);
+  const remove = confirmButton(v, t, `delete-${job.id}`, "Delete", "Delete this task?", `delete:${job.id}`,
+    (cx) => v.operate(`delete:${job.id}`, `${path}/delete`, {}, cx, (cx) => { if (v.level !== "factory" && !v.pinned) v.goUp(cx); }));
   const list = job.phase === "archived" ? [ghost(t, `restore-${job.id}`, "Restore", go("restore"))]
     : job.phase === "done" ? [ghost(t, `archive-${job.id}`, "Archive", go("archive"))]
       : [confirmButton(v, t, `complete-${job.id}`, "Complete", "Complete this task?", `complete:${job.id}`, go("complete")), ghost(t, `archive-${job.id}`, "Archive", go("archive"))];
-  return h_flex().flex_none().gap(2).items_center().children(list)
+  return h_flex().flex_none().gap(2).items_center().children([...list, remove])
     .when(Boolean(error), (el) => el.child(div().max_w(200).truncate().text_size(11.5).text_color(signal().fail).tooltip(error).child(error)));
 }

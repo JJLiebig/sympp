@@ -301,6 +301,7 @@ export function applyDemo(payload, path, body = {}) {
     else if (step === 'archive') Object.assign(r, { phase: 'archived', archived_at: now, prior_phase: r.phase });
     else if (step === 'restore') { r.phase = r.prior_phase ?? 'planned'; r.archived_at = null; }
     else if (step === 'release') release(r.worked_on);
+    else if (step === 'delete') payload.work_request_details = details.filter((d) => d.work_request.id !== id);
     else return null;
     return { ok: true };
   }
