@@ -68,7 +68,7 @@ function GoalRow({ at, tagged, view }: { at: number; tagged?: boolean; view: Goa
             {/* Closed, the brief is one clipped line; open, it reads in full. The strip keeps its column and wraps inside it. */}
             <span className="mt-1 flex items-start gap-6">
               {open ? (
-                <span className="min-w-0 flex-1 text-sm text-dim">
+                <span className="min-w-0 flex-1 break-words text-sm text-dim">
                   {said}
                   <BriefAge at={at} report={report} />
                 </span>

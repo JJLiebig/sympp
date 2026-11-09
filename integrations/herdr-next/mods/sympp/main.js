@@ -245,10 +245,8 @@ export default class Lens extends View {
         this.outage = false;
         this.startFailed = false;
         this.holdLease(outcome.board, now, cx);
-        if (this.ownConnection) {
-          this.shareConnection();
-          if ((shared(DASHBOARD) ?? null) !== this.dashboard) setShared(DASHBOARD, this.dashboard);
-        }
+        if (this.ownConnection) this.shareConnection();
+        if ((shared(DASHBOARD) ?? null) !== this.dashboard) setShared(DASHBOARD, this.dashboard);
         this.announce(outcome.board);
         const agents = Chrome.nextDecorations(shared(Chrome.AGENTS), Chrome.decorations(outcome.board, terminals(), this.endpoint, now, (a) => this.local(a)), this.endpoint, now);
         if (agents) setShared(Chrome.AGENTS, agents);
