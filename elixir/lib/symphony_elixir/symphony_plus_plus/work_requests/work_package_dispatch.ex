@@ -157,8 +157,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
   def error_message({:execution_graph_cycle, cycles}),
     do: "WorkRequest execution graph contains a cycle across WorkPackages: #{inspect(cycles)}"
 
-  def error_message({:unmet_work_package_dependencies, work_package_id, prerequisite_ids}) do
-    "WorkPackage #{work_package_id} has unmet dependencies: #{Enum.join(prerequisite_ids, ", ")}"
+  def error_message({:unmet_work_package_dependencies, work_package_id, prerequisite_ids, _waiting_for}) do
+    "WorkPackage #{work_package_id} depends on undelivered work: #{Enum.join(prerequisite_ids, ", ")}"
   end
 
   def error_message({:unsupported_branch_pattern, branch_pattern, reason}) do
@@ -166,6 +166,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
   end
 
   def error_message(reason), do: CreateWork.error_message(reason)
+
+  @doc """
+  What a package refused for undelivered prerequisites waits for. Only
+  delivered closure satisfies a dependency: a merged PR, completion without a
+  PR, or the delivery of every successor of a superseded or skipped package.
+  """
+  @spec waiting_next_action([map()]) :: String.t()
+  def waiting_next_action(waiting_for) do
+    {ended, open} = Enum.split_with(waiting_for, & &1.ended_as)
+
+    wait =
+      if open != [],
+        do: ["wait for delivered closure (merged PR or completed without a PR) of #{Enum.map_join(open, ", ", &waited/1)}, then dispatch"],
+        else: []
+
+    dead_ends = Enum.map(ended, &"#{waited(&1)} ended #{&1.ended_as} and never delivers: #{dead_end_action(&1.ended_as)}")
+
+    Enum.join(wait ++ dead_ends, "; ")
+  end
+
+  # Only a superseded or skipped package delivers through a successor.
+  defp dead_end_action(outcome) when outcome in ["superseded", "skipped"], do: "add a successor that delivers it or remove the dependency"
+  defp dead_end_action(_outcome), do: "remove the dependency or depend on a package that delivers it"
+
+  defp waited(%{work_package_id: id, successor_of: nil}), do: id
+  defp waited(%{work_package_id: id, successor_of: predecessor}), do: "#{id} (successor of #{predecessor})"
 
   defp require_supported_branch_pattern(branch_pattern) do
     case BranchPattern.validate(branch_pattern) do

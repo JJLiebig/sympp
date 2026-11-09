@@ -71,8 +71,8 @@ an architect. Do not force a large-work planning ceremony onto a one-PR fix.
 |---|---|
 | Clarify | Chief/architect and human agree on outcome, constraints, acceptance, and meaningful open decisions. |
 | Plan | Architect develops the plan and runs Review Suite plan review; verified findings refine it. |
-| Slice | Architect creates bounded WPs with scope, dependencies, checks, review needs, and stop conditions. |
-| Execute | Ready workers run concurrently; blocked dependencies wait. Each worker owns implementation, checks, and review convergence. |
+| Slice | Architect creates small, contained WPs (about 100 changed production lines, each one quick-to-review PR) with scope, dependencies, checks, review needs, and stop conditions. Independent WPs are preferred. |
+| Execute | Ready workers run concurrently, each branching from the base and targeting it. A dependent starts only after its prerequisite is delivered. Each worker owns implementation, checks, and review convergence. |
 | Resolve | Technical findings return to the worker. Product/contract conflicts or oversized slices return to the architect. |
 | Integrate | Architect accepts all required slices, verifies combined behavior, and merges in dependency order. |
 | Delivered | Required current WPs are delivered and agreed WR acceptance is met. |
@@ -106,16 +106,14 @@ another gate between merge and WR completion.
    is not a production wiring or merge claim.
 3. The architect reslices backend/API and wiring work using what the UI
    discovery established. Backend workers follow the ordinary delivery loop.
-4. Build the code dependency stack: **main ← backend/API PR ← wired UI PR**
-   for a same-repository stack, even though the prototype came first. Across
-   repositories, track explicit candidate dependencies instead of pretending
-   GitHub can make one cross-repository branch stack.
-5. A dedicated review owner runs technical UI review against a pinned,
-   qualified **unmerged backend candidate SHA**. Review can finish before the
-   backend merges. Relevant backend or UI changes invalidate only affected
-   evidence. Check the final combined candidate before acceptance.
-6. The architect accepts the complete stack, confirms combined checks, and
-   merges backend before UI. UI waits until its backend dependency is delivered.
+4. Land the backend/API work first, as small PRs against the base. The wired
+   UI package depends on it and starts only once the backend is delivered;
+   nothing is built on an unmerged branch, in one repository or across several.
+5. A dedicated review owner runs technical UI review on the wired UI PR, which
+   already contains the delivered backend through its base.
+6. The architect accepts the result, confirms combined checks, and merges. A
+   ready PR that waits is left alone and rebased once, right before merge, only
+   if it conflicts.
 
 “Frozen” means product intent is human-approved. Performance, correctness,
 authorization, accessibility, and wiring defects still need technical fixes.
@@ -154,8 +152,7 @@ must not authorize a worker takeover or imply delivery.
 
 The packaged
 [architect procedure](../../packages/sympp/skills/symphony-architect/SKILL.md#deliver)
-owns durable approval, reviewer handoff, candidate selection, successor replacement
-and ordered merge. This contract is not a second agent checklist.
+owns durable approval, reviewer handoff, successor replacement and merge. This contract is not a second agent checklist.
 Installed setup and recovery live in [Runtime](../runtime.md); the operator
 view lives in [Operations](../operations.md). Completed implementation and
 qualification history belongs in Git and release evidence.

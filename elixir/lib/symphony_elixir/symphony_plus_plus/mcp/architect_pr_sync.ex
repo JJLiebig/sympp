@@ -3,8 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
 
   import Ecto.Query, only: [from: 2]
 
-  import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments,
-    only: [optional_list_argument: 2, optional_string_argument: 2]
+  import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments, only: [optional_string_argument: 2]
 
   alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
@@ -20,10 +19,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
 
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, DependencyInputs}
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, Qualification, WorkPackage, WorkPackageActivity}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, Qualification, Stacking, WorkPackage}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
 
   @spec sync(module(), Actor.t(), WorkPackage.t(), map()) :: {:ok, map()} | {:error, term()} | {:tool_error, term()}
   def sync(repo, %Actor{} = actor, %WorkPackage{} = work_package, arguments)
@@ -31,15 +30,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     client = Application.get_env(:symphony_elixir, :sympp_github_client, DefaultClient)
 
     with {:ok, expected_head} <- optional_string_argument(arguments, "head_sha"),
-         {:ok, dependency_inputs} <- optional_list_argument(arguments, "dependency_inputs"),
          {:ok, ref} <- PullRequest.parse(arguments, work_package.repo),
          {:ok, metadata} <- Client.fetch_pull_request(client, ref, provider_snapshot: true),
          {:ok, payload} <- PullRequest.provider_snapshot(metadata, ref, expected_head),
          :ok <- require_delivery_scope(work_package, payload),
          :ok <- require_exact_head(payload, expected_head),
          :ok <- require_merge_evidence(payload),
-         pr_facts = pr_facts(work_package, metadata, payload),
-         {:ok, result} <- persist(repo, actor, work_package, payload, pr_facts, dependency_inputs) do
+         pr_facts = pr_facts(repo, work_package, metadata, payload),
+         {:ok, result} <- persist(repo, actor, work_package, payload, pr_facts) do
       if PullRequestProgress.merged?(payload) do
         MergeReconciler.reconcile_work_package(repo, work_package.id, pr_payload: payload, client: DryClient, metadata: payload)
       else
@@ -54,9 +52,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
       sync(repo, actor, work_package, Map.put(arguments, "url", current.ref.url))
     end
   end
-
-  def sync(_repo, %Actor{}, %WorkPackage{}, %{"dependency_inputs" => _inputs}),
-    do: {:tool_error, "dependency_inputs needs the PR: pass url, number or head_sha"}
 
   def sync(repo, %Actor{}, %WorkPackage{} = work_package, _arguments) do
     MergeReconciler.reconcile_work_package(repo, work_package.id)
@@ -82,26 +77,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     if PullRequestProgress.merged?(payload), do: PullRequest.validate_merge_evidence(payload), else: :ok
   end
 
-  defp persist(repo, actor, work_package, payload, pr_facts, dependency_inputs) do
+  defp persist(repo, actor, work_package, payload, pr_facts) do
     repo.transaction(fn ->
       with :ok <- lock_package(repo, work_package),
            {:ok, current} <- WorkPackageRepository.get(repo, work_package.id),
            :ok <- require_handoff(repo, current, payload),
            {:ok, candidate_head} <- Qualification.candidate_head(repo, current),
            :ok <- Qualification.record_pr(repo, actor, current, payload),
-           :ok <- record_dependency_inputs(repo, actor, current, payload, dependency_inputs),
            {:ok, decision} <- decide(repo, current, pr_facts, candidate_head, payload),
            {:ok, updated} <- Qualification.apply_decision(repo, actor, current, decision, payload["head_sha"]) do
         result(updated, payload, decision, pr_facts)
       else
-        {:tool_error, reason} -> repo.rollback({:tool_error, reason})
         {:error, reason} -> repo.rollback(reason)
       end
     end)
-    |> case do
-      {:error, {:tool_error, reason}} -> {:tool_error, reason}
-      result -> result
-    end
     |> DashboardPubSub.broadcast_changed_on_success()
   end
 
@@ -115,50 +104,41 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
   defp result(updated, payload, decision, pr_facts) do
     result = %{status: updated.status, head_sha: payload["head_sha"], readiness_reasons: Qualification.decision_reasons(decision)}
 
-    if pr_facts.review == :unknown,
-      do: Map.put(result, :next_action, "review state unknown: check #{review_machine(updated)}"),
-      else: result
+    cond do
+      match?([_ | _], pr_facts.stacked_on) -> Map.put(result, :next_action, Stacking.next_action(pr_facts.stacked_on))
+      pr_facts.review == :unknown -> Map.put(result, :next_action, "review state unknown: check #{review_machine(updated)}")
+      true -> result
+    end
   end
 
   defp review_machine(%WorkPackage{launch_machine: machine}) when is_binary(machine) and machine != "", do: machine
   defp review_machine(_package), do: "the worker's machine"
 
-  # Which prerequisite inputs the current PR head consumed. A green PR can't
-  # prove this, so the architect states it; the selection is validated against
-  # the package's dependencies and the head just synced.
-  defp record_dependency_inputs(_repo, _actor, _package, _payload, nil), do: :ok
-
-  defp record_dependency_inputs(repo, actor, %WorkPackage{} = package, payload, selections) do
-    selection = %{"type" => "dependency_inputs", "source_tool" => "sync_pr", "head_sha" => payload["head_sha"], "dependency_inputs" => selections}
-
-    with :ok <- DependencyInputs.validate_selection(repo, package.id, selection),
-         {:ok, _event} <- Qualification.append_event(repo, actor, package.id, Map.put(selection, "selection_revisions", selection_revisions(repo, selections)), "dependency_inputs_selected") do
-      :ok
-    end
-  end
-
-  # When a dependency's selection changes, the dependent must attest again, even
-  # to the same input; the selections' revisions keep that attestation distinct
-  # from an earlier one with the same payload.
-  defp selection_revisions(repo, selections) do
-    ids = Enum.map(selections, & &1["dependency_id"])
-
-    repo.all(from(edge in DependencyEdge, where: edge.id in ^ids, select: {edge.id, edge.selection_updated_at}))
-    |> Map.new(fn {id, updated_at} -> {id, updated_at && DateTime.to_iso8601(updated_at)} end)
-  end
-
-  # The review host is read before the transaction: it can take seconds.
-  defp pr_facts(work_package, metadata, payload) do
-    review = if PullRequestProgress.merged?(payload), do: :none, else: Qualification.review(work_package, payload["head_sha"])
+  # The review host and the other PRs the stacking check needs are read before
+  # the transaction: they can take seconds.
+  defp pr_facts(repo, work_package, metadata, payload) do
+    merged? = PullRequestProgress.merged?(payload)
+    pr_state = metadata |> Map.get("state") |> normalize_state()
+    review = if merged?, do: :none, else: Qualification.review(work_package, payload["head_sha"])
 
     %{
       manual?: true,
-      pr_state: metadata |> Map.get("state") |> normalize_state(),
+      pr_state: pr_state,
       pr_draft?: Map.get(metadata, "draft") == true,
       ci_status: get_in(payload, ["check_summary", "status"]),
       review: review,
-      head_sha: payload["head_sha"]
+      head_sha: payload["head_sha"],
+      stacked_on: if(merged? or pr_state != "open", do: [], else: stacking(repo, work_package, metadata, payload))
     }
+  end
+
+  defp stacking(repo, work_package, metadata, payload) do
+    own = %{work_package_id: work_package.id, repository: payload["repository"], number: payload["number"], commits: metadata["commits"]}
+
+    case Stacking.check(own, Stacking.attached_views(repo, work_package.id), &Stacking.refresh_with_client/1) do
+      {:ok, ids} -> ids
+      :unknown -> :unknown
+    end
   end
 
   defp normalize_state(state) when is_binary(state), do: state |> String.trim() |> String.downcase()

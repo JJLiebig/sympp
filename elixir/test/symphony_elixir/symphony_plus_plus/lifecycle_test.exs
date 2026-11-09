@@ -116,8 +116,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
       pr_draft?: false,
       ci_status: "passing",
       review: :none,
-      dependencies_available?: true,
-      dependency_inputs_current?: true
+      dependencies_delivered?: true,
+      stacked_on: []
     }
 
     assert :qualified = Lifecycle.qualification(qualified)
@@ -129,8 +129,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
           {%{ci_status: "unknown"}, "ci_not_green"},
           {%{review: :not_done}, "review_not_done"},
           {%{head_changed?: true}, "head_changed"},
-          {%{dependencies_available?: false}, "dependencies_unavailable"},
-          {%{dependency_inputs_current?: false}, "dependency_inputs_stale"}
+          {%{dependencies_delivered?: false}, "dependency_not_delivered"},
+          {%{stacked_on: ["wp-other"]}, "stacked_on_unmerged_work"}
         ] do
       assert {:unqualified, [^reason]} = Lifecycle.qualification(Map.merge(qualified, change))
     end
@@ -159,9 +159,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     refute DeliveryResolution.satisfies_dependents?("old", packages, superseded)
     refute DeliveryResolution.resolves_work_request?("old", packages, superseded)
 
+    assert [%{work_package_id: "next", successor_of: "old", ended_as: nil}] =
+             DeliveryResolution.waiting_for("old", packages, superseded)
+
     finished_successor = Map.put(superseded, "next", %{outcome: "finished"})
     refute DeliveryResolution.satisfies_dependents?("old", packages, finished_successor)
     assert DeliveryResolution.resolves_work_request?("old", packages, finished_successor)
+    assert [%{work_package_id: "next", ended_as: "finished"}] = DeliveryResolution.waiting_for("old", packages, finished_successor)
 
     merged_successor = Map.put(superseded, "next", %{outcome: "pr_merged"})
     assert DeliveryResolution.satisfies_dependents?("old", packages, merged_successor)
@@ -171,6 +175,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
 
     rehomed = %{"old" => %{outcome: "superseded", successor_work_package_id: "elsewhere"}, "elsewhere" => %{outcome: "pr_merged"}}
     refute DeliveryResolution.satisfies_dependents?("old", packages, rehomed)
+    assert [%{work_package_id: "old", ended_as: "superseded"}] = DeliveryResolution.waiting_for("old", packages, rehomed)
   end
 
   test "legacy endings resolve only when the old status was merged or closed" do

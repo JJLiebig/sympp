@@ -3,6 +3,8 @@
 You keep priorities, product intent and cross-feature coordination. Hand each
 substantial feature to an architect, who owns it end to end and delivers it to
 you. Small, clear work needs no WorkRequest: give it straight to a worker.
+Every branch starts from the base and targets it; nothing is built on another
+unmerged branch.
 
 ## Create a WorkRequest
 

@@ -10,8 +10,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
   owner, so a fork branch with the same name is never taken; a package branch
   also needs the PR to target `base`.
 
-  Per PR it reads state, merge evidence, head, draft flag, the head commit's
-  check rollup and the last reviews (for the Codex receipt).
+  Per PR it reads state, merge evidence, head and base commits, draft flag,
+  the head commit's check rollup and the last reviews (for the Codex receipt).
+  A PR's commit list is a separate read (`commits/2`), made only when needed.
   """
 
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.Api
@@ -19,11 +20,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
   @batch_size 25
   @max_concurrency 4
   @codex_login "chatgpt-codex-connector"
+  @commit_page "totalCount pageInfo { hasNextPage endCursor } nodes { commit { oid } }"
   @failing_conclusions ~w(failure cancelled timed_out startup_failure action_required stale)
 
   @fragment """
   fragment pr on PullRequest {
-    number url state isDraft merged mergedAt mergeable headRefOid headRefName baseRefName
+    number url state isDraft merged mergedAt mergeable headRefOid headRefName baseRefName baseRefOid
     mergeCommit { oid }
     headRepositoryOwner { login }
     commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 1) {
@@ -108,6 +110,83 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
   end
 
   @doc """
+  The commit lists of open PRs, as GitHub lists a PR's commits (commits
+  reachable from its base are left out). One batched document per 25 PRs.
+  Each result carries the head and base it was read at. A PR with more than
+  100 commits is read on in further pages; one whose list GitHub won't return
+  whole (it lists at most 250) is an error.
+  """
+  @spec commits([{String.t(), String.t(), pos_integer()}], keyword()) :: %{{String.t(), String.t(), pos_integer()} => {:ok, map()} | {:error, Api.error()}}
+  def commits(prs, opts \\ []) when is_list(prs) do
+    graphql = Keyword.get(opts, :graphql, &Api.graphql/3)
+    priority = Keyword.get(opts, :priority, :background)
+
+    prs
+    |> Enum.uniq()
+    |> Enum.chunk_every(@batch_size)
+    |> Enum.flat_map(&fetch_commits_batch(&1, graphql, priority))
+    |> Map.new()
+  end
+
+  defp fetch_commits_batch(batch, graphql, priority) do
+    indexed = Enum.with_index(batch)
+    declarations = Enum.flat_map(indexed, fn {_pr, index} -> ["$o#{index}: String!", "$r#{index}: String!", "$n#{index}: Int!"] end)
+    variables = indexed |> Enum.flat_map(fn {{owner, repo, number}, index} -> [{"o#{index}", owner}, {"r#{index}", repo}, {"n#{index}", number}] end) |> Map.new()
+
+    selections =
+      Enum.map(indexed, fn {_pr, index} ->
+        "e#{index}: repository(owner: $o#{index}, name: $r#{index}) { pullRequest(number: $n#{index}) " <>
+          "{ headRefOid baseRefOid commits(first: 100) { #{@commit_page} } } }"
+      end)
+
+    query = "query(#{Enum.join(declarations, ", ")}) {\n#{Enum.join(selections, "\n")}\n}\n"
+
+    case graphql.(query, variables, priority) do
+      {:ok, data} ->
+        Enum.map(indexed, fn {pr, index} ->
+          {pr, pr |> read_on(get_in(data, ["e#{index}", "pullRequest"]), [], graphql, priority) |> complete()}
+        end)
+
+      {:error, reason} ->
+        Enum.map(batch, &{&1, {:error, reason}})
+    end
+  end
+
+  # Follows a PR's commit pages while the head stays the one first read.
+  defp read_on(pr, %{"headRefOid" => head, "commits" => %{"nodes" => nodes} = page} = node, earlier, graphql, priority) when is_binary(head) and is_list(nodes) do
+    oids = earlier ++ for(%{"commit" => %{"oid" => oid}} when is_binary(oid) <- nodes, do: oid)
+    read = %{"head_sha" => head, "base_sha" => node["baseRefOid"], "commits" => oids, "total" => page["totalCount"]}
+
+    case page do
+      %{"pageInfo" => %{"hasNextPage" => true, "endCursor" => cursor}} when is_binary(cursor) ->
+        case next_page(pr, cursor, graphql, priority) do
+          {:ok, %{"headRefOid" => ^head} = next} -> read_on(pr, Map.put(next, "baseRefOid", node["baseRefOid"]), oids, graphql, priority)
+          _moved_or_unreadable -> {:error, :request_failed}
+        end
+
+      _last_page ->
+        {:ok, read}
+    end
+  end
+
+  defp read_on(_pr, _unusable, _earlier, _graphql, _priority), do: {:error, :request_failed}
+
+  defp next_page({owner, repo, number}, cursor, graphql, priority) do
+    query =
+      "query($o: String!, $r: String!, $n: Int!, $c: String!) { repository(owner: $o, name: $r) { pullRequest(number: $n) " <>
+        "{ headRefOid commits(first: 100, after: $c) { #{@commit_page} } } } }"
+
+    case graphql.(query, %{"o" => owner, "r" => repo, "n" => number, "c" => cursor}, priority) do
+      {:ok, data} -> {:ok, get_in(data, ["repository", "pullRequest"])}
+      error -> error
+    end
+  end
+
+  defp complete({:ok, %{"commits" => oids, "total" => total} = read}) when length(oids) == total, do: {:ok, Map.delete(read, "total")}
+  defp complete({:ok, _incomplete}), do: {:error, :request_failed}
+  defp complete(error), do: error
+
+  @doc """
   The names of the failing checks on a head: a detail read (ETag-cached REST),
   made only when a head's rollup turns failing.
   """
@@ -161,6 +240,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
       "merged_at" => node["mergedAt"],
       "merge_commit_sha" => get_in(node, ["mergeCommit", "oid"]),
       "head_sha" => node["headRefOid"],
+      "base_sha" => node["baseRefOid"],
       "branch" => node["headRefName"],
       "base_branch" => node["baseRefName"],
       "mergeable" => node["mergeable"] && String.downcase(node["mergeable"]),

@@ -113,15 +113,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   defp description("edit_plan"),
     do:
-      "Edit the plan of a WorkRequest you own in one atomic call: add_package (contract, optional group path such as \"Backend / Billing\", depends_on), update_package (expected_revision and a patch), set_dependency (from depends on to, optional candidate_head_sha) and remove_dependency. Any failing op rolls back the whole edit; the error names the op index, the state and the next action. Returns each op's result and the plan after the edit."
+      "Edit the plan of a WorkRequest you own in one atomic call: add_package (contract, optional group path such as \"Backend / Billing\", depends_on), update_package (expected_revision and a patch), set_dependency (from depends on to; to must be delivered before from dispatches) and remove_dependency. Any failing op rolls back the whole edit; the error names the op index, the state and the next action. Returns each op's result and the plan after the edit."
 
   defp description("dispatch_work_package"),
     do:
       "Dispatch a planned WorkPackage with a review mode: prepares its factory worktree, writes the worker's assignment file and returns launch_line, the hc run command that starts the worker. Calling it again for a dispatched package reuses the same worktree and review id."
 
   defp description("sync_pr"),
-    do:
-      "The factory watches dispatched packages' PRs, CI, reviews and merges on its own. Use sync_pr to attach a PR it can't find (fork or upstream), to record which prerequisite inputs the current PR head consumed (dependency_inputs), or to refresh and qualify now."
+    do: "The factory watches dispatched packages' PRs, CI, reviews and merges on its own. Use sync_pr to attach a PR it can't find (fork or upstream), or to refresh and qualify now."
 
   defp description("close_work_package"),
     do:

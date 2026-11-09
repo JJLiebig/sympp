@@ -221,7 +221,7 @@ test('ordinary PR handoff observes pending qualification then reconciles an exac
   expect(calls.length).toBeGreaterThan(0);
   for (const { argv } of calls) {
     expect(argv.slice(0, 6)).toEqual(['pr', 'view', '101', '--repo', 'example/service', '--json']);
-    for (const field of ['headRefOid', 'files', 'statusCheckRollup', 'reviewDecision', 'mergedAt', 'mergeCommit']) expect(argv[6].split(',')).toContain(field);
+    for (const field of ['headRefOid', 'files', 'statusCheckRollup', 'reviewDecision', 'mergedAt', 'mergeCommit', 'commits']) expect(argv[6].split(',')).toContain(field);
   }
 });
 
@@ -391,10 +391,10 @@ test('architect integration holds gate a ready PR without reopening work or chan
   const architect = await factory.client();
   const request = await architect.request('Final integration authority');
   const [wp, sibling] = (await architect.addPackages([contract('Held delivery'), contract('Independent delivery')]));
-  for (const [id, number] of [[wp, 801], [sibling, 802]] as const) {
+  for (const [id, number, sha] of [[wp, 801, head('a')], [sibling, 802, head('b')]] as const) {
     await architect.call('dispatch_work_package', { work_package_id: id });
-    provider.set(number, pr(number, head('a')));
-    await sync(architect, id, number, head('a'));
+    provider.set(number, pr(number, sha));
+    await sync(architect, id, number, sha);
   }
   const before = await row(architect, request, wp);
   expect(before.raw_status).toBe('ready');

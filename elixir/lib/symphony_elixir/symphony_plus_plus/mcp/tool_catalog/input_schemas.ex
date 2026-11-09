@@ -95,8 +95,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "url" => described_string_schema("PR URL to synchronize; merged PRs close delivery from GitHub merge evidence."),
         "number" => pr_number_schema(),
         "repository" => string_schema(),
-        "head_sha" => described_string_schema("Optional expected PR head; when supplied, must match the fetched provider head."),
-        "dependency_inputs" => dependency_inputs_schema()
+        "head_sha" => described_string_schema("Optional expected PR head; when supplied, must match the fetched provider head.")
       },
       ["work_package_id"]
     )
@@ -300,11 +299,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "op" => %{"const" => "set_dependency"},
         "from" => described_string_schema("Package reference that depends on `to`."),
         "to" => described_string_schema("Package reference that must be delivered first."),
-        "candidate_head_sha" => %{
-          "type" => ["string", "null"],
-          "pattern" => "^[0-9a-fA-F]{40}$",
-          "description" => "Optional head of `to`, qualified by native checks and review, that `from` may build on before `to` merges. null removes the pin."
-        },
         "reason" => described_string_schema("Optional reason for the dependency.")
       },
       ["op", "from", "to"]
@@ -384,25 +378,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
 
   defp string_array_schema, do: %{"type" => "array", "items" => nonblank_string_schema()}
   defp described_string_array_schema(description), do: Map.put(string_array_schema(), "description", description)
-
-  defp dependency_inputs_schema do
-    %{
-      "type" => "array",
-      "minItems" => 1,
-      "description" =>
-        "Prerequisite inputs this PR head consumed, one per dependency: the dependency id, its prerequisite WorkPackage and the candidate head pinned on it (null when unpinned). Needs a PR (url, number or head_sha).",
-      "items" => %{
-        "type" => "object",
-        "additionalProperties" => false,
-        "properties" => %{
-          "dependency_id" => nonblank_string_schema(),
-          "prerequisite_work_package_id" => nonblank_string_schema(),
-          "candidate_head_sha" => nullable_string_schema()
-        },
-        "required" => ["dependency_id", "prerequisite_work_package_id", "candidate_head_sha"]
-      }
-    }
-  end
 
   defp task_title_schema do
     described_string_schema("Title is the short name: 2–5 words, max 40 characters after trimming, e.g. Board read access. Put detail in the description.")

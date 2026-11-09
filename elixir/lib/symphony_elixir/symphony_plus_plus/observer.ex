@@ -20,13 +20,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
       recorded; a merge is recorded as `pr_merged` through the delivery
       evidence path; otherwise the package qualifies or unqualifies through
       `Qualification`;
+    * where two or more watched PRs are open in one repository, their commit
+      lists are read (one batched GraphQL read, again only when a PR's head or
+      base moves), and a PR stacked on another package's unmerged work
+      (`Stacking`) doesn't qualify;
     * the same snapshot reads the PRs of cards (`Cards`), the work of the
       terminals the operator talks to.
 
-  An input that can't be read (GitHub, or the review host) flags the package
-  `stale` and changes nothing else. The last snapshot per package is stored
-  (`Observation`), so a restart doesn't replay transitions. Merged and closed
-  PRs are no longer watched.
+  An input that can't be read (GitHub, the review host, or another PR the
+  stacking check needs) flags the package `stale` and changes nothing else.
+  The last snapshot per package is stored (`Observation`), so a restart
+  doesn't replay transitions. Merged and closed PRs are no longer watched.
   """
 
   use GenServer
@@ -43,7 +47,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.{RepoIdentity, ReviewStatus}
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, Qualification, WorkPackage}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, Qualification, Stacking, WorkPackage}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @terminal_interval_ms 15_000
@@ -125,8 +129,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   @doc """
   One sweep of every dispatched and ready package, and of cards. Options
   (tests): `:snapshot` replaces `GitHub.Snapshot.fetch/2`, `:failing_checks`
-  replaces `GitHub.Snapshot.failing_checks/3`, `:review` replaces
-  `ReviewStatus.read/2`; `Cards.watch/2` takes its own.
+  replaces `GitHub.Snapshot.failing_checks/3`, `:commits` replaces
+  `GitHub.Snapshot.commits/2`, `:review` replaces `ReviewStatus.read/2`;
+  `Cards.watch/2` takes its own.
   """
   @spec sweep(module(), keyword()) :: :ok
   def sweep(repo, opts \\ []) do
@@ -135,13 +140,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     watched = Enum.map(watched, &Map.put(&1, :observation, Map.get(observations, &1.package.id)))
     cards = guarded(fn -> Cards.watch(repo, opts) end, [])
 
+    watched = Enum.map(watched, &Map.put(&1, :entry, github_entry(&1)))
     {github, results} = github_results(watched, Enum.map(cards, & &1.entry), opts)
+    github = with_commits(watched, github, opts)
     reviews = review_results(Enum.map(watched, & &1.package), opts)
 
-    Enum.each(watched, fn item ->
-      result = Map.get(github, item.package.id, {:error, :not_watched})
-      observe_package(repo, item, result, Map.get(reviews, item.package.id, :none), opts)
-    end)
+    watched =
+      Enum.map(watched, fn item ->
+        result = Map.get(github, item.package.id, {:error, :not_watched})
+        fresh? = match?({:ok, %{}}, result) and usable?(item.package, item.attached, elem(result, 1))
+        Map.merge(item, %{github: result, fresh?: fresh?, pr: current_pr(item, result, item.observation && item.observation.pr, opts)})
+      end)
+
+    views = Enum.flat_map(watched, &view/1)
+    Enum.each(watched, &observe_package(repo, &1, Map.get(reviews, &1.package.id, :none), views))
 
     guarded(fn -> Cards.apply(repo, cards, results, opts) end, :ok)
   end
@@ -204,7 +216,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   # Package and card entries share one batched snapshot. Returns each
   # package's result and the results by entry.
   defp github_results(watched, card_entries, opts) do
-    entries = Map.new(watched, &{&1.package.id, github_entry(&1)})
+    entries = Map.new(watched, &{&1.package.id, &1.entry})
     wanted = (Map.values(entries) ++ card_entries) |> Enum.reject(&(&1 == :skip)) |> Enum.uniq()
 
     results =
@@ -256,17 +268,80 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   defp reviewed?(%WorkPackage{review_mode: mode, review_id: id}), do: mode in ["fast", "normal", "deep"] and is_binary(id)
 
-  defp observe_package(repo, %{package: package, observation: observation} = item, github, review, opts) do
-    stale = stale(github, review)
+  defp observe_package(repo, %{package: package, observation: observation, github: github, pr: pr} = item, review, views) do
     previous_pr = observation && observation.pr
-    pr = current_pr(item, github, previous_pr, opts)
     changed? = match?({:ok, %{}}, github) and pr != previous_pr and snapshot_changed?(previous_pr, pr)
+    stacked_on = stacking(item, views)
+    stale = stale(github, review, stacked_on)
 
-    # A stale GitHub read changes nothing; a stale review host only blocks qualifying.
-    outcome = if "github" in stale, do: :ok, else: act(repo, item, pr, changed?, review, stale)
+    # A stale GitHub read changes nothing; a stale review host or stacking
+    # input only blocks qualifying.
+    outcome = if "github" in stale, do: :ok, else: act(repo, item, pr, changed?, review, stacked_on)
     stored_pr = if outcome == :retry, do: previous_pr, else: pr
+    stored_stacking = if is_list(stacked_on), do: stacked_on, else: (observation && observation.stacked_on) || []
 
-    store(repo, package.id, observation, stored_pr, review_payload(review, observation), stale)
+    store(repo, package.id, observation, %{pr: stored_pr, review: review_payload(review, observation), stale: stale, stacked_on: stored_stacking})
+  end
+
+  # What this sweep read of each watched package's current PR. A PR that
+  # couldn't be read is unknown; a closed PR no longer watched, or none, is left out.
+  defp view(%{package: package, fresh?: true, pr: pr}),
+    do: [%{work_package_id: package.id, repository: pr["repository"], number: pr["number"], state: pr["state"], commits: pr["commits"], fresh?: true}]
+
+  defp view(%{package: package, github: {:error, _reason}, attached: %{} = attached}),
+    do: [%{work_package_id: package.id, repository: attached.repository, number: attached.number, state: nil, commits: nil, fresh?: true}]
+
+  # A branch whose PR lookup failed may hide an open PR.
+  defp view(%{package: package, github: {:error, _reason}, entry: {:branch, owner, repo, _branch, _base}}),
+    do: [%{work_package_id: package.id, repository: "#{owner}/#{repo}", number: nil, state: nil, commits: nil, fresh?: true}]
+
+  defp view(_item), do: []
+
+  # The packages an open PR read in this sweep is stacked on, or `:unknown`;
+  # every view is this sweep's read.
+  defp stacking(%{package: package, fresh?: true, pr: %{"state" => "open"} = pr}, views) do
+    case Stacking.check(%{work_package_id: package.id, repository: pr["repository"], number: pr["number"], commits: pr["commits"]}, views) do
+      {:ok, ids} -> ids
+      :unknown -> :unknown
+    end
+  end
+
+  defp stacking(_item, _views), do: []
+
+  # Commit lists are read only where the stacking check needs them (a
+  # repository with two or more open watched PRs) and only when a PR's head or
+  # base moved; otherwise the last list is kept.
+  defp with_commits(watched, github, opts) do
+    open = for item <- watched, {:ok, %{"state" => "open"} = pr} <- [Map.get(github, item.package.id)], do: {item, pr}
+    shared = open |> Enum.frequencies_by(fn {_item, pr} -> String.downcase(pr["repository"] || "") end) |> Enum.filter(&(elem(&1, 1) > 1)) |> Map.new()
+    {kept, wanted} = open |> Enum.map(fn {item, pr} -> {item.package.id, carry_commits(pr, item.observation)} end) |> Enum.split_with(fn {_id, pr} -> is_list(pr["commits"]) end)
+    wanted = Enum.filter(wanted, fn {_id, pr} -> Map.has_key?(shared, String.downcase(pr["repository"] || "")) end)
+    read = Keyword.get(opts, :commits, &Snapshot.commits/1)
+    lists = if wanted == [], do: %{}, else: read.(Enum.map(wanted, fn {_id, pr} -> commits_entry(pr) end))
+
+    read_prs =
+      Map.new(wanted, fn {id, pr} ->
+        head = pr["head_sha"]
+
+        case Map.get(lists, commits_entry(pr)) do
+          {:ok, %{"head_sha" => ^head, "base_sha" => base, "commits" => commits}} -> {id, {:ok, Map.merge(pr, %{"base_sha" => base, "commits" => commits})}}
+          _unreadable_or_moved -> {id, {:ok, pr}}
+        end
+      end)
+
+    github |> Map.merge(Map.new(kept, fn {id, pr} -> {id, {:ok, pr}} end)) |> Map.merge(read_prs)
+  end
+
+  defp carry_commits(pr, %Observation{pr: %{"commits" => commits} = previous}) when is_list(commits) do
+    same? = Enum.all?(~w(repository number head_sha base_sha), &(previous[&1] == pr[&1]))
+    if same?, do: Map.put(pr, "commits", commits), else: pr
+  end
+
+  defp carry_commits(pr, _observation), do: pr
+
+  defp commits_entry(pr) do
+    [owner, name] = String.split(pr["repository"], "/", parts: 2)
+    {owner, name, pr["number"]}
   end
 
   defp current_pr(%{package: package, attached: attached}, {:ok, %{} = pr}, previous_pr, opts) do
@@ -276,11 +351,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   defp current_pr(_item, _unknown_or_missing, previous_pr, _opts), do: previous_pr
 
   # Unknown inputs only flag the package; a stale GitHub read changes nothing.
-  defp stale(github, review) do
+  defp stale(github, review, stacked_on) do
     github_stale = match?({:error, _reason}, github)
     review_stale = review == :unknown
+    stacking_stale = stacked_on == :unknown
 
-    Enum.flat_map([{github_stale, "github"}, {review_stale, "review"}], fn
+    Enum.flat_map([{github_stale, "github"}, {review_stale, "review"}, {stacking_stale, "stacking"}], fn
       {true, source} -> [source]
       {false, _source} -> []
     end)
@@ -316,12 +392,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   # Returns `:ok` once the snapshot's effects are applied, or `:retry` when they
   # weren't: the previous snapshot is then kept, so the next sweep sees the
   # change again and retries it.
-  defp act(_repo, _item, nil, _changed?, _review, _stale), do: :ok
+  defp act(_repo, _item, nil, _changed?, _review, _stacked_on), do: :ok
 
-  defp act(repo, %{package: %WorkPackage{} = package, attached: attached}, %{} = pr, changed?, review, stale) do
+  defp act(repo, %{package: %WorkPackage{} = package, attached: attached}, %{} = pr, changed?, review, stacked_on) do
     with :ok <- same_attachment(attached_pr(repo, package), attached),
          {:ok, payload} <- payload(pr) do
-      work = fn -> record_and_qualify(repo, package, attached, payload, changed?, pr, review, stale) end
+      work = fn -> record_and_qualify(repo, package, attached, payload, changed?, pr, review, stacked_on) end
       # A PR merged into another base doesn't deliver this package: it unqualifies instead.
       merged? = pr["merged"] == true and base_matches?(package, pr)
       if merged?, do: merge(repo, package, attached, payload, changed?), else: in_transaction(repo, package, work)
@@ -343,11 +419,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   # Recording a new head and the qualification it causes commit together: the
   # candidate head is read before the new snapshot is recorded.
-  defp record_and_qualify(repo, package, attached, payload, changed?, pr, review, stale) do
+  defp record_and_qualify(repo, package, attached, payload, changed?, pr, review, stacked_on) do
     with {:ok, current} <- fetch(repo, package),
          {:ok, candidate_head} <- Qualification.candidate_head(repo, current),
          :ok <- if(changed?, do: record(repo, current, attached, payload), else: :ok),
-         {:ok, decision} <- Qualification.decide(repo, current, facts(current, pr, review, stale), candidate_head),
+         {:ok, decision} <- Qualification.decide(repo, current, facts(current, pr, review, stacked_on), candidate_head),
          {:ok, _updated} <- Qualification.apply_decision(repo, Actor.observer(), current, decision, pr["head_sha"]) do
       :ok
     end
@@ -390,14 +466,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     end
   end
 
-  defp facts(%WorkPackage{} = package, pr, review, stale) do
+  defp facts(%WorkPackage{} = package, pr, review, stacked_on) do
     %{
       pr_state: pr["state"],
       pr_draft?: pr["draft"] == true,
       ci_status: get_in(pr, ["ci", "status"]),
-      review: if("review" in stale, do: :unknown, else: review_state(review, pr["head_sha"])),
+      review: if(review == :unknown, do: :unknown, else: review_state(review, pr["head_sha"])),
       head_sha: pr["head_sha"],
-      base_matches?: base_matches?(package, pr)
+      base_matches?: base_matches?(package, pr),
+      stacked_on: stacked_on
     }
   end
 
@@ -448,10 +525,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   # An unreachable host keeps the last review it reported.
   defp review_payload(:unknown, observation), do: observation && observation.review
 
-  defp store(repo, work_package_id, observation, pr, review, stale) do
-    now = DateTime.utc_now(:microsecond)
-    attrs = %{pr: pr, review: review, stale: stale, observed_at: now}
-    changed? = is_nil(observation) or Map.take(observation, [:pr, :review, :stale]) != Map.take(attrs, [:pr, :review, :stale])
+  defp store(repo, work_package_id, observation, attrs) do
+    attrs = Map.put(attrs, :observed_at, DateTime.utc_now(:microsecond))
+    fields = [:pr, :review, :stale, :stacked_on]
+    changed? = is_nil(observation) or Map.take(observation, fields) != Map.take(attrs, fields)
 
     (observation || %Observation{work_package_id: work_package_id})
     |> Ecto.Changeset.change(attrs)

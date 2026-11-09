@@ -179,7 +179,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
       "id" => text_value(map_value(dependency, "id")),
       "from" => text_value(map_value(dependency, "from")),
       "to" => text_value(map_value(dependency, "to")),
-      "candidate_head_sha" => text_value(map_value(dependency, "candidate_head_sha")),
       "reason" => text_value(map_value(dependency, "reason"))
     }
     |> reject_nil_values()

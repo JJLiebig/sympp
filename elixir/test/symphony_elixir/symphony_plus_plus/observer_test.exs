@@ -9,7 +9,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository, as: ProductTreeRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.ReviewStatus
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
@@ -233,41 +232,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert length(events(repo, package.id)) == before
     end
 
-    test "stale consumed inputs block qualification", %{repo: repo} do
-      prerequisite = package!(repo, "WP-OBS-PREREQ", status: "ready")
-      prerequisite_head = String.duplicate("a", 40)
-      dependent_head = String.duplicate("b", 40)
-      attach!(repo, prerequisite, 60, prerequisite_head)
-      dependent = package!(repo, "WP-OBS-DEPENDENT", work_request_id: prerequisite.work_request_id)
-      attach!(repo, dependent, 61, dependent_head)
-      edge = pinned_dependency!(repo, dependent, prerequisite, prerequisite_head)
-
-      snapshot = %{
-        {:pr, "nextide", "repo", 60} => {:ok, pr(60, prerequisite_head)},
-        {:pr, "nextide", "repo", 61} => {:ok, pr(61, dependent_head)}
-      }
-
-      sweep(repo, snapshot)
-      assert repo.get!(WorkPackage, dependent.id).status == "dispatched"
-      assert repo.get!(WorkPackage, prerequisite.id).status == "ready"
-
-      # The architect states which prerequisite input the head consumed.
-      assert {:ok, _selection} =
-               PlanningRepository.append_progress_event(repo, %{
-                 work_package_id: dependent.id,
-                 summary: "Consumed inputs",
-                 payload: %{
-                   "type" => "dependency_inputs",
-                   "source_tool" => "sync_pr",
-                   "head_sha" => dependent_head,
-                   "dependency_inputs" => [%{"dependency_id" => edge.id, "prerequisite_work_package_id" => prerequisite.id, "candidate_head_sha" => prerequisite_head}]
-                 }
-               })
-
-      sweep(repo, snapshot)
-      assert repo.get!(WorkPackage, dependent.id).status == "ready"
-    end
-
     test "an unreachable GitHub flags the package stale and never transitions", %{repo: repo} do
       ready = package!(repo, "WP-OBS-GH-DOWN", status: "ready")
       attach!(repo, ready, 90)
@@ -317,9 +281,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       dispatched = package!(repo, "WP-OBS-REVIEW-DOWN", review_mode: "normal", review_id: "rvw_reviewdown01")
       ready = package!(repo, "WP-OBS-REVIEW-DOWN-READY", status: "ready", review_mode: "normal", review_id: "rvw_reviewdown02")
       attach!(repo, dispatched, 92)
-      attach!(repo, ready, 93)
+      attach!(repo, ready, 93, "head-b")
 
-      snapshot = %{{:pr, "nextide", "repo", 92} => {:ok, pr(92, "head-a")}, {:pr, "nextide", "repo", 93} => {:ok, pr(93, "head-a")}}
+      snapshot = %{{:pr, "nextide", "repo", 92} => {:ok, pr(92, "head-a")}, {:pr, "nextide", "repo", 93} => {:ok, pr(93, "head-b")}}
       sweep(repo, snapshot, review: fn _id, _machine -> :unknown end)
 
       assert repo.get!(WorkPackage, dispatched.id).status == "dispatched"
@@ -328,9 +292,166 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert repo.get!(Observation, ready.id).stale == ["review"]
 
       # The merge itself is still recorded: it doesn't depend on the review host.
-      merged = pr(93, "head-a", %{"state" => "merged", "merged" => true, "merged_at" => "2026-11-09T10:00:00Z", "merge_commit_sha" => "merge-93"})
+      merged = pr(93, "head-b", %{"state" => "merged", "merged" => true, "merged_at" => "2026-11-09T10:00:00Z", "merge_commit_sha" => "merge-93"})
       sweep(repo, Map.put(snapshot, {:pr, "nextide", "repo", 93}, {:ok, merged}), review: fn _id, _machine -> :unknown end)
       assert repo.get!(WorkPackage, ready.id).status == "ended"
+    end
+  end
+
+  describe "stacked commits" do
+    test "a PR carrying another active package's unmerged commits holds until that PR merges; the PR it builds on qualifies", %{repo: repo} do
+      base = package!(repo, "WP-STACK-BASE")
+      stacked = package!(repo, "WP-STACK-TOP")
+      attach!(repo, base, 70, "head-base")
+      attach!(repo, stacked, 71, "head-top")
+      snapshot = %{{:pr, "nextide", "repo", 70} => {:ok, pr(70, "head-base")}, {:pr, "nextide", "repo", 71} => {:ok, pr(71, "head-top")}}
+      # The stacked branch carries the base PR's fix commit.
+      lists = %{70 => ["fix-1"], 71 => ["fix-1", "top-1"]}
+
+      sweep(repo, snapshot, commits: listed(snapshot, lists))
+      assert repo.get!(WorkPackage, base.id).status == "ready"
+      assert repo.get!(WorkPackage, stacked.id).status == "dispatched"
+      assert repo.get!(Observation, stacked.id).stacked_on == [base.id]
+
+      assert board_row(repo, stacked).operational_state.activity_signal["next_action"] ==
+               "remove WP-STACK-BASE's unmerged commits, or wait for its PR to merge"
+
+      # Squash-merged on GitHub before the ledger records it: a merged PR no
+      # longer counts, though its commits stay on the stacked branch.
+      merged = pr(70, "head-base", %{"state" => "merged", "merged" => true, "merged_at" => "2026-11-09T10:00:00Z", "merge_commit_sha" => "merge-70"})
+      sweep(repo, %{snapshot | {:pr, "nextide", "repo", 70} => {:ok, merged}}, commits: listed(snapshot, lists))
+      assert repo.get!(WorkPackage, base.id).status == "ended"
+      assert repo.get!(WorkPackage, stacked.id).status == "ready"
+      assert repo.get!(Observation, stacked.id).stacked_on == []
+    end
+
+    test "when two PRs share unmerged work, the later one holds", %{repo: repo} do
+      first = package!(repo, "WP-SHARE-FIRST")
+      second = package!(repo, "WP-SHARE-SECOND")
+      attach!(repo, first, 72, "head-first")
+      attach!(repo, second, 73, "head-second")
+      snapshot = %{{:pr, "nextide", "repo", 72} => {:ok, pr(72, "head-first")}, {:pr, "nextide", "repo", 73} => {:ok, pr(73, "head-second")}}
+
+      sweep(repo, snapshot, commits: listed(snapshot, %{72 => ["shared", "first-1"], 73 => ["shared", "second-1"]}))
+      assert repo.get!(WorkPackage, first.id).status == "ready"
+      assert repo.get!(WorkPackage, second.id).status == "dispatched"
+      assert repo.get!(Observation, second.id).stacked_on == [first.id]
+    end
+
+    test "a ready PR that becomes stacked unqualifies", %{repo: repo} do
+      base = package!(repo, "WP-STACK-LATE-BASE")
+      top = package!(repo, "WP-STACK-LATE-TOP")
+      attach!(repo, base, 74, "head-base")
+      attach!(repo, top, 75, "head-top")
+      snapshot = %{{:pr, "nextide", "repo", 74} => {:ok, pr(74, "head-base")}, {:pr, "nextide", "repo", 75} => {:ok, pr(75, "head-top")}}
+      sweep(repo, snapshot)
+      assert repo.get!(WorkPackage, top.id).status == "ready"
+
+      # The worker merged the sibling's branch: a new head with its commits.
+      moved = Map.put(snapshot, {:pr, "nextide", "repo", 75}, {:ok, pr(75, "head-merged")})
+      sweep(repo, moved, commits: listed(moved, %{74 => ["head-base"], 75 => ["head-base", "head-top", "head-merged"]}))
+      assert repo.get!(WorkPackage, top.id).status == "dispatched"
+      assert "stacked_on_unmerged_work" in unqualified_event!(repo, top.id).payload["reasons"]
+    end
+
+    test "ended packages, other repositories and a package's own earlier PR don't count", %{repo: repo} do
+      package = package!(repo, "WP-STACK-CLEAN")
+      sibling = package!(repo, "WP-STACK-SIBLING")
+      # A superseded package's PR is still open with the commits its successor reuses.
+      _retired = package!(repo, "WP-STACK-RETIRED", status: "ended")
+      fork = package!(repo, "WP-STACK-FORK", repo: "nextide/fork")
+      attach!(repo, package, 76, "head-old")
+      attach!(repo, package, 77, "head-new")
+      attach!(repo, sibling, 78, "head-sibling")
+      attach_in!(repo, fork, "nextide/fork", 79, "head-fork")
+
+      snapshot = %{
+        {:pr, "nextide", "repo", 77} => {:ok, pr(77, "head-new")},
+        {:pr, "nextide", "repo", 78} => {:ok, pr(78, "head-sibling")},
+        {:pr, "nextide", "fork", 79} => {:ok, pr(79, "head-fork", %{"repository" => "nextide/fork", "url" => "https://github.com/nextide/fork/pull/79"})}
+      }
+
+      # Only the two open PRs in nextide/repo have their commits read.
+      commits = fn prs ->
+        assert Enum.sort(prs) == [{"nextide", "repo", 77}, {"nextide", "repo", 78}]
+        listed(snapshot, %{77 => ["retired-1", "fork-1", "old-1", "new-1"], 78 => ["head-sibling"]}).(prs)
+      end
+
+      sweep(repo, snapshot, commits: commits)
+      assert repo.get!(WorkPackage, package.id).status == "ready"
+      assert repo.get!(Observation, package.id).stacked_on == []
+    end
+
+    test "another package's PR that can't be read defers qualification and never unqualifies", %{repo: repo} do
+      package = package!(repo, "WP-STACK-DEFER")
+      other = package!(repo, "WP-STACK-UNREAD")
+      attach!(repo, package, 80, "head-a")
+      attach!(repo, other, 81, "head-b")
+      readable = %{{:pr, "nextide", "repo", 80} => {:ok, pr(80, "head-a")}, {:pr, "nextide", "repo", 81} => {:ok, pr(81, "head-b")}}
+      unreadable = Map.put(readable, {:pr, "nextide", "repo", 81}, {:error, :request_failed})
+
+      sweep(repo, unreadable)
+      assert repo.get!(WorkPackage, package.id).status == "dispatched"
+      assert repo.get!(Observation, package.id).stale == ["stacking"]
+
+      sweep(repo, readable)
+      assert repo.get!(WorkPackage, package.id).status == "ready"
+      assert repo.get!(Observation, package.id).stale == []
+
+      sweep(repo, unreadable)
+      assert repo.get!(WorkPackage, package.id).status == "ready"
+      assert repo.get!(Observation, package.id).stale == ["stacking"]
+    end
+
+    test "a package whose branch lookup fails may hide an open PR, so others in its repository wait", %{repo: repo} do
+      package = package!(repo, "WP-STACK-HIDDEN-PR")
+      _unattached = package!(repo, "WP-STACK-NO-PR-YET")
+      sibling = package!(repo, "WP-STACK-OPEN")
+      attach!(repo, package, 83, "head-a")
+      attach!(repo, sibling, 84, "head-b")
+
+      sweep_with = fn branch_result ->
+        Observer.sweep(repo,
+          snapshot: fn entries ->
+            Map.new(entries, fn
+              {:pr, _owner, _name, 83} = entry -> {entry, {:ok, pr(83, "head-a")}}
+              {:pr, _owner, _name, 84} = entry -> {entry, {:ok, pr(84, "head-b")}}
+              {:branch, _owner, _name, _branch, _base} = entry -> {entry, branch_result}
+            end)
+          end,
+          review: &no_review/2,
+          failing_checks: fn _repository, _head -> {:ok, []} end,
+          commits: listed(%{{:pr, "nextide", "repo", 83} => {:ok, pr(83, "head-a")}, {:pr, "nextide", "repo", 84} => {:ok, pr(84, "head-b")}}, %{})
+        )
+      end
+
+      sweep_with.({:error, :request_failed})
+      assert repo.get!(WorkPackage, package.id).status == "dispatched"
+      assert repo.get!(Observation, package.id).stale == ["stacking"]
+
+      sweep_with.({:ok, nil})
+      assert repo.get!(WorkPackage, package.id).status == "ready"
+    end
+
+    test "commit lists are read only where two PRs are open in one repository, and again only when a head or base moves", %{repo: repo} do
+      first = package!(repo, "WP-COMMITS-FIRST")
+      attach!(repo, first, 85, "head-a")
+      alone = %{{:pr, "nextide", "repo", 85} => {:ok, pr(85, "head-a")}}
+      sweep(repo, alone, commits: fn prs -> flunk("commits read for #{inspect(prs)}") end)
+
+      second = package!(repo, "WP-COMMITS-SECOND")
+      attach!(repo, second, 86, "head-b")
+      both = Map.put(alone, {:pr, "nextide", "repo", 86}, {:ok, pr(86, "head-b")})
+      recording = fn snapshot -> fn prs -> send(self(), {:commits_read, Enum.sort(prs)}) && listed(snapshot, %{}).(prs) end end
+
+      sweep(repo, both, commits: recording.(both))
+      assert_received {:commits_read, [{"nextide", "repo", 85}, {"nextide", "repo", 86}]}
+
+      sweep(repo, both, commits: fn prs -> flunk("commits read again for #{inspect(prs)}") end)
+
+      base_moved = Map.put(both, {:pr, "nextide", "repo", 85}, {:ok, pr(85, "head-a", %{"base_sha" => "main-2"})})
+      sweep(repo, base_moved, commits: recording.(base_moved))
+      assert_received {:commits_read, [{"nextide", "repo", 85}]}
     end
   end
 
@@ -456,6 +577,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
              PullRequestProgress.current_pr_state([new_event, old_event], ["attach_pr"])
   end
 
+  # Commit lists default to each PR's own head commit, so PRs share nothing.
   defp sweep(repo, snapshot, opts \\ []) do
     Observer.sweep(repo,
       snapshot: fn entries ->
@@ -463,8 +585,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
         snapshot
       end,
       review: Keyword.get(opts, :review, &no_review/2),
-      failing_checks: Keyword.get(opts, :failing_checks, fn _repository, _head -> {:ok, []} end)
+      failing_checks: Keyword.get(opts, :failing_checks, fn _repository, _head -> {:ok, []} end),
+      commits: Keyword.get(opts, :commits, listed(snapshot, %{}))
     )
+  end
+
+  # Commit lists by PR number (default: the PR's own head), read at each PR's head.
+  defp listed(snapshot, lists) do
+    fn prs ->
+      Map.new(prs, fn {owner, name, number} = pr ->
+        {:ok, %{"head_sha" => head} = read} = Map.fetch!(snapshot, {:pr, owner, name, number})
+        {pr, {:ok, %{"head_sha" => head, "base_sha" => read["base_sha"], "commits" => Map.get(lists, number, [head])}}}
+      end)
+    end
   end
 
   defp no_review(_id, _machine), do: flunk("review read for a package in mode none")
@@ -529,24 +662,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
              })
   end
 
-  defp pr_event_payload(number, head) do
-    %{"type" => "pr", "source_tool" => "attach_pr", "url" => "https://github.com/#{@repo_name}/pull/#{number}", "repository" => @repo_name, "number" => number, "head_sha" => head}
+  defp attach_in!(repo, package, repository, number, head) do
+    assert {:ok, _event} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: package.id,
+               summary: "PR attached",
+               status: "pr_attached",
+               payload: %{"type" => "pr", "source_tool" => "attach_pr", "url" => "https://github.com/#{repository}/pull/#{number}", "repository" => repository, "number" => number, "head_sha" => head}
+             })
   end
 
-  defp pinned_dependency!(repo, dependent, prerequisite, head) do
-    assert {:ok, edge} =
-             ProductTreeRepository.create_dependency_edge(repo, %{
-               work_request_id: dependent.work_request_id,
-               source_kind: "work_package",
-               source_id: dependent.id,
-               target_kind: "work_package",
-               target_id: prerequisite.id,
-               kind: "depends_on",
-               reason: "Consume the qualified prerequisite",
-               candidate_head_sha: head
-             })
-
-    edge
+  defp pr_event_payload(number, head) do
+    %{"type" => "pr", "source_tool" => "attach_pr", "url" => "https://github.com/#{@repo_name}/pull/#{number}", "repository" => @repo_name, "number" => number, "head_sha" => head}
   end
 
   defp owner!(repo, work_request_id, terminal_key) do

@@ -5,8 +5,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.EditPlanTest do
 
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyEdge
 
-  @sha String.duplicate("a", 40)
-
   test "one edit adds grouped packages that depend on each other and returns the plan once", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-EDIT-PLAN-ADD")
 
@@ -89,18 +87,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.EditPlanTest do
     assert response["error"]["data"]["next_action"] =~ "superseded"
   end
 
-  test "set_dependency pins and unpins a candidate head; remove_dependency removes the dependency", %{repo: repo} do
+  test "set_dependency creates the dependency and updates its reason; remove_dependency removes it", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-EDIT-PLAN-DEPENDENCY")
     prerequisite = add_package!(repo, work_request, title: "Prerequisite")
     dependent = add_package!(repo, work_request, title: "Dependent")
     pair = %{"from" => dependent.id, "to" => prerequisite.id}
 
+    edit_plan!(repo, work_request.id, [Map.put(pair, "op", "set_dependency")])
     edit_plan!(repo, work_request.id, [Map.merge(pair, %{"op" => "set_dependency", "reason" => "Needs the API."})])
-    edit_plan!(repo, work_request.id, [Map.merge(pair, %{"op" => "set_dependency", "candidate_head_sha" => @sha})])
-    assert [%DependencyEdge{candidate_head_sha: @sha, reason: "Needs the API."}] = repo.all(DependencyEdge)
-
-    edit_plan!(repo, work_request.id, [Map.merge(pair, %{"op" => "set_dependency", "candidate_head_sha" => nil})])
-    assert [%DependencyEdge{candidate_head_sha: nil}] = repo.all(DependencyEdge)
+    assert [%DependencyEdge{reason: "Needs the API."}] = repo.all(DependencyEdge)
 
     edit_plan!(repo, work_request.id, [Map.put(pair, "op", "remove_dependency")])
     assert repo.all(DependencyEdge) == []

@@ -12,7 +12,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlanEdit do
     * `update_package` - `work_package_id`, `expected_revision` and a contract
       `patch` (which may set or clear `group`);
     * `set_dependency` - `from` depends on `to`; creates the dependency or
-      updates it, with an optional `candidate_head_sha` (null clears it);
+      updates its `reason`. `from` dispatches only once `to` has delivered;
     * `remove_dependency` - removes the dependency of `from` on `to`.
 
   A package reference is a WorkPackage id in this WorkRequest or the `key` of
@@ -115,12 +115,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlanEdit do
   defp apply_op(%{"op" => "set_dependency"} = op, context) do
     with {:ok, from_ref} <- required_string(op, "from"),
          {:ok, to_ref} <- required_string(op, "to"),
-         {:ok, candidate} <- candidate_head_sha(op),
          {:ok, reason} <- optional_string(op, "reason"),
          {:ok, from} <- resolve(from_ref, context),
          {:ok, to} <- resolve(to_ref, context),
          :ok <- require_distinct(from, to),
-         :ok <- set_dependency(from, to, candidate, reason, context) do
+         :ok <- set_dependency(from, to, reason, context) do
       {:ok, context, %{"op" => "set_dependency", "from" => from, "to" => to}}
     end
   end
@@ -147,7 +146,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlanEdit do
   defp add_dependencies(work_package_id, prerequisite_ids, context) do
     Enum.reduce_while(prerequisite_ids, :ok, fn prerequisite_id, :ok ->
       with :ok <- require_distinct(work_package_id, prerequisite_id),
-           :ok <- set_dependency(work_package_id, prerequisite_id, :keep, nil, context) do
+           :ok <- set_dependency(work_package_id, prerequisite_id, nil, context) do
         {:cont, :ok}
       else
         error -> {:halt, error}
@@ -155,7 +154,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlanEdit do
     end)
   end
 
-  defp set_dependency(from, to, candidate, reason, context) do
+  defp set_dependency(from, to, reason, context) do
     case dependency_edges(context, from, to) do
       [] ->
         %{
@@ -168,13 +167,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlanEdit do
           "created_by" => context.created_by
         }
         |> put_present("reason", reason)
-        |> put_candidate(candidate)
         |> DependencyEdge.create_changeset()
         |> context.repo.insert()
         |> ok_or_error()
 
       edges ->
-        attrs = %{} |> put_present("reason", reason) |> put_candidate(candidate)
+        attrs = put_present(%{}, "reason", reason)
         Enum.reduce_while(edges, :ok, &update_edge(&1, &2, attrs, context))
     end
   end
@@ -209,9 +207,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlanEdit do
 
   defp ok_or_error({:ok, _record}), do: :ok
   defp ok_or_error({:error, _reason} = error), do: error
-
-  defp put_candidate(attrs, :keep), do: attrs
-  defp put_candidate(attrs, candidate), do: Map.put(attrs, "candidate_head_sha", candidate)
 
   defp put_present(map, _key, nil), do: map
   defp put_present(map, key, value), do: Map.put(map, key, value)
@@ -297,15 +292,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlanEdit do
     case Map.get(op, "patch") do
       %{} = patch when map_size(patch) > 0 -> {:ok, patch}
       _patch -> {:error, {:invalid_field, "patch"}}
-    end
-  end
-
-  defp candidate_head_sha(op) do
-    case Map.fetch(op, "candidate_head_sha") do
-      :error -> {:ok, :keep}
-      {:ok, nil} -> {:ok, nil}
-      {:ok, sha} when is_binary(sha) -> if sha =~ ~r/\A[0-9a-fA-F]{40}\z/, do: {:ok, sha}, else: {:error, {:invalid_field, "candidate_head_sha"}}
-      {:ok, _sha} -> {:error, {:invalid_field, "candidate_head_sha"}}
     end
   end
 

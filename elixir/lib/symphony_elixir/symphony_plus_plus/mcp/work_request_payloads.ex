@@ -549,7 +549,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
       {from, to} = dependency_pair(Map.get(edge, "kind"), get_in(edge, ["source", "id"]), get_in(edge, ["target", "id"]))
 
       edge
-      |> Map.take(["id", "reason", "candidate_head_sha", "created_by", "created_at"])
+      |> Map.take(["id", "reason", "created_by", "created_at"])
       |> Map.merge(%{"from" => from, "to" => to})
     end)
   end

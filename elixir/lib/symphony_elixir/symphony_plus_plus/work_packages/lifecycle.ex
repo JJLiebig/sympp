@@ -16,7 +16,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Blockers, WorkPackage}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Blockers, Stacking, WorkPackage}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase, as: WorkRequestPhase
 
@@ -130,8 +130,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
     2. CI is green for the current head (an architect's manual `sync_pr` also
        accepts CI that reports no state at all);
     3. review is done for the current head, or the package needs no review;
-    4. dependency inputs are current: prerequisites are available and the
-       recorded consumed-input selection matches the current head.
+    4. every prerequisite has delivered;
+    5. the PR carries no commits of another active package's open PR
+       (`Stacking`).
 
   Returns the reasons for every predicate that does not hold.
   """
@@ -145,8 +146,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
       {Map.get(facts, :ci_status) not in ci_accepted, "ci_not_green"},
       {Map.get(facts, :review) not in [:done, :none], "review_not_done"},
       {Map.get(facts, :head_changed?) == true, "head_changed"},
-      {Map.get(facts, :dependencies_available?) == false, "dependencies_unavailable"},
-      {Map.get(facts, :dependency_inputs_current?) == false, "dependency_inputs_stale"}
+      {Map.get(facts, :dependencies_delivered?) == false, "dependency_not_delivered"},
+      {match?([_ | _], Map.get(facts, :stacked_on)), "stacked_on_unmerged_work"}
     ]
     |> Enum.flat_map(fn
       {true, reason} -> [reason]
@@ -163,6 +164,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
 
   Facts (all optional):
     * `:dependencies_met?` - false while a prerequisite is undelivered;
+    * `:stacked_on` - the packages whose unmerged commits the PR carries;
     * `:progress` - derived progress inside `dispatched`: `"launching"`,
       `"implementing"`, `"worker_exited"` or `"review_ci"`;
     * `:attention?` - CI failed, or review findings or a review that no longer
@@ -183,6 +185,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
 
   defp planned_next_action(%{dependencies_met?: false}), do: %{action: "deliver_prerequisites", actor: "architect"}
   defp planned_next_action(_facts), do: %{action: "dispatch_work_package", actor: "architect"}
+
+  defp dispatched_next_action(%{stacked_on: [_ | _] = ids}), do: %{action: Stacking.next_action(ids), actor: "architect"}
 
   defp dispatched_next_action(facts) do
     case Map.get(facts, :progress) do

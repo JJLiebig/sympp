@@ -3,7 +3,7 @@ import { join, basename } from 'node:path';
 import { test } from '../support/browser-candidate.js';
 import { InspectorHost } from '../support/inspector-host.js';
 import { contract } from '../support/factory.js';
-import { head, pr, prUrl, row, sync } from '../support/delivery.js';
+import { head, pr, row, sync } from '../support/delivery.js';
 
 test('compiled inspector binds and pins actual request detail without stealing focus or inventing a worker', async ({ candidate, app, browser }) => {
   const { client, factory, provider } = candidate;
@@ -50,20 +50,16 @@ test('compiled inspector binds and pins actual request detail without stealing f
     expect(host.screen).toContain('Inspector findings');
 
     // Backend writes must reach the compiled inspector through its real event
-    // stream. Qualified dependent work is not mergeable before delivery.
+    // stream. Qualified work whose dependency is discovered later is not
+    // mergeable before that dependency delivers.
     provider!.set(402, pr(402, head('a')));
     await sync(client, wp, 402, head('a'));
     await expect.poll(() => host.screen).toContain('Ready to merge');
-    await client.call('edit_plan', { ops: [{ op: 'set_dependency', from: left, to: wp, candidate_head_sha: head('a'), reason: 'Qualify against the findings candidate before delivery.' }] });
-    const pin = (await client.call('read_work_request', { work_request_id: request, view: 'plan' })).plan.dependencies
-      .find((dependency: any) => dependency.from === left && dependency.to === wp).id;
+    await client.call('edit_plan', { ops: [{ op: 'remove_dependency', from: left, to: wp }] });
     await client.call('dispatch_work_package', { work_package_id: left });
     provider!.set(403, pr(403, head('b')));
-    await sync(client, left, 403, head('b'));
-    await client.call('sync_pr', {
-      work_package_id: left, url: prUrl(403), head_sha: head('b'),
-      dependency_inputs: [{ dependency_id: pin, prerequisite_work_package_id: wp, candidate_head_sha: head('a') }],
-    });
+    expect((await sync(client, left, 403, head('b'))).pr_sync.status).toBe('ready');
+    await client.call('edit_plan', { ops: [{ op: 'set_dependency', from: left, to: wp, reason: 'Findings must land before follow-up work.' }] });
     expect((await row(client, request, left)).merge_eligibility.reason_codes).toContain('dependency_not_delivered');
     await press('j');
     await expect.poll(() => host.screen).toMatch(/│Qualified\s*│/);

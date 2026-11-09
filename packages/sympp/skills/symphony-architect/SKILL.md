@@ -26,11 +26,16 @@ eligibility) or `package` (one contract; pass `work_package_id`). Use
 
 ## Plan
 
-Give each worker one cohesive, PR-sized package with a title (2–5 words, at most
-40 characters), goal, acceptance criteria, owned globs, validation steps and
-stop conditions. Repo and base default to the WorkRequest's; a package in
-another repo names both. `group` is an optional path such as
-`"Backend / Billing"`.
+Split every WorkRequest into small, contained packages, each one PR that is
+quick to review and clearly scoped, as if pushing straight to the base: about
+100 changed lines of production code, more only when the change can't be split.
+Prefer independent packages; a dependent dispatches once its prerequisite is
+delivered, which small PRs make quick.
+
+Each package needs a title (2–5 words, at most 40 characters), goal,
+acceptance criteria, owned globs, validation steps and stop conditions. Repo
+and base default to the WorkRequest's; a package in another repo names both.
+`group` is an optional path such as `"Backend / Billing"`.
 
 `edit_plan(work_request_id, ops)` applies its ops atomically:
 
@@ -39,8 +44,7 @@ another repo names both. `group` is an optional path such as
 - `update_package` with `expected_revision` and a `patch`;
 - `set_dependency` and `remove_dependency`, where `from` depends on `to`.
 
-A failed op rolls back the whole edit and names its index. A ready contract is
-frozen: add a successor instead.
+A ready contract is frozen; add a successor.
 
 ## Dispatch
 
@@ -50,13 +54,9 @@ Call `dispatch_work_package(work_package_id, review_mode)`, then run the
 billing, and `none` when the worker has no Review Suite. `agent` is `codex`
 (default) or `claude`.
 
-After launching a Claude worker, read its screen (`hc read <address>`). In a new
-worktree it stops silently at Claude's "trust this folder?" prompt: approve it
-for that worktree only.
-
-Dispatching again reuses the worktree and review id and writes a fresh
-assignment file. Do it after a contract edit, then tell the worker to re-read
-its file. If the hand-off fails, fix the `error` and dispatch again.
+Dispatch again after a contract edit (same worktree and review id, fresh
+assignment file) and tell the worker to re-read it. If the hand-off fails, fix
+the `error` and retry.
 
 ## Deliver
 
@@ -66,16 +66,15 @@ and act on each package's `next_action`: `run_launch_line`, `inspect_worker`
 (the worker exited, or sits idle with failures), `merge_pr`.
 
 Call `sync_pr` only to attach a PR the factory can't find, such as a fork or
-upstream PR (`url`), or to record which prerequisite head a dependent consumed
-(`dependency_inputs`).
+upstream PR (`url`).
+
+Every branch starts from its package's base and its PR targets it. Never build
+on another unmerged branch: a PR carrying another open package's commits
+doesn't qualify. Leave a ready branch that's waiting alone; rebase it once,
+right before merge, only if it conflicts.
 
 Workers return the PR, head, checks, review and risks. Verify acceptance for
-that head, then merge when authorized and the board says the package is
-merge-eligible. Merge backend before the UI that wires it.
-
-To start a dependent on an unmerged prerequisite, such as UI wiring on a ready
-backend, pin it with `set_dependency` and the prerequisite's exact
-`candidate_head_sha`. A head that must change needs a successor package.
+that head; merge when authorized and the board says merge-eligible.
 
 Review findings a worker can't settle come to you. Have genuine in-scope
 defects fixed; decline unsupported requests.

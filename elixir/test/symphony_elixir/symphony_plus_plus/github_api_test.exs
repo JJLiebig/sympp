@@ -224,6 +224,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubApiTest do
       Snapshot.fetch(for(number <- 1..60, do: {:pr, "o", "r", number}), graphql: graphql)
       assert :counters.get(documents, 1) == 3
     end
+
+    test "commit lists carry the head and base they were read at, follow further pages, and are an error when incomplete" do
+      page = fn oids, total, cursor ->
+        %{"totalCount" => total, "pageInfo" => %{"hasNextPage" => cursor != nil, "endCursor" => cursor}, "nodes" => Enum.map(oids, &%{"commit" => %{"oid" => &1}})}
+      end
+
+      first = Enum.map(1..100, &"c#{&1}")
+
+      data = %{
+        "e0" => %{"pullRequest" => %{"headRefOid" => "h1", "baseRefOid" => "b1", "commits" => page.(["c1", "h1"], 2, nil)}},
+        "e1" => %{"pullRequest" => %{"headRefOid" => "h2", "baseRefOid" => "b1", "commits" => page.(first, 101, "p2")}},
+        "e2" => %{"pullRequest" => %{"headRefOid" => "h3", "baseRefOid" => "b1", "commits" => page.(first, 300, nil)}}
+      }
+
+      graphql = fn
+        _query, %{"c" => "p2", "n" => 2}, _priority -> {:ok, %{"repository" => %{"pullRequest" => %{"headRefOid" => "h2", "commits" => page.(["h2"], 101, nil)}}}}
+        _query, _variables, _priority -> {:ok, data}
+      end
+
+      results = Snapshot.commits([{"o", "r", 1}, {"o", "r", 2}, {"o", "r", 3}], graphql: graphql)
+      assert results[{"o", "r", 1}] == {:ok, %{"head_sha" => "h1", "base_sha" => "b1", "commits" => ["c1", "h1"]}}
+      assert results[{"o", "r", 2}] == {:ok, %{"head_sha" => "h2", "base_sha" => "b1", "commits" => first ++ ["h2"]}}
+      assert {:error, _incomplete} = results[{"o", "r", 3}]
+    end
   end
 
   defp request(fun), do: Application.put_env(:symphony_elixir, :sympp_github_request, fun)
