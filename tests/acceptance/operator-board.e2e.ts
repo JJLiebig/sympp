@@ -52,7 +52,7 @@ test('operator sees dependency ordering, pending qualification and actual delive
   await candidate.capture('ci-wait');
   await browser.reload();
   await screen.getByRole('button', 'Expanded', { exact: true }).tap();
-  await expect(goal).toContainText('Review/CI');
+  await expect(goal).toContainText('Stage: Checks');
   await expect(goal).toContainText('CI running');
   expect((await row(client, request, first)).delivery_outcome).toBeNull();
   expect((await client.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.completed_at).toBeNull();
@@ -63,7 +63,7 @@ test('operator sees dependency ordering, pending qualification and actual delive
   await browser.reload();
   await screen.getByRole('button', 'Expanded', { exact: true }).tap();
   await expect(goal).toContainText('0/2 done');
-  await expect(goal).toContainText('Ready');
+  await expect(goal).toContainText('Stage: Merge');
   expect((await row(client, request, first)).merge_eligibility.eligible).toBe(true);
 
   provider!.set(401, pr(401, head('a'), { state: 'MERGED', mergedAt: new Date().toISOString(), mergeCommit: { oid: head('f') } }));

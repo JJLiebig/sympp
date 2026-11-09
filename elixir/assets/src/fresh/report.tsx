@@ -5,7 +5,7 @@ import { ActButton } from "./actions";
 import { span, waitsOnOthers, type Goal, type Phase as GoalPhase, type GoalView, type Pkg, type PkgView, type Stage } from "./model";
 import { GLOW, NUDGE, smoothly, spotlight, useFlash } from "./motion";
 import { Owner } from "./owner";
-import { CiCell, OUTCOME, Pip, PKG_GRID, PrLink, ReviewCell, StageLabel, StageSteps, StageTime } from "./parts";
+import { CiCell, Lifecycle, OUTCOME, Pip, PKG_GRID, PrLink, StageStatus } from "./parts";
 import { sampleReport } from "./samples";
 
 // What a goal says when asked "is this coming along?". The architect owns the words and the ETA;
@@ -168,9 +168,9 @@ export function DotStrip({ view }: { view: GoalView }) {
   return (
     <span className="flex flex-wrap items-center gap-y-1">
       {runs.map((state, index) => (
-        <span key={state.phase.id} className={`flex items-center gap-0.5 ${index > 0 ? "ml-1.5 border-l border-faint pl-1.5" : ""}`} title={state.phase.title || undefined}>
+        <span key={state.phase.id} className={`flex flex-wrap items-center gap-0.5 ${index > 0 ? "ml-1.5 border-l border-faint pl-1.5" : ""}`} title={state.phase.title || undefined}>
           {orderedDots(state).map((dot) => (
-            <span key={dot.id} title={dot.title}>
+            <span key={dot.id} className="flex" title={dot.title}>
               <Pip stage={dot.stage} failed={dot.failed} />
             </span>
           ))}
@@ -362,7 +362,7 @@ export function NeedsYouFlag({ view }: { view: GoalView }) {
   );
 }
 
-// Status on the left, then the PR's gates, where it is, the PR, who works on it, and Finish where the PR waits on others.
+// Status on the left, then the PR's checks, the lifecycle and time in it, the PR, who works on it, and Finish where the PR waits on others.
 export function PkgLine({ at, view }: { at: number; view: PkgView }) {
   const ref = useFlash<HTMLDivElement>(`${view.stage}${view.failed ? ":failed" : ""}`, GLOW, 1400);
   const pkg = view.pkg;
@@ -371,10 +371,8 @@ export function PkgLine({ at, view }: { at: number; view: PkgView }) {
       <Pip stage={view.stage} failed={view.failed} />
       <span className="truncate text-sm">{pkg.title}</span>
       <CiCell ci={pkg.ci} stale={pkg.stale.includes("github")} />
-      <ReviewCell review={pkg.review} />
-      <StageSteps view={view} />
-      <StageLabel view={view} />
-      <StageTime at={at} view={view} />
+      <Lifecycle view={view} />
+      <StageStatus at={at} view={view} />
       <PrLink pr={pkg.pr} repos={pkg.goalRepos} />
       <Owner owner={pkg.owner} />
       {waitsOnOthers(pkg) ? <ActButton action={{ kind: "finish", pkgId: pkg.id }} confirm="Finish?" label="Finish" tone="text-ink" /> : <span />}
@@ -389,9 +387,8 @@ function RestLine({ pkg }: { pkg: Pkg }) {
       <Pip stage={outcome ? "ended" : "planned"} />
       <span className={`truncate text-sm ${outcome ? "text-faint line-through decoration-faint/60" : "text-dim"}`}>{pkg.title}</span>
       <span />
-      <span />
-      {/* The outcome starts where the stage would: the steps column where it shows, the stage column otherwise. */}
-      <span className={`col-span-2 truncate font-mono text-[11px] min-[1280px]:col-span-3 ${outcome?.tone ?? "text-faint"}`}>{outcome?.label ?? "Planned"}</span>
+      {/* The outcome starts where the lifecycle would and takes its status column too. */}
+      <span className={`col-span-2 truncate font-mono text-[11px] ${outcome?.tone ?? "text-faint"}`}>{outcome?.label ?? "Planned"}</span>
       <PrLink pr={pkg.pr} repos={pkg.goalRepos} />
       <span />
       <span />

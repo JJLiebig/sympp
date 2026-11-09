@@ -6,7 +6,8 @@ export type Stage = "planned" | "launching" | "implementing" | "review_ci" | "re
 export type Outcome = "merged" | "finished" | "completed" | "superseded" | "abandoned" | "skipped";
 export type ReviewMode = "fast" | "normal" | "deep" | "none";
 // `state` is the Review Suite state for the PR's current head; null until a review has started.
-export type Review = { mode: ReviewMode | null; state: "running" | "findings" | "done" | "unknown" | null; round: number };
+// `at` is when the current round started, else the review; null where nobody said.
+export type Review = { mode: ReviewMode | null; state: "running" | "findings" | "done" | "unknown" | null; round: number; at: number | null };
 export type Ci = "pending" | "passing" | "failing";
 // "unknown" means the terminal's machine stopped answering without the agent saying it left.
 export type Liveness = "live" | "unknown" | "finished";
@@ -283,9 +284,9 @@ function cardSince(entry: CardEntry, state: CardState) {
 function cardReviewOf(review: CardEntry["review"]): Review | null {
   if (!review) return null;
   // The backend has already checked the status against the PR's current head: a passed review of an older head is pending, not done.
-  if (review.state === "done" || review.state === "unknown") return { mode: null, state: review.state, round: 0 };
+  if (review.state === "done" || review.state === "unknown") return { mode: null, state: review.state, round: 0, at: null };
   const state = review.status === "passed" ? null : (REVIEW_STATES[review.status ?? ""] ?? null);
-  return { mode: null, state, round: 0 };
+  return { mode: null, state, round: 0, at: null };
 }
 
 function staleOf(values: string[] | null | undefined): Stale[] {
@@ -372,8 +373,9 @@ function ciOf(checks: string | null | undefined): Ci | null {
 function reviewOf(signal: ReviewSignal | null | undefined, head: string | null, stale: Stale[]): Review | null {
   const mode = REVIEW_MODES[signal?.mode ?? ""];
   if (!signal || !mode) return null;
-  if (stale.includes("review")) return { mode, state: "unknown", round: signal.round ?? 0 };
-  return { mode, state: reviewState(signal, head), round: signal.round ?? 0 };
+  const at = ms(signal.round_started_at) ?? ms(signal.started_at);
+  if (stale.includes("review")) return { mode, state: "unknown", round: signal.round ?? 0, at };
+  return { mode, state: reviewState(signal, head), round: signal.round ?? 0, at };
 }
 
 function reviewState(signal: ReviewSignal, head: string | null): Review["state"] {

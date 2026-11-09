@@ -72,7 +72,9 @@ function Landed({ at, views }: { at: number; views: GoalView[] }) {
               <GoalTitle goal={view.goal} />
             </span>
             <span className="shrink-0 text-[11px] uppercase tracking-[0.12em] text-faint" title={view.goal.repo}>{areaLabel(view.goal.area)}</span>
-            <span className="min-w-0 flex-1 truncate text-dim">{reportFor(view).brief}</span>
+            <span className="min-w-0 flex-1 truncate text-dim" title={reportFor(view).brief}>
+              {reportFor(view).brief}
+            </span>
             <Deploy at={at} goal={view.goal} />
             <span className="w-24 shrink-0 text-right font-mono text-xs text-faint">{span(at - view.lastMoveAt)} ago</span>
             <GoalActions goal={view.goal} moving={view.live.length} phase={view.phase} />

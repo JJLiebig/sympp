@@ -42,13 +42,15 @@ function GoalRow({ at, tagged, view }: { at: number; tagged?: boolean; view: Goa
   const report = reportFor(view);
   const { level, showAll, toggle } = useGoalLevel(report.verdict);
   const total = view.live.length + view.queued.length + view.done.length;
+  const open = level !== "closed";
+  const said = `${report.brief}${report.eta ? ` ETA: ${report.eta}.` : ""}`;
 
   return (
     <div data-goal={view.goal.id}>
       {/* Two lines, each with words on the left and the matching figure on the right edge. */}
       <div className="flex items-start">
         <button className="flex min-w-0 flex-1 items-start gap-3 py-2.5 pr-2 text-left hover:bg-panel" type="button" onClick={toggle}>
-          <ChevronRight className={`mt-1 size-4 shrink-0 text-faint transition-transform ${level === "closed" ? "" : "rotate-90"}`} />
+          <ChevronRight className={`mt-1 size-4 shrink-0 text-faint transition-transform ${open ? "rotate-90" : ""}`} />
           <span className="min-w-0 flex-1">
             <span className="flex items-baseline gap-3">
               <span className="truncate font-medium">
@@ -63,15 +65,22 @@ function GoalRow({ at, tagged, view }: { at: number; tagged?: boolean; view: Goa
                 {view.done.length}/{total} done
               </span>
             </span>
-            <span className="mt-1 flex items-center gap-6">
-              <span className="flex min-w-0 flex-1 items-baseline">
-                <span className="truncate text-sm text-dim">
-                  {report.brief}
-                  {report.eta ? ` ETA: ${report.eta}.` : ""}
+            {/* Closed, the brief is one clipped line; open, it reads in full. The strip keeps its column and wraps inside it. */}
+            <span className="mt-1 flex items-start gap-6">
+              {open ? (
+                <span className="min-w-0 flex-1 break-words text-sm text-dim">
+                  {said}
+                  <BriefAge at={at} report={report} />
                 </span>
-                <BriefAge at={at} report={report} />
-              </span>
-              <span className="flex w-[440px] shrink-0 items-center justify-end">
+              ) : (
+                <span className="flex min-w-0 flex-1 items-baseline">
+                  <span className="truncate text-sm text-dim" title={said}>
+                    {said}
+                  </span>
+                  <BriefAge at={at} report={report} />
+                </span>
+              )}
+              <span className="flex min-h-5 w-[440px] max-w-[50%] shrink-0 flex-wrap items-center justify-end gap-y-1">
                 <DotStrip view={view} />
                 <Deploy at={at} goal={view.goal} />
               </span>
@@ -82,7 +91,7 @@ function GoalRow({ at, tagged, view }: { at: number; tagged?: boolean; view: Goa
         <GoalActions className="mt-2" goal={view.goal} moving={view.live.length} phase={view.phase} />
       </div>
       <UnresolvedLine className="mb-3 ml-7 mr-2" view={view} />
-      {level !== "closed" ? (
+      {open ? (
         <div className="pb-3 pl-5">
           <GoalPackages at={at} level={level} view={view} onFull={showAll} />
         </div>

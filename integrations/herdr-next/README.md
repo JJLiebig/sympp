@@ -27,8 +27,10 @@ with the decision prompt's choices when there is one. A flagged decision takes
 **Ack** or **Feedback**; the factory types the feedback into the terminal that
 made the call, and **Focus chief** also opens that terminal. A task shows its
 phase and the terminal working on it, and its packages at work under their
-groups, through Launching ─ Implementing ─ Review/CI ─ Ready, with the PR's
-checks and the review's mode and state; landed and planned work is folded.
+groups, through Build, PR, Checks, Review and Merge in fixed columns, with the
+PR's checks and one status: the time in the stage, or under review the round and
+its time (or, once the round ended, its outcome), naming the mode when it is deep
+or fast. Landed and planned work is folded.
 **Complete**, **Archive**, **Restore** and **Delete** act on the task, **Finish**
 ends a package whose PR goes into another repository, and **Release** frees a
 task from an owner that stopped answering. Click a terminal's address to focus
@@ -98,6 +100,9 @@ The desk mods currently consume:
 - `shared('sympp.board')`: array of live jobs `{ id, title, stage, needs, failed }`,
   where stage is the furthest active package stage or null. desk-status renders
   these and writes `shared('sympp.open')` as `{ job, at }` to select a job in sympp.
+- `shared('sympp.dashboard_url')`: the web board's address, or null when there is
+  none. Each sympp view publishes it after a good read;
+  desk-tabs links to it beside the sympp panel button.
 - Icons under `mods/sympp/`: `glyph.svg`, `glyph-dark.svg`,
   `stage-build.svg`, `stage-checks.svg`, `stage-review.svg`, `stage-merge.svg`,
   `stage-landed.svg`, `needs.svg`, `glyph-ui.svg`, `glyph-ui-dark.svg`,

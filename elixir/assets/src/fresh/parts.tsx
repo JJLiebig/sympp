@@ -24,36 +24,75 @@ export const OUTCOME: Record<Outcome, { label: string; tone: string }> = {
   skipped: { label: "Skipped", tone: "text-faint" },
 };
 
-const STEPS: Stage[] = ["launching", "implementing", "review_ci", "ready"];
-
 // Package and card rows are fixed column grids, so every column starts at the same x on every row,
-// whatever is in it. Below 1280px the step bars are left out and the PR and owner columns narrow.
-// Package: pip, title, CI, review, [steps], stage, time, PR, owner, action.
-export const PKG_GRID = "grid grid-cols-[10px_minmax(0,1fr)_88px_128px_88px_48px_110px_150px_52px] items-center gap-x-2.5 min-[1280px]:grid-cols-[10px_minmax(0,1fr)_88px_128px_48px_88px_48px_150px_170px_52px]";
+// whatever is in it. Below 1280px the lifecycle shows only its current stage and the PR and owner columns narrow.
+// Package: pip, title, CI, lifecycle, status, PR, owner, action.
+export const PKG_GRID = "grid grid-cols-[10px_minmax(0,1fr)_88px_48px_124px_110px_150px_52px] items-center gap-x-2.5 min-[1280px]:grid-cols-[10px_minmax(0,1fr)_88px_240px_124px_150px_170px_52px]";
 // Card: pip, task, repo and branch, CI, review, PR, state, owner, dismiss.
 export const CARD_GRID = "grid grid-cols-[10px_minmax(0,1fr)_150px_88px_128px_64px_72px_150px_24px] items-center gap-x-2.5 min-[1280px]:grid-cols-[10px_minmax(0,1fr)_200px_88px_128px_64px_72px_170px_24px]";
 
-// Four steps from launch to ready. Hidden with its column on narrow screens; the stage label says the same.
-export function StageSteps({ view }: { view: PkgView }) {
-  const position = STEPS.indexOf(view.stage);
+// A live package's way from build to merge, one fixed slot per stage.
+const LIFECYCLE = [
+  { label: "Build", tone: "text-build" },
+  { label: "PR", tone: "text-build" },
+  { label: "Checks", tone: "text-checks" },
+  { label: "Review", tone: "text-review" },
+  { label: "Merge", tone: "text-merge" },
+];
+const REVIEW_SLOT = 3;
+// Normal is the default review mode, so only the others are named.
+const MODE_WORD: Partial<Record<NonNullable<Review["mode"]>, string>> = { deep: "deep ", fast: "fast " };
+
+const reviewing = (review: Review | null) => Boolean(review?.mode && review.mode !== "none" && review.state);
+
+// Build until a PR opens; Review/CI is Review once a review runs and Checks before; ready is Merge.
+function slotOf(view: PkgView) {
+  if (view.stage === "ready") return 4;
+  if (view.stage === "review_ci") return reviewing(view.pkg.review) ? REVIEW_SLOT : 2;
+  return view.pkg.pr ? 1 : 0;
+}
+
+// Stages behind are plain, the current one in its colour (red while its checks fail), the ones ahead faint.
+// Below 1280px only the current stage shows, in the same place on every row. Screen readers hear only the current stage.
+export function Lifecycle({ view }: { view: PkgView }) {
+  const now = slotOf(view);
+  const mode = view.pkg.review?.mode;
   return (
-    <span aria-hidden className="hidden gap-0.5 min-[1280px]:flex">
-      {STEPS.map((step, index) => (
-        <span key={step} className={`h-1 w-2.5 rounded-full ${index < position ? "bg-dim" : index === position ? (view.failed ? "bg-fail" : STAGE[step].bar) : "bg-line"}`} />
-      ))}
+    <span className="flex whitespace-nowrap font-mono text-[11px]">
+      <span className="sr-only">Stage: {LIFECYCLE[now].label}</span>
+      {LIFECYCLE.map((slot, index) => {
+        const tone = index < now ? "text-dim" : index === now ? `font-semibold ${view.failed ? "text-fail" : slot.tone}` : "text-faint";
+        const title = index === REVIEW_SLOT && mode && mode !== "none" ? `${mode} review` : undefined;
+        return (
+          <span key={slot.label} aria-hidden className={`w-12 shrink-0 ${tone} ${index === now ? "" : "hidden min-[1280px]:inline"}`} title={title}>
+            {slot.label}
+          </span>
+        );
+      })}
     </span>
   );
 }
 
-// A worker that finished without opening a PR leaves its package implementing with nobody on it.
-export function StageLabel({ view }: { view: PkgView }) {
-  if (view.pkg.exited && view.stage === "implementing") return <span className="truncate whitespace-nowrap font-mono text-[11px] font-semibold text-checks" title="The worker finished without opening a PR">Exited</span>;
-  return <span className={`truncate whitespace-nowrap font-mono text-[11px] font-semibold ${view.failed ? "text-fail" : STAGE[view.stage].text}`}>{STAGE[view.stage].label}</span>;
-}
-
-// How long the package has been in its stage, right-aligned with tabular figures so the times line up.
-export function StageTime({ at, view }: { at: number; view: PkgView }) {
-  return <span className="text-right font-mono text-[11px] tabular-nums text-dim">{view.untimed ? "" : span(at - view.since)}</span>;
+// How long the package has been in its stage; under review, the round and how long it has run, or
+// once the round has ended, how it ended.
+// Right-aligned with tabular figures so the times line up.
+export function StageStatus({ at, view }: { at: number; view: PkgView }) {
+  const { pkg } = view;
+  const cell = "truncate whitespace-nowrap text-right font-mono text-[11px] tabular-nums";
+  // A worker that finished without opening a PR leaves its package implementing with nobody on it.
+  if (pkg.exited && view.stage === "implementing") return <span className={`${cell} font-semibold text-checks`} title="The worker finished without opening a PR">Exited</span>;
+  const review = pkg.review;
+  if (slotOf(view) === REVIEW_SLOT && review) {
+    const from = review.at ?? (view.untimed ? null : view.since);
+    const words = reviewLabel(review);
+    return (
+      <span className={`${cell} ${words.tone}`} title={`Review: ${words.text}`}>
+        {MODE_WORD[review.mode!] ?? ""}r{Math.max(1, review.round)}
+        {review.state !== "running" ? ` · ${review.state}` : from === null ? "" : ` · ${span(at - from)}`}
+      </span>
+    );
+  }
+  return <span className={`${cell} text-dim`}>{view.untimed ? "" : span(at - view.since)}</span>;
 }
 
 const CI: Record<Ci, { label: string; tone: string; icon: typeof Check }> = {
