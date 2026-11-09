@@ -128,7 +128,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
           {%{ci_status: "failing"}, "ci_not_green"},
           {%{ci_status: "unknown"}, "ci_not_green"},
           {%{review: :not_done}, "review_not_done"},
-          {%{head_changed?: true}, "head_changed"},
           {%{dependencies_delivered?: false}, "dependency_not_delivered"},
           {%{stacked_on: ["wp-other"]}, "stacked_on_unmerged_work"}
         ] do

@@ -208,28 +208,74 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   end
 
   describe "qualification" do
-    test "auto-qualifies when PR, CI and review are green for the head, and unqualifies when the head moves", %{repo: repo} do
+    test "a merge from main that keeps the PR's patch stays ready; a changed patch goes back", %{repo: repo} do
       package = package!(repo, "WP-OBS-QUALIFY", review_mode: "fast", review_id: "rvw_qualify0001")
       attach!(repo, package, 50)
       entry = {:pr, "nextide", "repo", 50}
-      green = pr(50, "head-a")
 
-      # A review done for an earlier head doesn't count.
-      sweep(repo, %{entry => {:ok, green}}, review: review_done("head-old"))
+      # A review accepted for another head doesn't count.
+      suite(%{"done" => true, "status" => "done", "reviewed_head" => "head-old", "accepted_head" => "head-old"})
+      suite_sweep(repo, %{entry => {:ok, pr(50, "head-a")}})
       assert repo.get!(WorkPackage, package.id).status == "dispatched"
 
-      sweep(repo, %{entry => {:ok, green}}, review: review_done("head-a"))
+      suite(%{"done" => true, "status" => "done", "reviewed_head" => "head-a", "accepted_head" => "head-a"})
+      suite_sweep(repo, %{entry => {:ok, pr(50, "head-a")}})
       assert repo.get!(WorkPackage, package.id).status == "ready"
 
-      sweep(repo, %{entry => {:ok, pr(50, "head-b", %{"ci" => %{"status" => "pending"}})}}, review: review_done("head-a"))
+      # `main` merged in with the PR's own patch unchanged: Review Suite carries
+      # the review to the merge commit and the package stays ready.
+      suite(%{"done" => true, "status" => "done", "reviewed_head" => "head-a", "accepted_head" => "head-merge", "required_checks" => "current_head_required", "base_interaction" => interaction(false)})
+      suite_sweep(repo, %{entry => {:ok, pr(50, "head-merge")}})
+      assert repo.get!(WorkPackage, package.id).status == "ready"
+      refute Enum.any?(events(repo, package.id), &(&1.status == "unqualified"))
+      assert %{accepted_head: "head-merge", reviewed_head: "head-a", status: "passed"} = review_signal(repo, package)
+
+      # A fix commit changed the patch: the review no longer covers the head.
+      suite(%{"done" => false, "status" => "stale", "review_ladder" => "invalidated", "reviewed_head" => "head-a", "current_head" => "head-fix"})
+      suite_sweep(repo, %{entry => {:ok, pr(50, "head-fix")}})
       assert repo.get!(WorkPackage, package.id).status == "dispatched"
-      assert %{"reasons" => reasons, "head_sha" => "head-b"} = unqualified_event!(repo, package.id).payload
-      assert "head_changed" in reasons
+      assert %{"reasons" => ["review_not_done"], "head_sha" => "head-fix"} = unqualified_event!(repo, package.id).payload
 
       # Replaying the same snapshot doesn't unqualify or record again.
       before = length(events(repo, package.id))
-      sweep(repo, %{entry => {:ok, pr(50, "head-b", %{"ci" => %{"status" => "pending"}})}}, review: review_done("head-a"))
+      suite_sweep(repo, %{entry => {:ok, pr(50, "head-fix")}})
       assert length(events(repo, package.id)) == before
+    end
+
+    test "a new head whose checks GitHub doesn't report yet takes a ready package back", %{repo: repo} do
+      package = package!(repo, "WP-OBS-NEW-HEAD-CI", review_mode: "fast", review_id: "rvw_newheadci001")
+      attach!(repo, package, 52)
+      entry = {:pr, "nextide", "repo", 52}
+
+      suite(%{"done" => true, "status" => "done", "reviewed_head" => "head-a", "accepted_head" => "head-a"})
+      suite_sweep(repo, %{entry => {:ok, pr(52, "head-a")}})
+      assert repo.get!(WorkPackage, package.id).status == "ready"
+
+      # Unknown CI on the head it qualified on holds; on a new head it is unproven.
+      suite_sweep(repo, %{entry => {:ok, pr(52, "head-a", %{"ci" => %{"status" => "unknown"}})}})
+      assert repo.get!(WorkPackage, package.id).status == "ready"
+
+      suite(%{"done" => true, "status" => "done", "reviewed_head" => "head-a", "accepted_head" => "head-merge", "base_interaction" => interaction(false)})
+      suite_sweep(repo, %{entry => {:ok, pr(52, "head-merge", %{"ci" => %{"status" => "unknown"}})}})
+      assert repo.get!(WorkPackage, package.id).status == "dispatched"
+      assert %{"reasons" => reasons, "head_sha" => "head-merge"} = unqualified_event!(repo, package.id).payload
+      assert "ci_unknown" in reasons
+    end
+
+    test "a carried review whose base change still needs a targeted check doesn't count", %{repo: repo} do
+      package = package!(repo, "WP-OBS-BASE-CHECK", review_mode: "fast", review_id: "rvw_basecheck001")
+      attach!(repo, package, 51)
+      entry = {:pr, "nextide", "repo", 51}
+
+      suite(%{"done" => true, "status" => "done", "reviewed_head" => "head-a", "accepted_head" => "head-a"})
+      suite_sweep(repo, %{entry => {:ok, pr(51, "head-a")}})
+      assert repo.get!(WorkPackage, package.id).status == "ready"
+
+      suite(%{"done" => true, "status" => "done", "reviewed_head" => "head-a", "accepted_head" => "head-merge", "required_checks" => "current_head_required", "base_interaction" => interaction(true)})
+      suite_sweep(repo, %{entry => {:ok, pr(51, "head-merge")}})
+      assert repo.get!(WorkPackage, package.id).status == "dispatched"
+      assert %{"reasons" => ["review_not_done"]} = unqualified_event!(repo, package.id).payload
+      assert %{status: "inspection_needed", accepted_head: "head-merge"} = review_signal(repo, package)
     end
 
     test "an unreachable GitHub flags the package stale and never transitions", %{repo: repo} do
@@ -284,7 +330,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       attach!(repo, ready, 93, "head-b")
 
       snapshot = %{{:pr, "nextide", "repo", 92} => {:ok, pr(92, "head-a")}, {:pr, "nextide", "repo", 93} => {:ok, pr(93, "head-b")}}
-      sweep(repo, snapshot, review: fn _id, _machine -> :unknown end)
+      # Review Suite answers with something that isn't its status JSON.
+      Application.put_env(:symphony_elixir, :sympp_review_command, fn "python3", _args, _timeout -> {:ok, {"Traceback (most recent call last)", 1}} end)
+      suite_sweep(repo, snapshot)
 
       assert repo.get!(WorkPackage, dispatched.id).status == "dispatched"
       assert repo.get!(WorkPackage, ready.id).status == "ready"
@@ -512,7 +560,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
 
   describe "Review Suite state" do
     test "is read locally on the factory host and with hc exec on other machines" do
-      done = Jason.encode!(%{"review" => "rvw_read0001", "done" => true, "status" => "done", "head" => "abc123", "progress" => "1/1", "rounds" => 2})
+      head = "abc123" <> String.duplicate("0", 34)
+      done = Jason.encode!(%{"review" => "rvw_read0001", "done" => true, "status" => "done", "head" => head, "reviewed_head" => head, "accepted_head" => head, "progress" => "1/1", "rounds" => 2})
       test_pid = self()
 
       Application.put_env(:symphony_elixir, :sympp_review_command, fn command, args, timeout ->
@@ -526,14 +575,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
 
       assert {:ok, review} = ReviewStatus.read("rvw_read0001", nil)
       assert_received {:command, "python3", [_script, "--id", "rvw_read0001", "--show-status", "--json"], 3_000}
-      assert %{"done" => true, "reviewed_head" => "abc123", "status" => "passed", "current" => 1, "total" => 1, "round" => 2} = review
-      assert ReviewStatus.state({:ok, review}, "abc123" <> String.duplicate("0", 34)) == :done
-      assert ReviewStatus.state({:ok, review}, "def456") == :pending
+      assert %{"done" => true, "reviewed_head" => ^head, "accepted_head" => ^head, "status" => "passed", "current" => 1, "total" => 1, "round" => 2} = review
+      assert ReviewStatus.state({:ok, review}, head) == :done
+      assert ReviewStatus.state({:ok, review}, "abc123") == :pending
       # Review Suite can keep `done` while reporting the cycle no longer holds.
       for status <- ["stale", "failed", "fix-pending", "invalidated"] do
-        stale = Jason.encode!(%{"review" => "rvw_read0001", "done" => true, "status" => status, "head" => "abc123"})
+        stale = Jason.encode!(%{"review" => "rvw_read0001", "done" => true, "status" => status, "accepted_head" => head})
         Application.put_env(:symphony_elixir, :sympp_review_command, fn "python3", _args, _timeout -> {:ok, {stale, 0}} end)
-        assert ReviewStatus.state(ReviewStatus.read("rvw_read0001", nil), "abc123") == :pending
+        assert ReviewStatus.state(ReviewStatus.read("rvw_read0001", nil), head) == :pending
       end
 
       Application.put_env(:symphony_elixir, :sympp_review_command, fn command, args, timeout ->
@@ -602,7 +651,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
 
   defp no_review(_id, _machine), do: flunk("review read for a package in mode none")
 
-  defp review_done(head), do: fn _id, _machine -> {:ok, %{"done" => true, "status" => "passed", "reviewed_head" => head}} end
+  # Review Suite's `review.py --id <id> --show-status --json` answer, for every review id.
+  defp suite(status) do
+    output = status |> Map.put("review", "rvw_fake") |> Jason.encode!()
+    answer = fn "python3", [_script, "--id", _id, "--show-status", "--json"], _timeout -> {:ok, {output, 0}} end
+    Application.put_env(:symphony_elixir, :sympp_review_command, answer)
+  end
+
+  defp suite_sweep(repo, snapshot), do: sweep(repo, snapshot, review: &ReviewStatus.read/2)
+
+  # Review Suite's base_interaction for a carried review: whether the base change
+  # touched the PR's paths and still needs a targeted check.
+  defp interaction(true), do: %{"check" => true, "reason" => "shared_paths", "paths" => ["lib/app.ex"], "line_overlap_paths" => []}
+  defp interaction(false), do: %{"check" => false, "reason" => "inspect_dependencies", "paths" => [], "line_overlap_paths" => []}
+
+  defp review_signal(repo, package), do: board_row(repo, package).work_package.review_signal
 
   defp pr(number, head, patch \\ %{}) do
     Map.merge(

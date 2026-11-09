@@ -147,11 +147,12 @@ test('installed Review Suite state for the review id gates qualification', async
   expect(notStarted.pr_sync.readiness_reasons).toContain('review_not_done');
   expect((await row(architect, request, wp)).raw_status).toBe('dispatched');
 
-  await review.answer({ review: reviewId, done: true, status: 'done', head: head('b'), progress: '1/1' });
+  await review.answer({ review: reviewId, done: true, status: 'done', reviewed_head: head('b'), accepted_head: head('b'), progress: '1/1' });
   const otherHead = await architect.call('sync_pr', { work_package_id: wp, url: prUrl(110) });
   expect(otherHead.pr_sync.readiness_reasons).toContain('review_not_done');
 
-  await review.answer({ review: reviewId, done: true, status: 'done', head: head('a'), progress: '1/1' });
+  // Review Suite carries the review to the PR's head when its patch is unchanged.
+  await review.answer({ review: reviewId, done: true, status: 'done', reviewed_head: head('b'), accepted_head: head('a'), progress: '1/1' });
   const done = await architect.call('sync_pr', { work_package_id: wp, url: prUrl(110) });
   expect(done.work_package.status).toBe('ready');
   for (const argv of await review.calls()) expect(argv).toEqual(['--id', reviewId, '--show-status', '--json']);

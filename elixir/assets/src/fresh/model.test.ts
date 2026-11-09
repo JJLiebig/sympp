@@ -79,9 +79,10 @@ describe("an unresolved goal", () => {
     expect(viewAt(board, NOW)[0].live.filter((view) => waitsOnOthers(view.pkg)).map((view) => view.pkg.id)).toEqual(["upstream"]);
   });
 
-  it("does not show a review of an older head as done", () => {
-    const board = read({ work_request_details: [{ work_request: { id: "wr", phase: "active" }, work_packages: [{ id: "p", status: "ready", pr_signal: { status: "open", number: 1, url: "u", head_sha: "bbbb2222" }, review_signal: { mode: "fast", status: "passed", reviewed_head: "aaaa1111" } }] }] });
-    expect(viewAt(board, NOW)[0].live[0].pkg.review).toMatchObject({ mode: "fast", state: null });
+  it("shows a review as done only when it is accepted for the PR's current head", () => {
+    const board = (accepted: string) => read({ work_request_details: [{ work_request: { id: "wr", phase: "active" }, work_packages: [{ id: "p", status: "ready", pr_signal: { status: "open", number: 1, url: "u", head_sha: "bbbb2222" }, review_signal: { mode: "fast", status: "passed", accepted_head: accepted } }] }] });
+    expect(viewAt(board("aaaa1111"), NOW)[0].live[0].pkg.review).toMatchObject({ mode: "fast", state: null });
+    expect(viewAt(board("bbbb2222"), NOW)[0].live[0].pkg.review).toMatchObject({ mode: "fast", state: "done" });
   });
 });
 

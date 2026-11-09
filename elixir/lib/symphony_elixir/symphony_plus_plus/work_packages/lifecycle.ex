@@ -129,7 +129,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
     1. the PR is open and not a draft;
     2. CI is green for the current head (an architect's manual `sync_pr` also
        accepts CI that reports no state at all);
-    3. review is done for the current head, or the package needs no review;
+    3. Review Suite accepts the review for the current head (a merge or rebase
+       that leaves the PR's own patch unchanged keeps it), or the package
+       needs no review;
     4. every prerequisite has delivered;
     5. the PR carries no commits of another active package's open PR
        (`Stacking`).
@@ -145,7 +147,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
       {Map.get(facts, :pr_draft?) == true, "pr_draft"},
       {Map.get(facts, :ci_status) not in ci_accepted, "ci_not_green"},
       {Map.get(facts, :review) not in [:done, :none], "review_not_done"},
-      {Map.get(facts, :head_changed?) == true, "head_changed"},
       {Map.get(facts, :dependencies_delivered?) == false, "dependency_not_delivered"},
       {match?([_ | _], Map.get(facts, :stacked_on)), "stacked_on_unmerged_work"}
     ]

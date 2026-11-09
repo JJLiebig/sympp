@@ -291,7 +291,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeToolsLifecycleTest do
   test "dispatch hands off a prepared worktree, assignment file and launch line, and a replay reuses them", %{repo: repo} do
     fixture = TestSupport.git_repo_fixture!("symphony-plus-plus/beta", prefix: "sympp-mcp-worktree")
     config = Config.default(repo: repo, repo_root: test_repo_root())
-    work_request = create_work_request!(repo, id: "WR-MCP-DISPATCH-HANDOFF", repo: fixture.origin, base_branch: "symphony-plus-plus/beta")
+
+    work_request =
+      create_work_request!(repo,
+        id: "WR-MCP-DISPATCH-HANDOFF",
+        repo: fixture.origin,
+        base_branch: "symphony-plus-plus/beta",
+        human_description: "Operators file requests in one place.\n\nThe intake form keeps drafts."
+      )
 
     [reviewed, unreviewed] =
       for {id, branch} <- [{"WRS-MCP-DISPATCH-REVIEWED", "feat/reviewed"}, {"WRS-MCP-DISPATCH-UNREVIEWED", "feat/unreviewed"}] do
@@ -299,7 +306,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeToolsLifecycleTest do
                  CanonicalWorkPackageFixtures.add_work_package(
                    repo,
                    work_request.id,
-                   work_request_work_package_attrs(id: id, title: "Hand off #{branch}", base_branch: "symphony-plus-plus/beta", branch_pattern: branch)
+                   work_request_work_package_attrs(
+                     id: id,
+                     title: "Hand off #{branch}",
+                     group: "Backend / Intake ghp_assignmentgroupsecret12345",
+                     base_branch: "symphony-plus-plus/beta",
+                     branch_pattern: branch
+                   )
                  )
 
         package
@@ -331,6 +344,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeToolsLifecycleTest do
     assert Path.dirname(file) == git!(worktree, ["rev-parse", "--absolute-git-dir"])
     assert git!(worktree, ["status", "--porcelain"]) == ""
     assignment = File.read!(file)
+
+    # It opens with what the WorkRequest is building and where the package sits.
+    assert [_title, building] = Regex.run(~r/\A# WorkPackage [^\n]+\n\n(.+?)\n\nYou are the worker/s, assignment)
+
+    assert building =~
+             ~r/\A## What we're building\n\n\*\*Improve WorkRequest intake\.\*\* Operators file requests in one place\.\n\nThis package is in Backend \/ Intake \S+\.\z/
+
+    refute assignment =~ "ghp_assignmentgroupsecret12345"
+
     assert assignment =~ "--id #{review_id} --mode fast --cd #{worktree}"
     assert assignment =~ "start it again while it runs"
     assert assignment =~ "Hand off feat/reviewed"
