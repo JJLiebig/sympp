@@ -7,7 +7,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.ReplaceSymppGroupsWith
   #
   # A dependency that named a group is replaced by the package-to-package
   # dependencies it stood for (every package in the group or its subgroups),
-  # so the execution graph is unchanged.
+  # so the execution graph is unchanged: each keeps the group dependency's
+  # candidate pin and selection time as its own constraint, and inputs a
+  # dependent already consumed under the group dependency are re-pointed to
+  # the dependency that replaces it.
   #
   # SQLite cannot drop product_tree_node_id because it carries a foreign key,
   # so sympp_work_packages is rebuilt. Other tables reference it with
@@ -99,7 +102,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.ReplaceSymppGroupsWith
   defp expand_group_dependencies(nodes) do
     edges =
       """
-      SELECT id, work_request_id, source_kind, source_id, target_kind, target_id, kind, reason, decision_ref, created_by, created_at
+      SELECT id, work_request_id, source_kind, source_id, target_kind, target_id, kind, reason, decision_ref, created_by, created_at,
+        candidate_head_sha, selection_updated_at
       FROM sympp_product_tree_dependency_edges
       WHERE source_kind = 'product_node' OR target_kind = 'product_node'
       """
@@ -139,7 +143,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.ReplaceSymppGroupsWith
     end
   end
 
-  defp insert_package_edges([id, work_request_id, source_kind, source_id, target_kind, target_id, kind, reason, decision_ref, created_by, created_at], members, now) do
+  defp insert_package_edges(
+         [id, work_request_id, source_kind, source_id, target_kind, target_id, kind, reason, decision_ref, created_by, created_at, candidate, selected_at],
+         members,
+         now
+       ) do
     sources = endpoint_packages(source_kind, source_id, members)
     targets = endpoint_packages(target_kind, target_id, members)
     shared = MapSet.intersection(MapSet.new(sources), MapSet.new(targets))
@@ -147,36 +155,47 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.ReplaceSymppGroupsWith
     for source <- sources,
         target <- targets,
         source != target,
-        not (MapSet.member?(shared, source) and MapSet.member?(shared, target)),
-        not package_edge_exists?(work_request_id, source, target, kind) do
+        not (MapSet.member?(shared, source) and MapSet.member?(shared, target)) do
+      new_id = expanded_edge_id(id, source, target)
+
       query!(
         """
         INSERT INTO sympp_product_tree_dependency_edges
-          (id, work_request_id, source_kind, source_id, target_kind, target_id, kind, reason, decision_ref, created_by, created_at, inserted_at, updated_at)
-        VALUES (?1, ?2, 'work_package', ?3, 'work_package', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
+          (id, work_request_id, source_kind, source_id, target_kind, target_id, kind, reason, decision_ref, created_by, created_at,
+           candidate_head_sha, selection_updated_at, inserted_at, updated_at)
+        VALUES (?1, ?2, 'work_package', ?3, 'work_package', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)
         """,
-        [expanded_edge_id(id, source, target), work_request_id, source, target, kind, reason, decision_ref, created_by, created_at, now]
+        [new_id, work_request_id, source, target, kind, reason, decision_ref, created_by, created_at, candidate, selected_at, now]
       )
+
+      {dependent, prerequisite} = if kind == "blocks", do: {target, source}, else: {source, target}
+      repoint_consumed_inputs(dependent, id, prerequisite, new_id)
     end
+  end
+
+  # Consumed inputs live in the dependent's progress payloads as
+  # dependency_inputs entries keyed by dependency id and prerequisite.
+  defp repoint_consumed_inputs(dependent, old_id, prerequisite, new_id) do
+    "SELECT id, payload FROM sympp_progress_events WHERE work_package_id = ?1 AND instr(payload, ?2) > 0"
+    |> query!([dependent, old_id])
+    |> Map.fetch!(:rows)
+    |> Enum.each(fn [event_id, payload] ->
+      with {:ok, %{"dependency_inputs" => inputs} = decoded} when is_list(inputs) <- Jason.decode(payload) do
+        repointed =
+          Enum.map(inputs, fn
+            %{"dependency_id" => ^old_id, "prerequisite_work_package_id" => ^prerequisite} = input -> Map.put(input, "dependency_id", new_id)
+            input -> input
+          end)
+
+        if repointed != inputs,
+          do: query!("UPDATE sympp_progress_events SET payload = ?1 WHERE id = ?2", [Jason.encode!(%{decoded | "dependency_inputs" => repointed}), event_id])
+      end
+    end)
   end
 
   defp endpoint_packages("product_node", id, members), do: Map.get(members, id, [])
   defp endpoint_packages("work_package", id, _members), do: [id]
   defp endpoint_packages(_kind, _id, _members), do: []
-
-  defp package_edge_exists?(work_request_id, source, target, kind) do
-    %{rows: [[count]]} =
-      query!(
-        """
-        SELECT count(*) FROM sympp_product_tree_dependency_edges
-        WHERE work_request_id = ?1 AND source_kind = 'work_package' AND source_id = ?2
-          AND target_kind = 'work_package' AND target_id = ?3 AND kind = ?4
-        """,
-        [work_request_id, source, target, kind]
-      )
-
-    count > 0
-  end
 
   defp expanded_edge_id(id, source, target) do
     suffix = :sha256 |> :crypto.hash([id, 0, source, 0, target]) |> Base.encode16(case: :lower) |> binary_part(0, 24)

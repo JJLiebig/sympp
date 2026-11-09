@@ -7,6 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GroupPathMigrationTest do
   @migration_version 20_261_109_120_000
   @previous_version 20_261_108_150_000
   @now "2026-11-01T00:00:00.000000Z"
+  @sha String.duplicate("a", 40)
 
   test "groups become paths, group dependencies become package dependencies, and package rows keep their children" do
     database_path =
@@ -29,15 +30,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GroupPathMigrationTest do
                ["WP-UI", "UI / UX"]
              ]
 
-      # Backend depended on WP-LOOSE, and UI/UX on Backend: each becomes the
-      # package dependencies it stood for. The existing package dependency is
-      # not duplicated.
-      assert rows!("SELECT source_id, target_id FROM sympp_product_tree_dependency_edges ORDER BY source_id, target_id") == [
-               ["WP-BACKEND", "WP-LOOSE"],
-               ["WP-BILLING", "WP-LOOSE"],
-               ["WP-UI", "WP-BACKEND"],
-               ["WP-UI", "WP-BILLING"]
+      # Backend depended on WP-LOOSE, and UI/UX on Backend and (pinned) on
+      # WP-BACKEND: each becomes the package dependencies it stood for. Every
+      # old constraint stays its own dependency, so the package dependency
+      # Billing already had is kept beside the one from its group.
+      assert rows!("SELECT source_id, target_id, candidate_head_sha, selection_updated_at FROM sympp_product_tree_dependency_edges ORDER BY source_id, target_id, candidate_head_sha") == [
+               ["WP-BACKEND", "WP-LOOSE", nil, nil],
+               ["WP-BILLING", "WP-LOOSE", nil, nil],
+               ["WP-BILLING", "WP-LOOSE", nil, nil],
+               ["WP-UI", "WP-BACKEND", nil, nil],
+               ["WP-UI", "WP-BACKEND", @sha, @now],
+               ["WP-UI", "WP-BILLING", nil, nil]
              ]
+
+      # The input WP-UI consumed under the pinned group dependency follows it.
+      [[pinned_id]] = rows!("SELECT id FROM sympp_product_tree_dependency_edges WHERE candidate_head_sha IS NOT NULL")
+      [[payload]] = rows!("SELECT payload FROM sympp_progress_events WHERE id = 'progress-ui-input'")
+
+      assert %{"dependency_inputs" => [%{"dependency_id" => ^pinned_id, "prerequisite_work_package_id" => "WP-BACKEND"}]} =
+               Jason.decode!(payload)
 
       assert [[0]] = rows!("SELECT count(*) FROM sympp_product_tree_dependency_edges WHERE source_kind <> 'work_package' OR target_kind <> 'work_package'")
       assert [] = rows!("SELECT name FROM sqlite_master WHERE name = 'sympp_product_tree_nodes'")
@@ -77,6 +88,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GroupPathMigrationTest do
     edge!("E-BACKEND-ON-LOOSE", "product_node", "N-BACKEND", "work_package", "WP-LOOSE")
     edge!("E-UI-ON-BACKEND", "product_node", "N-UI", "product_node", "N-BACKEND")
     edge!("E-EXISTING", "work_package", "WP-BILLING", "work_package", "WP-LOOSE")
+
+    Repo.query!(
+      "INSERT INTO sympp_product_tree_dependency_edges (id, work_request_id, source_kind, source_id, target_kind, target_id, kind, reason, candidate_head_sha, selection_updated_at, created_at, inserted_at, updated_at) VALUES ('E-UI-PINNED', 'WR-GROUPS', 'product_node', 'N-UI', 'work_package', 'WP-BACKEND', 'depends_on', 'Fixture.', ?1, ?2, ?2, ?2, ?2)",
+      [@sha, @now]
+    )
+
+    inputs =
+      Jason.encode!(%{
+        "head_sha" => String.duplicate("c", 40),
+        "dependency_inputs" => [%{"dependency_id" => "E-UI-PINNED", "prerequisite_work_package_id" => "WP-BACKEND", "candidate_head_sha" => @sha}]
+      })
+
+    Repo.query!(
+      "INSERT INTO sympp_progress_events (id, work_package_id, summary, status, sequence, payload, created_at, inserted_at, updated_at) VALUES ('progress-ui-input', 'WP-UI', 'Consumed', 'recorded', 1, ?1, ?2, ?2, ?2)",
+      [inputs, @now]
+    )
 
     Repo.query!(
       "INSERT INTO sympp_plan_nodes (id, work_package_id, title, status, position, created_at, inserted_at, updated_at) VALUES ('plan-billing', 'WP-BILLING', 'Step', 'pending', 0, ?1, ?1, ?1)",
