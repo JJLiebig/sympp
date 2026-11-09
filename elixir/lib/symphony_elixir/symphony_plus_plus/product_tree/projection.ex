@@ -54,18 +54,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
   end
 
   defp public_execution_graph(graph) do
-    edges =
-      Enum.map(graph.effective_edges, fn edge ->
-        %{edge | constraints: Enum.map(edge.constraints, &public_constraint/1)}
-      end)
-
+    edges = Enum.map(graph.effective_edges, &Map.take(&1, [:prerequisite_work_package_id, :dependent_work_package_id, :dependency_ids, :delivered, :waiting_for]))
     graph |> Map.drop([:merge_eligibility]) |> Map.put(:effective_edges, edges)
   end
-
-  defp public_constraint(%{candidate_head_sha: nil} = constraint),
-    do: Map.take(constraint, [:dependency_id, :available, :delivered])
-
-  defp public_constraint(constraint), do: Map.drop(constraint, [:selection_updated_at])
 
   defp dependency_edge_payload(%DependencyEdge{} = edge) do
     %{
@@ -73,7 +64,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
       source: %{kind: edge.source_kind, id: edge.source_id},
       target: %{kind: edge.target_kind, id: edge.target_id},
       kind: edge.kind,
-      candidate_head_sha: edge.candidate_head_sha,
       reason: Sanitizer.redacted_text(edge.reason),
       decision_ref: Sanitizer.redacted_json(edge.decision_ref),
       created_by: Sanitizer.redacted_text(edge.created_by),

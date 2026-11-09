@@ -60,22 +60,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
     request = create_work_request!(repo, [])
     backend = eligibility_package!(repo, request, "BACKEND", "ready")
     ui = eligibility_package!(repo, request, "UI", "ready")
-    stale = eligibility_package!(repo, request, "STALE", "ready")
     missing_backend = eligibility_package!(repo, request, "MISSING-BACKEND", "dispatched")
     missing = eligibility_package!(repo, request, "MISSING", "dispatched")
-    backend_head = String.duplicate("a", 40)
-    ui_head = String.duplicate("b", 40)
-    stale_head = String.duplicate("c", 40)
 
-    record_head!(repo, backend, backend_head)
-    record_head!(repo, ui, ui_head)
-    record_head!(repo, stale, stale_head)
-    ui_edge = pinned_dependency!(repo, ui, backend, backend_head)
-    stale_edge = pinned_dependency!(repo, stale, backend, backend_head)
-    pinned_dependency!(repo, missing, missing_backend, backend_head)
-    consume_input!(repo, ui, ui_edge, ui_head, backend_head)
-    consume_input!(repo, stale, stale_edge, stale_head, backend_head)
-    record_head!(repo, stale, String.duplicate("d", 40))
+    record_head!(repo, backend, String.duplicate("a", 40))
+    record_head!(repo, ui, String.duplicate("b", 40))
+    dependency!(repo, ui, backend)
+    dependency!(repo, missing, missing_backend)
 
     assert {:ok, canonical} = DeliveryBoard.project(repo, request.id)
     {{:ok, [full]}, full_queries} = capture_queries(fn -> Dashboard.work_request_details(repo, [request.id]) end)
@@ -102,11 +93,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
     assert by_id[backend.id]["reason_codes"] == []
     refute by_id[ui.id]["eligible"]
     assert by_id[ui.id]["reason_codes"] == ["dependency_not_delivered"]
-    assert "dependency_inputs_stale" in by_id[stale.id]["reason_codes"]
-    refute by_id[stale.id]["eligible"]
-    assert "not_ready" in by_id[missing.id]["reason_codes"]
-    assert "candidate_pin_stale" in by_id[missing.id]["reason_codes"]
-    assert "dependency_inputs_stale" in by_id[missing.id]["reason_codes"]
+    assert by_id[missing.id]["reason_codes"] == ["not_ready", "dependency_not_delivered"]
     refute by_id[missing.id]["eligible"]
 
     with_local_operator_endpoint(fn ->
@@ -173,7 +160,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
     end
   end
 
-  defp pinned_dependency!(repo, dependent, prerequisite, head) do
+  defp dependency!(repo, dependent, prerequisite) do
     assert {:ok, edge} =
              ProductTreeRepository.create_dependency_edge(repo, %{
                work_request_id: dependent.work_request_id,
@@ -182,25 +169,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
                target_kind: "work_package",
                target_id: prerequisite.id,
                kind: "depends_on",
-               reason: "Consume qualified backend",
-               candidate_head_sha: head
+               reason: "Needs the delivered backend"
              })
 
     edge
-  end
-
-  defp consume_input!(repo, package, edge, head, input_head) do
-    assert {:ok, _event} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: package.id,
-               summary: "Qualified wiring fixture",
-               payload: %{
-                 "type" => "dependency_inputs",
-                 "source_tool" => "sync_pr",
-                 "head_sha" => head,
-                 "dependency_inputs" => [%{"dependency_id" => edge.id, "prerequisite_work_package_id" => edge.target_id, "candidate_head_sha" => input_head}]
-               }
-             })
   end
 
   defp capture_queries(fun, projection \\ fn metadata -> metadata.query end) do

@@ -9,10 +9,9 @@ const ACTOR_LABELS: Record<string, string> = { architect: "Architect", prerequis
 const WAITING_LABELS: Record<string, string> = {
   active_blocker: "Active blocker",
   awaiting_integration: "Architect integration",
-  candidate_pin_stale: "Current candidate input",
   delivery_order_violation: "Delivery order resolution",
   dependency_cycle: "Dependency cycle resolution",
-  dependency_inputs_stale: "Requalification on current inputs",
+  stacked_on_unmerged_work: "Removal of another package's unmerged commits",
   dependency_not_delivered: "Prerequisite delivery",
   review_in_progress: "Review in progress",
   review_head_changed: "Changes since review need inspection",
@@ -31,7 +30,6 @@ const ACTION_LABELS: Record<string, string> = {
   clear_blocker: "clear the blocker",
   resolve_delivery_order_violation: "resolve delivery order",
   resolve_dependencies: "resolve dependencies",
-  select_current_candidate_and_requalify_affected_work: "select current input and requalify",
   verify_native_checks_and_review_then_merge: "verify checks and review, then integrate",
   wait: "wait for review",
 };

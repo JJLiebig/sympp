@@ -175,7 +175,8 @@ response. Existing fields retain their meaning. Read each entry of
 | `review_signal.steps` | Optional ordered ladder of `{index, name, state}` entries (`done`, `current`, or `pending`). |
 | `review_signal.round_history` | Optional oldest-first list of the latest 20 provider rounds. |
 | `worker_terminal` | The package's worker terminal as the Observer last saw it, `{address, state, status}`: `state` is `live` or `finished`; for a live terminal `status` is the core's agent state (such as `working` or `idle`), `live` when the core reports none, or `unknown` when the factory's core can't see it; for a finished one it is `finished`. `null` when no worker terminal was seen. |
-| `observation_stale` | Inputs the Observer couldn't read on its last sweep (`github`, `review`); `[]` when none. |
+| `observation_stale` | Inputs the Observer couldn't read on its last sweep (`github`, `review`, `stacking`); `[]` when none. |
+| `stacked_on` | Packages whose unmerged commits the PR carries; it keeps the PR from qualifying. `[]` when none. |
 | `progress` | For a `dispatched` package: `launching`, `implementing`, `worker_exited` or `review_ci` (an open PR). `null` otherwise. |
 
 Repository signals use only existing local checkouts under the factory repos root,

@@ -88,7 +88,7 @@ export function pr(number: number, sha: string, patch: object = {}) {
     reviewDecision: 'APPROVED', state: 'OPEN', isDraft: false,
     mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN',
     createdAt: '2026-01-01T10:00:00Z', updatedAt: '2026-01-01T11:00:00Z',
-    mergedAt: null, mergeCommit: null, ...patch,
+    mergedAt: null, mergeCommit: null, commits: [{ oid: sha }], ...patch,
   };
 }
 

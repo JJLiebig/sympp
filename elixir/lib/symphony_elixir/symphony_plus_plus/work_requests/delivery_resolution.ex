@@ -36,6 +36,47 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryResolution do
     resolve(work_package_id, work_packages_by_id, deliveries_by_id, successors_by_id, :work_request, %{})
   end
 
+  @doc """
+  What a dependent of an undelivered package waits for: the packages whose
+  delivery would satisfy it. Each entry names a package, the package it
+  succeeds (`successor_of`) when the wait runs through a supersession or skip,
+  and its `ended_as` outcome when it ended without delivering and has no
+  successor that could still deliver it (it then never satisfies on its own).
+  """
+  @spec waiting_for(String.t(), map(), map(), map()) :: [map()]
+  def waiting_for(work_package_id, work_packages_by_id, deliveries_by_id, successors_by_id \\ %{}) do
+    waits(work_package_id, nil, work_packages_by_id, deliveries_by_id, successors_by_id, %{})
+  end
+
+  defp waits(id, via, packages, deliveries, successors, visited) do
+    package = Map.get(packages, id)
+    outcome = deliveries |> Map.get(id) |> value(:outcome)
+
+    cond do
+      resolve(id, packages, deliveries, successors, :dependents, %{}) ->
+        []
+
+      is_nil(package) or is_nil(outcome) ->
+        [%{work_package_id: id, successor_of: via, ended_as: nil}]
+
+      outcome in @traversed_outcomes and not Map.has_key?(visited, id) ->
+        case same_request_successors(package, packages, deliveries, successors) do
+          [] -> [%{work_package_id: id, successor_of: via, ended_as: outcome}]
+          ids -> Enum.flat_map(ids, &waits(&1, id, packages, deliveries, successors, Map.put(visited, id, true)))
+        end
+
+      true ->
+        [%{work_package_id: id, successor_of: via, ended_as: outcome}]
+    end
+  end
+
+  defp same_request_successors(package, packages, deliveries, successors) do
+    package
+    |> value(:id)
+    |> successor_ids(deliveries, successors)
+    |> Enum.filter(&(value(Map.get(packages, &1), :work_request_id) == value(package, :work_request_id)))
+  end
+
   @spec successor_ids(String.t(), map(), map()) :: [String.t()]
   def successor_ids(work_package_id, deliveries_by_id, successors_by_id) do
     delivery = Map.get(deliveries_by_id, work_package_id, %{})

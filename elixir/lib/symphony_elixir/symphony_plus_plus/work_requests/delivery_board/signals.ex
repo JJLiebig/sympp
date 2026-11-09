@@ -8,7 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
   alias SymphonyElixir.SymphonyPlusPlus.HerdrCore
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, DependencyInputs, ExecutionGraph}
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, ExecutionGraph}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
@@ -43,11 +43,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
       product_tree =
         product_tree_for_request(work_request.id, product_trees_by_request, edges_by_request)
 
-      candidates? = Enum.any?(product_tree.dependency_edges, &(&1.candidate_head_sha || &1.selection_updated_at))
-
-      case DependencyInputs.context(repo, work_packages, candidates?) do
-        {:ok, input_context} ->
-          graph = ExecutionGraph.evaluate(product_tree, work_packages, deliveries, input_context)
+      case ExecutionGraph.successors(repo, work_packages) do
+        {:ok, successors} ->
+          graph = ExecutionGraph.evaluate(product_tree, work_packages, deliveries, successors)
           {:cont, {:ok, Map.put(graphs, work_request.id, scope_execution_graph(graph, work_packages, opts))}}
 
         {:error, _reason} = error ->
@@ -375,6 +373,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
 
     facts = %{
       dependencies_met?: unmet == [],
+      stacked_on: Map.get(summary, :stacked_on, []),
       progress: progress(summary),
       attention?: checks_failing? or review[:status] in ["inspection_needed", "failed"],
       # A worker that is idle or has exited can't act on failing CI or findings.
@@ -409,6 +408,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
     cond do
       reason = Enum.find(Map.get(eligibility, :reason_codes, []), &(&1 != "not_ready")) -> reason
       unmet != [] -> "unmet_dependencies"
+      Map.get(summary, :stacked_on, []) != [] -> "stacked_on_unmerged_work"
       get_in(summary, [:blocker_state, :active?]) -> "active_blocker"
       checks_failing? -> "validation_failed"
       Lifecycle.dispatched?(work_package) and progress(summary) == "worker_exited" -> "worker_exited"

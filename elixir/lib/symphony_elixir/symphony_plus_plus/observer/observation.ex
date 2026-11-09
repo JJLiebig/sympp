@@ -6,8 +6,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.Observation do
       evidence, CI rollup, failing check names, Codex receipt);
     * `review` - the last Review Suite status read by `review_id`;
     * `stale` - inputs that could not be read on the last sweep (`github`,
-      `review`). A stale input blocks qualification and merge eligibility and
-      never causes a transition.
+      `review`, `stacking`). A stale input blocks qualification and merge
+      eligibility and never causes a transition;
+    * `stacked_on` - the packages whose unmerged commits the PR carries
+      (`WorkPackages.Stacking`); it keeps the PR from qualifying.
   """
 
   use Ecto.Schema
@@ -22,6 +24,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.Observation do
     field(:pr, :map)
     field(:review, :map)
     field(:stale, StringList, default: [])
+    field(:stacked_on, StringList, default: [])
     field(:observed_at, :utc_datetime_usec)
     timestamps(type: :utc_datetime_usec)
   end

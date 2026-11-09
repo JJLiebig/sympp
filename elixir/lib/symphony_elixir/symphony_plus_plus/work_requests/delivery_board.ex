@@ -588,6 +588,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     end
   end
 
+  defp observed_stacking(context, work_package_id) do
+    case get_in(context, [:observations, work_package_id]) do
+      %{stacked_on: stacked_on} when is_list(stacked_on) -> stacked_on
+      _none -> []
+    end
+  end
+
   defp observed_review(context, work_package_id) do
     case get_in(context, [:observations, work_package_id]) do
       %{review: %{} = review} -> review
@@ -604,7 +611,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
   defp dependency_attention(work_package, context) do
     merge_eligibility(work_package, context).reason_codes
-    |> Enum.filter(&(&1 in ["candidate_pin_stale", "dependency_inputs_stale", "delivery_order_violation"]))
+    |> Enum.filter(&(&1 == "delivery_order_violation"))
   end
 
   defp slice_work_package_summary(work_package_id, delivery, context, opts) do
@@ -639,6 +646,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
           worker_signal: Map.get(activity, :worker_signal),
           worker_terminal: Signals.worker_terminal(Map.get(Map.get(context, :workers, %{}), work_package.id)),
           observation_stale: observation_stale(context, work_package.id),
+          stacked_on: observed_stacking(context, work_package.id),
           review_signal: Signals.review(work_package, metadata, observed_review(context, work_package.id)),
           blocker_state: Map.fetch!(activity, :blocker_state),
           runtime_state: Map.fetch!(activity, :runtime_state)
@@ -702,6 +710,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
           pr_signal: Signals.pr(metadata, delivery, observed_pr(context, work_package.id)),
           worker_terminal: Signals.worker_terminal(Map.get(Map.get(context, :workers, %{}), work_package.id)),
           observation_stale: observation_stale(context, work_package.id),
+          stacked_on: observed_stacking(context, work_package.id),
           review_signal: Signals.review(work_package, metadata, observed_review(context, work_package.id)),
           dependency_signal: Signals.dependency(work_package, context),
           blocker_state: Map.fetch!(activity, :blocker_state),

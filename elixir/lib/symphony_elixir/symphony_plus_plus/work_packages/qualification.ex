@@ -11,7 +11,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
     * a ready package unqualifies when a predicate is known to be false, or
       its PR now targets another base branch;
     * an unknown input (CI that reports nothing to the poller, a review host
-      that can't be read) blocks qualifying and never unqualifies.
+      or another PR the stacking check needs that can't be read) blocks
+      qualifying and never unqualifies.
   """
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection
@@ -30,7 +31,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
           required(:review) => review(),
           required(:head_sha) => String.t() | nil,
           optional(:manual?) => boolean(),
-          optional(:base_matches?) => boolean()
+          optional(:base_matches?) => boolean(),
+          optional(:stacked_on) => [String.t()] | :unknown
         }
   @type decision :: :qualify | {:unqualify, [String.t()]} | {:hold, [String.t()]}
 
@@ -93,12 +95,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
   end
 
   defp facts(%WorkPackage{} = package, graph, pr_facts, candidate_head) do
-    incoming = Enum.filter(graph.effective_edges, &(&1.dependent_work_package_id == package.id))
-
     Map.merge(pr_facts, %{
       head_changed?: is_binary(candidate_head) and candidate_head != pr_facts.head_sha,
-      dependencies_available?: ExecutionGraph.require_ready(graph, package.id) == :ok,
-      dependency_inputs_current?: not Enum.any?(incoming, &Enum.any?(&1.constraints, fn constraint -> not constraint.input_current end))
+      dependencies_delivered?: ExecutionGraph.require_ready(graph, package.id) == :ok
     })
   end
 
@@ -120,7 +119,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
   defp unknown_inputs(facts) do
     [
       {Map.get(facts, :ci_status) == "unknown" and not Map.get(facts, :manual?, false), "ci_unknown"},
-      {facts.review == :unknown, "review_unknown"}
+      {facts.review == :unknown, "review_unknown"},
+      {Map.get(facts, :stacked_on) == :unknown, "stacking_unknown"}
     ]
     |> Enum.flat_map(fn
       {true, reason} -> [reason]
@@ -132,6 +132,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
     facts
     |> Map.update!(:review, &if(&1 == :unknown, do: :done, else: &1))
     |> Map.update(:ci_status, nil, &if(&1 == "unknown", do: "passing", else: &1))
+    |> Map.update(:stacked_on, [], &if(&1 == :unknown, do: [], else: &1))
   end
 
   defp reasons(:qualified), do: []

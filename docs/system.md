@@ -164,33 +164,27 @@ ask state, or `null` when the call names nothing that exists) and
 are counted per day, tool, reason and layer in the ledger, without arguments;
 `summarize_failed_mcp_calls` reads the counts.
 
-### Qualified candidate dependencies
+### Delivered dependencies and stacked commits
 
-An architect can set `candidate_head_sha` with an `edit_plan` `set_dependency`
-op after qualifying that exact backend WorkPackage head through its native checks
-and review handoff. A current pin plus the backend's `ready` status and matching branch/PR head enables
-wiring and technical review before backend merge. Readiness alone does not prove
-checks or review passed. Without a pin, dispatch waits for actual delivered scope,
-including all required successors; skipped or abandoned attempts do not count.
-Set the pin to `null` to remove it.
+A dependency is met only by delivered work: a prerequisite that ended
+`pr_merged` or `completed_no_pr`, or a `superseded` or `skipped` one whose
+same-WorkRequest successors all delivered. `finished` never satisfies a
+dependent. `dispatch_work_package` refuses a package with an unmet
+dependency; the refusal's `next_action` names each package it waits for,
+including successors. Independent packages dispatch at once.
 
-The architect records which backend selections the dependent's current PR head
-consumed with `sync_pr(dependency_inputs)`; a green PR can't prove it. The
-[architect procedure](../packages/sympp/skills/symphony-architect/SKILL.md#deliver)
-owns approval, selection, recording and review-owner handoff.
-
-Clearing a previously consumed pin also invalidates that input evidence. Once the
-prerequisite has delivered, record fresh qualification with `candidate_head_sha: null`
-to qualify the delivered input. Dependencies
-that have never carried a candidate pin continue to require only delivery.
-
-
-The plan view of `read_work_request` exposes each dependency's constraints. A changed pin or candidate head makes affected input provenance stale.
-After qualifying the new input, append its selection for the current dependent head;
-other edges retain their valid selections. Repinning never refreshes old evidence.
-Ready packages remain immutable: create and qualify a successor before retiring the
-old candidate, then select that successor and requalify affected wiring. Provider
-review results stay with their provider; input provenance is not a review receipt.
+Every branch starts from its package's base and its PR targets it. A PR can't
+qualify while it carries commits of another active package's open PR in the
+same repository (`stacked_on_unmerged_work`): its next action is to remove that
+package's unmerged commits or wait for its PR to merge. Commits reachable from the base never count; ended packages and a
+package's own earlier PRs are left out. When two PRs share commits, the one
+holding all of the other's commits and more is the stacked one; otherwise the
+later-opened PR is. Commit lists come from GitHub: the Observer reads them only
+for repositories with two or more open watched PRs and only when a PR's head or
+base moves, and `sync_pr` reads its own PR's with `gh`. When another PR's state
+or commits can't be read, qualification waits (`stale: stacking`) rather than
+blocking. The check matches exact commits; a cherry-pick with new commit ids
+isn't detected.
 
 A ready-for-merge package can acquire a new integration blocker without changing
 its readiness or reviewed evidence. The architect declares and clears it with
@@ -199,11 +193,10 @@ its readiness or reviewed evidence. The architect declares and clears it with
 An active blocker makes the delivery board's `merge_eligibility.eligible` false.
 Workers route human decisions through the architect or chief.
 
-Before merging, the architect checks the delivery board's `merge_eligibility`,
-current selections, and native checks/review. Backend delivery must precede UI merge,
-and pinned heads must still match after backend delivery. External merges are
-recorded truthfully even when out of order; the board flags `delivery_order_violation`
-for remediation, including after the backend eventually delivers.
+Before merging, the architect checks the delivery board's `merge_eligibility`
+and native checks/review. External merges are recorded truthfully even when out
+of order; the board flags `delivery_order_violation` for remediation, including
+after the prerequisite eventually delivers.
 
 Dispatch takes a review mode (`fast`, `normal`, `deep` or `none`), prepares the
 package's factory worktree, writes the worker's assignment file under that
@@ -220,7 +213,7 @@ The factory's Observer watches dispatched packages: worker terminals through the
 factory host's herdr-core, PRs, CI and merges through one batched GitHub GraphQL
 read per minute, and the Review Suite cycle by its review id on the worker's
 machine. It qualifies, unqualifies and records merges itself; `sync_pr` attaches
-PRs it can't find and records consumed dependency inputs. A package whose GitHub
+PRs it can't find. A package whose GitHub
 or review state can't be read is flagged `stale` and changes nothing.
 Terminal packages have no pending merge next action. WorkRequest reads expose
 the derived `phase`, plus `next_action` when the operator has to act

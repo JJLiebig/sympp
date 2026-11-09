@@ -3,11 +3,9 @@ import type { WorkPackageMergeEligibility } from "./work-request";
 
 const QUALIFIED_STATES = new Set(["merge_ready", "ready"]);
 const REASON_COPY: Record<string, string> = {
-  candidate_pin_stale: "candidate input changed",
   delivery_order_violation: "delivery order conflict",
   dependencies_unavailable: "eligibility unavailable",
   dependency_cycle: "dependency cycle",
-  dependency_inputs_stale: "inputs need requalification",
   dependency_not_delivered: "waiting for prerequisite delivery",
 };
 

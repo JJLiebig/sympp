@@ -167,15 +167,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
 
     observation = scalar_fields(payload, fields)
 
-    observation =
-      case payload["dependency_inputs"] do
-        inputs when is_list(inputs) ->
-          Map.put(observation, "dependency_inputs", inputs |> Enum.filter(&is_map/1) |> Enum.map(&scalar_fields(&1, ~w(dependency_id prerequisite_work_package_id candidate_head_sha))))
-
-        _other ->
-          observation
-      end
-
     observation = if payload["type"] == "pr", do: pr_observation_states(payload, observation), else: observation
     payload_overview(payload) |> Map.put("observation", agent_safe(observation))
   end

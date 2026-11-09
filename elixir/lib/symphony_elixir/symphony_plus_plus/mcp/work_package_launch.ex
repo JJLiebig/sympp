@@ -130,6 +130,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
     `references/symphony-worker/procedure.md` in it.
 
     - Work only in `#{worktree.worktree_path}`, on branch `#{worktree.branch}`, targeting `#{worktree.base_branch}`.
+    - Keep the PR small and within the contract. Branch from `#{worktree.base_branch}`; never merge or cherry-pick
+      another unmerged branch. Once handed off, leave the branch alone unless your parent asks.
     #{review_step(work_package, worktree.worktree_path)}
     - Make no sympp MCP calls. Message only your parent terminal: one final handoff with the PR URL, the
       exact head, check and review results, and remaining risks, plus questions or blockers. Never message

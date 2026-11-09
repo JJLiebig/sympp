@@ -10,8 +10,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
   owner, so a fork branch with the same name is never taken; a package branch
   also needs the PR to target `base`.
 
-  Per PR it reads state, merge evidence, head, draft flag, the head commit's
-  check rollup and the last reviews (for the Codex receipt).
+  Per PR it reads state, merge evidence, head and base commits, draft flag,
+  the head commit's check rollup and the last reviews (for the Codex receipt).
+  A PR's commit list is a separate read (`commits/2`), made only when needed.
   """
 
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.Api
@@ -23,7 +24,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
 
   @fragment """
   fragment pr on PullRequest {
-    number url state isDraft merged mergedAt mergeable headRefOid headRefName baseRefName
+    number url state isDraft merged mergedAt mergeable headRefOid headRefName baseRefName baseRefOid
     mergeCommit { oid }
     headRepositoryOwner { login }
     commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 1) {
@@ -108,6 +109,49 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
   end
 
   @doc """
+  The commit lists of open PRs, as GitHub lists a PR's commits (commits
+  reachable from its base are left out; the first 100). One batched document
+  per 25 PRs. Each result carries the head and base it was read at.
+  """
+  @spec commits([{String.t(), String.t(), pos_integer()}], keyword()) :: %{{String.t(), String.t(), pos_integer()} => {:ok, map()} | {:error, Api.error()}}
+  def commits(prs, opts \\ []) when is_list(prs) do
+    graphql = Keyword.get(opts, :graphql, &Api.graphql/3)
+    priority = Keyword.get(opts, :priority, :background)
+
+    prs
+    |> Enum.uniq()
+    |> Enum.chunk_every(@batch_size)
+    |> Enum.flat_map(&fetch_commits_batch(&1, graphql, priority))
+    |> Map.new()
+  end
+
+  defp fetch_commits_batch(batch, graphql, priority) do
+    indexed = Enum.with_index(batch)
+    declarations = Enum.flat_map(indexed, fn {_pr, index} -> ["$o#{index}: String!", "$r#{index}: String!", "$n#{index}: Int!"] end)
+    variables = indexed |> Enum.flat_map(fn {{owner, repo, number}, index} -> [{"o#{index}", owner}, {"r#{index}", repo}, {"n#{index}", number}] end) |> Map.new()
+
+    selections =
+      Enum.map(indexed, fn {_pr, index} ->
+        "e#{index}: repository(owner: $o#{index}, name: $r#{index}) { pullRequest(number: $n#{index}) " <>
+          "{ headRefOid baseRefOid commits(first: 100) { nodes { commit { oid } } } } }"
+      end)
+
+    query = "query(#{Enum.join(declarations, ", ")}) {\n#{Enum.join(selections, "\n")}\n}\n"
+
+    case graphql.(query, variables, priority) do
+      {:ok, data} -> Enum.map(indexed, fn {pr, index} -> {pr, decode_commits(get_in(data, ["e#{index}", "pullRequest"]))} end)
+      {:error, reason} -> Enum.map(batch, &{&1, {:error, reason}})
+    end
+  end
+
+  defp decode_commits(%{"headRefOid" => head, "commits" => %{"nodes" => nodes}} = node) when is_binary(head) and is_list(nodes) do
+    oids = for %{"commit" => %{"oid" => oid}} when is_binary(oid) <- nodes, do: oid
+    {:ok, %{"head_sha" => head, "base_sha" => node["baseRefOid"], "commits" => oids}}
+  end
+
+  defp decode_commits(_unusable), do: {:error, :request_failed}
+
+  @doc """
   The names of the failing checks on a head: a detail read (ETag-cached REST),
   made only when a head's rollup turns failing.
   """
@@ -161,6 +205,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
       "merged_at" => node["mergedAt"],
       "merge_commit_sha" => get_in(node, ["mergeCommit", "oid"]),
       "head_sha" => node["headRefOid"],
+      "base_sha" => node["baseRefOid"],
       "branch" => node["headRefName"],
       "base_branch" => node["baseRefName"],
       "mergeable" => node["mergeable"] && String.downcase(node["mergeable"]),
