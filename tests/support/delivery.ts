@@ -19,9 +19,10 @@ export class Provider {
   readonly replies = new Map<number, Reply>();
   readonly apiReplies = new Map<string, Reply>();
   readonly calls: { argv: string[]; reply: Reply }[] = [];
-  // GitHub's HTTP API: down answers 503; unreadable PRs resolve to nothing.
+  // GitHub's HTTP API: down answers 503; unreadable PRs and branch lookups resolve to nothing.
   github: 'up' | 'down' = 'up';
   readonly unreadable = new Set<number>();
+  readonly unreadableBranches = new Set<string>();
   readonly graphql: { query: string; variables: Record<string, unknown> }[] = [];
   readonly rest: string[] = [];
   // herdr-core: `core` null is unreachable. `sent` records `hc send`.
@@ -116,6 +117,8 @@ export class Provider {
           if (this.unreadable.has(variables[`n${index}`])) { data[`e${index}`] = null; continue; }
           const pr = this.pr(variables[`n${index}`]);
           data[`e${index}`] = { pullRequest: pr && prNode(pr) };
+        } else if (this.unreadableBranches.has(variables[`b${index}`])) {
+          data[`e${index}`] = null;
         } else {
           const base = variables[`t${index}`];
           const nodes = this.prs(repository).filter((pr) => pr.headRefName === variables[`b${index}`] && (!base || pr.baseRefName === base));

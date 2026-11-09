@@ -179,4 +179,25 @@ test('the watcher holds a PR stacked on another package\'s unmerged work until t
   expect(await status(feature)).toBe('ready');
   expect((await row(architect, request, feature)).work_package.stacked_on).toEqual([]);
   expect((await row(architect, request, later)).work_package.stacked_on).toEqual([feature]);
+  // A package's own earlier PR never counts against its replacement.
+  const [own, hidden] = await architect.addPackages([
+    contract('Own replacement', { branch_pattern: 'feature/delivery-317' }), contract('Hidden PR', { branch_pattern: 'feature/delivery-319' }),
+  ]);
+  for (const wp of [own, hidden]) await architect.call('dispatch_work_package', { work_package_id: wp });
+  open(317, head('7'), [head('7')]);
+  await architect.call('sync_pr', { work_package_id: own, url: prUrl(317) });
+  open(318, head('8'), [head('7'), head('8')], { headRefName: 'feature/delivery-317',
+    statusCheckRollup: [{ name: 'required', status: 'IN_PROGRESS', conclusion: null }] });
+  expect((await architect.call('sync_pr', { work_package_id: own, url: prUrl(318) })).work_package.status).toBe('dispatched');
+  // A package whose branch lookup fails may hide an open PR: work in its repository waits.
+  open(318, head('8'), [head('7'), head('8')], { headRefName: 'feature/delivery-317' });
+  provider.unreadableBranches.add('feature/delivery-319');
+  await factory.tick('sweep');
+  expect(await status(own)).toBe('dispatched');
+  expect((await row(architect, request, own)).work_package.observation_stale).toEqual(['stacking']);
+  provider.unreadableBranches.delete('feature/delivery-319');
+  await factory.tick('sweep');
+  const replaced = await row(architect, request, own);
+  expect(replaced.raw_status).toBe('ready');
+  expect(replaced.work_package.stacked_on).toEqual([]);
 });

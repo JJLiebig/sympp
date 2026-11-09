@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
@@ -117,6 +119,65 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
 
     assert {:ok, %{status: "applied", reason: "github_pr_merged", applied_count: 1}} = DeliveryReconciler.reconcile_work_package(repo, linked_package.id)
     assert repo.get_by!(WorkPackageDelivery, work_package_id: linked_package.id).merge_commit_sha == "merge-sha-907"
+  end
+
+  test "later sync for a replaced PR does not become the active closeout PR", %{repo: repo} do
+    {_work_request, _work_package, linked_package} =
+      linked_slice!(repo,
+        work_request_id: "WR-RECONCILE-REPLACED-PR",
+        work_package_id: "WP-RECONCILE-REPLACED-PR",
+        status: "ready"
+      )
+
+    append_replaced_pr_evidence!(repo, linked_package)
+
+    assert {:ok, %{applied_count: 0, status: "skipped", reason: "no_structured_pr_merge_evidence"}} =
+             DeliveryReconciler.reconcile_work_package(repo, linked_package.id)
+
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
+    assert repo.get!(WorkPackage, linked_package.id).status == "ready"
+  end
+
+  test "blank work-package base branch is skipped with a clear reason", %{repo: repo} do
+    {_work_request, work_package, linked_package} =
+      linked_slice!(repo,
+        work_request_id: "WR-RECONCILE-BLANK-SLICE-BASE",
+        work_package_id: "WP-RECONCILE-BLANK-SLICE-BASE",
+        status: "ready"
+      )
+
+    repo.update_all(from(slice in WorkPackage, where: slice.id == ^work_package.id), set: [base_branch: ""])
+    append_merged_pr_evidence!(repo, linked_package, 905, "head-905", base_branch: "main")
+
+    assert {:ok, result} = DeliveryReconciler.reconcile_work_package(repo, linked_package.id)
+
+    assert %{applied_count: 0, status: "skipped", reason: "missing_base_branch", actual_base_branch: "main"} = result
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
+    assert repo.get!(WorkPackage, linked_package.id).status == "ready"
+  end
+
+  test "decision-log prose does not infer no-PR completion", %{repo: repo} do
+    {work_request, _work_package, linked_package} =
+      linked_slice!(repo,
+        work_request_id: "WR-RECONCILE-NO-PR-PROSE",
+        work_package_id: "WP-RECONCILE-NO-PR-PROSE",
+        status: "dispatched"
+      )
+
+    assert {:ok, _decision} =
+             WorkRequestRepository.record_decision(repo, work_request.id, %{
+               source_type: "architect",
+               created_by: "architect-1",
+               decision: "Slice completed without PR.",
+               rationale: "Operator prose only.",
+               scope_impact: "Advisory note."
+             })
+
+    assert {:ok, %{applied_count: 0, status: "skipped", reason: "no_structured_pr_merge_evidence"}} =
+             DeliveryReconciler.reconcile_work_package(repo, linked_package.id)
+
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
+    assert repo.get!(WorkPackage, linked_package.id).status == "dispatched"
   end
 
   defp linked_slice!(repo, overrides) do
@@ -374,5 +435,69 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     }
 
     Enum.into(overrides, defaults)
+  end
+
+  defp append_replaced_pr_evidence!(repo, work_package) do
+    old_url = "https://github.com/nextide/repo/pull/100"
+    new_url = "https://github.com/nextide/repo/pull/101"
+
+    assert {:ok, _branch} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: work_package.id,
+               summary: "Branch attached",
+               status: "branch_attached",
+               payload: %{type: "branch", source_tool: "attach_branch", branch: "agent/#{work_package.id}", head_sha: "new-head"}
+             })
+
+    assert {:ok, _old_attached} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: work_package.id,
+               summary: "Old PR attached",
+               status: "pr_attached",
+               payload: %{
+                 type: "pr",
+                 source_tool: "attach_pr",
+                 url: old_url,
+                 repository: "nextide/repo",
+                 number: 100,
+                 head_sha: "old-head",
+                 base_branch: "main"
+               }
+             })
+
+    assert {:ok, _new_attached} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: work_package.id,
+               summary: "Replacement PR attached",
+               status: "pr_attached",
+               payload: %{
+                 type: "pr",
+                 source_tool: "attach_pr",
+                 url: new_url,
+                 repository: "nextide/repo",
+                 number: 101,
+                 head_sha: "new-head",
+                 base_branch: "main"
+               }
+             })
+
+    assert {:ok, _old_synced} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: work_package.id,
+               summary: "Old PR merged after replacement",
+               status: "pr_synced",
+               payload: %{
+                 type: "pr",
+                 source_tool: "sync_pr",
+                 url: old_url,
+                 repository: "nextide/repo",
+                 number: 100,
+                 head_sha: "old-head",
+                 base_branch: "main",
+                 merged_at: "2026-05-24T12:00:00Z",
+                 merge_commit_sha: "merge-sha-100",
+                 merge_state: %{merged: true}
+               }
+             })
   end
 end

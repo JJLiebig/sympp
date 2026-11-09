@@ -1,7 +1,8 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   use ExUnit.Case, async: false
 
-  alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
+  alias SymphonyElixir.GitHubTestSupport
+  alias SymphonyElixir.SymphonyPlusPlus.GitHub.{Api, PullRequestProgress}
   alias SymphonyElixir.SymphonyPlusPlus.Observer
   alias SymphonyElixir.SymphonyPlusPlus.Observer.Observation
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
@@ -90,6 +91,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert repo.get!(WorkPackage, package.id).status == "dispatched"
       assert {:ok, %{payload: %{"head_sha" => "head-b"}}} = current_pr(repo, package.id)
       assert repo.get!(Observation, package.id).pr == nil
+    end
+
+    test "without a GitHub token every watched package is stale and nothing changes", %{repo: repo} do
+      package = package!(repo, "WP-OBS-NO-TOKEN", status: "ready")
+      attach!(repo, package, 91)
+      Api.forget_token()
+
+      GitHubTestSupport.with_github_token_env(nil, fn ->
+        Application.put_env(:symphony_elixir, :sympp_github_request, fn request -> flunk("GitHub request without a token: #{inspect(request.url)}") end)
+
+        try do
+          Observer.sweep(repo, review: &no_review/2)
+        after
+          Application.delete_env(:symphony_elixir, :sympp_github_request)
+          Api.forget_token()
+        end
+      end)
+
+      assert repo.get!(WorkPackage, package.id).status == "ready"
+      assert repo.get!(Observation, package.id).stale == ["github"]
     end
   end
 
