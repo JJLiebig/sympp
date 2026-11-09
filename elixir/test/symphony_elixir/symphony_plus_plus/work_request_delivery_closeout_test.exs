@@ -9,6 +9,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -54,6 +55,47 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
              AgentRunRepository.start_run(repo, %{work_package_id: linked_package.id, status: "starting"})
   end
 
+  test "PR merged recovery closeout ignores stale agent runtime rows that are not operationally active", %{repo: repo} do
+    {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready")
+
+    assert {:ok, agent_run} =
+             AgentRunRepository.start_run(repo, %{
+               work_package_id: linked_package.id,
+               status: "running",
+               last_seen_at: DateTime.add(DateTime.utc_now(:microsecond), -301, :second)
+             })
+
+    assert {:ok, %{work_packages: [before_closeout]}} = DeliveryBoard.project(repo, work_request.id)
+    assert before_closeout.operational_state.key == "merge_ready"
+    assert before_closeout.work_package.runtime_state.active? == false
+    assert before_closeout.work_package.runtime_state.stale? == true
+    assert before_closeout.work_package.runtime_state.stale_agent_run_ids == [agent_run.id]
+    assert "agent_run_stale" in before_closeout.work_package.runtime_state.reason_codes
+
+    attrs =
+      delivery_attrs(%{
+        outcome: "pr_merged",
+        idempotency_key: "delivery-pr-merged-stale-agent-runtime",
+        pr_url: "https://github.com/nextide/symphony-plus-plus/pull/131",
+        pr_number: 131,
+        pr_repository: "nextide/symphony-plus-plus",
+        pr_merged_at: ~U[2026-05-24 12:57:00.000000Z],
+        merge_commit_sha: "abc131"
+      })
+
+    assert {:ok, delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
+    assert delivery.outcome == "pr_merged"
+    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
+
+    assert [event] = repo.all(ProgressEvent)
+    assert "agent_run_stale" in event.payload["runtime_reason_codes_before_closeout"]
+    assert event.payload["ignored_stale_agent_run_ids"] == [agent_run.id]
+
+    assert {:ok, %{counts: %{"delivered" => 1}, work_packages: [after_closeout]}} = DeliveryBoard.project(repo, work_request.id)
+    assert after_closeout.operational_state.key == "delivered"
+    refute "work_package_active_after_delivery" in after_closeout.attention_reason_codes
+  end
+
   test "colliding closeout progress does not bypass validation or terminal mutation", %{repo: repo} do
     {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready")
     delivery_idempotency_key = "delivery-progress-collision"
@@ -94,6 +136,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
     assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
     assert repo.aggregate(ProgressEvent, :count, :id) == 1
     assert repo.get!(WorkPackage, linked_package.id).status == "ready"
+  end
+
+  test "stale agent runs do not block normal closeout and remain audited", %{repo: repo} do
+    {work_request, work_package, linked_package} =
+      linked_slice!(repo,
+        work_request_id: "WR-DELIVERY-STALE-AGENT-RUN",
+        status: "ready"
+      )
+
+    assert {:ok, agent_run} =
+             AgentRunRepository.start_run(repo, %{
+               work_package_id: linked_package.id,
+               status: "running",
+               last_seen_at: DateTime.add(DateTime.utc_now(:microsecond), -301, :second)
+             })
+
+    attrs =
+      delivery_attrs(%{
+        outcome: "completed_no_pr",
+        idempotency_key: "delivery-stale-agent-run",
+        no_pr_evidence: "The only runtime evidence is stale."
+      })
+
+    assert {:ok, delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
+    assert delivery.outcome == "completed_no_pr"
+
+    assert [event] = repo.all(ProgressEvent)
+    assert event.payload["previous_status"] == "ready"
+    assert "agent_run_stale" in event.payload["runtime_reason_codes_before_closeout"]
+    assert event.payload["ignored_stale_agent_run_ids"] == [agent_run.id]
   end
 
   defp linked_slice!(repo, overrides) do
