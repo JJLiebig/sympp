@@ -246,11 +246,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       # `main` merged in with the PR's own patch unchanged: Review Suite accepts
       # the review for the new head, so the package stays ready.
       new_head = String.duplicate("d", 40)
-      green = GitHubPullRequestFixtures.metadata(412, new_head, base_branch: anchor.base_branch)
+      green = GitHubPullRequestFixtures.metadata(412, new_head, base_branch: anchor.base_branch) |> Map.put("check_summary", %{"status" => "success"})
       FakeGitHubClient.put_response("nextide/repo", 412, green)
       Agent.update(reviewed, fn _state -> {head, new_head} end)
       carried = mcp_tool(repo, "t1", "sync_pr", url_only)
       assert get_in(carried, ["result", "structuredContent", "work_package", "status"]) == "ready"
+
+      # A new head whose checks GitHub doesn't report yet is unproven, even on a
+      # manual sync; the next sync accepts it for that head, as when qualifying.
+      unchecked_head = String.duplicate("e", 40)
+      unchecked = GitHubPullRequestFixtures.metadata(412, unchecked_head, base_branch: anchor.base_branch)
+      FakeGitHubClient.put_response("nextide/repo", 412, unchecked)
+      Agent.update(reviewed, fn _state -> {head, unchecked_head} end)
+      moved = mcp_tool(repo, "t1", "sync_pr", url_only)
+      assert get_in(moved, ["result", "structuredContent", "work_package", "status"]) == "dispatched"
+      assert "ci_unknown" in get_in(moved, ["result", "structuredContent", "pr_sync", "readiness_reasons"])
+      resynced = mcp_tool(repo, "t1", "sync_pr", url_only)
+      assert get_in(resynced, ["result", "structuredContent", "work_package", "status"]) == "ready"
+
+      FakeGitHubClient.put_response("nextide/repo", 412, green)
+      Agent.update(reviewed, fn _state -> {head, new_head} end)
+      assert get_in(mcp_tool(repo, "t1", "sync_pr", url_only), ["result", "structuredContent", "work_package", "status"]) == "ready"
 
       # Each qualification predicate that stops holding unqualifies the ready package;
       # a green sync of the current head qualifies it again.
@@ -270,7 +286,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       end
 
       assert {:ok, %{progress_events: events}} = PlanningRepository.get_state(repo, approved_slice.id)
-      assert Enum.count(events, &(&1.status == "unqualified")) == 3
+      assert Enum.count(events, &(&1.status == "unqualified")) == 4
 
       FakeGitHubClient.put_response(
         "nextide/repo",

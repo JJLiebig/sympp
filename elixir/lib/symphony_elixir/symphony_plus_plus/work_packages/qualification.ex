@@ -111,7 +111,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
     end
   end
 
-  defp definite_reasons(_facts, reasons, unknown, _scope, true = _moved?), do: Enum.uniq(reasons ++ unknown)
+  # A manual sync accepts CI that reports no state only for the head the package
+  # qualified on.
+  defp definite_reasons(facts, reasons, unknown, _scope, true = _moved?) do
+    ci = if Map.get(facts, :ci_status) == "unknown", do: ["ci_unknown"], else: []
+    Enum.uniq(reasons ++ unknown ++ ci)
+  end
+
   defp definite_reasons(facts, _reasons, _unknown, scope, false = _moved?), do: reasons(Lifecycle.qualification(assume_known(facts))) ++ scope
 
   # An architect's manual sync accepts CI that reports no state; the poller
