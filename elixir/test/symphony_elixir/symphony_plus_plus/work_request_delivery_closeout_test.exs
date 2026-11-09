@@ -10,7 +10,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -56,34 +55,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
              AgentRunRepository.start_run(repo, %{work_package_id: linked_package.id, status: "starting"})
   end
 
-  test "PR merged recovery closeout ends a stale dispatched package", %{repo: repo} do
-    {work_request, work_package, linked_package} = linked_slice!(repo, status: "dispatched")
-
-    attrs =
-      delivery_attrs(%{
-        outcome: "pr_merged",
-        idempotency_key: "delivery-pr-merged-stale-worker",
-        pr_url: "https://github.com/nextide/symphony-plus-plus/pull/124",
-        pr_number: 124,
-        pr_repository: "nextide/symphony-plus-plus",
-        pr_merged_at: ~U[2026-05-24 12:30:00.000000Z],
-        merge_commit_sha: "abc124"
-      })
-
-    assert {:ok, delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
-    assert delivery.outcome == "pr_merged"
-
-    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
-
-    assert [event] = repo.all(ProgressEvent)
-    assert event.status == "ended"
-    assert event.payload["previous_status"] == "dispatched"
-
-    assert {:ok, %{counts: %{"delivered" => 1}, work_packages: [slice]}} = DeliveryBoard.project(repo, work_request.id)
-    assert slice.operational_state.key == "delivered"
-    assert slice.work_package.raw_status == "ended"
-  end
-
   test "PR merged recovery closeout ignores stale agent runtime rows that are not operationally active", %{repo: repo} do
     {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready")
 
@@ -123,28 +94,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
     assert {:ok, %{counts: %{"delivered" => 1}, work_packages: [after_closeout]}} = DeliveryBoard.project(repo, work_request.id)
     assert after_closeout.operational_state.key == "delivered"
     refute "work_package_active_after_delivery" in after_closeout.attention_reason_codes
-  end
-
-  test "a replayed closeout returns the recorded delivery and keeps the request complete", %{repo: repo} do
-    {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready")
-
-    attrs =
-      delivery_attrs(%{
-        outcome: "pr_merged",
-        idempotency_key: "delivery-legacy-pr-merged",
-        pr_url: "https://github.com/nextide/symphony-plus-plus/pull/790",
-        pr_number: 790,
-        pr_repository: "nextide/symphony-plus-plus",
-        pr_merged_at: ~U[2026-05-24 14:30:00.000000Z],
-        merge_commit_sha: "legacy-790"
-      })
-
-    assert {:ok, delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
-    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
-
-    assert {:ok, replay} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
-    assert replay.id == delivery.id
-    assert {:ok, %{phase: "done"}} = Phase.load_one(repo, repo.get!(WorkRequest, work_request.id))
   end
 
   test "colliding closeout progress does not bypass validation or terminal mutation", %{repo: repo} do
@@ -187,28 +136,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
     assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
     assert repo.aggregate(ProgressEvent, :count, :id) == 1
     assert repo.get!(WorkPackage, linked_package.id).status == "ready"
-  end
-
-  test "investigation no-PR closeout closes the linked package", %{repo: repo} do
-    {work_request, work_package, linked_package} =
-      linked_slice!(repo,
-        work_request_id: "WR-DELIVERY-INVESTIGATION-NO-PR",
-        work_package_id: "wp_o3kgjdl7gausbmqi",
-        kind: "investigation",
-        status: "ready"
-      )
-
-    attrs =
-      delivery_attrs(%{
-        outcome: "completed_no_pr",
-        idempotency_key: "delivery-investigation-no-pr",
-        no_pr_evidence: "Investigation completed without a PR."
-      })
-
-    assert {:ok, delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
-    assert delivery.outcome == "completed_no_pr"
-    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
-    assert Enum.any?(repo.all(ProgressEvent), &(&1.payload["type"] == "work_request_delivery_closeout"))
   end
 
   test "stale agent runs do not block normal closeout and remain audited", %{repo: repo} do

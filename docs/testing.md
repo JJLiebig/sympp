@@ -46,6 +46,16 @@ are supplied. MCP drives dispatch, dependency selection and reconciliation;
 public operator reads observe stored qualification and request completion.
 Provider and MCP receipts accompany the process logs, including failed calls.
 
+Watcher journeys (delivery, stacking and cards) start the candidate as the
+installed service runs it: the packaged supervision tree on a disposable ledger
+(`tests/support/watcher.exs`). The Observer's two passes run only when the
+journey asks and finish before it continues, so no timer runs between steps.
+GitHub's HTTP API is the same loopback provider, answering GraphQL and REST
+from the PR model `gh` reads; a test-only `hc` stands in for herdr-core; card
+checkouts are real disposable Git repositories. This proves the Observer's
+decisions on real inputs, not GitHub's GraphQL compatibility or a live
+herdr-core.
+
 Authority and recovery journeys use real candidate clients that assert distinct
 synthetic Herdr terminal identities for ownership contention, read-only access
 without an identity, operator Release, reconnects, terminal delivery, and an
@@ -111,10 +121,9 @@ still run; same-contract cross-revision refresh needs a compatible published bas
 Retention journeys use public operator settings and lifecycle actions against
 disposable candidate ledgers. Age fixtures stop the candidate before changing
 timestamps; they never manufacture completion, archive, ownership or dispatch.
-Cards are observed only by the factory runtime's Observer, which the cockpit
-does not run, so card states, asks and retention are ExUnit checks with faked
-herdr-core, git and GitHub reads. Exact time boundaries, historical migrations and precise contention remain
-separate hosted storage checks.
+Card states and asks are watcher journeys. Card retention timing, and a
+dismissal racing a sweep, stay ExUnit checks. Exact time boundaries, historical
+migrations and precise contention remain separate hosted storage checks.
 
 Worktree journeys use real disposable Git repositories. They prove preparation,
 replay, current remote bases, divergent local branch refusal and offline

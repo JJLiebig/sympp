@@ -17,7 +17,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
-  alias SymphonyElixir.TestSupport
   alias SymphonyElixir.WorkPackageFactory
 
   setup_all do
@@ -80,27 +79,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert closeout_event.payload["ignored_stale_agent_run_ids"] == [agent_run.id]
   end
 
-  test "apply records merged PR closeout for a stale dispatched package", %{repo: repo} do
-    {_work_request, work_package, linked_package} =
-      linked_slice!(repo,
-        work_request_id: "WR-RECONCILE-STALE-PR-MERGED",
-        work_package_id: "WP-RECONCILE-STALE-PR-MERGED",
-        status: "dispatched"
-      )
-
-    append_merged_pr_evidence!(repo, linked_package, 913, "old-head-913", synced_head_sha: "head-913")
-
-    assert {:ok, applied} = DeliveryReconciler.reconcile_work_package(repo, linked_package.id, recorded_by: "reconciler-test")
-
-    assert %{status: "applied", applied_count: 1, work_package_id: work_package_id} = applied
-    assert work_package_id == work_package.id
-    assert work_package_id == linked_package.id
-
-    assert [delivery] = repo.all(WorkPackageDelivery)
-    assert delivery.outcome == "pr_merged"
-    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
-  end
-
   test "apply leaves active blockers unchanged when delivery recording fails", %{repo: repo} do
     {work_request, work_package, linked_package} =
       linked_slice!(
@@ -143,22 +121,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
 
     assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
     assert WorkPackageActivity.context(repo, linked_package.id).blocker_state.active?
-  end
-
-  test "delivery matches merged PR evidence to a local checkout scope", %{repo: repo} do
-    {_work_request, _work_package, linked_package} =
-      linked_slice!(repo,
-        work_request_id: "WR-RECONCILE-LOCAL-REPO",
-        work_package_id: "WP-RECONCILE-LOCAL-REPO",
-        status: "ready"
-      )
-
-    repo_path = TestSupport.git_repo_with_origin_fixture!("https://github.com/nextide/repo.git", prefix: "sympp-delivery-repo")
-    repo.update_all(from(package in WorkPackage, where: package.id == ^linked_package.id), set: [repo: repo_path])
-    append_merged_pr_evidence!(repo, linked_package, 906, "head-906")
-
-    assert {:ok, %{applied_count: 1}} = DeliveryReconciler.reconcile_work_package(repo, linked_package.id)
-    assert repo.get!(WorkPackage, linked_package.id).status == "ended"
   end
 
   test "blank work-package base branch is skipped with a clear reason", %{repo: repo} do

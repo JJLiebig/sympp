@@ -12,8 +12,12 @@ export class Factory extends Candidate {
   readonly endpoint: Promise<string>;
   readonly receipt: string;
 
-  constructor(readonly root: string, provider?: { bin: string; endpoint: string }, options: CandidateOptions & { name?: string } = {}) {
+  // `onTerminal` tells a controlled herdr-core about each client's live terminal.
+  private onTerminal?: (address: string) => void;
+
+  constructor(readonly root: string, provider?: { bin: string; endpoint: string }, options: CandidateOptions & { name?: string; onTerminal?: (address: string) => void } = {}) {
     super(root, options.name ?? 'factory', 'http', provider, options);
+    this.onTerminal = options.onTerminal;
     this.receipt = join('.e2e', `${basename(root)}-mcp.jsonl`);
     this.endpoint = new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('Candidate cockpit startup timed out')), 30_000);
@@ -37,6 +41,7 @@ export class Factory extends Candidate {
   // Each client is its own Herdr terminal unless told otherwise; `null` is a
   // caller outside Herdr, which can only read.
   async client(terminal: string | null = nextTerminal(), labels: Record<string, string> = {}) {
+    if (terminal) this.onTerminal?.(terminal);
     const client = new Client(await this.endpoint, this.receipt, terminal, labels);
     const initialized = await client.rpc('initialize', {
       protocolVersion: '2025-03-26', capabilities: {},
