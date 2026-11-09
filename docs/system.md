@@ -219,7 +219,9 @@ machine. It qualifies, unqualifies and records merges itself; `sync_pr` attaches
 PRs it can't find. A review counts while Review Suite accepts it for the PR's
 current head, including after a merge or rebase that leaves the PR's own patch
 unchanged ([review across head changes](operator-board-api.md#review-across-head-changes)). A package whose GitHub
-or review state can't be read is flagged `stale` and changes nothing.
+or review state can't be read is flagged `stale` and changes nothing, except
+that a ready package whose PR moved to a new head goes back until that head's
+checks and review are known.
 Terminal packages have no pending merge next action. WorkRequest reads expose
 the derived `phase`, plus `next_action` when the operator has to act
 (`complete_or_archive` for `unresolved`, `restore` for `archived`). Native Herdr

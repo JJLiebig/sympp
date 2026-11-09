@@ -12,11 +12,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
       its PR now targets another base branch;
     * an unknown input (CI that reports nothing to the poller, a review host
       or another PR the stacking check needs that can't be read) blocks
-      qualifying and never unqualifies.
+      qualifying, and unqualifies a ready package only once its PR head has
+      moved off the head it qualified on.
   """
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection
-  alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestArtifact
+  alias SymphonyElixir.SymphonyPlusPlus.GitHub.{PullRequestArtifact, PullRequestProgress}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
@@ -48,6 +49,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
 
   def review(%WorkPackage{}, _head_sha), do: :none
 
+  @doc """
+  The head a ready package was qualified on (its recorded PR head); a
+  dispatched package has none. Read it before recording a new snapshot.
+  """
+  @spec candidate_head(module(), WorkPackage.t()) :: {:ok, String.t() | nil} | {:error, term()}
+  def candidate_head(repo, %WorkPackage{} = package) do
+    if Lifecycle.ready?(package), do: attached_head(repo, package), else: {:ok, nil}
+  end
+
+  defp attached_head(repo, %WorkPackage{} = package) do
+    with {:ok, state} <- PlanningRepository.get_state(repo, package.id) do
+      case PullRequestProgress.current_pr_state(state.progress_events) do
+        {:ok, current} -> {:ok, current.payload["head_sha"]}
+        {:error, :missing_attached_pr} -> {:ok, nil}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
   @doc "Records a PR snapshot: the branch, the attached PR and the synced snapshot."
   @spec record_pr(module(), Actor.t(), WorkPackage.t(), map()) :: :ok | {:error, term()}
   def record_pr(repo, %Actor{} = actor, %WorkPackage{} = package, payload) do
@@ -65,21 +85,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
   Evaluates the predicates and readiness gates for `package` and returns the
   decision with every reason that keeps it from qualifying.
   """
-  @spec decide(module(), WorkPackage.t(), pr_facts()) :: {:ok, decision()} | {:error, term()}
-  def decide(repo, %WorkPackage{} = package, pr_facts) do
+  @spec decide(module(), WorkPackage.t(), pr_facts(), String.t() | nil) :: {:ok, decision()} | {:error, term()}
+  def decide(repo, %WorkPackage{} = package, pr_facts, candidate_head) do
     with {:ok, state} <- PlanningRepository.get_state(repo, package.id),
          {:ok, graph} <- ExecutionGraph.evaluate(repo, package.work_request_id) do
       facts = Map.put(pr_facts, :dependencies_delivered?, ExecutionGraph.require_ready(graph, package.id) == :ok)
       gates = state |> OperationalProjection.readiness_failure_reasons() |> Enum.map(& &1["gate"])
-      {:ok, decision(package, facts, gates)}
+      moved? = is_binary(candidate_head) and candidate_head != pr_facts.head_sha
+      {:ok, decision(package, facts, gates, moved?)}
     end
   end
 
-  defp decision(%WorkPackage{} = package, facts, gates) do
+  # Readiness holds through an unknown input only on the head it was qualified
+  # on; a new head's unknown CI, review or stacking is unproven.
+  defp decision(%WorkPackage{} = package, facts, gates, moved?) do
     unknown = unknown_inputs(facts)
     scope = if Map.get(facts, :base_matches?) == false, do: ["pr_base_mismatch"], else: []
     reasons = reasons(Lifecycle.qualification(facts)) ++ scope
-    definite = reasons(Lifecycle.qualification(assume_known(facts))) ++ scope
+    definite = definite_reasons(facts, reasons, unknown, scope, moved?)
 
     cond do
       Lifecycle.dispatched?(package) and reasons == [] and gates == [] and unknown == [] -> :qualify
@@ -87,6 +110,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
       true -> {:hold, Enum.uniq(reasons ++ unknown ++ gates)}
     end
   end
+
+  defp definite_reasons(_facts, reasons, unknown, _scope, true = _moved?), do: Enum.uniq(reasons ++ unknown)
+  defp definite_reasons(facts, _reasons, _unknown, scope, false = _moved?), do: reasons(Lifecycle.qualification(assume_known(facts))) ++ scope
 
   # An architect's manual sync accepts CI that reports no state; the poller
   # treats it as unknown.

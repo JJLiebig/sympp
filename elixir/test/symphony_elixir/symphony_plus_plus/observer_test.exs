@@ -242,6 +242,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert length(events(repo, package.id)) == before
     end
 
+    test "a new head whose checks GitHub doesn't report yet takes a ready package back", %{repo: repo} do
+      package = package!(repo, "WP-OBS-NEW-HEAD-CI", review_mode: "fast", review_id: "rvw_newheadci001")
+      attach!(repo, package, 52)
+      entry = {:pr, "nextide", "repo", 52}
+
+      suite(%{"done" => true, "status" => "done", "reviewed_head" => "head-a", "accepted_head" => "head-a"})
+      suite_sweep(repo, %{entry => {:ok, pr(52, "head-a")}})
+      assert repo.get!(WorkPackage, package.id).status == "ready"
+
+      # Unknown CI on the head it qualified on holds; on a new head it is unproven.
+      suite_sweep(repo, %{entry => {:ok, pr(52, "head-a", %{"ci" => %{"status" => "unknown"}})}})
+      assert repo.get!(WorkPackage, package.id).status == "ready"
+
+      suite(%{"done" => true, "status" => "done", "reviewed_head" => "head-a", "accepted_head" => "head-merge", "base_interaction" => interaction(false)})
+      suite_sweep(repo, %{entry => {:ok, pr(52, "head-merge", %{"ci" => %{"status" => "unknown"}})}})
+      assert repo.get!(WorkPackage, package.id).status == "dispatched"
+      assert %{"reasons" => reasons, "head_sha" => "head-merge"} = unqualified_event!(repo, package.id).payload
+      assert "ci_unknown" in reasons
+    end
+
     test "a carried review whose base change still needs a targeted check doesn't count", %{repo: repo} do
       package = package!(repo, "WP-OBS-BASE-CHECK", review_mode: "fast", review_id: "rvw_basecheck001")
       attach!(repo, package, 51)
