@@ -4,7 +4,6 @@ import { useId, useState, type MouseEvent } from "react";
 import { ActButton } from "./actions";
 import { readOnly } from "./api";
 import { span, type Board, type Decision, type Undelivered as Reason } from "./model";
-import { focusGoal } from "./motion";
 import { useAct } from "./operator";
 import { Owner } from "./owner";
 
@@ -12,7 +11,7 @@ const ROW = "grid grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-2 py-3 pr-2";
 
 // Product calls chiefs and architects flagged for review, and feedback that could not reach its terminal.
 // They follow the questions' layout, in neutral tones: these calls are made already and only want a reaction.
-export function Decisions({ at, board, decisions }: { at: number; board: Board; decisions: Decision[] }) {
+export function Decisions({ at, board, decisions, onGoal }: { at: number; board: Board; decisions: Decision[]; onGoal: (goalId: string) => void }) {
   const shown = decisions.filter((entry) => entry.state === "recorded" || (entry.state === "feedback" && entry.undelivered !== null));
   if (shown.length === 0) return null;
   const waiting = shown.filter((entry) => entry.state === "recorded").length;
@@ -22,7 +21,7 @@ export function Decisions({ at, board, decisions }: { at: number; board: Board; 
       <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-dim">Decisions to review{waiting > 0 ? ` · ${waiting}` : ""}</h2>
       <ul className="divide-y divide-line border-y border-line">
         {[...shown].sort((left, right) => right.at - left.at).map((entry) => (
-          <DecisionItem key={entry.id} at={at} board={board} decision={entry} />
+          <DecisionItem key={entry.id} at={at} board={board} decision={entry} onGoal={onGoal} />
         ))}
       </ul>
     </section>
@@ -35,7 +34,7 @@ function rowClick(event: MouseEvent) {
   return !target.closest("button, a, input, textarea, label, form") && !window.getSelection()?.toString();
 }
 
-function DecisionItem({ at, board, decision }: { at: number; board: Board; decision: Decision }) {
+function DecisionItem({ at, board, decision, onGoal }: { at: number; board: Board; decision: Decision; onGoal: (goalId: string) => void }) {
   const act = useAct();
   const goal = board.goals.find((entry) => entry.id === decision.goalId);
   const [writing, setWriting] = useState(false);
@@ -56,7 +55,7 @@ function DecisionItem({ at, board, decision }: { at: number; board: Board; decis
 
   return (
     <li className={`${ROW} ${clickable ? "cursor-pointer hover:bg-white/[0.025]" : ""}`} onClick={onRow}>
-      <Subject goal={goal} />
+      <Subject goal={goal} onGoal={onGoal} />
       <p className="flex items-center justify-end gap-3">
         <Owner owner={decision.by} />
         <span className="font-mono text-[11px] text-faint">{span(at - decision.at)} ago</span>
@@ -73,12 +72,12 @@ function DecisionItem({ at, board, decision }: { at: number; board: Board; decis
 }
 
 // The goal's area, and the goal the decision belongs to.
-function Subject({ goal }: { goal: Board["goals"][number] | undefined }) {
+function Subject({ goal, onGoal }: { goal: Board["goals"][number] | undefined; onGoal: (goalId: string) => void }) {
   return (
     <p className="flex min-w-0 items-baseline gap-3 text-xs">
       <span className="shrink-0 uppercase tracking-[0.12em] text-faint">{goal?.area[0]}</span>
       {goal ? (
-        <button className="min-w-0 truncate text-dim hover:text-ink" type="button" onClick={() => focusGoal(goal.id)}>
+        <button className="min-w-0 truncate text-dim hover:text-ink" type="button" onClick={() => onGoal(goal.id)}>
           {goal.title}
         </button>
       ) : null}

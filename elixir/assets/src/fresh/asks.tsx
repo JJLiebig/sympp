@@ -2,7 +2,6 @@ import { useId, useState } from "react";
 
 import { readOnly } from "./api";
 import { span, type Ask, type Board, type Choice } from "./model";
-import { focusGoal } from "./motion";
 import { REDIRECT, useAct, type Answer } from "./operator";
 import { Owner } from "./owner";
 
@@ -15,7 +14,8 @@ function subjectOf(ask: Ask, board: Board) {
 }
 
 // Every question waiting on the operator, oldest first, each with its answer form.
-export function NeedsYou({ asks, at, board }: { asks: Ask[]; at: number; board: Board }) {
+// `onGoal` lifts the area filter before it goes to the ask's goal, which may be filtered out.
+export function NeedsYou({ asks, at, board, onGoal }: { asks: Ask[]; at: number; board: Board; onGoal: (goalId: string) => void }) {
   if (asks.length === 0) return null;
 
   return (
@@ -23,14 +23,14 @@ export function NeedsYou({ asks, at, board }: { asks: Ask[]; at: number; board: 
       <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-you">Needs you · {asks.length}</h2>
       <ul className="divide-y divide-line border-y border-line">
         {[...asks].sort((left, right) => left.from - right.from).map((ask) => (
-          <AskItem key={ask.id} ask={ask} at={at} board={board} />
+          <AskItem key={ask.id} ask={ask} at={at} board={board} onGoal={onGoal} />
         ))}
       </ul>
     </section>
   );
 }
 
-function AskItem({ ask, at, board }: { ask: Ask; at: number; board: Board }) {
+function AskItem({ ask, at, board, onGoal }: { ask: Ask; at: number; board: Board; onGoal: (goalId: string) => void }) {
   const subject = subjectOf(ask, board);
 
   return (
@@ -38,7 +38,7 @@ function AskItem({ ask, at, board }: { ask: Ask; at: number; board: Board }) {
       <p className="flex min-w-0 items-baseline gap-3 text-xs">
         <span className="shrink-0 uppercase tracking-[0.12em] text-faint">{subject.area[0]}</span>
         {subject.goalId ? (
-          <button className="min-w-0 truncate text-dim hover:text-ink" type="button" onClick={() => focusGoal(subject.goalId!)}>
+          <button className="min-w-0 truncate text-dim hover:text-ink" type="button" onClick={() => onGoal(subject.goalId!)}>
             {subject.title}
           </button>
         ) : (

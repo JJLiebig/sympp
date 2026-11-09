@@ -147,8 +147,8 @@ export function App() {
         <SinceLine at={at} changes={changes} since={since} width={current.width} onPick={goToGoal} onSeen={markSeen} />
         <ActContext.Provider value={act}>
           <div className={`mx-auto ${current.width}`}>
-            <NeedsYou asks={asks} at={at} board={data.board} />
-            <Decisions at={at} board={data.board} decisions={data.board.decisions} />
+            <NeedsYou asks={asks} at={at} board={data.board} onGoal={goToGoal} />
+            <Decisions at={at} board={data.board} decisions={data.board.decisions} onGoal={goToGoal} />
           </div>
           <SinceContext.Provider value={changes.notes}>
             <DensityContext.Provider value={density}>
@@ -186,7 +186,7 @@ function useShaped(data: Loaded | null, at: number, since: number, area: string 
   const shown = area ? views.filter((view) => view.goal.area[0] === area) : views;
   // Phases has nothing to add until a goal on the board is grouped, so it is offered only then.
   const grouped = lanesOf(views, at).main.some((view) => view.goal.pkgs.some((pkg) => pkg.group));
-  return { views, changes, asks: data?.board.asks ?? [], areas, shown, shownCards: area ? cards.filter((card) => card.area[0] === area) : cards, lanes: lanesOf(shown, at), grouped };
+  return { views, changes, asks: data?.board.asks.filter((ask) => ask.from <= at) ?? [], areas, shown, shownCards: area ? cards.filter((card) => card.area[0] === area) : cards, lanes: lanesOf(shown, at), grouped };
 }
 
 // A board that has never loaded shows only that it is reading, or why it could not.
@@ -337,7 +337,9 @@ function useShortcuts(setDirection: (index: number) => void, setNote: (note: str
     let timer = 0;
     const onKey = (event: KeyboardEvent) => {
       const index = ["1", "2", "3"].indexOf(event.key);
-      if (index >= 0 && !(event.target instanceof HTMLInputElement)) smoothly(() => setDirection(index));
+      // Digits typed into a field are text, not a view switch.
+      const typing = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
+      if (index >= 0 && !typing) smoothly(() => setDirection(index));
     };
     const onSay = (event: Event) => {
       setNote((event as CustomEvent<string>).detail);
