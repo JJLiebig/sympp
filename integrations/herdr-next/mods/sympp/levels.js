@@ -109,13 +109,14 @@ export function decisionQueue(jobs) {
   return jobs.flatMap((job) => job.decisions.map((d) => ({ ...d, job }))).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
 }
 
-// One row per Herdr topic, then unsorted spaces and work without a space when either has anything.
-// A card's asks count where the card lives.
+// One row per Herdr topic, then unsorted spaces and work without a space when either has anything,
+// cards included. A card's asks count where the card lives.
 export function factoryRows(jobs, desk, place, cards = []) {
   const open = jobs.filter((job) => job.state !== "settled");
   const names = new Map(desk.map((t) => [t.id, t.name]));
   return desk.map((topic) => {
     const own = open.filter((job) => place.home(job) === topic.id);
+    const held = cards.filter((card) => place.home(card) === topic.id);
     const shared = new Map();
     for (const job of open) {
       if (place.home(job) === topic.id || !place.touches(job, topic.id)) continue;
@@ -125,12 +126,13 @@ export function factoryRows(jobs, desk, place, cards = []) {
     return {
       ...topic,
       jobs: own,
-      needs: own.reduce((n, job) => n + job.needs.length, 0) + cards.filter((card) => place.home(card) === topic.id).reduce((n, card) => n + card.needs.length, 0),
+      needs: own.reduce((n, job) => n + job.needs.length, 0) + held.reduce((n, card) => n + card.needs.length, 0),
+      cards: held.length,
       moving: own.reduce((n, job) => n + job.counts.live, 0),
       repos: [...new Set(own.flatMap((job) => job.repos.map(shortRepo)).filter(Boolean))],
       shared: [...shared].map(([name, count]) => ({ name, count })),
     };
-  }).filter((row) => row.kind === "topic" || row.jobs.length > 0 || row.shared.length > 0 || (row.kind === "unsorted" && row.spaces.length > 0));
+  }).filter((row) => row.kind === "topic" || row.jobs.length > 0 || row.cards > 0 || row.shared.length > 0 || (row.kind === "unsorted" && row.spaces.length > 0));
 }
 
 // ---------- Topic and space ----------

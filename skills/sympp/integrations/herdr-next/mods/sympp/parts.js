@@ -62,18 +62,18 @@ export function confirmButton(v, t, id, label, confirm, key, act, color = null) 
 
 // ---------- Asks ----------
 
-// Where an ask or decision comes from: its task (or card) and topic, small and quiet. With `open`,
+// Where an ask or decision comes from: its task (or card) and topic, small and quiet. With `goTo`,
 // a click on it goes to the task.
-function context(t, parts, id, open = null) {
+function context(t, parts, id, goTo = null) {
   const text = parts.filter(Boolean).join(" · ");
   if (!text) return div().flex_1();
   const el = div().id(`from-${id}`).flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(text);
-  return open ? el.cursor_pointer().hover((s) => s.text_color(t.foreground)).tooltip("Open the task").on_click((_e, cx) => { cx.stop_propagation(); open(cx); }) : el;
+  return goTo ? el.cursor_pointer().hover((s) => s.text_color(t.foreground)).tooltip("Open the task").on_click((_e, cx) => { cx.stop_propagation(); goTo(cx); }) : el;
 }
 
 // An ask, as the dashboard's: an orange rule, the question in plain ink, who asks, and Answer. The
 // answer form opens in place, with the decision prompt's choices when it has one.
-export function askBlock(v, t, ask, { where = [], id = ask.key, open = null } = {}) {
+export function askBlock(v, t, ask, { where = [], id = ask.key, goTo = null } = {}) {
   const draft = v.answers[ask.key];
   const open = Boolean(draft?.open);
   const action = draft?.saved ? mono(11, t.dim).child("answered")
@@ -83,7 +83,7 @@ export function askBlock(v, t, ask, { where = [], id = ask.key, open = null } = 
       .child(div().w(2).flex_none().self_stretch().rounded(1).bg(signal().you))
       .child(v_flex().flex_1().min_w(0).pl(12).gap(4)
         .when(where.length > 0 || Boolean(ask.by), (el) => el.child(h_flex().gap(8).items_center()
-          .child(context(t, where, id, open)).child(ownerChip(v, t, ask.by, `ask-${id}`))))
+          .child(context(t, where, id, goTo)).child(ownerChip(v, t, ask.by, `ask-${id}`))))
         .child(h_flex().gap(10).items_center()
           .child(div().flex_1().min_w(0).py(1).text_size(13.5).line_height("19px").text_color(t.foreground).child(ask.text))
           .when(!open && Boolean(action), (el) => el.child(action)))))
@@ -95,11 +95,11 @@ export function askBlock(v, t, ask, { where = [], id = ask.key, open = null } = 
 // A decision a chief or architect flagged, neutral where an ask is orange: a quiet rule, the call and
 // why, who made it. A click anywhere on it opens Feedback; Ack is its own button. Feedback that
 // never reached a finished terminal stays as Undelivered until dismissed.
-export function decisionBlock(v, t, d, { where = [], open = null } = {}) {
+export function decisionBlock(v, t, d, { where = [], goTo = null } = {}) {
   const draft = v.feedback[d.key];
   const open = Boolean(draft?.open);
   const ack = v.ops[`ack:${d.id}`];
-  const head = h_flex().gap(8).items_center().child(context(t, where, d.key, open)).child(ownerChip(v, t, d.by, `decision-${d.id}`));
+  const head = h_flex().gap(8).items_center().child(context(t, where, d.key, goTo)).child(ownerChip(v, t, d.by, `decision-${d.id}`));
   const body = v_flex().gap(2)
     .child(div().text_size(13.5).line_height("19px").text_color(t.foreground).child(d.text))
     .when(Boolean(d.rationale), (el) => el.child(div().text_size(12).line_height("17px").text_color(t.muted).child(d.rationale)));

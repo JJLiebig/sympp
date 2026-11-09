@@ -26,6 +26,18 @@ async function render(t, spec, main = null) {
 
 const skip = { skip: !available && 'herdr-app is not installed' };
 
+// Herdr's runtime parses some code a standard engine refuses, so every view module must also parse
+// as a strict ES module here, with or without herdr-app.
+test('every view module parses as a standard ES module', async () => {
+  const { readdir } = await import('node:fs/promises');
+  for (const mod of ['sympp', 'sympp-lab']) {
+    for (const name of (await readdir(join(here, 'mods', mod))).filter((n) => n.endsWith('.js'))) {
+      const result = spawnSync(process.execPath, ['--check', join(here, 'mods', mod, name)], { encoding: 'utf8', windowsHide: true });
+      assert.equal(result.status, 0, `${mod}/${name}: ${result.stderr}`);
+    }
+  }
+});
+
 test('the factory lists every ask with its answer in place, the decisions to review, and one row per Herdr topic', skip, async (t) => {
   const view = await render(t, { props: {}, width: 1400 });
   for (const id of ['lens-overview', 'breadcrumb', 'crumb-factory', 'factory-main', 'factory-aside', 'needs-queue', 'topic-rows',

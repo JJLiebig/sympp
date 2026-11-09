@@ -90,7 +90,7 @@ function reachable(v, t, el, key, open, label) {
 function needRow(v, t, need, names) {
   const job = need.job;
   const where = job ? [job.title, names.get(v.place.home(job)), need.unblocks > 0 ? `unblocks ${need.unblocks}` : null] : [need.card.task, names.get(v.place.home(need.card))];
-  return askBlock(v, t, need.ask, { where, id: need.key, open: job ? (cx) => v.openJob(job, { pkg: need.pkgId }, cx) : null });
+  return askBlock(v, t, need.ask, { where, id: need.key, goTo: job ? (cx) => v.openJob(job, { pkg: need.pkgId }, cx) : null });
 }
 
 // A topic: its mark, name, chief and counts; a click opens it. The chevron beside it opens its
@@ -177,7 +177,7 @@ export function factoryLevel(v, t, board, rows, now) {
       : div().px(4).text_size(12.5).text_color(t.muted).child("Nothing needs you."),
     decisions.length ? section(t, "Decisions to review", decisions.length) : null,
     decisions.length ? v_flex().id("decision-queue").px(4).children(decisions.map((d) => decisionBlock(v, t, d,
-      { where: [d.job.title, names.get(v.place.home(d.job))], open: (cx) => v.openJob(d.job, {}, cx) }))) : null];
+      { where: [d.job.title, names.get(v.place.home(d.job))], goTo: (cx) => v.openJob(d.job, {}, cx) }))) : null];
   const aside = [section(t, "Topics", null), v_flex().id("topic-rows").gap(2).children(rows.map((row) => topicRow(v, t, row, now)))];
   return columns(v, "factory", main, aside, 400);
 }
