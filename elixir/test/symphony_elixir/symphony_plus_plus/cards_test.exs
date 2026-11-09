@@ -174,6 +174,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CardsTest do
     assert_receive {:pasted, "t1", "Answer: Yes, ship it."}
   end
 
+  test "a PR from the base branch opens a card with its repository; a dismissal during a sweep wins", %{repo: repo} do
+    on_main = fn _cwd -> {:ok, %{@git | branch: "main"}} end
+    terminals = [chief("t0"), child("t1", "t0")]
+    sweep(repo, terminals, %{head("main") => {:ok, nil}}, git: on_main)
+    assert list(repo) == []
+
+    sweep(repo, terminals, %{head("main") => {:ok, %{pr(4, "open") | "branch" => "main", "base_branch" => "release"}}}, git: on_main)
+    assert [%{"id" => card_id, "state" => "review_ci", "repository" => "acme/app", "base_branch" => "main", "branch" => "main"}] = list(repo)
+
+    # The operator dismisses after the sweep read the card, before it applies.
+    items = Cards.watch(repo, core: core(terminals), terminal: fn _address -> :error end, git: on_main)
+    assert {:ok, _dismissed} = Cards.dismiss(repo, card_id)
+    Cards.apply(repo, items, %{{:pr, "acme", "app", 4} => {:ok, %{pr(4, "open") | "head_sha" => "h2"}}}, review: fn _id, _machine -> :not_started end)
+    assert [%{"state" => "dismissed", "pr" => %{"head_sha" => "h1"}}] = list(repo)
+  end
+
+  test "sympp.health shows the caller's card and the answers to its asks", %{repo: repo} do
+    sweep(repo, [chief("t0"), child("t1", "t0")], %{head("feature-1") => {:ok, nil}})
+    asked = mcp_tool(repo, "t1", "ask", %{"question" => "Ship it?"})
+    ask_id = get_in(asked, ["result", "structuredContent", "ask", "id"])
+
+    # The terminal can't be reached, so the answer stays on the ask.
+    assert {:ok, _ask, %{"state" => "not_delivered"}} = Asks.answer_by_operator(repo, ask_id, %{"answer" => "Yes."})
+
+    health = mcp_tool(repo, "t1", "sympp.health", %{})
+    assert %{"state" => "working", "asks" => [%{"id" => ^ask_id, "answer" => "Yes.", "state" => "answered"}]} = get_in(health, ["result", "structuredContent", "caller", "card"])
+    refute get_in(mcp_tool(repo, "t2", "sympp.health", %{}), ["result", "structuredContent", "caller", "card"])
+  end
+
   defp sweep(repo, terminals, github, opts \\ []) do
     Observer.sweep(
       repo,

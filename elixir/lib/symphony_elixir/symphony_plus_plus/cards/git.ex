@@ -5,7 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards.Git do
   the terminals it lists.
 
   The repository (origin remote) and base branch (`origin/HEAD`) are cached
-  per cwd; the current branch is read on every call. A cwd whose origin isn't
+  per cwd for 5 minutes; the current branch is read on every call. A cwd whose origin isn't
   on GitHub has no card. The base is empty when `origin/HEAD` isn't set.
   """
 
@@ -13,6 +13,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards.Git do
 
   @cache_key {__MODULE__, :repositories}
   @timeout_ms 2_000
+  @cache_ms 5 * 60_000
 
   @type t :: %{repository: String.t(), base_branch: String.t() | nil, branch: String.t() | nil}
 
@@ -28,14 +29,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards.Git do
 
   defp repository(git, cwd) do
     cache = :persistent_term.get(@cache_key, %{})
+    now = System.monotonic_time(:millisecond)
 
     case Map.fetch(cache, cwd) do
-      {:ok, cached} ->
-        {:ok, cached}
+      {:ok, {entry, at}} when now - at < @cache_ms ->
+        {:ok, entry}
 
-      :error ->
+      _missing_or_old ->
         with {:ok, entry} <- read_repository(git, cwd) do
-          :persistent_term.put(@cache_key, Map.put(cache, cwd, entry))
+          :persistent_term.put(@cache_key, Map.put(cache, cwd, {entry, now}))
           {:ok, entry}
         end
     end

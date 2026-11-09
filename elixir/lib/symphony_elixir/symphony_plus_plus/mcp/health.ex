@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.FactoryRepos
+  alias SymphonyElixir.SymphonyPlusPlus.{Cards, FactoryRepos}
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     Config,
@@ -23,8 +23,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
   @mcp_contract_identity_key {__MODULE__, :mcp_contract_identity}
 
   @doc """
-  Health plus the caller: its Herdr terminal and the WorkRequests it owns, or
-  `access: read_only` outside Herdr.
+  Health plus the caller: its Herdr terminal, the WorkRequests it owns and its
+  card, or `access: read_only` outside Herdr.
   """
   @spec health(map(), Terminal.t() | nil) :: map()
   def health(server, terminal) do
@@ -38,6 +38,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
     %{"access" => "write", "terminal" => terminal.display_address, "role" => terminal.role}
     |> then(fn caller -> if terminal.domain, do: Map.put(caller, "domain", terminal.domain), else: caller end)
     |> Map.put("owns", if(reachable?, do: owned(repo, terminal.key), else: []))
+    |> put_card(reachable? && card(repo, terminal.key))
+  end
+
+  defp put_card(caller, %{} = card), do: Map.put(caller, "card", card)
+  defp put_card(caller, _none), do: caller
+
+  defp card(repo, terminal_key) do
+    Cards.for_terminal(repo, terminal_key)
+  rescue
+    _error -> nil
   end
 
   defp owned(repo, terminal_key) do

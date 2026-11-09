@@ -41,7 +41,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AskTools do
   end
 
   defp ask_next_action(%{work_request_id: nil}),
-    do: "The operator answers on the board; the answer is typed into this terminal. Withdraw it with resolve_ask if it stops mattering."
+    do:
+      "The operator answers on the board; the answer is typed into this terminal. If it doesn't arrive, read it under caller.card in sympp.health. Withdraw it with resolve_ask if it stops mattering."
 
   defp ask_next_action(_ask),
     do:

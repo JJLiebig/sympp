@@ -197,6 +197,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
     card_ids |> Enum.chunk_every(500) |> Enum.each(&repo.delete_all(from(ask in Ask, where: ask.card_id in ^&1)))
   end
 
+  @doc "A card's ten newest open or answered asks."
+  @spec recent_by_card(repo(), String.t()) :: [Ask.t()]
+  def recent_by_card(repo, card_id) do
+    repo.all(
+      from(ask in Ask,
+        where: ask.card_id == ^card_id and ask.state in ["open", "answered"],
+        order_by: [desc: ask.inserted_at, desc: ask.id],
+        limit: 10
+      )
+    )
+  end
+
   @doc "Open asks on these cards, newest first, keyed by card id."
   @spec open_by_card(repo(), [String.t()]) :: %{String.t() => [Ask.t()]}
   def open_by_card(_repo, []), do: %{}

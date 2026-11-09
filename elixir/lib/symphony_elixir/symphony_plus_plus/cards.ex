@@ -186,15 +186,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
 
   defp entry(_item), do: :skip
 
-  # A live terminal shows new work on a branch that isn't its base and, for an
-  # ended card, isn't the branch that card ended on. Without a known base,
-  # only an open PR shows it.
-  defp new_work?(%{git: %{branch: branch} = git} = item) when is_binary(branch) do
-    base? = is_binary(git.base_branch) and BaseBranch.equivalent?(branch, git.base_branch)
-
+  # A live terminal may show new work on any branch other than the one its
+  # ended card ended on. Its PR is looked up; without one only a branch off a
+  # known base shows work (`opening/2`).
+  defp new_work?(%{git: %{branch: branch}} = item) when is_binary(branch) do
     case item.card do
-      nil -> not base?
-      %Card{branch: ended_branch} -> not base? and branch != ended_branch
+      nil -> true
+      %Card{branch: ended_branch} -> branch != ended_branch
     end
   end
 
@@ -299,18 +297,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
 
   defp persist(_repo, _item, _github, :none, _review), do: false
 
+  # An operator action between `watch/2` and now (a dismissal) wins: the
+  # observation is dropped when the card no longer is what the sweep read.
   defp persist(repo, item, github, decision, review) do
     {:ok, changed?} =
-      repo.transaction(fn ->
-        case decision do
-          {:open, state} -> open(repo, item, github, state, review)
-          {:move, state} -> update(repo, item, item.card, state, github, review)
-          :stay -> update(repo, item, item.card, item.card.state, github, review)
-        end
-      end)
+      repo.transaction(
+        fn ->
+          case {unchanged?(repo, item), decision} do
+            {false, _decision} -> false
+            {true, {:open, state}} -> open(repo, item, github, state, review)
+            {true, {:move, state}} -> update(repo, item, item.card, state, github, review)
+            {true, :stay} -> update(repo, item, item.card, item.card.state, github, review)
+          end
+        end,
+        mode: :immediate
+      )
 
     changed?
   end
+
+  defp unchanged?(repo, %{card: nil, key: key}), do: is_nil(repo.get(Card, card_id(key)))
+  defp unchanged?(repo, %{card: %Card{id: id, state: state}}), do: match?(%Card{state: ^state}, repo.get(Card, id))
 
   defp open(repo, item, github, state, review) do
     now = DateTime.utc_now(:microsecond)
@@ -319,7 +326,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
 
     attrs =
       observed(item, github, review, nil, state)
-      |> Map.merge(%{state: state, branch: item.git.branch, pr: pr(github), ended_at: nil, observed_at: now})
+      |> Map.merge(%{
+        state: state,
+        repository: item.git.repository,
+        base_branch: item.git.base_branch,
+        branch: item.git.branch,
+        pr: pr(github),
+        ended_at: nil,
+        observed_at: now
+      })
 
     if item.card,
       do: repo.update!(Ecto.Changeset.change(base, attrs)),
@@ -419,6 +434,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
       mode: :immediate
     )
     |> DashboardPubSub.broadcast_changed_on_success()
+  end
+
+  @doc """
+  A terminal's card for `sympp.health`: its state and branch, and its open and
+  answered asks, so the agent can read an answer that couldn't be typed in.
+  """
+  @spec for_terminal(repo(), String.t()) :: map() | nil
+  def for_terminal(repo, terminal_key) when is_binary(terminal_key) do
+    case repo.get_by(Card, terminal_key: terminal_key) do
+      nil -> nil
+      %Card{} = card -> %{"id" => card.id, "state" => card.state, "branch" => card.branch, "asks" => Enum.map(Asks.recent_by_card(repo, card.id), &Asks.public/1)}
+    end
   end
 
   @doc "The open card of a terminal, if it has one."
