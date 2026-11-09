@@ -261,7 +261,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
           error -> hand_off_failed_payload(dispatch, error)
         end
 
-      {:ok, ToolResult.agent_tool_result(payload, fn -> WorkerContext.encode_tool_payload(payload) end)}
+      # Text consumers need the whole launch line, which the summary profile would cut.
+      {:ok, ToolResult.with_text_profile(:full, fn -> ToolResult.agent_tool_result(payload, fn -> WorkerContext.encode_tool_payload(payload) end) end)}
     else
       {:tool_error, reason} -> invalid_params_error("dispatch_work_package", reason)
       {:error, :not_found} -> not_found_error("dispatch_work_package")

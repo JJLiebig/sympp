@@ -53,6 +53,8 @@ test('dispatch hands off a real worktree, assignment and launch line, and a repl
   expect(dispatched.launch_line).toBe(`hc run --bg --on ${dispatched.worktree.machine} --cwd ${path} --name ${wp} --label sympp.role=worker `
     + `--label sympp.work_package_id=${wp} --label sympp.review_id=${reviewId} -- codex "Read ${file}"`);
 
+  // Agents that read only the text content still see the whole launch line.
+  expect((await client.tool('dispatch_work_package', args)).result.content[0].text).toContain(JSON.stringify(dispatched.launch_line));
   const replay = await client.call('dispatch_work_package', args);
   expect([replay.worktree.path, replay.work_package.review_id, replay.launch_line]).toEqual([path, reviewId, dispatched.launch_line]);
   await client.reject('dispatch_work_package', { ...args, review_mode: 'deep' }, 'review_mode_conflict');
