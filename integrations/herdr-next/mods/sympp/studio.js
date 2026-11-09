@@ -44,7 +44,9 @@ export function studioWorker(pkg, terminalList, here = (address) => address) {
   const terminal = pkg.owner.liveness === "live" ? (terminalList ?? []).find((k) => k.address === address && k.state === "live") : null;
   if (!terminal) return { state: "gone" };
   const local = !address.includes("/");
-  return { state: "live", address, cwd: local && typeof terminal.cwd === "string" && terminal.cwd ? terminal.cwd : null };
+  // Where the worker is now, else where its terminal started.
+  const cwd = terminal.foreground?.cwd || terminal.cwd;
+  return { state: "live", address, cwd: local && typeof cwd === "string" && cwd ? cwd : null };
 }
 
 // A tab named after the package in the job's local space; the copy's connection props carry over.

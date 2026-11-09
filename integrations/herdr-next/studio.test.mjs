@@ -43,6 +43,7 @@ test("the studio's worker is the terminal the factory sees live on the package, 
   const local = (address) => M.localAddress(address, 'box');
   assert.deepEqual(S.studioWorker(build, [worker('t8')], local), { state: 'live', address: 't8', cwd: 'C:/code/wt/wp-build' }, 'a local worker previews from its folder');
   assert.deepEqual(S.studioWorker(build, [worker('box/t8')]), { state: 'live', address: 'box/t8', cwd: null }, 'one on another machine has no folder here');
+  assert.equal(S.studioWorker(build, [worker('t8', {}, { foreground: { cwd: 'C:/code/wt/moved' } })], local).cwd, 'C:/code/wt/moved', 'where the worker is now, when its terminal reports it');
   assert.equal(S.studioWorker(build, [worker('t8', {}, { state: 'finished' })], local).state, 'gone', 'a finished terminal is no worker');
   assert.equal(S.studioWorker({ ...build, owner: { ...build.owner, liveness: 'unknown' } }, [worker('t8')], local).state, 'gone', 'nor one the factory no longer sees');
   assert.equal(S.studioWorker(pr.packages.find((p) => p.id === 'wp-queued'), [worker('t8')], local).state, 'none', 'no worker yet');
