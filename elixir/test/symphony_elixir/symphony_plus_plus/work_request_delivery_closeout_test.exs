@@ -2,9 +2,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
   use ExUnit.Case, async: false
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
+  alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
@@ -29,6 +31,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
     repo.delete_all(WorkPackage)
     repo.delete_all(WorkRequest)
     :ok
+  end
+
+  test "delivery evidence remains terminal truth after package status drift", %{repo: repo} do
+    {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready")
+
+    attrs =
+      delivery_attrs(%{
+        outcome: "pr_merged",
+        idempotency_key: "delivery-terminal-truth",
+        pr_url: "https://github.com/nextide/symphony-plus-plus/pull/130",
+        pr_number: 130,
+        pr_repository: "nextide/symphony-plus-plus",
+        pr_merged_at: ~U[2026-05-24 13:00:00.000000Z],
+        merge_commit_sha: "abc130"
+      })
+
+    assert {:ok, _delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
+    assert {:ok, _drifted} = WorkPackageRepository.update(repo, linked_package.id, %{status: "dispatched"})
+
+    assert {:error, :work_package_terminal} =
+             AgentRunRepository.start_run(repo, %{work_package_id: linked_package.id, status: "starting"})
   end
 
   test "colliding closeout progress does not bypass validation or terminal mutation", %{repo: repo} do
