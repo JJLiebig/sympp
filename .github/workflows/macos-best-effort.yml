@@ -1,0 +1,77 @@
+name: macOS best effort
+
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  windows-paths:
+    name: Runtime path selection
+    runs-on: ubuntu-latest
+    outputs:
+      runtime: ${{ steps.paths.outputs.runtime }}
+    steps:
+      - name: Checkout candidate and PR history
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          fetch-depth: 0
+      - name: Select runtime qualification
+        id: paths
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/ci/windows-paths.mjs
+
+  macos-installed:
+    name: macOS installed client (best effort)
+    needs: windows-paths
+    if: ${{ needs.windows-paths.outputs.runtime == 'true' }}
+    runs-on: macos-latest
+    continue-on-error: true
+    timeout-minutes: 20
+    env:
+      E2E_OAUTH_CREDENTIALS: '{}'
+      E2E_TELEMETRY_DISABLED: '1'
+      DO_NOT_TRACK: '1'
+    steps:
+      - name: Checkout candidate combined tree
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+      - name: Set up candidate toolchain
+        uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
+        with:
+          install: true
+          cache: true
+          working_directory: elixir
+      - name: Select tool binaries and isolated build homes
+        working-directory: elixir
+        run: |
+          echo "$(mise where node)/bin" >> "$GITHUB_PATH"
+          echo "$(mise where erlang)/bin" >> "$GITHUB_PATH"
+          echo "$(mise where elixir)/bin" >> "$GITHUB_PATH"
+          echo "ACCEPTANCE_CHECKOUT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "MIX_HOME=$RUNNER_TEMP/sympp-macos-mix" >> "$GITHUB_ENV"
+          echo "MIX_ARCHIVES=$RUNNER_TEMP/sympp-macos-mix/archives" >> "$GITHUB_ENV"
+      - name: Install locked acceptance dependencies
+        run: npm ci --ignore-scripts
+      - name: Build candidate source
+        working-directory: elixir
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          mix compile --warnings-as-errors
+      - name: Prove install, setup, registration and a worker terminal
+        run: |
+          npm exec -- e2e run tests/acceptance/installed-runtime.e2e.ts --target api
+          node tests/support/installed-report.ts tests/acceptance/installed-runtime.e2e.ts
+      - name: Retain macOS evidence including failures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-installed-evidence
+          path: .e2e
+          include-hidden-files: true
+
