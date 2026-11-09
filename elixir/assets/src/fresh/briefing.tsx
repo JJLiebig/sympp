@@ -2,10 +2,10 @@ import { ChevronRight } from "lucide-react";
 
 import { GoalActions } from "./actions";
 import { areaLabel } from "./areas";
-import { AskLine, lanesOf, Rest } from "./board";
+import { GoalOwner, lanesOf, UnresolvedLine } from "./board";
 import type { GoalView } from "./model";
 import { Deploy } from "./parts";
-import { BriefAge, DotStrip, GoalPackages, GoalTitle, reportFor, useGoalLevel, VerdictBadge } from "./report";
+import { BriefAge, DotStrip, GoalPackages, GoalTitle, NeedsYouFlag, PhaseBadge, reportFor, useGoalLevel } from "./report";
 import { SinceChip } from "./since";
 
 // Direction 2: every goal reports in. Words first, dots second, packages only if you ask.
@@ -13,13 +13,12 @@ export function Briefing({ at, views }: { at: number; views: GoalView[] }) {
   const lanes = lanesOf(views, at);
 
   return (
-    <div className="mx-auto max-w-[1080px]">
+    <div className="mx-auto max-w-[1280px]">
       <div className="space-y-4">
         {lanes.main.map((view) => (
           <GoalReport key={view.goal.id} at={at} view={view} />
         ))}
       </div>
-      <Rest at={at} lanes={lanes} />
     </div>
   );
 }
@@ -40,10 +39,12 @@ function GoalReport({ at, view }: { at: number; view: GoalView }) {
               <GoalTitle goal={view.goal} />
             </span>
             <SinceChip goalId={view.goal.id} />
-            <VerdictBadge verdict={report.verdict} />
+            <NeedsYouFlag view={view} />
+            <PhaseBadge view={view} />
           </span>
         </button>
-        <GoalActions className="mt-5" goal={view.goal} moving={view.live.length} />
+        <GoalOwner className="ml-3 mt-5" view={view} />
+        <GoalActions className="mt-5" goal={view.goal} moving={view.live.length} phase={view.phase} />
       </div>
       <p className="mt-2 max-w-[72ch] pl-7 text-[15px] leading-relaxed text-ink/90">
         {report.brief}
@@ -51,18 +52,11 @@ function GoalReport({ at, view }: { at: number; view: GoalView }) {
         <BriefAge at={at} report={report} />
         {report.sample ? <span className="ml-2 rounded border border-line px-1 font-mono text-[10px] uppercase text-faint">sample wording</span> : null}
       </p>
-      <AskLine at={at} className="ml-7 mt-3" view={view} />
-      {report.bumps.length > 0 ? (
-        <ul className="ml-7 mt-3 space-y-0.5 border-l-2 border-checks pl-3 text-sm text-dim">
-          {report.bumps.map((bump) => (
-            <li key={bump}>{bump}</li>
-          ))}
-        </ul>
-      ) : null}
+      <UnresolvedLine className="ml-7 mt-3" view={view} />
       <div className="mt-4 flex items-center gap-3 pl-7">
         <DotStrip view={view} />
         <span className="shrink-0 font-mono text-xs text-dim">
-          {view.live.length} moving · {view.done.length}/{total} done
+          {view.live.length} moving · {view.done.length}/{total} ended
         </span>
         <Deploy at={at} goal={view.goal} />
       </div>

@@ -2,10 +2,10 @@ import { Check, ChevronRight } from "lucide-react";
 
 import { GoalActions } from "./actions";
 import { areaLabel } from "./areas";
-import { AskLine, lanesOf, Rest } from "./board";
+import { GoalOwner, lanesOf, UnresolvedLine } from "./board";
 import { deployAt, type Goal, type GoalView } from "./model";
 import { Deploy, deployLabel, Pip } from "./parts";
-import { BriefAge, DotStrip, GoalPackages, GoalTitle, phaseStates, reportFor, useGoalLevel, usePhaseControl, VerdictBadge, type PhaseState } from "./report";
+import { BriefAge, DotStrip, GoalPackages, GoalTitle, NeedsYouFlag, PhaseBadge, phaseStates, reportFor, useGoalLevel, usePhaseControl, type PhaseState } from "./report";
 import { SinceChip } from "./since";
 
 // Direction 3: a goal the architect grouped becomes a route of its phases. Ungrouped goals stay a plain line of dots.
@@ -19,7 +19,6 @@ export function Phases({ at, views }: { at: number; views: GoalView[] }) {
           <GoalRoute key={view.goal.id} at={at} view={view} />
         ))}
       </div>
-      <Rest at={at} lanes={lanes} />
     </div>
   );
 }
@@ -47,16 +46,18 @@ function GoalRoute({ at, view }: { at: number; view: GoalView }) {
             <GoalTitle goal={view.goal} />
           </span>
           <SinceChip goalId={view.goal.id} />
-          <VerdictBadge verdict={report.verdict} />
+          <NeedsYouFlag view={view} />
+          <PhaseBadge view={view} />
         </button>
-        <GoalActions goal={view.goal} moving={view.live.length} />
+        <GoalOwner className="ml-3" view={view} />
+        <GoalActions goal={view.goal} moving={view.live.length} phase={view.phase} />
       </div>
       <p className="mt-1 pl-7 text-sm text-dim">
         {report.brief}
         {report.eta ? ` ETA: ${report.eta}.` : ""}
         <BriefAge at={at} report={report} />
       </p>
-      <AskLine at={at} className="ml-7 mt-2" view={view} />
+      <UnresolvedLine className="ml-7 mt-2" view={view} />
       <div className="pl-7">
         {phases.length > 0 ? (
           <Route at={at} goal={view.goal} isOpen={(state) => listed(state) && control.isOpen(state)} phases={phases} onPick={pick} />
@@ -116,9 +117,9 @@ function PhaseBox({ onToggle, open, state }: { onToggle: () => void; open: boole
           <span className="truncate">{state.phase.title}</span>
         </span>
         <span className="flex flex-wrap gap-0.5">
-          {state.done.map((pkg) => <Pip key={pkg.id} stage="done" />)}
+          {state.done.map((pkg) => <Pip key={pkg.id} stage="ended" />)}
           {state.live.map((entry) => <Pip key={entry.pkg.id} stage={entry.stage} failed={entry.failed} />)}
-          {state.queued.map((pkg) => <Pip key={pkg.id} stage="queued" />)}
+          {state.queued.map((pkg) => <Pip key={pkg.id} stage="planned" />)}
         </span>
         <span className="font-mono text-[11px] text-dim">{phaseCaption(state, total)}</span>
       </button>
@@ -128,7 +129,7 @@ function PhaseBox({ onToggle, open, state }: { onToggle: () => void; open: boole
 
 function phaseCaption(state: PhaseState, total: number) {
   if (state.status === "upcoming") return "not sliced yet";
-  if (state.status === "done") return `done · ${total}`;
+  if (state.status === "done") return `ended · ${total}`;
   if (state.status === "waiting") return `up next · 0/${state.queued.length}`;
   return `${state.live.length} moving · ${state.done.length}/${total}`;
 }
