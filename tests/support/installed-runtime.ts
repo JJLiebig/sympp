@@ -137,7 +137,9 @@ export class Stdio {
 
 export const test = base.extend<{ installed: Installed }>({
   installed: async ({}, use) => {
-    const root = await mkdtemp(join(tmpdir(), 'sympp-installed-'));
+    const created = await mkdtemp(join(tmpdir(), 'sympp-installed-'));
+    // macOS temp folders sit behind a symlink; the factory and agents see canonical paths.
+    const root = process.platform === 'win32' ? created : await realpath(created);
     await mkdir('.e2e', { recursive: true });
     const installed = new Installed(root);
     try { await installed.prepare(); await use(installed); } finally {

@@ -16,6 +16,8 @@ if (command === 'connect') {
     const { id, method, params } = JSON.parse(line);
     const state = load();
     state.calls.push({ method, params });
+    // A connect may start a long-lived core, so it must never inherit a provider credential.
+    if (process.env.OPENAI_API_KEY) state.transport_secret_present = true;
     const terminal = state.terminals[params?.terminal];
     let reply;
     if (method === 'hello') reply = { result: { generation: 1, core: state.core } };
@@ -36,6 +38,8 @@ if (command === 'connect') {
       else { (terminal.sent ??= []).push(params.text); reply = { result: { started: true, turn: terminal.sent.length } }; }
     } else if (method === 'terminal.get' && terminal) reply = { result: { address: params.terminal, ...terminal } };
     else if (method === 'terminal.label' && terminal) {
+      // A core that applied nothing because the launcher lost it mid-call.
+      if (state.lose_label_reply) { save(state); process.exit(0); }
       for (const [key, value] of Object.entries(params.labels)) {
         if (value) terminal.labels[key] = value; else delete terminal.labels[key];
       }

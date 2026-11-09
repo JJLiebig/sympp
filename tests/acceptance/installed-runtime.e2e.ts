@@ -167,6 +167,20 @@ if (process.platform !== 'win32') {
       expect((await installed.setup(bundle, 'codex', '--server', server)).code).toBe(0);
       expect(await readFile(configFile, 'utf8')).toBe(config.trimEnd() + '\n' + userTable);
 
+      // A sympp registration setup does not own is refused however it is spelled, and left as it was.
+      const repairedConfig = await readFile(configFile, 'utf8');
+      const endMarker = '# END sympp Skills MCP\n';
+      for (const foreign of ['[mcp_servers."sympp"]\ncommand = "other"', "['mcp_servers'.'sympp']\ncommand = \"other\"",
+        '[mcp_servers]\nsympp.command = "other"', '[mcp_servers]\nsympp = { command = "other" }']) {
+        const owned = repairedConfig.slice(repairedConfig.lastIndexOf('# BEGIN sympp Skills MCP'), repairedConfig.lastIndexOf(endMarker) + endMarker.length);
+        const unmanaged = repairedConfig.replace(owned, '') + foreign + '\n';
+        await writeFile(configFile, unmanaged);
+        const collision = await installed.setup(bundle, 'codex', '--server', server);
+        expect([collision.code, collision.stdout.includes('unmanaged sympp MCP registration')]).toEqual([1, true]);
+        expect(await readFile(configFile, 'utf8')).toBe(unmanaged);
+      }
+      await writeFile(configFile, repairedConfig);
+
       // A panel that fails Herdr's check is rolled back with the person's own edit and connection.
       const panel = join(env.HERDR_APP_HOME, 'mods/sympp/main.js');
       await writeFile(panel, '// my edit\n');
@@ -271,11 +285,13 @@ if (process.platform !== 'win32') {
     expect([started.name, started.cwd, started.env.CLAUDE_CONFIG_DIR, started.env.OPENAI_API_KEY]).toEqual(['repair-the-specified-claude', project, profile, undefined]);
     expect(started.argv.at(-1)).toContain(JSON.stringify(task));
     expect(started.argv.join(' ')).not.toContain('Repair the specified');
+    expect(started.line).toBeUndefined();
 
     // The same launch again is the same agent; a follow-up reaches it while it is idle.
     const again = await helper(...claude);
     expect([again.reused, again.receipt]).toEqual([true, launched.receipt]);
     expect(Object.keys((await state()).terminals)).toEqual(['t1']);
+    expect((await helper(...claude.map((arg) => arg === 'opus' ? 'sonnet' : arg))).error).toBe('launch_conflict');
     expect((await helper('check', '--receipt', launched.receipt)).state).toBe('live');
     const followUp = join(root, 'follow-up.txt');
     await writeFile(followUp, 'Also update the changelog.');
@@ -309,6 +325,17 @@ if (process.platform !== 'win32') {
     expect(JSON.parse(await readFile(codexState, 'utf8')).config).toMatchObject({ concurrent: 'preserved', projects: { [project]: { trust_level: 'untrusted' } } });
     expect(Object.keys((await state()).terminals)).toHaveLength(2);
 
+    // A launch interrupted while labelling its terminal is repaired on replay, without another agent.
+    const labelled = join(root, 'label.txt');
+    await writeFile(labelled, 'Label repair');
+    const replayed = ['launch', '--provider', 'opencode', '--task', labelled, '--cwd', project, '--attempt', 'label'];
+    await change((value) => { value.lose_label_reply = true; });
+    expect((await helper(...replayed)).error).toBe('core_unreachable');
+    await change((value) => { value.lose_label_reply = false; });
+    expect((await helper(...replayed)).reused).toBe(true);
+    const repaired = (await state()).terminals.t3;
+    expect(repaired.labels['sympp.pid']).toBe(String(repaired.pid));
+
     // A title that looks like a credential is not shown, and a lost reply never starts the task twice.
     await writeFile(task, 'token=controlled-private-value');
     await change((value) => { value.lose_reply = true; });
@@ -317,7 +344,8 @@ if (process.platform !== 'win32') {
     await change((value) => { value.lose_reply = false; });
     expect((await helper(...opencode)).error).toBe('launch_uncertain');
     const terminals = Object.values((await state()).terminals) as any[];
-    expect(terminals.map((terminal) => terminal.name)).toEqual(['repair-the-specified-claude', 'repair-the-specified-codex', 'task-opencode']);
+    expect(terminals.map((terminal) => terminal.name)).toEqual(['repair-the-specified-claude', 'repair-the-specified-codex', 'label-repair-opencode', 'task-opencode']);
+    expect((await state()).transport_secret_present).toBeUndefined();
   });
 }
 
