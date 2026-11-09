@@ -47,7 +47,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, created_by} <- optional_string_argument(arguments, "created_by", terminal_name(terminal)),
          {:ok, source_id} <- optional_string_argument(arguments, "source_id"),
          {:ok, flag} <- flag_argument(arguments),
-         {:ok, _work_request, _filters, scope} <- scoped_work_request(config.repo, work_request_id),
+         {:ok, work_request, _filters, scope} <- scoped_work_request(config.repo, work_request_id),
          {:ok, decision_record} <-
            WorkRequestService.record_decision(
              config.repo,
@@ -65,6 +65,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
              |> Map.merge(DecisionFeedback.record_attrs(flag))
            ),
          {:ok, updated_work_request} <- WorkRequestScope.scoped_work_request(config.repo, work_request_id) do
+      DecisionFeedback.notify_chief(work_request, decision_record)
+
       {:ok,
        ToolResult.tool_result(%{
          "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),

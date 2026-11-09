@@ -103,6 +103,9 @@ Any Herdr terminal may `record_decision` on a WorkRequest without owning it.
 With `flag: true` the decision waits for the operator's review on the board.
 The operator acknowledges it or sends feedback over HTTP; feedback is typed into
 the recording terminal as `Decision feedback: <text>` without being submitted.
+The chief that created the WorkRequest, when it is live on the factory's
+machine and didn't record the decision, also gets one submitted line:
+`Product call on <title> by <terminal>: <decision>`.
 See the [operator board API](../docs/operator-board-api.md).
 
 ## Configuration
