@@ -5,7 +5,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, Response, ToolCatalog}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer, as: PlanningRenderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
 
   @version_resource "sympp://health/version"
   @agent_text_mime_type "text/vnd.toon"
@@ -37,21 +36,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
     end
   end
 
-  @doc "Reads a WorkPackage's rendered document or its worker bootstrap."
+  @doc """
+  Reads a WorkPackage's rendered document. Any trusted caller can read these,
+  so they use the agent encoding, which redacts secret-shaped keys and values.
+  """
   @spec read_work_package_virtual_resource(module(), String.t(), String.t(), String.t()) ::
           {:ok, map()} | {:error, integer(), String.t(), map()}
-  def read_work_package_virtual_resource(repo, work_package_id, "worker-bootstrap.json", uri) do
-    with {:ok, state} <- render_state(repo, work_package_id, "context.md", uri),
-         {:ok, bootstrap} <- WorkPackageDispatch.bootstrap(repo, state.work_package, true) do
-      {:ok, Response.json_resource(uri, bootstrap)}
-    else
-      {:error, _code, _message, _data} = error -> error
-      {:error, _reason} -> service_error(uri)
-    end
-  end
-
-  # Any trusted caller can read these, so they use the agent encoding, which
-  # redacts secret-shaped keys and values.
   def read_work_package_virtual_resource(repo, work_package_id, file_name, uri) do
     with {:ok, state} <- render_state(repo, work_package_id, file_name, uri),
          {:ok, toon} <- WorkerContext.encode_virtual_file(state, file_name, uri: uri) do

@@ -86,7 +86,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
     payload =
       state
       |> base_payload("task_plan.md", opts)
-      |> put_optional("version", Keyword.get(opts, :version))
       |> Map.put("plan_nodes", Enum.map(state.plan_nodes, &plan_node_payload/1))
       |> Map.put("omitted", %{"plan_nodes" => state.plan_nodes_omitted_count || 0})
 

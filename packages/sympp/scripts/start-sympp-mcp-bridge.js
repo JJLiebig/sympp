@@ -1315,6 +1315,10 @@ async function bridge(identity, state, runtimeFile) {
       let parsed = null;
       try { parsed = JSON.parse(line); } catch (_) { }
       trace("mcp_request_begin", { method: parsed && parsed.method });
+      if (["tools/list", "tools/call"].includes(parsed?.method) && await sessionLocation.worker()) {
+        process.stdout.write(`${JSON.stringify(require("./sympp-session-location.js").workerToolsResponse(parsed))}\n`);
+        continue;
+      }
       const requestProtocol = parsed && parsed.method === "initialize" && parsed.params ? String(parsed.params.protocolVersion || "") : null;
       let response;
       let requestStarted = false;
@@ -1410,8 +1414,7 @@ async function bridge(identity, state, runtimeFile) {
             }
           }
         }
-        const output = require("./sympp-session-location.js").remoteWorktreeResponse(forwarded);
-        process.stdout.write(`${output.replace(/\r?\n/g, "")}\n`);
+        process.stdout.write(`${forwarded.replace(/\r?\n/g, "")}\n`);
       }
     }
     if (fatalRecoveryError) throw fatalRecoveryError;

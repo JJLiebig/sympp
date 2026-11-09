@@ -1,8 +1,8 @@
 # sympp Coordinator
 
 When the user selects Herdr-next execution, use the [optional execution helper](../symphony-worker/references/herdr-execution.md)
-for an existing dispatched assignment or ordinary untracked task. It does not
-dispatch or replace standalone coordination.
+for an ordinary untracked task. A WorkPackage launches from the line its
+dispatch returns, not from this helper.
 
 Use for ordinary coordination in a dedicated sympp MCP config. For WorkRequests, WorkPackages,
 delivery boards, or MCP merge gates, use [symphony-architect](../symphony-architect/procedure.md).
@@ -53,9 +53,8 @@ WorkRequest and WorkPackage titles are their short names: 2–5 words, max 40 ch
   PR/evidence.
 - Honor assigned budgets; otherwise keep one cohesive outcome and escalate
   material scope growth or reviewability risk. Numerical budgets are optional.
-- For sympp WorkPackages, provide the full scoped assignment and local worktree
-  scope, including relevant prior findings/decisions. The parent owns dispatch
-  authority; workers make no sympp calls.
+- For sympp WorkPackages, dispatch writes the scoped assignment and returns the
+  launch line; follow the architect procedure. Workers make no sympp calls.
 - Use explorers for reconnaissance only.
 
 ## Dispatch

@@ -3,7 +3,7 @@ import { join, basename } from 'node:path';
 import { test } from '../support/browser-candidate.js';
 import { InspectorHost } from '../support/inspector-host.js';
 import { contract } from '../support/factory.js';
-import { head, pr, row, sync } from '../support/delivery.js';
+import { head, pr, prUrl, row, sync } from '../support/delivery.js';
 
 test('compiled inspector binds and pins actual request detail without stealing focus or inventing a worker', async ({ candidate, app, browser }) => {
   const { client, factory, provider } = candidate;
@@ -60,11 +60,10 @@ test('compiled inspector binds and pins actual request detail without stealing f
     await client.call('dispatch_work_package', { work_package_id: left });
     provider!.set(403, pr(403, head('b')));
     await sync(client, left, 403, head('b'));
-    await client.call('append_progress', {
-      work_package_id: left, summary: 'Accepted the findings candidate.', idempotency_key: 'inspector-qualified-input',
-      payload: { head_sha: head('b'), dependency_inputs: [{ dependency_id: pin, prerequisite_work_package_id: wp, candidate_head_sha: head('a') }] },
+    await client.call('sync_pr', {
+      work_package_id: left, url: prUrl(403), head_sha: head('b'),
+      dependency_inputs: [{ dependency_id: pin, prerequisite_work_package_id: wp, candidate_head_sha: head('a') }],
     });
-    await sync(client, left, 403, head('b'));
     expect((await row(client, request, left)).merge_eligibility.reason_codes).toContain('dependency_not_delivered');
     await press('j');
     await expect.poll(() => host.screen).toMatch(/│Qualified\s*│/);

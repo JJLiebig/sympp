@@ -69,8 +69,8 @@ sympp does not require a duplicate review-completion record.
 The worker procedure owns required checks and review convergence. MCP readiness
 checks ledger prerequisites and current provider-backed PR metadata; a ready
 state alone is not proof that every test or review requirement passed. See the
-[WorkPackage skill](../packages/sympp/skills/symphony-work-package/SKILL.md)
-for the authoritative handoff procedure.
+[worker procedure](../packages/sympp/skills/symphony-worker/SKILL.md)
+for the authoritative handoff.
 
 GitHub owns commits, PRs, checks, and merge state. sympp records the delivery
 outcome so its completion projection is auditable and idempotent.
@@ -130,11 +130,10 @@ checks or review passed. Without a pin, dispatch waits for actual delivered scop
 including all required successors; skipped or abandoned attempts do not count.
 Set the pin to `null` to remove it.
 
-Consumed backend selections belong to the dependent candidate's existing progress
-history. The [WorkPackage procedure](../packages/sympp/skills/symphony-work-package/SKILL.md#candidate-inputs)
-owns recording and requalification; the
+The architect records which backend selections the dependent's current PR head
+consumed with `sync_pr(dependency_inputs)`; a green PR can't prove it. The
 [architect procedure](../packages/sympp/skills/symphony-architect/references/operations.md#ui-collaboration-and-candidates)
-owns approval, selection and review-owner handoff.
+owns approval, selection, recording and review-owner handoff.
 
 Clearing a previously consumed pin also invalidates that input evidence. Once the
 prerequisite has delivered, record fresh qualification with `candidate_head_sha: null`
@@ -162,12 +161,17 @@ and pinned heads must still match after backend delivery. External merges are
 recorded truthfully even when out of order; the board flags `delivery_order_violation`
 for remediation, including after the backend eventually delivers.
 
-MCP dispatch and delivery-board reads default to compact summaries. Dispatch
-returns an `assignment_uri`; the architect reads that authorized resource and
-passes the JSON bootstrap to the worker. `detail: "full"` on dispatch returns
-the complete bootstrap inline; on the board view of `read_work_request` it restores all nested
-package and delivery evidence. Structured results remain JSON and agent text
-uses TOON. See the [architect procedure](../packages/sympp/skills/symphony-architect/SKILL.md#dispatch).
+Dispatch takes a review mode (`fast`, `normal`, `deep` or `none`), prepares the
+package's factory worktree, writes the worker's assignment file under that
+worktree's git dir, mints a Review Suite id (none for mode `none`) and returns a
+ready `hc run` launch line labelled `sympp.role=worker`. Dispatching a dispatched
+package again reuses its worktree and review id. If the worktree can't be
+prepared, the package stays dispatched and the response carries the error and
+next action. In a worker terminal the sympp bridge serves no tools. See the
+[architect procedure](../packages/sympp/skills/symphony-architect/SKILL.md#dispatch).
+The board view of `read_work_request` defaults to compact summaries; `detail: "full"`
+restores all nested package and delivery evidence. Structured results remain JSON
+and agent text uses TOON.
 `reconcile_work_request` defaults to counts plus proposed, applied and error
 rows; `detail: "full"` restores skipped rows and complete delivery-board evidence.
 Terminal packages have no pending merge next action. WorkRequest reads expose

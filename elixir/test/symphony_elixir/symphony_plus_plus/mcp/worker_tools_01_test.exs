@@ -3,8 +3,6 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope
-
   test "package evidence is idempotent per key and redacts secrets", %{repo: repo} do
     own_package = package_in_request!(repo, "SYMPP-WORKER-OWN", kind: "adapter")
 
@@ -104,40 +102,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
 
     assert get_in(redacted_replay_response, ["result", "structuredContent", "progress_event", "id"]) ==
              get_in(redacted_progress_response, ["result", "structuredContent", "progress_event", "id"])
-  end
-
-  test "attach_branch infers the package branch when none is given", %{repo: repo} do
-    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-compact-metadata")
-
-    package =
-      package_in_request!(repo, "SYMPP-COMPACT-METADATA",
-        kind: "mcp",
-        branch_pattern: "agent/{{work_package_id}}/{{slug}}",
-        worktree_path: fixture.repo_root
-      )
-
-    assert {:ok, branch} = WorktreeScope.prepare_branch(package, nil)
-    TestSupport.git_output!(fixture.repo_root, ["checkout", "-b", branch])
-    compact_branch_response = attach_tool(repo, "t1", "attach_branch", %{"work_package_id" => package.id, "head_sha" => "compact-head"})
-    compact_branch_payload = response_progress_payload(repo, compact_branch_response)
-    assert compact_branch_payload["branch"] == branch
-    assert compact_branch_payload["head_sha"] == "compact-head"
-
-    verbose_branch_response = attach_tool(repo, "t1", "attach_branch", %{"work_package_id" => package.id, "branch" => branch, "head_sha" => "verbose-head"})
-    verbose_branch_payload = response_progress_payload(repo, verbose_branch_response)
-    assert verbose_branch_payload["branch"] == branch
-    assert verbose_branch_payload["head_sha"] == "verbose-head"
-
-    repo.update_all(
-      from(work_package in WorkPackage, where: work_package.id == ^package.id),
-      set: [branch_pattern: "legacy/*"]
-    )
-
-    invalid_inferred_branch_response =
-      call(repo, package, "attach_branch", %{"head_sha" => "invalid-head"})
-
-    assert get_in(invalid_inferred_branch_response, ["error", "code"]) == -32_602
-    assert get_in(invalid_inferred_branch_response, ["error", "data", "reason"]) =~ "unsupported_branch_pattern_wildcard"
   end
 
   test "stored package documents and progress payloads retain redaction at read time", %{repo: repo} do

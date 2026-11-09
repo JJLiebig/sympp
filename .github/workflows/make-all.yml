@@ -458,6 +458,7 @@ jobs:
         run: |
           node --test integrations/herdr-next/*.test.mjs
           node --test packages/sympp/tests/launcher/remote.test.js
+          node --test packages/sympp/tests/launcher/remote-worktrees.test.js
           node --test packages/sympp/tests/launcher/herdr-execution.test.js
           node --test packages/sympp/tests/launcher/setup-contract.test.js
 

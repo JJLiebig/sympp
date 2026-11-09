@@ -3,7 +3,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
 
   alias Ecto.Changeset
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Policies.Templates
@@ -12,11 +11,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @type request :: map()
-  @type creation :: %{
-          work_package: WorkPackage.t(),
-          virtual_files: %{String.t() => String.t()},
-          policy: Templates.template()
-        }
+  @type creation :: %{work_package: WorkPackage.t()}
 
   @type error ::
           :invalid_acceptance_criteria
@@ -48,7 +43,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
          policy = effective_policy(policy, work_package.review_requirement),
          {:ok, acceptance_criteria} <- normalize_acceptance_criteria(work_package.acceptance_criteria),
          :ok <- require_acceptance_criteria(policy, acceptance_criteria) do
-      repo.transaction(fn -> activate_transaction(repo, work_package, policy) end)
+      repo.transaction(fn -> activate_transaction(repo, work_package) end)
       |> case do
         {:ok, creation} -> {:ok, creation}
         {:error, reason} -> {:error, reason}
@@ -67,32 +62,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
     end
   end
 
-  defp activate_transaction(repo, work_package, policy) do
+  defp activate_transaction(repo, work_package) do
     revision = work_package.contract_revision
 
     with {:ok, activated} <- Lifecycle.transition(repo, work_package, :dispatch, expected_contract_revision: revision),
-         {:ok, _scope_node} <- append_scope_plan_node(repo, activated),
-         {:ok, virtual_files} <- Renderer.render_all(repo, activated.id) do
-      %{
-        work_package: activated,
-        virtual_files: virtual_files,
-        policy: policy
-      }
+         {:ok, _scope_node} <- append_scope_plan_node(repo, activated) do
+      %{work_package: activated}
     else
       {:error, reason} -> repo.rollback(reason)
     end
-  end
-
-  @spec response_payload(creation(), keyword()) :: map()
-  def response_payload(%{work_package: work_package, virtual_files: virtual_files, policy: policy}, opts \\ []) do
-    worker_bootstrap = Keyword.get(opts, :worker_bootstrap)
-
-    %{
-      work_package: work_package_payload(work_package),
-      policy: policy_payload(policy),
-      virtual_files: virtual_files
-    }
-    |> maybe_put_worker_bootstrap(worker_bootstrap)
   end
 
   @spec error_message(term()) :: String.t()
@@ -134,50 +112,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   end
 
   defp nonblank_or(_value, fallback), do: fallback
-
-  defp maybe_put_worker_bootstrap(payload, nil), do: payload
-  defp maybe_put_worker_bootstrap(payload, bootstrap), do: Map.put(payload, :worker_bootstrap, redacted_worker_bootstrap(bootstrap))
-
-  defp redacted_worker_bootstrap(bootstrap) when is_map(bootstrap) do
-    bootstrap
-    |> redact_bootstrap_launch_prompt(:launch_prompt)
-    |> redact_bootstrap_launch_prompt("launch_prompt")
-  end
-
-  defp redact_bootstrap_launch_prompt(bootstrap, key) do
-    case Map.fetch(bootstrap, key) do
-      {:ok, prompt} when is_binary(prompt) -> Map.put(bootstrap, key, Redactor.redact_text(prompt))
-      _result -> bootstrap
-    end
-  end
-
-  defp work_package_payload(%WorkPackage{} = work_package) do
-    %{
-      id: work_package.id,
-      kind: work_package.kind,
-      title: work_package.title,
-      repo: work_package.repo,
-      base_branch: work_package.base_branch,
-      branch_pattern: work_package.branch_pattern,
-      product_description: work_package.product_description,
-      engineering_scope: work_package.engineering_scope,
-      allowed_file_globs: work_package.allowed_file_globs,
-      review: work_package.review_requirement,
-      policy_template: work_package.policy_template,
-      acceptance_criteria: work_package.acceptance_criteria,
-      status: work_package.status,
-      parent_id: work_package.parent_id,
-      owner_id: work_package.owner_id
-    }
-  end
-
-  defp policy_payload(policy) do
-    %{
-      template: policy.template,
-      constraints: policy.constraints,
-      required_gates: policy.required_gates
-    }
-  end
 
   defp require_acceptance_criteria(%{required_gates: required_gates}, []) do
     if "package_acceptance" in required_gates do

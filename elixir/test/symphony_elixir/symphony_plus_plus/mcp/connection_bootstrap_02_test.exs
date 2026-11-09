@@ -65,7 +65,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
   end
 
   test "tools list returns Codex-compatible top-level input schemas for every surface", %{repo: repo} do
-    for profile <- [:full, :worker, :architect, :coordinator, :solo],
+    for profile <- [:full, :architect, :coordinator, :solo],
         tool <- ToolCatalog.startup_tool_specs(profile, test_mcp_config(repo)) do
       schema = Map.fetch!(tool, "inputSchema")
 

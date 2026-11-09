@@ -1,8 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{SoloTools, ToolCatalog}
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{SoloTools, ToolCatalog, WorkPackageLaunch}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{WorkPackage, WorkPackageDelivery}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{DecisionLogEntry, Phase, WorkRequest}
 
@@ -81,17 +80,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
 
   defp require_work_request_target(schema), do: schema
 
-  defp architect_schema("update_task_plan") do
-    schema(
-      %{
-        "work_package_id" => string_schema(),
-        "expected_version" => integer_schema(),
-        "nodes" => plan_nodes_schema()
-      },
-      ["work_package_id", "expected_version", "nodes"]
-    )
-  end
-
   defp architect_schema("append_finding") do
     schema(
       scoped_properties(%{
@@ -147,23 +135,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "url" => described_string_schema("PR URL to synchronize; merged PRs close delivery from GitHub merge evidence."),
         "number" => pr_number_schema(),
         "repository" => string_schema(),
-        "head_sha" => described_string_schema("Optional expected PR head; when supplied, must match the fetched provider head.")
+        "head_sha" => described_string_schema("Optional expected PR head; when supplied, must match the fetched provider head."),
+        "dependency_inputs" => dependency_inputs_schema()
       },
       ["work_package_id"]
     )
     |> Map.put("additionalProperties", true)
-  end
-
-  defp architect_schema("attach_branch") do
-    schema(
-      %{
-        "work_request_id" => current_work_request_id_schema(),
-        "work_package_id" => described_string_schema("Explicit descendant WorkPackage whose canonical branch metadata will be updated."),
-        "branch" => string_schema(),
-        "head_sha" => string_schema()
-      },
-      ["work_package_id", "head_sha"]
-    )
   end
 
   defp architect_schema("reconcile_work_request") do
@@ -343,24 +320,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
       %{
         "work_request_id" => current_work_request_id_schema(),
         "work_package_id" => string_schema(),
-        "detail" => payload_detail_schema()
+        "review_mode" =>
+          WorkPackage.review_modes()
+          |> string_enum_schema()
+          |> Map.put("description", "Review Suite mode for the worker: fast, normal (Review Suite base) or deep; none skips the review step."),
+        "agent" => WorkPackageLaunch.agents() |> string_enum_schema() |> Map.put("description", "Agent the launch line starts. Defaults to codex."),
+        "machine" => described_string_schema("Herdr machine name for the factory host in your hc. Defaults to the factory's own name."),
+        "target_repo_root" => described_string_schema("Local factory checkout override. Omit for factories with a repos root.")
       },
-      ["work_package_id"]
+      ["work_package_id", "review_mode"]
     )
     |> Map.put("additionalProperties", true)
-  end
-
-  defp architect_schema("prepare_work_package_worktree") do
-    schema(
-      %{
-        "work_request_id" => current_work_request_id_schema(),
-        "work_package_id" => string_schema(),
-        "target_repo_root" => described_string_schema("Local factory checkout override. Omit for remote factories, which resolve the WorkPackage remote under their repos root."),
-        "branch" =>
-          described_string_schema("Optional branch override. Omit it to derive a package-unique branch from the WorkPackage id or branch_pattern template. Exact branch patterns are used unchanged.")
-      },
-      ["work_package_id"]
-    )
   end
 
   defp work_package_delivery_evidence_schema do
@@ -545,19 +515,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   defp string_array_schema, do: %{"type" => "array", "items" => nonblank_string_schema()}
   defp described_string_array_schema(description), do: Map.put(string_array_schema(), "description", description)
 
-  defp plan_nodes_schema do
+  defp dependency_inputs_schema do
     %{
       "type" => "array",
       "minItems" => 1,
+      "description" =>
+        "Prerequisite inputs this PR head consumed, one per dependency: the dependency id, its prerequisite WorkPackage and the candidate head pinned on it (null when unpinned). Needs a PR (url, number or head_sha).",
       "items" => %{
         "type" => "object",
         "additionalProperties" => false,
         "properties" => %{
-          "id" => nonblank_string_schema(),
-          "title" => nonblank_string_schema(),
-          "body" => nullable_string_schema(),
-          "status" => string_enum_schema(PlanNode.statuses())
-        }
+          "dependency_id" => nonblank_string_schema(),
+          "prerequisite_work_package_id" => nonblank_string_schema(),
+          "candidate_head_sha" => nullable_string_schema()
+        },
+        "required" => ["dependency_id", "prerequisite_work_package_id", "candidate_head_sha"]
       }
     }
   end

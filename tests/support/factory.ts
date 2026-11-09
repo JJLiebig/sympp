@@ -80,8 +80,10 @@ export class Client {
   }
 
   toolParams(name: string, args: object) {
-    const scoped = requestScoped.has(name) && this.workRequest && !('work_request_id' in args) && !('work_package_id' in args)
+    let scoped = requestScoped.has(name) && this.workRequest && !('work_request_id' in args) && !('work_package_id' in args)
       ? { work_request_id: this.workRequest, ...args } : args;
+    // Journeys that only need a dispatched package dispatch without a review step.
+    if (name === 'dispatch_work_package' && !('review_mode' in scoped)) scoped = { review_mode: 'none', ...scoped };
     return { name, arguments: scoped, ...(this.terminal ? { _meta: { herdr: herdr(this.terminal, this.labels) } } : {}) };
   }
 

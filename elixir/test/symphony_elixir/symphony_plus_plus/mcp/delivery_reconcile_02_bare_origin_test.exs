@@ -3,108 +3,54 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02BareOriginTest do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle
 
   @moduletag :ci_slow
 
-  test "WorkPackage worktree MCP prepare accepts bare repo with owner-qualified target origin", %{repo: repo} do
+  test "dispatch finds a bare-named repo's checkout by its owner-qualified origin", %{repo: repo} do
     fixture =
       "symphony-plus-plus/beta"
       |> TestSupport.git_repo_fixture!(prefix: "sympp-mcp-bare-origin-worktree")
       |> set_relative_owner_origin!("JJLiebig/sympp")
 
-    codex_home = Path.join(fixture.root, "codex-home")
     config = Config.default(repo: repo, repo_root: fixture.repo_root)
+    work_request = create_work_request!(repo, id: "WR-MCP-WORKTREE-BARE-ORIGIN", repo: "sympp", base_branch: "symphony-plus-plus/beta")
 
-    anchor = %{repo: "sympp", base_branch: "symphony-plus-plus/beta"}
-
-    work_request =
-      create_work_request!(repo,
-        id: "WR-MCP-WORKTREE-BARE-ORIGIN",
-        repo: anchor.repo,
-        base_branch: anchor.base_branch
-      )
-
-    assert {:ok, work_package} =
+    assert {:ok, package} =
              CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
                work_request_work_package_attrs(
                  id: "WRS-MCP-WORKTREE-BARE-ORIGIN",
                  title: "Prepare bare repo target origin worktree",
-                 base_branch: anchor.base_branch,
+                 base_branch: "symphony-plus-plus/beta",
                  branch_pattern: "feat/bare-origin-worktree",
                  allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/mcp/server.ex"],
                  acceptance_criteria: ["Accept unambiguous owner-qualified target origin."]
                )
              )
 
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-WORKTREE-BARE-ORIGIN",
-                 kind: work_package.kind,
-                 title: work_package.title,
-                 repo: work_request.repo,
-                 base_branch: work_package.base_branch,
-                 branch_pattern: work_package.branch_pattern,
-                 product_description: work_request.human_description,
-                 allowed_file_globs: work_package.allowed_file_globs,
-                 acceptance_criteria: work_package.acceptance_criteria,
-                 status: "dispatched"
-               )
-             )
-
-    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
-    assert {:ok, _linked_slice} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", package.id)
-
-    previous_codex_home = System.get_env("CODEX_HOME")
-
-    try do
-      System.put_env("CODEX_HOME", codex_home)
-
-      prepare_response =
-        mcp_tool(
-          repo,
-          "t1",
-          "prepare_work_package_worktree",
-          %{
-            "work_package_id" => package.id
-          },
-          config: config
-        )
-
-      prepare_payload = get_in(prepare_response, ["result", "structuredContent"])
-      assert prepare_payload["worktree"]["status"] == "prepared"
-      assert comparable_path(prepare_payload["worktree"]["target_repo_root"]) == comparable_path(fixture.repo_root)
-      assert File.dir?(prepare_payload["worktree"]["path"])
-
-      assert {:ok, %{status: "cleaned"}} = WorktreeLifecycle.cleanup(repo, package.id)
-      assert {:ok, %{worktree_path: nil}} = WorkPackageRepository.get(repo, package.id)
-      refute File.exists?(prepare_payload["worktree"]["path"])
-
-      legacy_prepare_response =
-        mcp_tool(
-          repo,
-          "t1",
-          "prepare_work_package_worktree",
-          %{
-            "work_package_id" => package.id
-          },
-          config: config
-        )
-
-      legacy_prepare_payload = get_in(legacy_prepare_response, ["result", "structuredContent"])
-      assert legacy_prepare_payload["worktree"]["status"] == "prepared"
-
-      assert {:ok, _legacy_package} = WorkPackageRepository.update(repo, package.id, %{worktree_target_repo_root: nil})
-      File.rm_rf!(legacy_prepare_payload["worktree"]["path"])
-
-      assert {:ok, %{status: "stale_record_cleared"}} = WorktreeLifecycle.cleanup(repo, package.id)
-      assert {:ok, %{worktree_path: nil}} = WorkPackageRepository.get(repo, package.id)
-    after
-      restore_env("CODEX_HOME", previous_codex_home)
+    dispatch = fn ->
+      mcp_tool(repo, "t1", "dispatch_work_package", %{"work_request_id" => work_request.id, "work_package_id" => package.id, "review_mode" => "none"}, config: config)
+      |> get_in(["result", "structuredContent", "worktree", "path"])
     end
+
+    path = dispatch.()
+    assert File.dir?(path)
+    assert comparable_path(repo.get!(WorkPackage, package.id).worktree_target_repo_root) == comparable_path(fixture.repo_root)
+
+    assert {:ok, %{status: "cleaned"}} = WorktreeLifecycle.cleanup(repo, package.id)
+    assert {:ok, %{worktree_path: nil}} = WorkPackageRepository.get(repo, package.id)
+    refute File.exists?(path)
+
+    replayed = dispatch.()
+    assert File.dir?(replayed)
+
+    assert {:ok, _package} = WorkPackageRepository.update(repo, package.id, %{worktree_target_repo_root: nil})
+    File.rm_rf!(replayed)
+
+    assert {:ok, %{status: "stale_record_cleared"}} = WorktreeLifecycle.cleanup(repo, package.id)
+    assert {:ok, %{worktree_path: nil}} = WorkPackageRepository.get(repo, package.id)
   end
 end

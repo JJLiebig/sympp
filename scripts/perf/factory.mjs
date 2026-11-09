@@ -56,7 +56,7 @@ try {
             }
           } else {
             const args = operation === "list_work_requests" ? {} : { work_request_id: "WR-FIXTURE-FANOUT" };
-            if (operation === "dispatch_work_package") args.work_package_id = `WP-PERF-${++dispatch}`;
+            if (operation === "dispatch_work_package") Object.assign(args, { work_package_id: `WP-PERF-${++dispatch}`, review_mode: "none" });
             if (operation === "plan_view") args.view = "plan";
             metric = await call("tools/call", { name: operation === "plan_view" ? "read_work_request" : operation, arguments: args });
           }

@@ -16,7 +16,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   @command_timeout_ms 2_000
 
   @type view :: {:live, map()} | :finished | :unseen | :unknown
-  @type snapshot :: %{core_id: String.t(), terminals: %{String.t() => map()}}
+  @type snapshot :: %{
+          required(:core_id) => String.t(),
+          required(:terminals) => %{String.t() => map()},
+          optional(:core_name) => String.t()
+        }
 
   @doc """
   How the factory's core sees one terminal. With `confirm: true`, a terminal
@@ -61,6 +65,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
     end
   end
 
+  @doc """
+  The factory host's Herdr machine name: its core's name, or the host name when
+  the core can't be reached. `hc run --on <name>` on the factory host reaches
+  this machine.
+  """
+  @spec machine_name() :: String.t()
+  def machine_name do
+    case snapshot(false) do
+      {:ok, %{core_name: name}} when is_binary(name) and name != "" ->
+        name
+
+      _unnamed ->
+        {:ok, host} = :inet.gethostname()
+        to_string(host)
+    end
+  end
+
   @spec snapshot(boolean()) :: {:ok, snapshot()} | :unavailable
   defp snapshot(fresh?) do
     case Application.get_env(:symphony_elixir, :sympp_herdr_core, "hc") do
@@ -86,9 +107,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
 
   defp load_command(command) do
     with path when is_binary(path) <- System.find_executable(command),
-         {:ok, %{"core" => %{"id" => core_id}}} when is_binary(core_id) <- run(path, ["server", "status", "--json"]),
+         {:ok, %{"core" => %{"id" => core_id} = core}} when is_binary(core_id) <- run(path, ["server", "status", "--json"]),
          {:ok, %{"terminals" => terminals}} when is_list(terminals) <- run(path, ["ls", "--all", "--json"]) do
-      {:ok, %{core_id: core_id, terminals: Map.new(terminals, &{&1["address"], &1})}}
+      snapshot = %{core_id: core_id, terminals: Map.new(terminals, &{&1["address"], &1})}
+      {:ok, if(is_binary(core["name"]), do: Map.put(snapshot, :core_name, core["name"]), else: snapshot)}
     else
       _unavailable -> :unavailable
     end

@@ -88,7 +88,8 @@ async function remoteArguments(body, factoryOwned) {
         return op;
       }));
     }
-    if (params.name === "prepare_work_package_worktree") delete args.target_repo_root;
+    // A factory with a repos root chooses the checkout itself.
+    if (params.name === "dispatch_work_package") delete args.target_repo_root;
     return { ...payload, params: { ...params, arguments: args } };
   }
   const payload = JSON.parse(body);
@@ -96,24 +97,26 @@ async function remoteArguments(body, factoryOwned) {
   return JSON.stringify(await rewrite(payload));
 }
 
-function remoteWorktreeResponse(body, env = process.env) {
+// A remote factory's launch line runs `hc run --on <machine>` from this client, so it names the
+// factory the way this client's hc does: SYMPP_SERVER_NAME, else the server URL's host name.
+function remoteDispatchMachine(body, env = process.env) {
   if (!isRemoteEndpoint(env)) return body;
   try {
-    const qualify = payload => {
-      const result = payload?.result;
-      const worktree = result?.structuredContent?.worktree;
-      if (!result?.isError && ["prepared", "already_prepared"].includes(worktree?.status) && typeof worktree?.path === "string") {
-        const machine = env.SYMPP_SERVER_NAME || new URL(env.SYMPP_SERVER_URL).hostname;
-        const value = `${machine}:${worktree.path}`;
-        const encoded = /[\u0000-\u001f"\u007f]/.test(value) ? JSON.stringify(value) : value;
-        result.content = [{ type: "text", text: `worktree: ${encoded}` }];
-      }
-      return payload;
-    };
     const payload = JSON.parse(body);
-    if (Array.isArray(payload)) return body;
-    return JSON.stringify(qualify(payload));
+    const params = payload?.params;
+    const input = params?.arguments;
+    if (Array.isArray(payload) || payload?.method !== "tools/call" || params?.name !== "dispatch_work_package" ||
+        !input || typeof input !== "object" || Array.isArray(input) || Object.hasOwn(input, "machine")) return body;
+    const machine = env.SYMPP_SERVER_NAME || new URL(env.SYMPP_SERVER_URL).hostname;
+    return JSON.stringify({ ...payload, params: { ...params, arguments: { ...input, machine } } });
   } catch (_) { return body; }
+}
+
+// A worker terminal (`sympp.role=worker`) gets no sympp tools: it lists none and every call is refused.
+function workerToolsResponse(request) {
+  if (request.method === "tools/list") return { jsonrpc: "2.0", id: request.id, result: { tools: [] } };
+  return { jsonrpc: "2.0", id: request.id, error: { code: -32601, message: "sympp serves no tools in a worker terminal. Report to your parent terminal instead.",
+    data: { reason: "worker_terminal" } } };
 }
 
 function createReporter(env = process.env, connect = selected => connectCore(undefined, "hc", [], selected)) {
@@ -174,6 +177,11 @@ function createReporter(env = process.env, connect = selected => connectCore(und
     terminal() { return identity ? { core_id: identity.core_id, terminal_id: identity.terminal_id } : null; },
     // Whether the verified terminal is labelled as a chief.
     chief() { return identity?.labels?.["sympp.role"] === "chief"; },
+    // Whether the verified terminal is labelled as a dispatched worker.
+    async worker() {
+      await refresh();
+      return identity?.labels?.["sympp.role"] === "worker";
+    },
     clear,
     close() { closed = true; clear(); },
     report(binding, probe) {
@@ -205,9 +213,9 @@ function createReporter(env = process.env, connect = selected => connectCore(und
     refresh,
     async attach(body) {
       await refresh();
-      return withTerminal(await remoteArguments(body, factoryOwned), identity);
+      return withTerminal(remoteDispatchMachine(await remoteArguments(body, factoryOwned), env), identity);
     },
   };
 }
 
-module.exports = { terminalMeta, withTerminal, createReporter, remoteArguments, remoteWorktreeResponse };
+module.exports = { terminalMeta, withTerminal, createReporter, remoteArguments, remoteDispatchMachine, workerToolsResponse };

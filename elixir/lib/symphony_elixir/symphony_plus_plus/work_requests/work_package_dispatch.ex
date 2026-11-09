@@ -1,5 +1,14 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
-  @moduledoc false
+  @moduledoc """
+  The ledger half of dispatching a WorkPackage.
+
+  A planned package moves to `dispatched` and records its review mode, a newly
+  minted Review Suite id (none for mode `none`) and the Herdr machine its
+  worker launches on. Dispatching a package that is already `dispatched`
+  replays: it keeps the stored review mode and id, so the worker's worktree and
+  review stay the same. Preparing the worktree and writing the worker's
+  assignment happen after this commits (`MCP.WorkPackageLaunch`).
+  """
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext
   alias SymphonyElixir.SymphonyPlusPlus.BranchPattern
@@ -16,20 +25,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
-  @mcp_worker_skill "sympp"
-  @preferred_worker_skill_set [@mcp_worker_skill]
-
   @type dispatch_result :: %{
           work_request: WorkRequest.t(),
           work_package: WorkPackage.t(),
-          creation: CreateWork.creation(),
-          worker_bootstrap: map()
+          replay?: boolean()
         }
 
+  @doc """
+  Dispatches or replays one package. Options: `review_mode` (required, one of
+  `WorkPackage.review_modes/0`), `launch_machine` and `dispatched_by`.
+  """
   @spec dispatch(module(), String.t(), String.t(), keyword()) ::
           {:ok, dispatch_result()} | {:error, term()}
-  def dispatch(repo, work_request_id, work_package_id, opts \\ [])
-      when is_atom(repo) and is_binary(work_request_id) and is_binary(work_package_id) do
+  def dispatch(repo, work_request_id, work_package_id, opts)
+      when is_atom(repo) and is_binary(work_request_id) and is_binary(work_package_id) and is_list(opts) do
     # SQLite permits only one writer per ledger. Queue dispatches before checking
     # out connections, rather than making competing BEGIN IMMEDIATE calls wait
     # inside SQLite while the current dispatch still needs to execute queries.
@@ -48,10 +57,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
       end,
       mode: :immediate
     )
-    |> case do
-      {:ok, result} -> {:ok, result}
-      {:error, reason} -> {:error, reason}
-    end
     |> DashboardPubSub.broadcast_changed_on_success()
   rescue
     error in Exqlite.Error ->
@@ -63,58 +68,94 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
   end
 
   defp dispatch_transaction(repo, work_request_id, work_package_id, opts) do
+    review_mode = Keyword.fetch!(opts, :review_mode)
+
     with {:ok, %WorkRequest{} = work_request} <- Repository.get(repo, work_request_id),
          :ok <- Phase.require_writable(work_request),
-         {:ok, %WorkPackage{status: "planned"} = work_package} <-
-           Repository.get_work_package(repo, work_request_id, work_package_id),
-         {:ok, execution_graph} <- ExecutionGraph.evaluate(repo, work_request_id),
-         :ok <- ExecutionGraph.require_ready(execution_graph, work_package_id),
-         :ok <- validate_contract(repo, work_request, work_package),
-         {:ok, creation} <- CreateWork.activate(repo, work_package, broadcast?: false),
-         {:ok, activated} <-
-           creation.work_package
-           |> Ecto.Changeset.change(dispatched_by: Keyword.get(opts, :dispatched_by))
-           |> repo.update(),
-         creation = %{creation | work_package: activated},
-         {:ok, bootstrap} <- bootstrap(repo, activated) do
-      {:ok,
-       %{
-         work_request: work_request,
-         work_package: activated,
-         creation: creation,
-         worker_bootstrap: bootstrap
-       }}
-    else
-      {:ok, %WorkPackage{}} -> {:error, :invalid_work_package_status}
-      {:error, reason} -> {:error, reason}
+         {:ok, %WorkPackage{} = work_package} <- Repository.get_work_package(repo, work_request_id, work_package_id),
+         {:ok, dispatched, replay?} <- dispatch_package(repo, work_request, work_package, review_mode, opts) do
+      {:ok, %{work_request: work_request, work_package: dispatched, replay?: replay?}}
     end
   end
 
-  @spec bootstrap(module(), WorkPackage.t(), boolean()) :: {:ok, map()} | {:error, term()}
-  def bootstrap(repo, %WorkPackage{} = work_package, compact? \\ false) do
-    with {:ok, work_request} <- Repository.get(repo, work_package.work_request_id),
-         {:ok, state} <- PlanningRepository.get_state(repo, work_package.id),
+  defp dispatch_package(repo, work_request, %WorkPackage{status: "planned"} = work_package, review_mode, opts) do
+    with {:ok, execution_graph} <- ExecutionGraph.evaluate(repo, work_request.id),
+         :ok <- ExecutionGraph.require_ready(execution_graph, work_package.id),
+         :ok <- validate_contract(repo, work_request, work_package),
+         {:ok, creation} <- CreateWork.activate(repo, work_package, broadcast?: false),
+         {:ok, dispatched} <-
+           creation.work_package
+           |> Ecto.Changeset.change(
+             dispatched_by: Keyword.get(opts, :dispatched_by),
+             review_mode: review_mode,
+             review_id: mint_review_id(review_mode),
+             launch_machine: Keyword.get(opts, :launch_machine)
+           )
+           |> repo.update() do
+      {:ok, dispatched, false}
+    end
+  end
+
+  defp dispatch_package(repo, _work_request, %WorkPackage{status: "dispatched", review_mode: review_mode} = work_package, review_mode, opts) do
+    machine = Keyword.get(opts, :launch_machine)
+
+    if is_nil(machine) or machine == work_package.launch_machine do
+      {:ok, work_package, true}
+    else
+      with {:ok, updated} <- work_package |> Ecto.Changeset.change(launch_machine: machine) |> repo.update(),
+           do: {:ok, updated, true}
+    end
+  end
+
+  defp dispatch_package(_repo, _work_request, %WorkPackage{status: "dispatched"} = work_package, _review_mode, _opts),
+    do: {:error, {:review_mode_conflict, work_package.review_mode}}
+
+  defp dispatch_package(_repo, _work_request, %WorkPackage{status: status}, _review_mode, _opts),
+    do: {:error, {:invalid_work_package_status, status}}
+
+  # Review Suite accepts a caller-supplied id matching `rvw_[a-z0-9]{8,32}`.
+  defp mint_review_id("none"), do: nil
+  defp mint_review_id(_review_mode), do: "rvw_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+
+  @doc """
+  The redacted assignment a worker reads: package contract, context, prior
+  findings and progress. A product description or engineering scope that only
+  repeats the WorkRequest's or the package's goal is left out.
+  """
+  @spec assignment(module(), WorkPackage.t()) :: {:ok, map()} | {:error, term()}
+  def assignment(repo, %WorkPackage{} = work_package) do
+    with {:ok, state} <- PlanningRepository.get_state(repo, work_package.id),
          {:ok, context} <- WorkRequestPayloads.worker_context(repo, work_package, work_package),
          {:ok, findings} <- WorkerContext.virtual_file_payload(state, "findings.md", []),
          {:ok, progress} <- WorkerContext.virtual_file_payload(state, "progress.md", []),
          {:ok, handoff} <- WorkerContext.virtual_file_payload(state, "handoff.md", []) do
-      context = context |> Map.put("prior_findings", findings) |> Map.put("prior_progress", progress)
-      {:ok, worker_bootstrap(work_request, work_package, context, handoff, compact?)}
+      work_package_payload =
+        work_package
+        |> WorkRequestPayloads.work_package()
+        |> put_distinct("product_description", work_package.product_description, get_in(context, ["parent_work_request", "goal"]))
+        |> put_distinct("engineering_scope", work_package.engineering_scope, work_package.goal)
+
+      {:ok,
+       context
+       |> Map.merge(%{
+         "prior_findings" => findings,
+         "prior_progress" => progress,
+         "work_package" => work_package_payload,
+         "delivery_context" => handoff
+       })
+       |> Redactor.json_safe()
+       |> Redactor.redact_output()}
     end
   end
 
-  @spec response_payload(dispatch_result()) :: map()
-  def response_payload(%{work_package: work_package, creation: creation, worker_bootstrap: bootstrap}) do
-    %{
-      work_package: work_package_payload(work_package),
-      dispatch: CreateWork.response_payload(creation, worker_bootstrap: bootstrap)
-    }
-  end
+  defp put_distinct(payload, _key, value, value), do: payload
+  defp put_distinct(payload, key, value, _repeated), do: Map.put(payload, key, value)
 
   @spec error_message(term()) :: String.t()
   def error_message(:not_found), do: "WorkRequest or WorkPackage was not found"
   def error_message(:work_request_archived), do: "WorkRequest is archived; restore it before dispatch"
-  def error_message(:invalid_work_package_status), do: "WorkPackage must be planned before dispatch"
+  def error_message({:invalid_work_package_status, status}), do: "WorkPackage is #{status}; only a planned package dispatches, and a dispatched one replays"
+  def error_message({:review_mode_conflict, stored}), do: "WorkPackage was dispatched with review_mode #{stored}; replay it with the same review_mode"
 
   def error_message({:execution_graph_cycle, cycles}),
     do: "WorkRequest execution graph contains a cycle across WorkPackages: #{inspect(cycles)}"
@@ -140,73 +181,4 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
       {:error, reason} -> {:error, {:unsupported_branch_pattern, branch_pattern, reason}}
     end
   end
-
-  defp worker_bootstrap(%WorkRequest{} = work_request, %WorkPackage{} = work_package, context, handoff, compact?) do
-    assignment =
-      context
-      |> Map.put("work_package", WorkRequestPayloads.work_package(work_package))
-      |> Map.update!("work_package", &Map.merge(&1, %{"product_description" => work_package.product_description, "engineering_scope" => work_package.engineering_scope}))
-      |> Map.put("delivery_context", handoff)
-      |> Redactor.json_safe()
-      |> Redactor.redact_output()
-
-    assignment = if compact?, do: compact_assignment(assignment), else: assignment
-
-    %{
-      type: "assignment",
-      assignment: assignment,
-      coordinates: %{
-        primary_execution: %{kind: "work_package", work_package_id: work_package.id},
-        product_parent: %{kind: "work_request", work_request_id: work_request.id}
-      },
-      required_skills: @preferred_worker_skill_set,
-      preferred_skill_set: @preferred_worker_skill_set,
-      supported_skill_sets: [@preferred_worker_skill_set],
-      launch_prompt: worker_launch_prompt()
-    }
-    |> Map.reject(fn {_key, value} -> is_nil(value) end)
-  end
-
-  defp compact_assignment(assignment) do
-    Enum.reduce(
-      [{"product_description", ["parent_work_request", "goal"]}, {"engineering_scope", ["work_package", "goal"]}],
-      assignment,
-      fn {key, source}, payload ->
-        if get_in(payload, ["work_package", key]) == get_in(payload, source) do
-          work_package = payload["work_package"] |> Map.delete(key) |> Map.put(key <> "_ref", "#/" <> Enum.join(source, "/"))
-          Map.put(payload, "work_package", work_package)
-        else
-          payload
-        end
-      end
-    )
-  end
-
-  defp worker_launch_prompt do
-    """
-    Read the sibling `assignment` object in this bootstrap; `*_ref` fields are JSON pointers within that assignment.
-    Use the installed `#{@mcp_worker_skill}` skill and read `references/symphony-worker/procedure.md` relative to that skill. Implement the assignment, run required native checks/review, and return the PR URL, exact head, results, and remaining risks to the parent.
-    No worker MCP calls or duplicate status/review records are required. Ask questions in the conversation; the parent owns coordination, blockers, and delivery reconciliation.
-    Stay inside this WorkPackage and never request or expose raw secrets.
-    """
-    |> String.trim()
-    |> Redactor.redact_text()
-  end
-
-  defp work_package_payload(%WorkPackage{} = work_package) do
-    %{
-      id: work_package.id,
-      work_request_id: work_package.work_request_id,
-      group: work_package.group,
-      sequence: work_package.sequence,
-      kind: work_package.kind,
-      title: work_package.title,
-      status: work_package.status,
-      contract_revision: work_package.contract_revision,
-      dispatched_at: timestamp(work_package.dispatched_at)
-    }
-  end
-
-  defp timestamp(%DateTime{} = value), do: DateTime.to_iso8601(value)
-  defp timestamp(nil), do: nil
 end

@@ -142,7 +142,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
       "resources" => resource_contract_material(),
       "schema_version" => @mcp_contract_schema_version,
       "tool_sets" =>
-        Map.new([:full, :worker, :architect, :coordinator, :solo], fn profile ->
+        Map.new([:full, :architect, :coordinator, :solo], fn profile ->
           {Atom.to_string(profile), ToolCatalog.startup_tool_specs(profile, config)}
         end),
       "owner_gated_tools" => Enum.filter(ToolCatalog.known_tools(), &ToolCatalog.owner_gated_call?(&1, %{"apply" => true}))
@@ -154,10 +154,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
       "list" => base_resource_specs(),
       "templates" => work_package_resource_template_specs(),
       "read_payloads" => %{
-        "sympp://work-packages/{work_package_id}/worker-bootstrap.json" => %{
-          "mimeType" => "application/json",
-          "fields" => ["type", "assignment", "coordinates", "required_skills", "preferred_skill_set", "supported_skill_sets", "launch_prompt"]
-        },
         @version_resource => %{
           "fields" => [
             "mode",

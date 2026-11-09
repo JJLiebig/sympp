@@ -99,7 +99,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
         merge_commit_sha: "source-merge"
       })
 
-    {:ok, _dispatch} = WorkPackageDispatch.dispatch(repo, work_request.id, playtest.id)
+    {:ok, _dispatch} = WorkPackageDispatch.dispatch(repo, work_request.id, playtest.id, review_mode: "none")
 
     run!(repo, parse.id, "RUN-FANOUT-PARSE", "fictional-parse-worker", 10)
     live_run!(repo, parse.id, "RUN-FANOUT-PARSE-LIVE", "fictional-parse-worker", 12)

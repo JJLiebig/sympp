@@ -57,7 +57,6 @@ if (process.env.SYMPP_OFFLINE_ACCEPTANCE === '1') {
     for (const route of ['/mcp', '/mcp/client-lease']) {
       expect((await viewer.raw({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }, {}, 'POST', route)).status).toBe(403);
     }
-    expect((await viewer.operator(`/api/v1/sympp/operator/work-requests/${request}/work-packages/${wp}/dispatch`, {})).status).toBe(403);
     expect((await architect.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages).toEqual(before.work_packages);
     await offline.stop();
 

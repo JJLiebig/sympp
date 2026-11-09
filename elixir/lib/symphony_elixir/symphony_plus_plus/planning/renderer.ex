@@ -37,19 +37,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
     end
   end
 
-  @spec render_all(Repository.repo(), String.t(), keyword()) :: {:ok, %{String.t() => String.t()}} | {:error, error()}
-  def render_all(repo, work_package_id, _opts \\ []) when is_atom(repo) and is_binary(work_package_id) do
-    with {:ok, state} <- Repository.get_render_state(repo, work_package_id) do
-      rendered =
-        Map.new(@virtual_files, fn file_name ->
-          {:ok, markdown} = render_state(state, file_name)
-          {file_name, markdown}
-        end)
-
-      {:ok, rendered}
-    end
-  end
-
   @spec render_state(State.t(), String.t()) :: {:ok, String.t()} | {:error, :unknown_virtual_file}
   def render_state(%State{} = state, "context.md"), do: {:ok, context_markdown(state)}
   def render_state(%State{} = state, "task_plan.md"), do: {:ok, task_plan_markdown(state)}

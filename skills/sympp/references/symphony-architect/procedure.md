@@ -1,9 +1,5 @@
 # sympp Architect
 
-When the user selects Herdr-next execution, use the [optional execution helper](../symphony-worker/references/herdr-execution.md)
-to launch the existing bounded worker bootstrap. Keep dispatch and reconciliation
-in the parent; the helper does not replace standalone orchestration.
-
 Own product clarification, optional group paths, WorkPackage planning, worker
 dispatch, guidance routing, and delivery closeout. Do not implement worker
 packages yourself. Workers own implementation, required validation/review,
@@ -12,8 +8,8 @@ The architect owns readiness and delivery reconciliation, and decides
 implementation and architecture autonomously within approved product intent.
 For a chief-delegated feature, the architect also owns review convergence,
 authorized integration and merges, qualification and delivery to the chief.
-Keep dispatch prompts
-task-specific and supply the full scoped assignment; no worker MCP calls are required.
+Dispatch renders each worker's assignment from the package contract; workers
+make no sympp calls.
 Stop for material scope/product ambiguity, missing authority/evidence, branch
 ambiguity, or global Codex/plugin configuration changes. Never expose
 bearer/API/GitHub/Linear/MCP tokens or secret-bearing commands.
@@ -117,17 +113,37 @@ For secondary repo defaults and contract edits, read
 
 ## Dispatch
 
-Call `dispatch_work_package` for planned packages. It enforces the same graph
-as the plan view, rejecting cycles/unmet dependencies, and atomically activates
-the canonical row with an ordinary assignment bootstrap. Dispatch belongs to the
-architect; workers make no sympp calls.
+Dispatch a planned package with `dispatch_work_package(work_package_id, review_mode)`,
+then run the `launch_line` it returns. Dispatch belongs to the architect and
+enforces the same graph as the plan view, refusing cycles and unmet dependencies.
+The one call prepares the package's worktree on the factory, writes the worker's
+assignment file under that worktree's git dir, mints the package's Review Suite
+id, and returns:
 
-Dispatch defaults to ids, status, recorded workspace/branch pattern and
-`assignment_uri`. Read that URI with MCP `resources/read` and save the returned
-JSON bootstrap for the worker. This read does not dispatch again.
-Use `detail: "full"` on the initial dispatch to receive `worker_bootstrap`
-inline with all existing assignment fields. Do not redispatch to fetch details.
-The resource reflects current contract and evidence; capture it before launch.
+```text
+hc run --bg --on <machine> --cwd <worktree> --name <wp> --label sympp.role=worker --label sympp.work_package_id=<id> --label sympp.review_id=<rid> -- <agent> "Read <file>"
+```
+
+- `review_mode`: `fast` for small or UI-only changes, `normal` for ordinary
+  changes (Review Suite `base`), `deep` for security, data integrity, migrations,
+  concurrency, billing and other high-risk logic, or `none` when the worker has
+  no Review Suite; progress then comes from the PR, CI and merge only.
+- `agent`: `codex` (default) or `claude`.
+- `machine`: the factory host as your `hc` names it. It defaults to the factory's
+  own Herdr name; remote clients send their saved server name.
+
+Right after running the line, read the worker's screen (`hc read` with the
+address `hc run` printed). A Claude worker in a new worktree stops silently at
+Claude's "trust this folder?" prompt: approve it for that worktree only, nothing
+broader. Codex has no such prompt.
+
+Dispatching a package that is already `dispatched` replays it: same worktree,
+same review id, a rewritten assignment file and a fresh launch line. Use it to
+recover a lost line, or after a contract edit, then tell the worker to re-read
+the file; the worker isn't told automatically. If the worktree can't be
+prepared, the package stays `dispatched` and the response carries `error` and
+`next_action` instead of `launch_line`: fix the cause and dispatch again with the
+same `review_mode`.
 
 `read_work_request(view: "board")` defaults to one summary per package, retaining delivery
 outcome, attention reasons, merge eligibility and PR URL. Use `detail: "full"`
@@ -145,30 +161,13 @@ Update Skills and start fresh MCP sessions after upgrading this contract.
 
 Name repositories by git remote URL or `owner/name`, never a client checkout path.
 Remote clients may omit `repo` at intake to infer the calling checkout's origin.
-The factory resolves/clones the repo and owns preparation and cleanup on its machine.
-Call `prepare_work_package_worktree(work_package_id)`; remote responses contain
-`worktree: <machine>:<path>` (for example `worktree: jjdev:/srv/jjdev/Code/.worktrees/sympp/fix-login-abc12345`).
-Launch the worker yourself with `hc run --bg --on <machine> --cwd <path> ...`;
-the factory does not launch it automatically. Never prepare worktrees on the client.
-Loopback clients use the returned `worker_launch.workspace_path` as cwd as before.
-Override `branch` only when needed; absent/templated patterns derive a unique branch.
+The factory resolves or clones the repo and owns worktree preparation and cleanup
+on its machine; never prepare worktrees on the client. On a local factory without
+a repos root, `target_repo_root` names the checkout when the factory can't find it.
 
-Worker prompts contain task-specific data only:
-
-- [symphony-worker](../symphony-worker/procedure.md).
-- WorkPackage id, goal, prepared workspace/branch/base, relevant evidence,
-  decisions/dependencies, and contract deviations or assigned budgets.
-- Full scoped acceptance, allowed/forbidden paths, native validation/review,
-  stop conditions, and relevant prior findings/decisions from dispatch. No worker
-  MCP setup, status calls, or duplicate review receipts.
-- Delivery owner and required PR/no-PR evidence. Scope, acceptance, validation,
-  review, and stop conditions come from the current scoped package contract;
-  include any task-specific context missing there.
-
-Use [the template](../symphony-work-package/references/worker_prompt.md);
-do not repeat the worker checklist. Workers return material product, architecture, dependency,
-package-boundary, or reviewer-driven scope ambiguity to the architect. Let the
-worker finish review convergence and delivery.
+Workers report the PR, exact head, checks, review and risks back to you. Let the
+worker finish review convergence and delivery; it returns material product,
+architecture, dependency, package-boundary or reviewer-driven scope ambiguity.
 
 Review findings are hypotheses, not product decisions. Workers verify and
 converge them; you are the first escalation line for findings they cannot
@@ -222,8 +221,10 @@ fields stay unknown. Missing optional observations do not prevent this workflow.
 Once GitHub reports the attached PR merged, sync, reconciliation and periodic PR
 observation record `pr_merged` from its merge timestamp and commit without a head
 handoff or readiness transition. Pre-merge readiness and dependency gates still apply.
-For selected candidate inputs, reconcile qualification from the native handoff
-using existing scoped `append_progress` dependency provenance for the dependent head.
+For selected candidate inputs, pass the consumed inputs from the handoff as
+`sync_pr(dependency_inputs: [{dependency_id, prerequisite_work_package_id, candidate_head_sha}])`
+for the dependent's current head; a green PR can't prove which prerequisite head
+it consumed.
 
 Use `read_work_request(view: "board")` for lifecycle evidence.
 

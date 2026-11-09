@@ -252,7 +252,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     end
   end
 
-  test "ten MCP sessions in the owning terminal dispatch distinct packages concurrently and duplicate dispatch returns an MCP error" do
+  test "ten MCP sessions in the owning terminal dispatch distinct packages concurrently and a repeated dispatch replays" do
     init = post_json(initialize_request("dispatch-init"))
     headers = [{"mcp-session-id", hd(get_resp_header(init, "mcp-session-id"))}]
 
@@ -292,24 +292,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       Enum.map(clients, fn {client, package_id} ->
         Task.async(fn ->
           receive do: (:dispatch -> :ok)
-          result = terminal_call(client, "t1", "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => package_id})
+          result = terminal_call(client, "t1", "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => package_id, "review_mode" => "fast"})
           assert result["result"], inspect(result)
           refute result["result"]["isError"], inspect(result)
+          result["result"]["structuredContent"]["work_package"]["review_id"]
         end)
       end)
 
     Enum.each(tasks, &send(&1.pid, :dispatch))
-    Enum.each(tasks, &Task.await(&1, 30_000))
+    review_ids = Enum.map(tasks, &Task.await(&1, 30_000))
+    assert review_ids |> Enum.uniq() |> length() == 10
 
     for package_id <- package_ids do
       assert Repo.get!(WorkPackage, package_id).status == "dispatched"
     end
 
     {client, package_id} = hd(clients)
-    duplicate = terminal_call(client, "t1", "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => package_id})
-    assert duplicate["error"]["data"]["reason"] == "invalid_work_package_status"
+    replay = terminal_call(client, "t1", "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => package_id, "review_mode" => "fast"})
+    assert replay["result"]["structuredContent"]["replay"]
+    assert replay["result"]["structuredContent"]["work_package"]["review_id"] == hd(review_ids)
 
-    other_terminal = terminal_call(client, "t2", "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => blocked_id})
+    other_mode = terminal_call(client, "t1", "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => package_id, "review_mode" => "deep"})
+    assert other_mode["error"]["data"]["reason"] == "review_mode_conflict"
+    assert other_mode["error"]["data"]["review_mode"] == "fast"
+
+    other_terminal = terminal_call(client, "t2", "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => blocked_id, "review_mode" => "fast"})
     assert other_terminal["error"]["data"]["reason"] == "owned_by_other_terminal"
 
     parent = self()
@@ -328,7 +335,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     assert_receive :writer_locked
 
     try do
-      busy = terminal_call(client, "t1", "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => blocked_id})
+      busy = terminal_call(client, "t1", "dispatch_work_package", %{"work_request_id" => request_id, "work_package_id" => blocked_id, "review_mode" => "fast"})
       assert busy["error"]["data"]["reason"] == "database_busy"
       assert busy["error"]["data"]["remediation"] =~ "Read the WorkPackage status"
     after

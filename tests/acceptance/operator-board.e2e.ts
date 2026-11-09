@@ -52,7 +52,6 @@ test('operator sees dependency ordering, pending qualification and actual delive
   provider!.set(401, pr(401, head('a'), {
     statusCheckRollup: [{ name: 'required', status: 'IN_PROGRESS', conclusion: null }], reviewDecision: 'REVIEW_REQUIRED', mergeStateStatus: 'BLOCKED',
   }));
-  await client.call('attach_branch', { work_package_id: first, branch: 'feature/delivery-401', head_sha: head('a') });
   await client.call('sync_pr', { work_package_id: first, url: prUrl(401), head_sha: head('a') });
   await candidate.capture('ci-wait');
   await browser.reload();
@@ -87,10 +86,9 @@ test('operator sees dependency ordering, pending qualification and actual delive
   const reviewClient = await candidate.factory!.client();
   const reviewing = await reviewClient.request('Provider-reported review wait', 'beta', reviewRepo.origin);
   const [reviewWp] = (await reviewClient.addPackages([contract('Review provider findings', { review: { type: 'review-suite', args: { mode: 'fast' } } })]));
-  await reviewClient.call('dispatch_work_package', { work_package_id: reviewWp });
   const receipt = await installReviewProvider(candidate);
-  const prepared = await reviewClient.call('prepare_work_package_worktree', { work_package_id: reviewWp, target_repo_root: reviewRepo.checkout });
-  expect(prepared.worktree.status).toBe('prepared');
+  const prepared = await reviewClient.call('dispatch_work_package', { work_package_id: reviewWp, review_mode: 'fast', target_repo_root: reviewRepo.checkout });
+  expect(prepared.launch_line).toContain(prepared.worktree.path);
   // Finish the public review refresh after its worktree becomes observable.
   // The hydrated projection currently snapshots the graph before that refresh.
   await reviewClient.inspect('/api/v1/sympp/operator/dashboard/hydrated');

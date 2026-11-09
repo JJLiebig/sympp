@@ -66,10 +66,10 @@ does not determine role. Ordinary workers still own their review cycle.
    branch/PR head; ready state alone is not qualification. The plan view exposes
    each dependency's constraints. Across repositories use these explicit
    dependencies, not a Git branch stack.
-5. Dispatch the wiring/review worker against that selection. Its native handoff
-   names both backend pin and final UI head; record those consumed inputs with
-   scoped `append_progress` dependency provenance before readiness (see the
-   [WorkPackage procedure](../../symphony-work-package/SKILL.md#parent-reconciliation)). Requalify only evidence whose relevant inputs changed.
+5. Dispatch the wiring/review worker against that selection. Its handoff names
+   both backend pin and final UI head; record those consumed inputs with
+   `sync_pr(dependency_inputs)` for that head before readiness. Requalify only
+   evidence whose relevant inputs changed.
    Repinning A to B never revives A's consumed evidence. Clearing a consumed pin
    also requires fresh selection after prerequisite delivery.
 6. Ready candidates are immutable. If backend or UI candidate A must change,

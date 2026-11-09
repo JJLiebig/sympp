@@ -155,7 +155,6 @@ test("ordinary tasks launch every provider without sympp authority, shell interp
   for (const provider of ["codex", "claude", "opencode"]) {
     const result = await run(["launch", "--provider", provider, "--model", "chosen/model", "--task", task, "--cwd", root, "--attempt", provider]);
     assert.equal(result.code, 0);
-    assert.equal(result.body.work_package_id, null);
     const request = state().calls.filter((call) => call.method === "terminal.run").at(-1).params;
     assert.equal(request.name, `repair-the-specified-${provider}`, "shorten at a word boundary and preserve the provider");
     assert.equal(request.env.OPENAI_API_KEY, undefined);
@@ -298,13 +297,8 @@ test("an interrupted PID label publication repairs discovery on replay without a
   assert.equal(state().terminal.labels["sympp.pid"], "900");
 }));
 
-test("dispatched bootstrap binds exact work once, preserves placement, profile and worker preview", async () => scenario(async ({ root, run, state, save }) => {
-  const input = path.join(root, "worker.json");
-  fs.writeFileSync(input, JSON.stringify({ worker_bootstrap: {
-    type: "assignment", launch_prompt: "Implement the scoped assignment.", future_field: true,
-    coordinates: { primary_execution: { kind: "work_package", work_package_id: "wp-one" }, product_parent: { kind: "work_request", work_request_id: "wr-one" } },
-  } }));
-  const args = ["launch", "--provider", "claude", "--model", "opus", "--assignment", input, "--ledger", "isolated-ledger", "--cwd", root, "--space", "s1", "--tab", "job", "--parent", "t2", "--provider-home", root];
+test("a repeated launch binds once, preserves placement, profile and worker preview", async () => scenario(async ({ root, task, run, state, save }) => {
+  const args = ["launch", "--provider", "claude", "--model", "opus", "--task", task, "--cwd", root, "--space", "s1", "--tab", "job", "--parent", "t2", "--provider-home", root];
   const first = await run(args);
   const preview = "http://127.0.0.1:5173/";
   save({ ...state(), terminal: { ...state().terminal, labels: { ...state().terminal.labels, "sympp.preview_url": preview } } });
@@ -313,8 +307,6 @@ test("dispatched bootstrap binds exact work once, preserves placement, profile a
   assert.equal(second.code, 0);
   assert.equal(second.body.reused, true);
   assert.equal(second.body.launch_id, first.body.launch_id);
-  assert.equal(first.body.work_package_id, "wp-one");
-  assert.equal(first.body.work_request_id, "wr-one");
   assert.equal(state().runs, 1);
   const request = state().calls.find((call) => call.method === "terminal.run").params;
   assert.equal(request.labels["herdr.space"], "s1");
@@ -328,28 +320,6 @@ test("dispatched bootstrap binds exact work once, preserves placement, profile a
   assert.equal((await run(["check", "--receipt", first.body.receipt])).body.state, "live");
   assert.ok(state().calls.every((call) => call.method.startsWith("terminal.") || call.method === "hello"));
   assert.equal((await run(args.map((arg) => arg === "opus" ? "sonnet" : arg))).body.error, "launch_conflict");
-}));
-
-test("assignment titles and leading ownership prompts name the worker without changing its binding", async () => scenario(async ({ root, run, state }) => {
-  const input = path.join(root, "worker.json");
-  const bootstrap = {
-    type: "assignment", launch_prompt: "You own WorkPackage wp-one: Prompt title (parent WorkRequest wr-one).\nDo the work.",
-    coordinates: { primary_execution: { kind: "work_package", work_package_id: "wp-one" }, product_parent: { kind: "work_request", work_request_id: "wr-one" } },
-  };
-  const cases = [
-    [{ dispatch: { worker_bootstrap: { ...bootstrap, assignment: { title: "  Review drill-down  " } } } }, "review-drill-down-claude"],
-    [{ worker_bootstrap: { ...bootstrap, assignment: { work_package: { title: "Native dispatch title" } } } }, "native-dispatch-title-claude"],
-    [{ worker_bootstrap: { ...bootstrap, work_package: { title: "Package title" } } }, "package-title-claude"],
-    [{ work_package: { title: "Outer package" }, dispatch: { worker_bootstrap: bootstrap } }, "outer-package-claude"],
-    [bootstrap, "prompt-title-claude"],
-  ];
-  for (const [index, [body, expected]] of cases.entries()) {
-    fs.writeFileSync(input, JSON.stringify(body));
-    const result = await run(["launch", "--provider", "claude", "--assignment", input, "--ledger", "isolated", "--cwd", root, "--attempt", String(index)]);
-    assert.equal(result.code, 0);
-    assert.equal(state().terminal.name, expected);
-    assert.equal(state().terminal.labels["sympp.work_package_id"], "wp-one");
-  }
 }));
 
 test("name override is cosmetic and keeps legacy launch and request hashes and the same receipt", async () => scenario(async ({ root, task, run, state }) => {

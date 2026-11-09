@@ -78,7 +78,7 @@ async function main() {
       const body = Buffer.concat(chunks).toString("utf8");
       const message = JSON.parse(body);
       if (failLegacyHealth && message.method === "initialize") return request.socket.destroy();
-      if (["create_work_request", "prepare_work_package_worktree"].includes(message.params?.name)) {
+      if (["create_work_request", "dispatch_work_package"].includes(message.params?.name)) {
         response.writeHead(200, { "Content-Type": "application/json", "Mcp-Session-Id": "test-session" });
         return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id,
           result: { content: [{ type: "text", text: "forwarded" }], structuredContent: message.params.arguments } }));
@@ -213,8 +213,8 @@ async function main() {
   bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "create_work_request", arguments: { repo: productRoot } } })}\n`);
   assert.equal((await responsePromise).result.structuredContent.repo, productOrigin);
   responsePromise = readResponse(9);
-  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "prepare_work_package_worktree", arguments: { work_package_id: "wp-local", target_repo_root: productRoot } } })}\n`);
-  assert.deepEqual((await responsePromise).result.structuredContent, { work_package_id: "wp-local" });
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "dispatch_work_package", arguments: { work_package_id: "wp-local", review_mode: "none", target_repo_root: productRoot } } })}\n`);
+  assert.deepEqual((await responsePromise).result.structuredContent, { work_package_id: "wp-local", review_mode: "none" });
 
   for (const [id, name] of [[11, "test.removed"], [12, "test.arguments"]]) {
     responsePromise = readResponse(id);

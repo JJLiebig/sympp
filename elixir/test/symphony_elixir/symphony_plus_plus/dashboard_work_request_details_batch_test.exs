@@ -195,7 +195,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
              PlanningRepository.append_progress_event(repo, %{
                work_package_id: package.id,
                summary: "Qualified wiring fixture",
-               payload: %{"head_sha" => head, "dependency_inputs" => [%{"dependency_id" => edge.id, "prerequisite_work_package_id" => edge.target_id, "candidate_head_sha" => input_head}]}
+               payload: %{
+                 "type" => "dependency_inputs",
+                 "source_tool" => "sync_pr",
+                 "head_sha" => head,
+                 "dependency_inputs" => [%{"dependency_id" => edge.id, "prerequisite_work_package_id" => edge.target_id, "candidate_head_sha" => input_head}]
+               }
              })
   end
 

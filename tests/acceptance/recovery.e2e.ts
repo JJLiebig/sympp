@@ -96,7 +96,6 @@ test('a supported disposable offline snapshot denies MCP and dispatch without ch
     expect(refused.status).toBe(403);
     expect(refused.body.error.data.reason).toBe('offline_sandbox');
   }
-  expect((await client.operator(`/api/v1/sympp/operator/work-requests/${request}/work-packages/${wp}/dispatch`, {})).status).toBe(403);
   const restarted = processes.factory();
   const original = await restarted.client(architect.terminal);
   expect((await original.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages[0].status).toBe('dispatched');
@@ -164,20 +163,16 @@ test('STDIO initialization serves trusted local reads, refuses writes outside He
   const architect = await factory.client();
   const request = await architect.request('STDIO authority');
   const [wp] = await packages(architect, ['Local transport']);
-  const workerProfile = processes.stdio('stdio-worker', { database: factory.database, surface: 'worker' });
-  const before = await workerProfile.rawRequest('tools/call', { name: 'read_work_request', arguments: { work_request_id: request } });
+  const reader = processes.stdio('stdio-reader', { database: factory.database });
+  const before = await reader.rawRequest('tools/call', { name: 'read_work_request', arguments: { work_request_id: request } });
   expect(before.error.data.reason).toBe('server_not_initialized');
-  const initialized = await workerProfile.request('initialize', initialize);
+  const initialized = await reader.request('initialize', initialize);
   expect(initialized.serverInfo.name).toBe('sympp');
   expect(initialized.serverInfo.version).toBeTruthy();
   expect(initialized.capabilities.tools).toEqual({});
   expect(initialized.capabilities.resources).toEqual({});
-  // Workers make no sympp calls: their profile lists only health.
-  expect((await workerProfile.request('tools/list')).tools.map((entry: any) => entry.name)).toEqual(['sympp.health']);
-  for (const name of ['read_work_request', 'append_progress', 'mint_worker_grant']) {
-    expect((await workerProfile.rawRequest('tools/call', { name, arguments: { work_request_id: request } })).error.code).toBe(-32601);
-  }
-  const health = (await workerProfile.request('tools/call', { name: 'sympp.health', arguments: {} })).structuredContent;
+  expect((await reader.rawRequest('tools/call', { name: 'mint_worker_grant', arguments: {} })).error.code).toBe(-32601);
+  const health = (await reader.request('tools/call', { name: 'sympp.health', arguments: {} })).structuredContent;
   expect(health.status).toBe('ok');
   expect(health.ledger.reachable).toBe(true);
   expect(health.ledger.identity.kind).toBe('sqlite');

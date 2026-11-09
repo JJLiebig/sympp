@@ -2,7 +2,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
   @moduledoc false
 
   import Ecto.Query, only: [from: 2]
-  import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments, only: [optional_string_argument: 2]
+
+  import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments,
+    only: [optional_list_argument: 2, optional_string_argument: 2]
 
   alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection
@@ -20,6 +22,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
 
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, DependencyInputs}
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, WorkPackage, WorkPackageActivity}
@@ -31,13 +34,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     client = Application.get_env(:symphony_elixir, :sympp_github_client, DefaultClient)
 
     with {:ok, expected_head} <- optional_string_argument(arguments, "head_sha"),
+         {:ok, dependency_inputs} <- optional_list_argument(arguments, "dependency_inputs"),
          {:ok, ref} <- PullRequest.parse(arguments, work_package.repo),
          {:ok, metadata} <- Client.fetch_pull_request(client, ref, provider_snapshot: true),
          {:ok, payload} <- PullRequest.provider_snapshot(metadata, ref, expected_head),
          :ok <- require_delivery_scope(work_package, payload),
          :ok <- require_exact_head(payload, expected_head),
          :ok <- require_merge_evidence(payload),
-         {:ok, result} <- persist(repo, actor, work_package, payload, pr_facts(metadata, payload)) do
+         {:ok, result} <- persist(repo, actor, work_package, payload, pr_facts(metadata, payload), dependency_inputs) do
       if PullRequestProgress.merged?(payload) do
         MergeReconciler.reconcile_work_package(repo, work_package.id, pr_payload: payload, client: DryClient, metadata: payload)
       else
@@ -52,6 +56,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
       sync(repo, actor, work_package, Map.put(arguments, "url", current.ref.url))
     end
   end
+
+  def sync(_repo, %Actor{}, %WorkPackage{}, %{"dependency_inputs" => _inputs}),
+    do: {:tool_error, "dependency_inputs needs the PR: pass url, number or head_sha"}
 
   def sync(repo, %Actor{}, %WorkPackage{} = work_package, _arguments) do
     MergeReconciler.reconcile_work_package(repo, work_package.id)
@@ -77,13 +84,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
     if PullRequestProgress.merged?(payload), do: PullRequest.validate_merge_evidence(payload), else: :ok
   end
 
-  defp persist(repo, actor, work_package, payload, pr_facts) do
+  defp persist(repo, actor, work_package, payload, pr_facts, dependency_inputs) do
     repo.transaction(fn ->
       with :ok <- lock_package(repo, work_package),
            {:ok, current} <- WorkPackageRepository.get(repo, work_package.id),
            :ok <- require_handoff(repo, current, payload),
            {:ok, candidate_head} <- candidate_head(repo, current),
            :ok <- append_snapshot(repo, actor, current, payload),
+           :ok <- record_dependency_inputs(repo, actor, current, payload, dependency_inputs),
            {:ok, state} <- PlanningRepository.get_state(repo, current.id),
            {:ok, graph} <- ExecutionGraph.evaluate(repo, current.work_request_id),
            facts = qualification_facts(current, graph, pr_facts, candidate_head, payload),
@@ -92,10 +100,39 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
            {:ok, updated} <- reconcile_qualification(repo, actor, current, qualification, gates, payload) do
         %{status: updated.status, head_sha: payload["head_sha"], readiness_reasons: qualification_reasons(qualification) ++ gates}
       else
+        {:tool_error, reason} -> repo.rollback({:tool_error, reason})
         {:error, reason} -> repo.rollback(reason)
       end
     end)
+    |> case do
+      {:error, {:tool_error, reason}} -> {:tool_error, reason}
+      result -> result
+    end
     |> DashboardPubSub.broadcast_changed_on_success()
+  end
+
+  # Which prerequisite inputs the current PR head consumed. A green PR can't
+  # prove this, so the architect states it; the selection is validated against
+  # the package's dependencies and the head just synced.
+  defp record_dependency_inputs(_repo, _actor, _package, _payload, nil), do: :ok
+
+  defp record_dependency_inputs(repo, actor, %WorkPackage{} = package, payload, selections) do
+    selection = %{"type" => "dependency_inputs", "source_tool" => "sync_pr", "head_sha" => payload["head_sha"], "dependency_inputs" => selections}
+
+    with :ok <- DependencyInputs.validate_selection(repo, package.id, selection),
+         {:ok, _event} <- append_event(repo, actor, package.id, Map.put(selection, "selection_revisions", selection_revisions(repo, selections)), "dependency_inputs_selected") do
+      :ok
+    end
+  end
+
+  # When a dependency's selection changes, the dependent must attest again, even
+  # to the same input; the selections' revisions keep that attestation distinct
+  # from an earlier one with the same payload.
+  defp selection_revisions(repo, selections) do
+    ids = Enum.map(selections, & &1["dependency_id"])
+
+    repo.all(from(edge in DependencyEdge, where: edge.id in ^ids, select: {edge.id, edge.selection_updated_at}))
+    |> Map.new(fn {id, updated_at} -> {id, updated_at && DateTime.to_iso8601(updated_at)} end)
   end
 
   defp pr_facts(metadata, payload) do

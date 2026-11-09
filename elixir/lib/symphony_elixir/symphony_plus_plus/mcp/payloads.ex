@@ -1,11 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Payloads do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @type timestamp_value :: DateTime.t() | NaiveDateTime.t() | nil
 
@@ -16,79 +12,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Payloads do
       _payload -> {:tool_error, "invalid_payload"}
     end
   end
-
-  @spec dispatch_work_package_result_payload(map(), map(), String.t()) :: map()
-  def dispatch_work_package_result_payload(
-        %{
-          work_request: %WorkRequest{} = work_request,
-          work_package: %WorkPackage{} = work_package,
-          creation: creation
-        } = dispatch,
-        scope,
-        detail \\ "summary"
-      ) do
-    worker_bootstrap =
-      dispatch_or_creation_value(dispatch, creation, :worker_bootstrap)
-      |> dispatch_worker_bootstrap_payload()
-
-    payload = %{
-      "coordinates" => worker_bootstrap && Map.get(worker_bootstrap, "coordinates"),
-      "work_request" => %{"id" => work_request.id},
-      "work_package" => %{
-        "id" => work_package.id,
-        "status" => work_package.status,
-        "dispatched_at" => timestamp(work_package.dispatched_at),
-        "branch_pattern" => Redactor.redact_text(work_package.branch_pattern),
-        "worktree_path" => Redactor.redact_text(work_package.worktree_path)
-      },
-      "scope" => scope,
-      "status" => %{"work_package_status" => work_package.status}
-    }
-
-    if detail == "full" do
-      Map.put(payload, "worker_bootstrap", worker_bootstrap)
-    else
-      payload
-      |> Map.drop(["coordinates", "status"])
-      |> Map.put("assignment_uri", "sympp://work-packages/#{work_package.id}/worker-bootstrap.json")
-    end
-  end
-
-  @spec dispatch_work_package_payload(WorkPackage.t() | map()) :: map()
-  def dispatch_work_package_payload(%WorkPackage{} = work_package) do
-    work_package
-    |> Map.from_struct()
-    |> Map.drop([:__meta__])
-    |> json_safe_payload()
-    |> Redactor.redact_output()
-  end
-
-  def dispatch_work_package_payload(work_package) when is_map(work_package) do
-    work_package
-    |> json_safe_payload()
-    |> Redactor.redact_output()
-  end
-
-  @spec dispatch_worker_bootstrap_payload(map() | nil) :: map() | nil
-  def dispatch_worker_bootstrap_payload(nil), do: nil
-
-  def dispatch_worker_bootstrap_payload(bootstrap) when is_map(bootstrap) do
-    bootstrap
-    |> json_safe_payload()
-    |> Redactor.redact_output()
-  end
-
-  @spec dispatch_link_recovery_payload(map()) :: map()
-  def dispatch_link_recovery_payload(recovery) when is_map(recovery) do
-    %{}
-    |> put_optional_recovery_value("work_package_id", recovery_value(recovery, :work_package_id))
-    |> put_optional_recovery_value("worker_grant_id", recovery_value(recovery, :worker_grant_id))
-    |> put_optional_recovery_value("cleanup", safe_recovery_value(recovery_value(recovery, :cleanup)))
-  end
-
-  @spec put_optional_recovery_value(map(), String.t(), term()) :: map()
-  def put_optional_recovery_value(payload, _key, nil), do: payload
-  def put_optional_recovery_value(payload, key, value), do: Map.put(payload, key, value)
 
   @doc false
   @spec mcp_timestamp(timestamp_value()) :: String.t() | nil
@@ -104,43 +27,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Payloads do
 
   @spec timestamp(timestamp_value()) :: String.t() | nil
   def timestamp(timestamp), do: mcp_timestamp(timestamp)
-
-  @spec worktree_lifecycle_payload(map(), map(), term()) :: map()
-  def worktree_lifecycle_payload(result, scope, audit_event) do
-    %{
-      "work_package" => work_package_worktree_payload(result.work_package),
-      "worktree" => %{
-        "status" => result.status,
-        "path" => Redactor.redact_text(result.worktree_path),
-        "target_repo_root" => Redactor.redact_text(result.target_repo_root || result.repo_root),
-        "branch" => result.branch,
-        "base_branch" => result.base_branch
-      },
-      "worker_launch" => worktree_worker_launch_payload(result),
-      "audit_event" => ProgressEvents.payload(audit_event),
-      "scope" => scope
-    }
-  end
-
-  @spec worktree_worker_launch_payload(map()) :: map() | nil
-  def worktree_worker_launch_payload(%{worktree_path: worktree_path, branch: branch, base_branch: base_branch})
-      when is_binary(worktree_path) and is_binary(branch) and is_binary(base_branch) do
-    %{
-      "workspace_path" => Redactor.redact_text(worktree_path),
-      "branch" => branch,
-      "base_branch" => base_branch,
-      "instruction" => "Use this worktree only for the assigned WorkPackage."
-    }
-  end
-
-  def worktree_worker_launch_payload(_result), do: nil
-
-  @spec work_package_worktree_payload(WorkPackage.t()) :: map()
-  def work_package_worktree_payload(%WorkPackage{} = work_package) do
-    work_package
-    |> work_package_payload()
-    |> Map.put("worktree_path", Redactor.redact_text(work_package.worktree_path))
-  end
 
   @spec work_package_payload(WorkPackage.t()) :: map()
   def work_package_payload(%WorkPackage{} = work_package) do
@@ -169,26 +55,4 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Payloads do
     |> Jason.encode!()
     |> Jason.decode!()
   end
-
-  defp dispatch_or_creation_value(dispatch, creation, key) when is_atom(key) do
-    Map.get(dispatch, key) || map_get(creation, key)
-  end
-
-  defp map_get(map, key) when is_map(map) and is_atom(key), do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
-  defp map_get(_value, _key), do: nil
-
-  defp recovery_value(recovery, key) do
-    Map.get(recovery, key) || Map.get(recovery, to_string(key))
-  end
-
-  defp safe_recovery_value(value) when is_map(value) do
-    value
-    |> Enum.map(fn {key, map_value} -> {to_string(key), safe_recovery_value(map_value)} end)
-    |> Map.new()
-  end
-
-  defp safe_recovery_value(value) when is_list(value), do: Enum.map(value, &safe_recovery_value/1)
-  defp safe_recovery_value(value) when is_atom(value), do: Atom.to_string(value)
-  defp safe_recovery_value(value) when is_binary(value) or is_number(value) or is_boolean(value) or is_nil(value), do: value
-  defp safe_recovery_value(value), do: inspect(value)
 end

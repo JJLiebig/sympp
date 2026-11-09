@@ -169,9 +169,9 @@ cp.spawnSync = (command, args, options) => {
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(fs.readFileSync(config, 'utf8'), /21783/);
   const saved = JSON.parse(fs.readFileSync(path.join(root, '.local/share/sympp/connection.json'), 'utf8'));
-  const response = JSON.stringify({ result: { structuredContent: { worktree: { status: 'prepared', path: '/srv/repos/.worktrees/repo/fix' } }, content: [] } });
-  const annotated = require('../../scripts/sympp-session-location.js').remoteWorktreeResponse(response, saved.env);
-  assert.equal(JSON.parse(annotated).result.content[0].text, 'worktree: factory-qa:/srv/repos/.worktrees/repo/fix');
+  const dispatch = JSON.stringify({ method: 'tools/call', params: { name: 'dispatch_work_package', arguments: { work_package_id: 'wp-1', review_mode: 'fast' } } });
+  const named = require('../../scripts/sympp-session-location.js').remoteDispatchMachine(dispatch, saved.env);
+  assert.equal(JSON.parse(named).params.arguments.machine, 'factory-qa');
   assert.equal(fs.readFileSync(log, 'utf8'), 'skill\nfactory\n');
   fs.writeFileSync(config, 'untouched');
   for (const failure of ['skill', 'check', 'skipped', 'legacy']) {

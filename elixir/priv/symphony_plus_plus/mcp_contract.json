@@ -1,20 +1,17 @@
 {
-  "mcp_contract_fingerprint": "377b48c8d7f0401541882ad305ba6210bb7c8290669df52af42bd3f785d3a4e4",
+  "mcp_contract_fingerprint": "a362778159c9d6c1bc14b2753e65ff6e20c8af4e66f81ef49fd7326763990688",
   "tool_sets": {
     "owner_gated_tools": [
-      "update_task_plan",
       "append_finding",
       "append_progress",
       "resolve_blocker",
-      "attach_branch",
       "sync_pr",
       "reconcile_work_request",
       "record_work_package_delivery",
       "set_report",
       "edit_plan",
       "skip_work_package",
-      "dispatch_work_package",
-      "prepare_work_package_worktree"
+      "dispatch_work_package"
     ],
     "read_tools": [
       "sympp.health",
@@ -43,11 +40,9 @@
       "create_work_request",
       "list_work_requests",
       "read_work_request",
-      "update_task_plan",
       "append_finding",
       "append_progress",
       "resolve_blocker",
-      "attach_branch",
       "sync_pr",
       "reconcile_work_request",
       "record_work_package_delivery",
@@ -60,7 +55,6 @@
       "edit_plan",
       "skip_work_package",
       "dispatch_work_package",
-      "prepare_work_package_worktree",
       "record_work_request_operator_decision",
       "summarize_failed_mcp_calls"
     ]

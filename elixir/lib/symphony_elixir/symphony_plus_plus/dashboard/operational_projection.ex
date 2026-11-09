@@ -546,7 +546,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     payload_status = map_value(payload, "status")
 
     map_value(payload, "type") == "worktree_lifecycle" and
-      map_value(payload, "source_tool") == "prepare_work_package_worktree" and
       status in @prepared_worktree_statuses and
       (is_nil(payload_status) or payload_status in @prepared_worktree_statuses)
   end

@@ -27,6 +27,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
     "skill",
     "hooks"
   ]
+  @review_modes ["fast", "normal", "deep", "none"]
   @type t :: %__MODULE__{
           id: String.t() | nil,
           work_request_id: String.t() | nil,
@@ -56,6 +57,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
           owner_id: String.t() | nil,
           contract_revision: pos_integer() | nil,
           dispatched_at: DateTime.t() | nil,
+          review_mode: String.t() | nil,
+          review_id: String.t() | nil,
+          launch_machine: String.t() | nil,
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -89,12 +93,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
     field(:contract_revision, :integer, default: 1)
     field(:dispatched_at, :utc_datetime_usec)
     field(:dispatched_by, :map)
+    # Set by dispatch only: how the worker reviews its change, the Review Suite
+    # id it reviews under, and the Herdr machine named in its launch line.
+    field(:review_mode, :string)
+    field(:review_id, :string)
+    field(:launch_machine, :string)
 
     timestamps(type: :utc_datetime_usec)
   end
 
   @spec kinds() :: [String.t()]
   def kinds, do: @kinds
+
+  @doc "Review modes dispatch accepts. `none` means the worker runs no Review Suite review."
+  @spec review_modes() :: [String.t()]
+  def review_modes, do: @review_modes
+
+  @doc "The Review Suite `--mode` for a review mode; `none` has no review."
+  @spec review_suite_mode(String.t()) :: String.t() | nil
+  def review_suite_mode("fast"), do: "fast"
+  def review_suite_mode("normal"), do: "base"
+  def review_suite_mode("deep"), do: "deep"
+  def review_suite_mode("none"), do: nil
 
   @spec repo(map(), t()) :: String.t() | nil
   def repo(work_request, %__MODULE__{} = work_package) do
