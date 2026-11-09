@@ -23,7 +23,7 @@ export function answerBody(question, choice, text) {
 // when it was delivered. The answer stays on the ask either way.
 const UNDELIVERED = {
   terminal_finished: "the asking terminal has finished",
-  terminal_unreachable: "sympp can't reach the asking terminal",
+  terminal_unreachable: "the asking terminal is on another machine or out of reach",
   no_asking_terminal: "the ask has no asking terminal",
   send_failed: "sending it to the asking terminal failed",
 };

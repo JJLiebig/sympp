@@ -49,6 +49,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AskTools do
   defp error(tool, :work_package_ended),
     do: precondition(tool, "work_package_ended", "ended", "The package has ended; ask on the WorkRequest without work_package_id.")
 
+  defp error(tool, :work_request_completed),
+    do: precondition(tool, "work_request_completed", "done", "The operator completed this WorkRequest; it takes no new asks.")
+
   defp error(tool, {:ask_not_open, state}), do: precondition(tool, "ask_not_open", state, "Nothing to do: the ask is already #{state}.")
 
   defp error(tool, {:not_asker_or_owner, ask}) do

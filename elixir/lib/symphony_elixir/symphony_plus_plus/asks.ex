@@ -39,6 +39,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   defp insert(repo, terminal, work_request_id, work_package_id, question, prompt) do
     with {:ok, %WorkRequest{} = work_request} <- fetch(repo, WorkRequest, work_request_id),
          :ok <- Phase.require_writable(work_request),
+         :ok <- require_not_completed(work_request),
          :ok <- require_open_package(repo, work_request.id, work_package_id) do
       now = DateTime.utc_now(:microsecond)
 
@@ -57,6 +58,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
        })}
     end
   end
+
+  # Operator completion withdrew the WorkRequest's asks; it takes no new ones.
+  defp require_not_completed(%WorkRequest{operator_completed_at: %DateTime{}}), do: {:error, :work_request_completed}
+  defp require_not_completed(%WorkRequest{}), do: :ok
 
   defp require_open_package(_repo, _work_request_id, nil), do: :ok
 
@@ -151,25 +156,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
     end
   end
 
-  # Only a terminal the factory can name without ambiguity is typed into: one
-  # its own herdr-core sees live (by bare address), or one on another core
-  # named `machine/address`. A bare address on another core could match an
-  # unrelated terminal on the factory host.
-  defp delivery_target(%Ask{asked_by_terminal: key, asked_by_address: address}) do
+  # Answers are typed only into a terminal the factory's own herdr-core sees
+  # live. Herdr machine names are local aliases, so a terminal on another core
+  # can't be addressed safely from here; its answer stays on the ask.
+  defp delivery_target(%Ask{asked_by_terminal: key}) do
     case Terminal.split_key(key) do
-      {core_id, terminal} -> target_in_view(HerdrCore.view(core_id, terminal, confirm: true), terminal, address)
+      {core_id, terminal} -> target_in_view(HerdrCore.view(core_id, terminal, confirm: true), terminal)
       :error -> {:error, "terminal_unreachable"}
     end
   end
 
-  defp target_in_view({:live, _record}, terminal, _address), do: {:ok, terminal}
-  defp target_in_view(:finished, _terminal, _address), do: {:error, "terminal_finished"}
-
-  defp target_in_view(:unseen, _terminal, address) when is_binary(address) do
-    if String.contains?(address, "/"), do: {:ok, address}, else: {:error, "terminal_unreachable"}
-  end
-
-  defp target_in_view(_unseen_or_unknown, _terminal, _address), do: {:error, "terminal_unreachable"}
+  defp target_in_view({:live, _record}, terminal), do: {:ok, terminal}
+  defp target_in_view(:finished, _terminal), do: {:error, "terminal_finished"}
+  defp target_in_view(_unseen_or_unknown, _terminal), do: {:error, "terminal_unreachable"}
 
   @doc "Withdraws the open asks that name these packages, which have just ended. Joins the caller's transaction."
   @spec withdraw_for_packages(repo(), [String.t()]) :: :ok

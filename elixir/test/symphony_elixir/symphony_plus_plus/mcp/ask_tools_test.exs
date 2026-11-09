@@ -78,4 +78,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AskToolsTest do
 
     assert get_in(mcp_tool(repo, "t3", "ask", %{"work_request_id" => "WR-MISSING", "question" => "?"}), ["error", "data", "reason"]) == "not_found"
   end
+
+  test "an operator-completed WorkRequest takes no new asks", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-ASK-COMPLETED")
+    repo.update!(Ecto.Changeset.change(work_request, operator_completed_at: DateTime.utc_now(:microsecond)))
+
+    refused = mcp_tool(repo, "t3", "ask", %{"work_request_id" => work_request.id, "question" => "After completion?"})
+    assert get_in(refused, ["error", "data", "reason"]) == "work_request_completed"
+    assert get_in(refused, ["error", "data", "state"]) == "done"
+  end
 end

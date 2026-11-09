@@ -64,8 +64,9 @@ WorkRequest, optionally naming a package and a decision prompt. An ask is
 `open` until it is `answered` or `withdrawn`. Both boards show open asks as
 Needs you. The operator answers in the Herdr panel or through the operator HTTP
 route, and the factory types `Answer: <answer>` into the asking terminal's
-input without submitting it; a terminal that has finished keeps the answer on
-the ask. The asker or the WorkRequest owner records an answer given in
+input without submitting it. Only terminals the factory's own herdr-core sees
+live receive it; for a finished terminal or one on another machine, the answer
+stays on the ask. The asker or the WorkRequest owner records an answer given in
 conversation, or withdraws the ask, with `resolve_ask`, optionally recording a
 decision in the same step. An ask on a package is withdrawn when the package
 ends; archiving or completing the WorkRequest withdraws all of its open asks.
