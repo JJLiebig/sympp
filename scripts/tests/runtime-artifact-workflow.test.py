@@ -1,4 +1,5 @@
 """Exercise the workflow's retry decisions with a fake GitHub CLI (bash + jq)."""
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,10 @@ import unittest
 WORKFLOW = Path(__file__).resolve().parents[2] / '.github/workflows/sympp-runtime-artifact.yml'
 PLAN = textwrap.dedent(WORKFLOW.read_text().split('      - name: Select required builds or missing macOS\n', 1)[1]
                        .split('        run: |\n', 1)[1].split('\n  build-runtime-artifact:', 1)[0])
+PRUNE_PATH = WORKFLOW.parents[2] / 'scripts/prune-sympp-runtime-assets.py'
+spec = importlib.util.spec_from_file_location('prune_runtime', PRUNE_PATH)
+prune = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(prune)
 SHA = 'a' * 40
 
 
@@ -87,6 +92,75 @@ fi
                 expected = {f'artifacts/sympp-runtime-release/sympp-runtime-{SHA}-{platform}.{suffix}'
                             for platform in platforms for suffix in ['zip', 'manifest.json']}
                 self.assertEqual(set(uploaded), expected)
+
+
+class PruneTest(unittest.TestCase):
+    def assets(self):
+        return [dict(id=build * 10 + index,
+                     name=f'sympp-runtime-{build:040x}-{platform}.{suffix}',
+                     created_at=f'2026-11-{build + 1:02d}T00:00:00Z')
+                for build in range(14)
+                for index, (platform, suffix) in enumerate(
+                    (p, s) for p in ['linux-x64', 'windows-x64', 'macos-arm64']
+                    for s in ['zip', 'manifest.json'])]
+
+    def test_retains_newest_groups_channel_references_and_unrelated_assets(self):
+        assets = self.assets()
+        unrelated = ['sympp-runtime-artifacts-stable.json', 'notes.zip',
+                     'sympp-runtime-short-linux-x64.zip',
+                     f'sympp-runtime-{2:040x}-linux-x64.zip.bak',
+                     f'sympp-runtime-{2:040x}-linux-x64.tar.gz']
+        assets += [dict(id=1000 + i, name=name) for i, name in enumerate(unrelated)]
+        manifest = {'source_revision': f'{0:040x}', 'artifacts': [
+            {'source_revision': f'{1:040x}', 'archive': {
+                'url': f'https://example.com/sympp-runtime-{2:040x}-macos-arm64.zip'}}]}
+        deleted = prune.select_deletions(list(reversed(assets)), manifest)
+        self.assertEqual({a['id'] for a in deleted}, set(range(30, 36)))
+        self.assertEqual(prune.select_deletions(self.assets()[-60:], {}), [])
+
+    def test_build_recency_uses_latest_asset_creation(self):
+        assets = self.assets()
+        assets[0]['created_at'] = '2026-12-01T00:00:00Z'
+        deleted = prune.select_deletions(assets, {})
+        self.assertEqual({a['id'] // 10 for a in deleted}, {1, 2, 3, 4})
+
+    def test_cli_paginates_protects_channel_logs_and_stops_on_delete_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'assets.json').write_text(json.dumps([self.assets()[:42], self.assets()[42:]]))
+            (root / 'gh').write_text('''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+with open('calls.jsonl', 'a') as log:
+    log.write(json.dumps(args) + '\\n')
+if args[:3] == ['api', '--method', 'DELETE']:
+    sys.exit(int(os.environ.get('FAIL_DELETE', '0')))
+elif args[:3] == ['api', '--paginate', '--slurp']:
+    print(Path('assets.json').read_text())
+elif args[0] == 'api':
+    print('{"id": 123}')
+else:
+    print(json.dumps({'source_revision': '0' * 40}))
+''')
+            (root / 'gh').chmod(0o755)
+            pages = json.loads((root / 'assets.json').read_text())
+            pages[1].append({'name': 'sympp-runtime-artifacts-stable.json', 'id': 999})
+            (root / 'assets.json').write_text(json.dumps(pages))
+            env = dict(os.environ, PATH=f'{root}:{os.environ["PATH"]}',
+                       GITHUB_REPOSITORY='example/repo', RELEASE_TAG='test-runtime',
+                       RELEASE_CHANNEL='stable')
+            for failure in [0, 1]:
+                (root / 'calls.jsonl').unlink(missing_ok=True)
+                result = subprocess.run(['python3', str(PRUNE_PATH)], cwd=root,
+                                        env=dict(env, FAIL_DELETE=str(failure)),
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode == 0, failure == 0, result.stderr)
+                calls = [json.loads(line) for line in (root / 'calls.jsonl').read_text().splitlines()]
+                deletes = [c for c in calls if c[:3] == ['api', '--method', 'DELETE']]
+                self.assertEqual(len(deletes), 1 if failure else 18)
+                self.assertEqual(deletes[0][-1], 'repos/example/repo/releases/assets/10')
+                self.assertIn('Deleting sympp-runtime-', result.stdout)
 
 
 if __name__ == '__main__':
