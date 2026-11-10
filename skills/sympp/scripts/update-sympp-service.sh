@@ -10,9 +10,17 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
+import time
+started = time.monotonic()
+phase = 'reading service settings'
+log_path = 'the factory install.log'
+def failed(kind, value, traceback):
+    print('factory: failed during ' + phase + '; inspect ' + log_path, file=sys.stderr, flush=True)
+sys.excepthook = failed
 unit = sys.argv[1] + '.service'
 raw = subprocess.check_output(['systemctl', '--user', 'show', unit, '-p', 'Environment', '--value'], text=True)
 values = dict(item.split('=', 1) for item in shlex.split(raw) if '=' in item)
+log_path = values.get('SYMPP_HOME', '') + '/logs/install.log'
 if not values.get('SYMPP_HOME') or not values.get('SYMPP_SERVICE_HOST'):
     raise SystemExit('Factory service is not installed. Run its installer first.')
 if len(sys.argv) > 2 and sys.argv[2] != values.get('SYMPP_BACKEND_PORT', '19998'):
@@ -35,6 +43,8 @@ except BlockingIOError:
 env['SYMPP_UPDATE_LOCK_FD'] = str(lock.fileno())
 if subprocess.check_output(['git', '-C', str(source), 'status', '--porcelain'], text=True).strip():
     raise SystemExit('Factory checkout has local changes. Commit or remove them before updating.')
+phase = 'fetching'
+print('factory: fetching ' + ref, flush=True)
 subprocess.run(['git', '-C', str(source), 'fetch', '--quiet', 'origin', ref], check=True, env={**env, 'GIT_TERMINAL_PROMPT': '0'})
 target = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'FETCH_HEAD'], text=True).strip()
 pid = subprocess.check_output(['systemctl', '--user', 'show', unit, '-p', 'MainPID', '--value'], text=True).strip()
@@ -65,7 +75,8 @@ if running and needs_build:
 if not needs_build:
     subprocess.run(['git', '-C', str(source), 'config', 'sympp.serviceRef', ref], check=True)
     subprocess.run(['git', '-C', str(source), 'config', 'sympp.serviceRevision', target], check=True)
-    print('factory: already current' if running == target else 'factory: runtime unchanged')
+    print('factory: already current' if running == target else 'factory: runtime unchanged', flush=True)
+    print('factory: ready (' + str(round(time.monotonic() - started)) + 's)', flush=True)
     raise SystemExit(0)
 env['SYMPP_SERVICE_REF'] = ref
 result = subprocess.run(['bash', str(source / 'scripts/install-sympp-checkout.sh')], env=env, pass_fds=(lock.fileno(),))

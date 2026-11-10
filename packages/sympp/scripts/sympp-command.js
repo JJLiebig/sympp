@@ -2,7 +2,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
 function installCommand(root) {
   const bin = path.join(os.homedir(), ".local", "bin");
@@ -73,7 +73,7 @@ async function board() {
   if (result.error || result.status !== 0) throw new Error("Could not open the board in your default browser.");
   process.stdout.write("board: opened\n");
 }
-function update() {
+async function update() {
   const file = path.join(os.homedir(), '.local', 'share', 'sympp', 'connection.json');
   if (!fs.existsSync(file)) throw new Error('Run sympp setup first.');
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -82,6 +82,17 @@ function update() {
   for (const key of ['SYMPP_REMOTE_HOME', 'SYMPP_REMOTE_PORT', 'SYMPP_REMOTE_SERVICE', 'SYMPP_BACKEND_PORT', 'SYMPP_LOG_DIR', 'SYMPP_OPEN_DASHBOARD']) delete env[key];
   Object.assign(env, saved.env, saved.setup.homes, saved.setup.remote);
   const failures = [];
+  const factory = (command, args, script) => new Promise(resolve => {
+    // Inherit output handles so SSH and local phases arrive before the child exits.
+    const child = spawn(command, args, { env, stdio: ['pipe', 'inherit', 'inherit'], windowsHide: true });
+    child.stdin.on('error', () => {}); // A failed SSH connection can close stdin early.
+    child.stdin.end(script);
+    child.on('error', () => failures.push('factory failed to start. Check the saved server and retry sympp update.'));
+    child.on('close', code => {
+      if (code !== 0) failures.push('factory failed. Inspect the reported phase and install log, then retry sympp update.');
+      resolve();
+    });
+  });
   const step = (label, command, args, options = {}) => {
     const result = spawnSync(command, args, { env, encoding: 'utf8', windowsHide: true, ...options });
     const skillCheckFailed = label === 'skill' && /Failed to check skills|No installed skills found|No global skills tracked|No project skills|cannot be (?:checked|updated) automatically|Skipped/i.test((result.stdout || '') + (result.stderr || ''));
@@ -103,8 +114,8 @@ function update() {
     if (!/^[a-zA-Z0-9_-]+$/.test(service)) throw new Error('Invalid remote service name. Run sympp setup again.');
     if (saved.setup.server.startsWith('http://')) {
       const endpoint = new URL(saved.setup.server);
-      if (process.platform === 'linux' && ['127.0.0.1', 'localhost'].includes(endpoint.hostname)) step('factory', 'bash', ['-s', '--', service, endpoint.port || '80'], { input: script });
-    } else step('factory', 'ssh', ['-o', 'BatchMode=yes', saved.setup.server, `bash -s -- ${quote(service)}`], { input: script });
+      if (process.platform === 'linux' && ['127.0.0.1', 'localhost'].includes(endpoint.hostname)) await factory('bash', ['-s', '--', service, endpoint.port || '80'], script);
+    } else await factory('ssh', ['-o', 'BatchMode=yes', saved.setup.server, `bash -s -- ${quote(service)}`], script);
   }
   if (failures.length) throw new Error(failures.join(' '));
 }

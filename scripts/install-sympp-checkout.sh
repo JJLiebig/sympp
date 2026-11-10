@@ -30,30 +30,41 @@ flock -n "$SYMPP_UPDATE_LOCK_FD" || { echo 'Another factory update is running. R
 # Build before stopping the existing service. Never select a substitute ledger.
 mkdir -p "$SYMPP_HOME/logs"
 build_log="$SYMPP_HOME/logs/install.log"
+started=$SECONDS
+phase='checking CI runtime'
+trap 'echo "factory: failed during $phase; inspect $build_log" >&2' ERR
+release="$SYMPP_HOME/service/releases/$(date -u +%Y%m%dT%H%M%S)-$$"
+mkdir -p "$release" "$SYMPP_SERVICE_CONFIG"
+printf 'factory: checking CI runtime %s\n' "${service_revision:0:12}"
+if python3 "$repo_root/scripts/install-sympp-linux-runtime.py" "$service_revision" "$release" >"$build_log" 2>&1; then
+  printf 'factory: installing runtime %s\n' "${service_revision:0:12}"
+else
+  phase=building
+  printf 'factory: building (no verified CI runtime for %s)\n' "${service_revision:0:12}"
 (
 set -e
 cd "$repo_root/elixir" || exit 1
 mise install || exit 1
 mise exec -- npm --prefix assets ci || exit 1
 mise exec -- npm --prefix assets run build || exit 1
-mise exec -- mix local.hex --force || exit 1
-mise exec -- mix local.rebar --force || exit 1
+# Probe the tools in this mise toolchain; retain Hex, Rebar, deps and _build caches.
+mise exec -- mix local.hex --if-missing --force || exit 1
+mise exec -- mix local.rebar --if-missing --force || exit 1
 MIX_ENV=prod mise exec -- mix deps.get --only prod || exit 1
 export SYMPP_SOURCE_REVISION="$(git -C "$repo_root" rev-parse HEAD)"
 MIX_ENV=prod mise exec -- mix release symphony_elixir --overwrite || exit 1
-) >"$build_log" 2>&1 || {
-  echo "Factory build failed for ${service_revision:0:12}. Inspect $build_log" >&2
+) >>"$build_log" 2>&1 || {
+  echo "factory: failed during building; inspect $build_log" >&2
   exit 1
 }
+cp -a "$repo_root/elixir/_build/prod/rel/symphony_elixir/." "$release/"
+fi
 cd "$repo_root/elixir"
 export SYMPP_SOURCE_REVISION="$service_revision"
 
 git -C "$repo_root" config sympp.serviceRef "$SYMPP_SERVICE_REF"
 git -C "$repo_root" config sympp.serviceRevision "$service_revision"
 
-release="$SYMPP_HOME/service/releases/$(date -u +%Y%m%dT%H%M%S)-$$"
-mkdir -p "$release" "$SYMPP_HOME/logs" "$SYMPP_SERVICE_CONFIG"
-cp -a _build/prod/rel/symphony_elixir/. "$release/"
 previous_release="$(readlink -f "$SYMPP_HOME/service/current" || true)"
 previous_unit="$release/previous.service"
 unit_file="$SYMPP_SERVICE_CONFIG/$SYMPP_SERVICE_NAME.service"
@@ -100,7 +111,6 @@ unit = '\n'.join([
 Path(home + '/service/tmp').mkdir(parents=True, exist_ok=True)
 file = Path(os.environ['SYMPP_SERVICE_CONFIG']) / (os.environ['SYMPP_SERVICE_NAME'] + '.service')
 file.write_text(unit)
-print('unit: ' + str(file))
 PY
 }
 # Link also supports a scratch XDG_CONFIG_HOME without changing the default unit.
@@ -136,17 +146,18 @@ else:
     raise SystemExit('Service did not become ready. Inspect journalctl --user -u ' + os.environ['SYMPP_SERVICE_NAME'])
 READY
 }
-started=$SECONDS
-if write_unit &&
+phase=restarting
+echo 'factory: restarting'
+if { write_unit &&
    ln -s "$release" "$SYMPP_HOME/service/current.new" &&
    mv -Tf "$SYMPP_HOME/service/current.new" "$SYMPP_HOME/service/current" &&
    systemctl --user link "$SYMPP_SERVICE_CONFIG/$SYMPP_SERVICE_NAME.service" &&
    systemctl --user daemon-reload &&
    systemctl --user enable "$SYMPP_SERVICE_NAME.service" &&
-   systemctl --user restart "$SYMPP_SERVICE_NAME.service" && wait_ready; then
-  printf 'factory: updated %s (restart to ready: %ss)\n' "${service_revision:0:12}" "$((SECONDS-started))"
+   systemctl --user restart "$SYMPP_SERVICE_NAME.service" && wait_ready; } >>"$build_log" 2>&1; then
+  printf 'factory: ready (%ss)\n' "$((SECONDS-started))"
 else
-  echo "Factory revision ${service_revision:0:12} failed readiness; restoring previous release." >&2
+  echo "factory: failed during restarting/readiness; inspect $build_log and journalctl --user -u $SYMPP_SERVICE_NAME; restoring previous release" >&2
   if [[ -n "$previous_release" && -f "$previous_unit" ]]; then
     ln -s "$previous_release" "$SYMPP_HOME/service/current.rollback"
     mv -Tf "$SYMPP_HOME/service/current.rollback" "$SYMPP_HOME/service/current"
@@ -167,7 +178,7 @@ REV
     export SYMPP_BACKEND_PORT="${previous_settings[1]}"
     export SYMPP_SERVICE_HOST="${previous_settings[2]}"
     systemctl --user daemon-reload
-    if systemctl --user restart "$SYMPP_SERVICE_NAME.service" && wait_ready; then
+    if { systemctl --user restart "$SYMPP_SERVICE_NAME.service" && wait_ready; } >>"$build_log" 2>&1; then
       echo 'factory: previous release restored and ready' >&2
     else
       echo 'factory: rollback failed readiness; inspect the service journal' >&2
@@ -175,4 +186,3 @@ REV
   fi
   exit 1
 fi
-printf 'service: %s\nendpoint: http://%s:%s\n' "$SYMPP_SERVICE_NAME" "$SYMPP_SERVICE_HOST" "$SYMPP_BACKEND_PORT"
