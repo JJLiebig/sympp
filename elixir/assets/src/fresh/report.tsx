@@ -5,7 +5,7 @@ import { ActButton } from "./actions";
 import { span, waitsOnOthers, type Goal, type Phase as GoalPhase, type GoalView, type Pkg, type PkgView, type Stage } from "./model";
 import { GLOW, NUDGE, smoothly, spotlight, useFlash } from "./motion";
 import { Owner } from "./owner";
-import { CiCell, Lifecycle, NARROW_HIDDEN, NARROW_UNDER, NARROW_WRAP, OUTCOME, Pip, PKG_GRID, PKG_TITLE, PrLink, StageStatus } from "./parts";
+import { CiCell, Lifecycle, NARROW_HIDDEN, NARROW_STATUS, NARROW_UNDER, NARROW_WRAP, OUTCOME, Pip, PKG_GRID, PKG_TITLE, PrLink, StageStatus } from "./parts";
 import { sampleReport } from "./samples";
 
 // What a goal says when asked "is this coming along?". The architect owns the words and the ETA;
@@ -393,7 +393,7 @@ export function PkgLine({ at, view }: { at: number; view: PkgView }) {
       <span className={NARROW_HIDDEN}>
         <Lifecycle view={view} />
       </span>
-      <span className={NARROW_HIDDEN}>
+      <span className={`grid ${NARROW_STATUS}`}>
         <StageStatus at={at} view={view} />
       </span>
       <span className={`flex min-w-0 flex-wrap items-center gap-x-2 min-[1000px]:flex-nowrap ${NARROW_UNDER}`}>
