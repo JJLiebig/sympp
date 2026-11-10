@@ -106,7 +106,7 @@ function AnswerForm({ ask }: { ask: Ask }) {
         void submit();
       }}
     >
-      <div className={`overflow-hidden rounded-lg border bg-panel transition-colors ${failure ? "border-fail" : "border-line has-[textarea:focus]:border-you/70"}`}>
+      <div className={`overflow-hidden rounded-lg border bg-panel transition-colors ${failure ? "border-fail has-[textarea:focus]:ring-2 has-[textarea:focus]:ring-fail/35" : "border-line has-[textarea:focus]:border-you/70"}`}>
         {chosen ? (
           <fieldset className="divide-y divide-line border-b border-line" disabled={busy}>
             <legend className="sr-only">{ask.question}</legend>
