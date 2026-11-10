@@ -4,8 +4,10 @@ import { GoalActions } from "./actions";
 import { areaLabel } from "./areas";
 import { GoalOwner, lanesOf, UnresolvedLine } from "./board";
 import { deployAt, type Goal, type GoalView } from "./model";
+import { Presence } from "./motion";
 import { Deploy, deployLabel, Pip } from "./parts";
 import { Brief, DotStrip, GoalPackages, GoalTitle, NeedsYouFlag, PhaseBadge, phaseStates, reportFor, useGoalLevel, usePhaseControl, type PhaseState } from "./report";
+import { Reveal } from "./reveal";
 import { SinceChip } from "./since";
 
 // Direction 3: a goal the architect grouped becomes a route of its phases. Ungrouped goals stay a plain line of dots.
@@ -15,15 +17,15 @@ export function Phases({ at, views }: { at: number; views: GoalView[] }) {
   return (
     <div className="mx-auto max-w-[1280px]">
       <div className="divide-y divide-line border-y border-line">
-        {lanes.main.map((view) => (
-          <GoalRoute key={view.goal.id} at={at} view={view} />
-        ))}
+        <Presence items={lanes.main} keyOf={(view) => view.goal.id}>
+          {({ item, key, ref }) => <GoalRoute key={key} ref={ref} at={at} view={item} />}
+        </Presence>
       </div>
     </div>
   );
 }
 
-function GoalRoute({ at, view }: { at: number; view: GoalView }) {
+function GoalRoute({ at, ref, view }: { at: number; ref: (node: HTMLElement | null) => void; view: GoalView }) {
   const report = reportFor(view);
   const { level, showAll, toggle } = useGoalLevel(report.verdict);
   const control = usePhaseControl();
@@ -37,7 +39,7 @@ function GoalRoute({ at, view }: { at: number; view: GoalView }) {
   };
 
   return (
-    <section className="py-5" data-goal={view.goal.id}>
+    <section ref={ref} className="py-5" data-goal={view.goal.id}>
       <div className="flex items-center">
         <button className="flex min-w-0 flex-1 items-baseline gap-3 text-left" type="button" onClick={toggle}>
           <ChevronRight className={`size-4 shrink-0 self-center text-faint transition-transform ${level === "closed" ? "" : "rotate-90"}`} />
@@ -63,11 +65,9 @@ function GoalRoute({ at, view }: { at: number; view: GoalView }) {
             <Deploy at={at} goal={view.goal} />
           </div>
         )}
-        {level !== "closed" ? (
-          <div className="mt-3">
-            <GoalPackages at={at} control={control} level={level} view={view} onFull={showAll} />
-          </div>
-        ) : null}
+        <Reveal className="pt-3" show={level !== "closed"}>
+          <GoalPackages at={at} control={control} level={level === "full" ? "full" : "now"} view={view} onFull={showAll} />
+        </Reveal>
       </div>
     </section>
   );
@@ -113,9 +113,11 @@ function PhaseBox({ onToggle, open, state }: { onToggle: () => void; open: boole
           <span className="truncate">{state.phase.title}</span>
         </span>
         <span className="flex flex-wrap gap-0.5">
-          {state.done.map((pkg) => <Pip key={pkg.id} stage="ended" />)}
-          {state.live.map((entry) => <Pip key={entry.pkg.id} stage={entry.stage} failed={entry.failed} />)}
-          {state.queued.map((pkg) => <Pip key={pkg.id} stage="planned" />)}
+          {[
+            ...state.done.map((pkg) => <Pip key={pkg.id} stage="ended" />),
+            ...state.live.map((entry) => <Pip key={entry.pkg.id} stage={entry.stage} failed={entry.failed} />),
+            ...state.queued.map((pkg) => <Pip key={pkg.id} stage="planned" />),
+          ]}
         </span>
         <span className="font-mono text-[11px] text-dim">{phaseCaption(state, total)}</span>
       </button>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 
 import { api } from "./api";
@@ -10,7 +10,7 @@ import { Cards, visibleCards } from "./cards";
 import { Decisions } from "./decisions";
 import { applyDemo, demoLedger, type DemoLedger } from "./mock";
 import { buildBoard, liveCountAt, openAt, viewAt, type Archived, type Board, type HistoryEvent, type Hydrated, type Settings } from "./model";
-import { focusGoal, smoothly } from "./motion";
+import { focusGoal } from "./motion";
 import { ActContext, send, type OperatorAction } from "./operator";
 import { Outline } from "./outline";
 import { Phases } from "./phases";
@@ -89,7 +89,7 @@ export function App() {
   const since = lastLookAt(seenAt, at, data?.replayable !== false);
   const markSeen = () => {
     rememberVisit(at);
-    smoothly(() => setSeenAt(at));
+    setSeenAt(at);
   };
   // An ask can sit in an area that is filtered out, so the filter is lifted before jumping to its goal.
   const goToGoal = (goalId: string) => {
@@ -106,28 +106,28 @@ export function App() {
 
   return (
     <div className={`min-h-screen ${replay ? "pb-28" : "pb-10"}`}>
-      <header className="pin-top sticky top-0 z-20 border-b border-line bg-bg/95 px-8 backdrop-blur">
-        <div className="flex h-12 items-center gap-6">
+      <header className="sticky top-0 z-20 border-b border-line bg-bg/95 px-4 backdrop-blur sm:px-8">
+        <div className="flex min-h-12 flex-wrap items-center gap-x-6 gap-y-1 py-1.5">
           <BoardMenu settings={data.settings} onSaved={read} />
           <nav className="flex shrink-0 gap-1">
             {directions.map((entry, index) => (
-              <button key={entry.key} className={`rounded px-2.5 py-1 text-xs ${entry.key === current.key ? "bg-ink text-bg" : "text-dim hover:text-ink"}`} title={entry.hint} type="button" onClick={() => smoothly(() => setDirection(DIRECTIONS.indexOf(entry)))}>
+              <button key={entry.key} className={`rounded px-2.5 py-1 text-xs ${entry.key === current.key ? "bg-ink text-bg" : "text-dim hover:text-ink"}`} title={entry.hint} type="button" onClick={() => setDirection(DIRECTIONS.indexOf(entry))}>
                 <span className="mr-1.5 font-mono opacity-60">{index + 1}</span>
                 {entry.label}
               </button>
             ))}
           </nav>
-          <nav className="flex min-w-0 gap-1 overflow-hidden whitespace-nowrap text-xs">
+          <nav className="flex min-w-0 max-w-full gap-1 overflow-x-auto whitespace-nowrap text-xs [scrollbar-width:none]">
             {[null, ...areas].map((name) => (
-              <button key={name ?? "all"} className={`rounded px-2 py-1 ${name === area ? "bg-line text-ink" : "text-dim hover:text-ink"}`} type="button" onClick={() => smoothly(() => setArea(name))}>
+              <button key={name ?? "all"} className={`rounded px-2 py-1 ${name === area ? "bg-line text-ink" : "text-dim hover:text-ink"}`} type="button" onClick={() => setArea(name)}>
                 {name ?? "Everything"}
               </button>
             ))}
           </nav>
-          <nav className="flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap text-xs">
+          <nav className="flex min-w-0 max-w-full items-center gap-1 overflow-x-auto whitespace-nowrap text-xs [scrollbar-width:none]">
             <span className="mr-1 text-faint">Show</span>
             {DENSITIES.map((entry) => (
-              <button key={entry.key} className={`rounded px-2 py-1 ${entry.key === density ? "bg-line text-ink" : "text-dim hover:text-ink"}`} title={entry.hint} type="button" onClick={() => smoothly(() => setDensity(entry.key))}>
+              <button key={entry.key} className={`rounded px-2 py-1 ${entry.key === density ? "bg-line text-ink" : "text-dim hover:text-ink"}`} title={entry.hint} type="button" onClick={() => setDensity(entry.key)}>
                 {entry.label}
               </button>
             ))}
@@ -143,22 +143,25 @@ export function App() {
           </span>
         </div>
       </header>
-      <main className="px-8 py-6">
+      <main className="px-4 py-6 sm:px-8">
         <SinceLine at={at} changes={changes} since={since} width={current.width} onPick={goToGoal} onSeen={markSeen} />
         <ActContext.Provider value={act}>
           <div className={`mx-auto ${current.width}`}>
             <NeedsYou asks={asks} at={at} board={data.board} onGoal={goToGoal} />
             <Decisions at={at} board={data.board} decisions={data.board.decisions.filter((entry) => entry.at <= at)} onGoal={goToGoal} />
           </div>
-          <SinceContext.Provider value={changes.notes}>
-            <DensityContext.Provider value={density}>
-              <View at={at} views={shown} />
-            </DensityContext.Provider>
-          </SinceContext.Provider>
-          <div className={`mx-auto ${current.width}`}>
-            <Cards at={at} cards={shownCards} />
-            <Rest at={at} lanes={lanes} />
-          </div>
+          {/* Switching the view, the area or the density draws the board afresh, so the switch itself never animates. */}
+          <Fragment key={`${current.key}:${area ?? ""}:${density}`}>
+            <SinceContext.Provider value={changes.notes}>
+              <DensityContext.Provider value={density}>
+                <View at={at} views={shown} />
+              </DensityContext.Provider>
+            </SinceContext.Provider>
+            <div className={`mx-auto ${current.width}`}>
+              <Cards at={at} cards={shownCards} />
+              <Rest at={at} lanes={lanes} />
+            </div>
+          </Fragment>
         </ActContext.Provider>
       </main>
       {replay ? <Scrubber at={at} data={data} onChange={setAt} /> : null}
@@ -170,7 +173,7 @@ export function App() {
 // The demo applies actions to its own invented work; a backend is told, then read again.
 function useOperator(read: () => void, setData: (update: (current: Loaded | null) => Loaded | null) => void) {
   return useCallback(async (action: OperatorAction) => {
-    if (DEMO) return smoothly(() => setData((current) => (current?.demo ? demoRead(applyDemo(current.demo, action, current.now), current.now) : current)));
+    if (DEMO) return setData((current) => (current?.demo ? demoRead(applyDemo(current.demo, action, current.now), current.now) : current));
     await send(action);
     read();
   }, [read, setData]);
@@ -314,7 +317,7 @@ function Scrubber({ at, data, onChange }: { at: number; data: Loaded; onChange: 
   const live = at >= data.now;
 
   return (
-    <footer className="pin-bottom fixed inset-x-0 bottom-0 z-20 border-t border-line bg-bg/95 px-8 py-3 backdrop-blur">
+    <footer className="fixed inset-x-0 bottom-0 z-20 border-t border-line bg-bg/95 px-4 py-3 backdrop-blur sm:px-8">
       <div className="flex items-center gap-4 text-xs">
         <span className={`w-64 shrink-0 font-mono ${live ? "text-merge" : "text-checks"}`}>
           {live ? "Now" : "Replaying"} · {stamp(at)}
@@ -339,7 +342,7 @@ function useShortcuts(setDirection: (index: number) => void, setNote: (note: str
       const index = ["1", "2", "3"].indexOf(event.key);
       // Digits typed into a field are text, not a view switch.
       const typing = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
-      if (index >= 0 && !typing) smoothly(() => setDirection(index));
+      if (index >= 0 && !typing) setDirection(index);
     };
     const onSay = (event: Event) => {
       setNote((event as CustomEvent<string>).detail);

@@ -1,9 +1,10 @@
 import { Check, CircleDashed, ScanSearch, X } from "lucide-react";
 
-import { GoalActions, ShelfCleanup } from "./actions";
+import { GoalActions, GoalRefusal, ShelfCleanup } from "./actions";
 import { areaLabel } from "./areas";
 import { deployAt, inRepos, span, type Ci, type DeployStep, type Goal, type GoalView, type Outcome, type Pr, type PkgView, type Review, type Stage } from "./model";
-import { POP, useFlash } from "./motion";
+import { POP, Presence, useFlash } from "./motion";
+import { Reveal } from "./reveal";
 
 // `pip` is the small square that stands for a package in a strip of dots; `bar` is its step on the track.
 export const STAGE: Record<Stage, { label: string; text: string; pip: string; bar: string }> = {
@@ -39,8 +40,10 @@ export const NARROW_UNDER = "max-[1000px]:col-span-2 max-[1000px]:col-start-2 ma
 export const NARROW_STATUS = "max-[1000px]:col-span-2 max-[1000px]:col-start-2 max-[1000px]:row-start-3";
 // Narrow, a PR name wraps rather than clip, so the PR and its CI can take two lines.
 export const NARROW_WRAP = "max-[1000px]:overflow-visible max-[1000px]:whitespace-normal max-[1000px]:wrap-anywhere";
-// Card: pip, task, repo and branch, CI, review, PR, state, owner, dismiss.
-export const CARD_GRID = "grid grid-cols-[10px_minmax(0,1fr)_150px_88px_128px_64px_72px_150px_24px] items-center gap-x-2.5 min-[1280px]:grid-cols-[10px_minmax(0,1fr)_200px_88px_128px_64px_72px_170px_24px]";
+// Card: pip, task, repo and branch, CI, review, PR, state, owner, dismiss. Below 1000px the pip, task, state and
+// dismiss share a line, CI, review and PR take the line under the task (CARD_UNDER), and the rest drops out.
+export const CARD_GRID = "grid grid-cols-[10px_minmax(0,1fr)_auto_auto] items-center gap-x-2.5 min-[1000px]:grid-cols-[10px_minmax(0,1fr)_150px_88px_128px_64px_72px_150px_24px] min-[1280px]:grid-cols-[10px_minmax(0,1fr)_200px_88px_128px_64px_72px_170px_24px]";
+export const CARD_UNDER = "flex flex-wrap items-center gap-x-3 col-span-3 col-start-2 row-start-2 min-[1000px]:contents";
 
 // A live package's way from build to merge, one fixed slot per stage.
 const LIFECYCLE = [
@@ -57,7 +60,7 @@ const MODE_WORD: Partial<Record<NonNullable<Review["mode"]>, string>> = { deep: 
 const reviewing = (review: Review | null) => Boolean(review?.mode && review.mode !== "none" && review.state);
 
 // Build until a PR opens; Review/CI is Review once a review runs and Checks before; ready is Merge.
-function slotOf(view: PkgView) {
+export function slotOf(view: PkgView) {
   if (view.stage === "ready") return 4;
   if (view.stage === "review_ci") return reviewing(view.pkg.review) ? REVIEW_SLOT : 2;
   return view.pkg.pr ? 1 : 0;
@@ -177,40 +180,43 @@ function shelfCount(view: GoalView) {
 
 // `age` says what the time on each row means, for example "idle" or "done".
 export function Shelf({ age, at, cleanup, hint, label, views }: { age: string; at: number; cleanup?: boolean; hint?: string; label: string; views: GoalView[] }) {
-  if (views.length === 0) return null;
-
   return (
-    <details className="mt-8 text-sm text-dim">
-      <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">
-        {label} · {views.length}
-        {hint ? <span className="ml-2 font-normal normal-case tracking-normal">{hint}</span> : null}
-      </summary>
-      {cleanup ? (
-        <div className="mt-2 flex max-w-[900px] justify-end">
-          <ShelfCleanup at={at} views={views} />
-        </div>
-      ) : null}
-      <ul className="mt-2 max-w-[900px] space-y-1">
-        {views.map((view) => (
-          <li key={view.goal.id} className="flex items-center justify-between gap-4" data-goal={view.goal.id}>
-            <span className="min-w-0 truncate">{view.goal.title}</span>
-            <span className="shrink-0 text-[11px] uppercase tracking-[0.12em] text-faint" title={view.goal.repo}>{areaLabel(view.goal.area)}</span>
-            <span className="min-w-0 flex-1 truncate text-faint">{view.goal.report?.parked?.text}</span>
-            <span className="shrink-0 font-mono text-xs text-faint">
-              {shelfCount(view)} · {age} {span(at - (view.goal.archivedAt ?? view.goal.report?.parked?.at ?? view.lastMoveAt))}
-            </span>
-            <GoalActions phase={view.phase} goal={view.goal} />
-          </li>
-        ))}
-      </ul>
-    </details>
+    <Reveal className="mt-8" show={views.length > 0}>
+      <details className="text-sm text-dim">
+        <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">
+          {label} · {views.length}
+          {hint ? <span className="ml-2 font-normal normal-case tracking-normal">{hint}</span> : null}
+        </summary>
+        {cleanup ? (
+          <div className="mt-2 flex max-w-[900px] justify-end">
+            <ShelfCleanup at={at} views={views} />
+          </div>
+        ) : null}
+        <ul className="mt-2 max-w-[900px] space-y-1">
+          <Presence items={views} keyOf={(view) => view.goal.id}>
+            {({ item: view, key, ref }) => (
+            <li key={key} ref={ref} className="flex flex-wrap items-center justify-between gap-x-4" data-goal={view.goal.id}>
+              <span className="min-w-0 truncate">{view.goal.title}</span>
+              <span className="shrink-0 text-[11px] uppercase tracking-[0.12em] text-faint" title={view.goal.repo}>{areaLabel(view.goal.area)}</span>
+              <span className="min-w-0 flex-1 truncate text-faint">{view.goal.report?.parked?.text}</span>
+              <span className="shrink-0 font-mono text-xs text-faint">
+                {shelfCount(view)} · {age} {span(at - (view.goal.archivedAt ?? view.goal.report?.parked?.at ?? view.lastMoveAt))}
+              </span>
+              <GoalActions phase={view.phase} goal={view.goal} />
+              <GoalRefusal className="basis-full" goalId={view.goal.id} />
+            </li>
+            )}
+          </Presence>
+        </ul>
+      </details>
+    </Reveal>
   );
 }
 
 // A package's dot pops when its stage changes, so a glance catches what just moved.
 export function Pip({ stage, failed }: { stage: Stage; failed?: boolean }) {
-  const ref = useFlash<HTMLSpanElement>(`${stage}${failed ? ":failed" : ""}`, POP, 700);
-  return <span ref={ref} className={`inline-block size-2 shrink-0 rounded-[2px] ${failed ? "bg-fail" : STAGE[stage].pip}`} title={STAGE[stage].label} />;
+  const ref = useFlash(`${stage}${failed ? ":failed" : ""}`, POP, 700);
+  return <span ref={ref} data-pip className={`inline-block size-2 shrink-0 rounded-[2px] ${failed ? "bg-fail" : STAGE[stage].pip}`} title={STAGE[stage].label} />;
 }
 
 const DEPLOY_MARK: Record<DeployStep["state"], { mark: string; tone: string }> = {

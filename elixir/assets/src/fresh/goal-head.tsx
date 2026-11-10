@@ -1,12 +1,13 @@
 import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { GoalActions } from "./actions";
+import { GoalActions, GoalRefusal } from "./actions";
 import { areaLabel } from "./areas";
 import { GoalOwner } from "./board";
 import type { GoalView } from "./model";
 import { Deploy } from "./parts";
 import { Brief, DotStrip, GoalTitle, NeedsYouFlag, PhaseBadge, type Report } from "./report";
+import { Reveal, Roll } from "./reveal";
 import { SinceChip } from "./since";
 
 // One goal's header in Outline and Briefing: the title and its flags on the left, the packages and the count
@@ -35,16 +36,23 @@ export function GoalHead({ at, area, big, open, report, toggle, view }: { at: nu
             <Deploy at={at} goal={view.goal} />
           </span>
           <span className="shrink-0 font-mono text-xs text-dim">
-            {view.live.length > 0 ? `${view.live.length} moving · ` : ""}
-            {view.done.length}/{total} done
+            {view.live.length > 0 ? (
+              <>
+                <Roll value={view.live.length} /> moving ·{" "}
+              </>
+            ) : null}
+            <Roll value={view.done.length} />/<Roll value={total} /> done
           </span>
           <GoalOwner className="w-44 shrink-0" view={view} />
           <GoalActions goal={view.goal} phase={view.phase} />
         </span>
       </div>
-      <Brief at={at} className={`mt-1 pl-7 ${big ? "text-[15px] leading-relaxed text-ink/90" : "text-sm text-dim"}`} report={report}>
-        {report.sample ? <span className="ml-2 rounded border border-line px-1 font-mono text-[10px] uppercase text-faint">sample wording</span> : null}
-      </Brief>
+      <GoalRefusal className="pl-7 pt-1" goalId={view.goal.id} />
+      <Reveal show={Boolean(report.brief || report.eta)}>
+        <Brief at={at} className={`mt-1 pl-7 ${big ? "text-[15px] leading-relaxed text-ink/90" : "text-sm text-dim"}`} report={report}>
+          {report.sample ? <span className="ml-2 rounded border border-line px-1 font-mono text-[10px] uppercase text-faint">sample wording</span> : null}
+        </Brief>
+      </Reveal>
     </>
   );
 }
