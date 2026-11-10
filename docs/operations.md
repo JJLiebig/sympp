@@ -18,7 +18,7 @@ packaged dashboard from the same runtime.
 ## Work Board
 
 The board lists goals, one per WorkRequest, with the ones that need you first:
-a goal whose architect asks you something, then goals with a road bump or
+a goal whose chief asks you something, then goals with a road bump or
 stalled work, then goals on track. Parked, dormant, not-started and settled
 goals sit on shelves that open on demand, and recently merged work is listed
 under Landed.
@@ -56,10 +56,10 @@ returns it at `work_request_details[].work_request.operator_report`;
 `read_work_request` returns the same report. Each brief/ETA has `text` and
 `written_at`. Parking has `reason`, `parked_at`, and `resumed_at`. A missing
 report/field is absent information; a non-null resume time means that interval
-is closed. Questions for the operator are asks, which the board shows as Needs
+is closed. Questions the chief sends to the operator are asks, which the board shows as Needs
 you; worker waits do not. Reports do not change blockers or completion. See the
-[architect procedure](../packages/sympp/skills/symphony-architect/SKILL.md#ask-and-report)
-for optional milestone updates and resolving answers given in the conversation.
+[architect procedure](../packages/sympp/skills/symphony-architect/SKILL.md#report)
+for optional milestone updates.
 
 MCP `read_work_request` defaults to a compact overview: request description,
 open asks, package status/PR/next action, and five recent decision previews.

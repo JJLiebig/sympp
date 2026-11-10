@@ -84,13 +84,14 @@ test('operator sees dependency ordering, pending qualification and actual delive
 
 test('operator attention differs from explicit blockers and settings/archive actions persist', async ({ candidate, app, screen, browser }) => {
   const { client } = candidate;
+  const chief = await candidate.factory!.client(undefined, { 'sympp.role': 'chief' });
   const request = await client.request('Operator choice');
   const [wp] = (await client.addPackages([contract('Bounded findings')]));
   await client.call('dispatch_work_package', { work_package_id: wp });
   const prematureArchive = await client.operator(`/api/v1/sympp/operator/work-requests/${request}/archive`, {});
   expect(prematureArchive.status).toBe(422);
   expect(prematureArchive.body.error.code).toBe('not_completed');
-  const ask = (await client.call('ask', { work_request_id: request, question: 'Approve the bounded scope?' })).ask.id;
+  const ask = (await chief.call('ask', { work_request_id: request, question: 'Approve the bounded scope?' })).ask.id;
   await candidate.capture('operator-needed');
   await app.open('/sympp/board');
   await expect(browser.locator('title')).toHaveText(/^\(1\)\s/);
@@ -136,8 +137,9 @@ test('operator attention differs from explicit blockers and settings/archive act
 
 test('the person answers a question, reviews flagged decisions and releases a goal whose owner stopped answering', async ({ candidate, app, screen, browser }) => {
   const { client, factory } = candidate;
+  const chief = await factory!.client(undefined, { 'sympp.role': 'chief' });
   const request = await client.request('Board review');
-  const ask = (await client.call('ask', { work_request_id: request, question: 'Which scope should ship?', decision_prompt: {
+  const ask = (await chief.call('ask', { work_request_id: request, question: 'Which scope should ship?', decision_prompt: {
     tl_dr: 'Choose scope', details: 'Keep this delivery bounded.',
     options: [{ id: 'bounded', label: 'Bounded option', answer: 'Ship the bounded option.' }, { id: 'wide', label: 'Wide option', answer: 'Ship everything.' }],
   } })).ask.id;

@@ -16,9 +16,7 @@ Branch from the base and target it; never merge or cherry-pick another unmerged
 branch. Once handed off, leave the branch alone unless your parent asks.
 
 Without a WorkPackage, your parent's message is the assignment. If your parent
-is a chief or architect, your branch or PR shows on the board as a card. Ask the
-operator with `ask` and no `work_request_id`; the answer is typed into your
-input without being submitted.
+is a chief or architect, your branch or PR shows on the board as a card. Only the chief can use `ask`; send your chief the question directly instead.
 
 You own your package. Within its paths and constraints, decide and fix without
 asking: implementation, CI, lint, tests, merge conflicts, and review findings

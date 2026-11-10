@@ -42,8 +42,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   # Every tool is a write unless listed here. Writes need a Herdr terminal
   # identity; the same split drives the MCP readOnlyHint annotation.
   @read_tools [@health_tool, "list_work_requests", "read_work_request", "summarize_failed_mcp_calls"]
-  # Writes that take or confirm ownership of the target WorkRequest. Decisions,
-  # asks and WorkRequest creation stay open to any Herdr terminal.
+  # Writes that take or confirm ownership of the target WorkRequest. Decisions
+  # and WorkRequest creation stay open to any Herdr terminal. Only chiefs open asks.
   @owner_gated_tools ["edit_plan", "dispatch_work_package", "sync_pr", "close_work_package", "set_blocker", "set_report"]
 
   @type tool_name :: String.t()
@@ -132,7 +132,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   defp description("ask"),
     do:
-      "Ask the operator a question: it shows as Needs you on the boards until it is answered or withdrawn. Without work_request_id it asks on your own card. Optionally name a package and give a decision_prompt with options. The operator's answer is typed into your terminal without being submitted when it runs on the factory's machine; otherwise read it from the ask with read_work_request detail: full. Asks never block planning or dispatch, and an ask on a package is withdrawn when the package ends."
+      "Chief only. Asks the human owner; the question shows on the sympp board until it is answered or withdrawn. Without work_request_id it asks on your own card. Optionally name a package and give a decision_prompt with options. The operator's answer is typed into your terminal without being submitted when it runs on the factory's machine; otherwise read it from the ask with read_work_request detail: full."
 
   defp description("resolve_ask"),
     do:

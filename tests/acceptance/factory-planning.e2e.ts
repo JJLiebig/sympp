@@ -76,9 +76,10 @@ test('skipping every planned package leaves the goal unfinished in persisted and
 });
 
 test('a clarified request becomes a revised plan and a dispatched package', async ({ factory }) => {
+  const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
   const architect = await factory.client();
   const id = await architect.request('Clarified planning');
-  const ask = (await architect.call('ask', { work_request_id: id, question: 'Which behavior should ship?' })).ask;
+  const ask = (await chief.call('ask', { work_request_id: id, question: 'Which behavior should ship?' })).ask;
   expect((await architect.call('read_work_request', { detail: 'full', work_request_id: id })).work_request.phase).toBe('intake');
   // An open ask never holds back planning.
   const [wp] = await architect.addPackages([contract('Agreed scope')]);
