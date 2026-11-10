@@ -390,7 +390,8 @@ export function PkgLine({ at, view }: { at: number; view: PkgView }) {
     <div ref={ref} className={ROW}>
       <Pip stage={view.stage} failed={view.failed} />
       <span className={PKG_TITLE}>{pkg.title}</span>
-      <span className={NARROW_HIDDEN}>
+      {/* Narrow, the strip leaves the screen but screen readers still hear the current stage. */}
+      <span className="max-[1000px]:sr-only min-[1000px]:grid">
         <Lifecycle view={view} />
       </span>
       <span className={`grid ${NARROW_STATUS}`}>
