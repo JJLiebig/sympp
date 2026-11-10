@@ -38,7 +38,7 @@ export function growIn(node: HTMLElement) {
 // A row that left closes up, and what is below it moves up into its place.
 export function collapseOut(node: HTMLElement) {
   if (calm()) return node.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 150, fill: "forwards" }).finished;
-  return clipped(node, node.animate([{ ...boxOf(node), opacity: 1 }, { ...FLAT, opacity: 0 }], { duration: 260, easing: EASE, fill: "forwards" })).finished;
+  return clipped(node, node.animate([{ ...boxOf(node), opacity: 1 }, { ...FLAT, opacity: 0 }], { duration: 200, easing: EASE, fill: "forwards" })).finished;
 }
 
 // A row that changed places glides from where it was.
