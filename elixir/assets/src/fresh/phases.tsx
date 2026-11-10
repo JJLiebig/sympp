@@ -1,6 +1,6 @@
 import { Check, ChevronRight } from "lucide-react";
 
-import { GoalActions } from "./actions";
+import { GoalActions, GoalRefusal } from "./actions";
 import { areaLabel } from "./areas";
 import { GoalOwner, lanesOf, UnresolvedLine } from "./board";
 import { deployAt, type Goal, type GoalView } from "./model";
@@ -54,6 +54,7 @@ function GoalRoute({ at, ref, view }: { at: number; ref: (node: HTMLElement | nu
         <GoalOwner className="ml-3" view={view} />
         <GoalActions goal={view.goal} phase={view.phase} />
       </div>
+      <GoalRefusal className="pl-7 pt-1" goalId={view.goal.id} />
       <Brief at={at} className="mt-1 pl-7 text-sm text-dim" report={report} />
       <UnresolvedLine className="ml-7 mt-2" view={view} />
       <div className="pl-7">
