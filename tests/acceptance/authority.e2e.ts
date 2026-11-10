@@ -420,7 +420,7 @@ test('asks and decisions preserve provenance and redact their responses', async 
     },
   });
   const first = asked.ask.id;
-  expect(asked.ask.asked_by).toBe(architect.address);
+  expect(asked.ask.asked_by).toBe(chief.address);
   expect(JSON.stringify(asked)).not.toContain('raw_secret_synthetic');
   await architect.reject('resolve_ask', { ask_id: first, to: 'closed' }, 'invalid_to');
   await architect.reject('resolve_ask', { ask_id: first, to: 'answered' }, 'missing_answer');
