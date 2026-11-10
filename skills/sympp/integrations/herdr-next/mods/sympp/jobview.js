@@ -15,7 +15,7 @@ export function answerForm(v, t, question) {
     .flex().w_full().min_w(0).px(10).py(8).rounded(6).border(1).border_color(draft?.choice === id ? t.accent : t.input)
     .bg(draft?.choice === id ? t.selected : CLEAR).text_color(t.foreground).cursor_pointer()
     .hover((s) => s.bg(t.hover)).focus((s) => s.border_color(t.accent)).disabled(Boolean(draft?.pending))
-    .accessibility_label(label)
+    .accessibility_label(recommended ? `${label} (Recommended)` : label)
     .on_click((_e, cx) => { draft.choice = id; cx.stop_propagation(); cx.notify(); })
     .child(v_flex().flex_1().min_w(0).gap(4)
       .child(h_flex().gap(8).items_center().flex_wrap()
