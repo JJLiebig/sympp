@@ -106,6 +106,36 @@ test('an ask on a package is withdrawn when the package ends, and only the asker
   await chief.reject('ask', { work_request_id: id, work_package_id: wp, question: 'Too late?' }, 'work_package_ended');
 });
 
+test('a chief recommends one choice, persists it for both interfaces, and cannot recommend two', async ({ factory }) => {
+  const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
+  const owner = await factory.client();
+  const id = await owner.request('Recommended choice');
+  const options = [
+    { id: 'small', label: 'Small scope', answer: 'Ship the small scope.', recommended: true },
+    { id: 'wide', label: 'Wide scope', answer: 'Ship the wide scope.', recommended: false },
+    { id: 'later', label: 'Defer', answer: 'Defer delivery.' },
+  ];
+  const params = { work_request_id: id, question: 'Which scope?', decision_prompt: {
+    tl_dr: 'Choose scope', details: 'The operator chooses what ships.', options,
+  } };
+  const ask = (await chief.call('ask', params)).ask;
+  expect(ask.decision_prompt.options).toEqual(options);
+  const read = await owner.call('read_work_request', { detail: 'full', work_request_id: id });
+  expect(read.asks[0].decision_prompt.options).toEqual(options);
+  for (const route of ['/api/v1/sympp/operator/work-requests/' + id, '/api/v1/sympp/herdr/dashboard']) {
+    const response = await owner.raw(null, { origin: new URL(await factory.endpoint).origin }, 'GET', route);
+    expect(response.status).toBe(200);
+    const detail = route.endsWith('dashboard') ? response.body.work_request_details.find((entry: any) => entry.work_request.id === id) : response.body;
+    expect(detail.asks[0].decision_prompt.options).toEqual(options);
+  }
+  const rejected = await chief.rpc('tools/call', chief.toolParams('ask', {
+    ...params, decision_prompt: { ...params.decision_prompt, options: [options[0], { ...options[1], recommended: true }, options[2]] },
+  }));
+  expect(rejected.error.code).toBe(-32602);
+  expect(rejected.error.data).toMatchObject({ code: 'invalid_decision_prompt', message: 'at most one option may be recommended' });
+  expect((await owner.call('read_work_request', { detail: 'full', work_request_id: id })).asks).toHaveLength(1);
+});
+
 test('human choice submission rejects unknown or empty redirects and preserves the selected answer', async ({ factory }) => {
   const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
   const architect = await factory.client();

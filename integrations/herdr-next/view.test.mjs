@@ -164,6 +164,8 @@ test('an ask opens its answer form with the decision prompt, and a decision open
   for (const id of ['choice-ask:q1-board_first', 'choice-ask:q1-lens_first', 'choice-ask:q1-__custom_redirect__', 'save-ask:q1', 'send-feedback-dec-order', 'focus-feedback-dec-order', 'cancel-feedback-dec-order'])
     assert.ok(view.has(id), id);
   assert.equal(view.out.split('text "Which order should the levels land in?"').length - 1, 1, 'the question shows once');
+  assert.ok(view.text('Recommended'), 'the recommended choice is identified before answering');
+  assert.ok(view.out.includes('Stage board first (Recommended)'), 'assistive technology identifies the recommended choice');
   assert.equal(view.has('ack-dec-order'), false, 'Ack waits while the feedback form is open');
 });
 

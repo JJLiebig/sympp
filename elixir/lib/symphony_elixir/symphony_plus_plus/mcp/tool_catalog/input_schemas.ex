@@ -369,7 +369,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
               "description" => nonblank_string_schema(),
               "pros" => string_array_schema(),
               "cons" => string_array_schema(),
-              "answer" => nonblank_string_schema()
+              "answer" => nonblank_string_schema(),
+              "recommended" => %{
+                "type" => "boolean",
+                "description" => "Mark the option you recommend with recommended: true (at most one)."
+              }
             },
             "required" => ["id", "label", "answer"]
           }
