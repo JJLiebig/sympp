@@ -17,8 +17,8 @@ export function GoalHead({ at, area, big, open, report, toggle, view }: { at: nu
   return (
     <>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        <div className="flex min-w-[min(100%,18rem)] flex-1 items-start gap-3">
-          <Fold className="-mx-1" label={view.goal.title} open={open} onToggle={toggle} />
+        <div className="flex min-w-[min(100%,18rem)] flex-1 items-baseline gap-3">
+          <Fold className={`-mx-1 ${big ? "text-lg" : ""}`} label={view.goal.title} open={open} onToggle={toggle} />
           {/* A click anywhere on the title line folds too; keyboards use the chevron. */}
           <span className="flex min-w-0 flex-1 cursor-pointer flex-wrap items-baseline gap-x-3 gap-y-0.5" onClick={toggle}>
             <span className={`min-w-0 max-w-full ${big ? "text-lg font-semibold leading-snug wrap-break-word" : "truncate font-medium"}`}>

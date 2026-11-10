@@ -41,6 +41,22 @@ button {
   transition: color 120ms, background-color 120ms, border-color 120ms;
 }
 
+/* A glyph beside text, centred on the text's capitals. Flex centring puts it on the middle of the line box
+   instead: 0.7px low beside 16px titles, and beside the 11px mono cells, whose leading splits into fractions
+   of a pixel, it snaps up to a pixel low. The wrapper is one line of the surrounding type, so the row places
+   it as it places the text and their baselines meet; the glyph is centred on the x-height, then raised half
+   the gap to the cap height. Rows of 12px and 14px text already land within a third of a pixel. */
+.glyph {
+  display: inline-block;
+  flex: none;
+}
+
+.glyph > * {
+  display: inline-flex;
+  vertical-align: middle;
+  translate: 0 calc((1ex - 1cap) / 2);
+}
+
 /* A goal jumped to from the header lands just below it. */
 [data-goal],
 [data-ask],
