@@ -362,9 +362,7 @@ export default class Lens extends View {
 
   // The job's open tab when there is one, else a new one.
   jobAction(job) {
-    const tabs = shared("sympp.jobTabs");
-    const open = new Set(this.spaceList().flatMap((s) => (s.tabs ?? []).map((tab) => tab.id)));
-    const tab = Object.entries(tabs && typeof tabs === "object" ? tabs : {}).find(([id, jobId]) => jobId === job.id && open.has(id))?.[0];
+    const tab = L.tabShowing(shared("sympp.jobTabs"), job.id, this.endpoint, new Set(this.openTabs()));
     return tab ? { name: "tab.select", args: { id: tab } } : { name: "tab.new", args: J.jobTabArgs(this.given, job, this.spaceList()) };
   }
 
@@ -466,12 +464,12 @@ export default class Lens extends View {
     const f = focused();
     const stored = shared("sympp.jobTabs") ?? {};
     const chiefs = this.chiefTerminals(desk);
-    const tabs = L.liveTabs(stored, board.jobs, panes(), chiefs);
+    const tabs = L.liveTabs(stored, board.jobs, panes(), chiefs, this.endpoint);
     // A binding that no longer holds goes, so the tab falls back to what it shows.
     if (JSON.stringify(tabs) !== JSON.stringify(stored)) cx.spawn(async () => setShared("sympp.jobTabs", tabs));
     // A chief recognised after it took focus still leads to its topic.
     const chief = f ? chiefs.get(f.shown ?? f.terminal) ?? panes().find((p) => p.tab === f.tab && chiefs.has(p.terminal))?.terminal : null;
-    const seen = f ? [f.space, f.tab, f.pane, f.terminal, f.shown, tabs[f.tab], chief].join("|") : "";
+    const seen = f ? [f.space, f.tab, f.pane, f.terminal, f.shown, tabs[f.tab]?.shows, chief].join("|") : "";
     if (seen === this.lastFocus) return;
     this.lastFocus = seen;
     const next = L.followPath(L.focusTarget(f, terminals(), tabs, panes(), chiefs), board.jobs, desk, this.place);
@@ -486,11 +484,13 @@ export default class Lens extends View {
     if (!f?.tab || !this.net.data) return;
     const before = shared("sympp.jobTabs");
     const current = before && typeof before === "object" ? before : {};
+    const mine = { shows, endpoint: this.endpoint };
     // Again once the panel dropped it, should it hold again.
-    if (this.registered === f.tab && this.registeredAs === shows && current[f.tab] === shows) return;
+    if (this.registered === f.tab && this.registeredAs === shows && JSON.stringify(current[f.tab]) === JSON.stringify(mine)) return;
     // Only a binding that holds: never a chief's tab, an archived task or a tab without a sympp pane.
-    const next = L.liveTabs({ ...current, [f.tab]: shows }, this.net.data.jobs, panes(), this.chiefTerminals(L.deskOf(this.deskTopics(), this.spaceList())));
-    if (next[f.tab] !== shows) return;
+    const next = L.liveTabs({ ...current, [f.tab]: mine }, this.net.data.jobs, panes(),
+      this.chiefTerminals(L.deskOf(this.deskTopics(), this.spaceList())), this.endpoint);
+    if (next[f.tab]?.shows !== shows) return;
     this.registered = f.tab;
     this.registeredAs = shows;
     if (JSON.stringify(next) !== JSON.stringify(current)) cx.spawn(async () => setShared("sympp.jobTabs", next));
@@ -501,10 +501,7 @@ export default class Lens extends View {
   openBig(_cx) {
     const path = this.path;
     const job = path.job ? this.net.data?.jobs.find((j) => j.id === path.job) : null;
-    const tabs = shared("sympp.jobTabs");
-    const open = new Set(this.openTabs());
-    const shows = job ? job.id : L.scopeTabKey(path);
-    const tab = Object.entries(tabs && typeof tabs === "object" ? tabs : {}).find(([id, value]) => value === shows && open.has(id))?.[0];
+    const tab = L.tabShowing(shared("sympp.jobTabs"), job ? job.id : L.scopeTabKey(path), this.endpoint, new Set(this.openTabs()));
     if (tab) return run("tab.select", { id: tab });
     if (job) return run("tab.new", J.jobTabArgs(this.given, job, this.spaceList()));
     const { role: _role, job: _job, studio: _studio, scope: _scope, ...rest } = this.given;

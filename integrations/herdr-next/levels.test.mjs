@@ -88,9 +88,13 @@ test("a tab's task binding holds only while the tab shows that task: never a chi
     // A task tab that came to hold the chief beside it, and one left with only a terminal.
     { pane: 'p5', tab: 'tab-chief', mod: 'sympp', terminal: null }, { pane: 'p6', tab: 'tab-chief', terminal: 'core/t81' },
     { pane: 'p7', tab: 'tab-bare', terminal: 'core/t9' },
+    { pane: 'p8', tab: 'tab-other', mod: 'sympp', terminal: null },
   ];
-  const stored = { 'tab-job': 'wr-open', 'tab-old': 'wr-old', 'tab-gone': 'wr-deleted', 'tab-scope': 'scope:t-herdr:', 'tab-chief': 'wr-open', 'tab-bare': 'wr-open' };
-  assert.deepEqual(L.liveTabs(stored, jobs, panes, chiefs), { 'tab-job': 'wr-open', 'tab-scope': 'scope:t-herdr:' });
+  const here = 'http://127.0.0.1:4000', bound = (shows, endpoint = here) => ({ shows, endpoint });
+  const stored = { 'tab-job': bound('wr-open'), 'tab-old': bound('wr-old'), 'tab-gone': bound('wr-deleted'), 'tab-scope': bound('scope:t-herdr:'),
+    'tab-chief': bound('wr-open'), 'tab-bare': bound('wr-open'), 'tab-other': bound('wr-elsewhere', 'http://other:4000') };
+  assert.deepEqual(Object.keys(L.liveTabs(stored, jobs, panes, chiefs, here)), ['tab-job', 'tab-scope', 'tab-other'],
+    "another factory's task tab is not this board's to drop");
   const focus = (tab, terminal = null) => L.followPath(L.focusTarget({ space: 's-web', tab, pane: 'p', terminal }, [], stored, panes, chiefs), jobs, desk, L.placeJobs(jobs, desk, null));
   assert.deepEqual(focus('tab-chief'), { topic: 't-herdr', space: null, job: null }, "the chief's tab is its topic, whatever it was bound to");
   assert.deepEqual(focus('tab-x', 'core/t81'), { topic: 't-herdr', space: null, job: null }, 'so is the chief itself, wherever it shows');

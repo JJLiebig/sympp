@@ -312,17 +312,25 @@ export function chiefTopics(chiefs, sessions, labelled, desk, terminalList = [],
   return out;
 }
 
-// The tab bindings that still hold (shared("sympp.jobTabs") = { [tab]: job id | scopeTabKey }): the tab
-// still has a sympp pane and no chief's terminal, and a bound task is on the board and not archived.
-// Opening an agent that has no pane keeps it beside the focused tab, so a task's own tab can come to
-// hold a chief, or only that, long after its task is done with.
-export function liveTabs(jobTabs, jobs, paneList, chiefs = new Map()) {
+// The tab bindings that still hold (shared("sympp.jobTabs") = { [tab]: { shows: job id | scopeTabKey,
+// endpoint } }): the tab still has a sympp pane and no chief's terminal, and a task bound from this
+// factory (endpoint) is on its board (jobs) and not archived. Another factory's tasks are its own
+// views' to judge. Opening an agent that has no pane keeps it beside the focused tab, so a task's own
+// tab can come to hold a chief, or only that, long after its task is done with.
+export function liveTabs(jobTabs, jobs, paneList, chiefs, endpoint) {
   const panes = paneList ?? [];
   const held = new Set(panes.filter((p) => p.mod === "sympp" && !p.terminal).map((p) => p.tab));
   const chiefTabs = new Set(panes.filter((p) => p.terminal && chiefs.has(p.terminal)).map((p) => p.tab));
   const open = new Set(jobs.filter((job) => job.phase !== "archived").map((job) => job.id));
-  return Object.fromEntries(Object.entries(jobTabs && typeof jobTabs === "object" ? jobTabs : {}).filter(([tab, shows]) =>
-    typeof shows === "string" && held.has(tab) && !chiefTabs.has(tab) && (shows.startsWith("scope:") || open.has(shows))));
+  return Object.fromEntries(Object.entries(jobTabs && typeof jobTabs === "object" ? jobTabs : {}).filter(([tab, b]) =>
+    typeof b?.shows === "string" && held.has(tab) && !chiefTabs.has(tab) &&
+    (b.shows.startsWith("scope:") || b.endpoint !== endpoint || open.has(b.shows))));
+}
+
+// The open tab bound to what a factory's view shows, if any.
+export function tabShowing(jobTabs, shows, endpoint, openTabs) {
+  return Object.entries(jobTabs && typeof jobTabs === "object" ? jobTabs : {})
+    .find(([tab, b]) => b?.shows === shows && b.endpoint === endpoint && openTabs.has(tab))?.[0] ?? null;
 }
 
 // What Herdr's focus shows: a chief's terminal or tab is its topic; an sympp-labelled terminal or a job
@@ -338,7 +346,7 @@ export function focusTarget(focus, terminalList, jobTabs, paneList, chiefs = new
   if (job || pkg) return { kind: "job", job, pkg, space: focus.space };
   const chief = (paneList ?? []).find((p) => p.tab === focus.tab && p.terminal && chiefs.has(p.terminal));
   if (chief) return { kind: "topic", topic: chiefs.get(chief.terminal), space: focus.space };
-  const tabJob = jobTabs && typeof jobTabs === "object" ? jobTabs[focus.tab] : null;
+  const tabJob = jobTabs && typeof jobTabs === "object" ? jobTabs[focus.tab]?.shows : null;
   if (typeof tabJob === "string" && tabJob && !tabJob.startsWith("scope:")) return { kind: "job", job: tabJob, pkg: null, space: focus.space };
   const pane = (paneList ?? []).find((p) => p.pane === focus.pane);
   if (pane && !pane.terminal && !focus.shown) return null;

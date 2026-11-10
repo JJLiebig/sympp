@@ -117,10 +117,10 @@ A panel copy follows Herdr's focus without taking it: a running chief's terminal
 shows the chief's topic; an sympp-labelled terminal shows its job, even beside
 the chief; else the tab holding a chief shows its topic, a job tab its job, else
 the space while sympp work touches it, else the space's topic; focusing a mod pane keeps what it shows, and a pin stops it.
-Job tabs record their Herdr tab in `shared("sympp.jobTabs")` while drawn, since
-Herdr does not expose a mod pane's props. A record holds only while its tab has
-a sympp pane and no chief's terminal and its task is on the board and not
-archived; the panel drops any other. A toast posts only for a need that
+Job tabs record their Herdr tab and factory in `shared("sympp.jobTabs")` while
+drawn, since Herdr does not expose a mod pane's props. A record holds only while
+its tab has a sympp pane and no chief's terminal and, for the panel's own
+factory, its task is on the board and not archived; the panel drops any other. A toast posts only for a need that
 appeared between two successful reads of one copy, never on the first read or
 for an offline copy; copies share `shared("sympp.toasted")` so each need is
 announced once. Clicking it selects the job's tab or opens one.
