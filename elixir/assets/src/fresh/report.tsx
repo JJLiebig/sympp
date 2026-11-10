@@ -1,11 +1,11 @@
 import { Check, Circle, type LucideIcon } from "lucide-react";
-import { createContext, useContext, useState, type MouseEvent } from "react";
+import { createContext, useContext, useState, type MouseEvent, type ReactNode } from "react";
 
 import { ActButton } from "./actions";
 import { span, waitsOnOthers, type Goal, type Phase as GoalPhase, type GoalView, type Pkg, type PkgView, type Stage } from "./model";
 import { GLOW, NUDGE, smoothly, spotlight, useFlash } from "./motion";
 import { Owner } from "./owner";
-import { CiCell, Lifecycle, OUTCOME, Pip, PKG_GRID, PrLink, StageStatus } from "./parts";
+import { CiCell, Lifecycle, NARROW_HIDDEN, NARROW_STATUS, NARROW_UNDER, NARROW_WRAP, OUTCOME, Pip, PKG_GRID, PKG_TITLE, PrLink, StageStatus } from "./parts";
 import { sampleReport } from "./samples";
 
 // What a goal says when asked "is this coming along?". The architect owns the words and the ETA;
@@ -91,6 +91,27 @@ export function reportFor(view: GoalView): Report {
   return { verdict, brief: sample?.brief ?? draftBrief(view), briefAt: null, eta: written?.eta?.text ?? sample?.eta ?? null, sample: Boolean(sample) };
 }
 
+// The brief and its ETA, clamped to two lines; hovering shows the rest and a click opens it in full.
+export function Brief({ at, children, className = "", report }: { at: number; children?: ReactNode; className?: string; report: Report }) {
+  const [full, setFull] = useState(false);
+  const said = `${report.brief}${report.eta ? ` ${etaText(report.eta)}` : ""}`.trim();
+  if (!said) return null;
+
+  return (
+    <button className={`w-full text-left wrap-anywhere ${full ? "block" : "line-clamp-2"} ${className}`} title={full ? undefined : said} type="button" onClick={() => setFull(!full)}>
+      {report.brief}
+      {report.eta ? <span className="text-dim"> {etaText(report.eta)}</span> : null}
+      <BriefAge at={at} report={report} />
+      {children}
+    </button>
+  );
+}
+
+// The architect may already end the ETA with a full stop.
+export function etaText(eta: string) {
+  return `ETA: ${eta}${/[.!?…]$/.test(eta.trim()) ? "" : "."}`;
+}
+
 // How old the architect's brief is, so a stale one is not read as news.
 export function BriefAge({ at, report }: { at: number; report: Report }) {
   if (report.briefAt === null) return null;
@@ -103,15 +124,14 @@ function verdictFor(view: GoalView): Verdict {
   return view.phase;
 }
 
-// Fallback wording from ledger counts, used where no architect brief exists.
+// Fallback wording where no architect brief exists. An open goal says nothing its package count does not already say.
 function draftBrief(view: GoalView) {
   if (view.goal.report?.parked) return `Parked: ${view.goal.report.parked.text}`;
   const total = view.live.length + view.queued.length + view.done.length;
   if (view.phase === "intake") return "Not sliced yet.";
   if (view.phase === "done" || view.phase === "archived") return `All ${total} packages have ended.`;
   if (view.phase === "unresolved") return "Every package has ended, but not all of them landed.";
-  if (view.live.length === 0) return `Between packages: ${view.done.length} of ${total} have ended, ${view.queued.length} up next.`;
-  return `${view.live.length} of ${total} packages are moving. ${view.done.length} have ended.`;
+  return "";
 }
 
 const SPLIT = /\s*\/\s*/;
@@ -362,19 +382,28 @@ export function NeedsYouFlag({ view }: { view: GoalView }) {
   );
 }
 
-// Status on the left, then the PR's checks, the lifecycle and time in it, the PR, who works on it, and Finish where the PR waits on others.
+// Status on the left, then the lifecycle and time in it, the PR with its checks, who works on it, and Finish where the PR waits on others.
 export function PkgLine({ at, view }: { at: number; view: PkgView }) {
   const ref = useFlash<HTMLDivElement>(`${view.stage}${view.failed ? ":failed" : ""}`, GLOW, 1400);
   const pkg = view.pkg;
   return (
     <div ref={ref} className={ROW}>
       <Pip stage={view.stage} failed={view.failed} />
-      <span className="truncate text-sm">{pkg.title}</span>
-      <CiCell ci={pkg.ci} stale={pkg.stale.includes("github")} />
-      <Lifecycle view={view} />
-      <StageStatus at={at} view={view} />
-      <PrLink pr={pkg.pr} repos={pkg.goalRepos} />
-      <Owner owner={pkg.owner} />
+      <span className={PKG_TITLE}>{pkg.title}</span>
+      {/* Narrow, the strip leaves the screen but screen readers still hear the current stage. */}
+      <span className="max-[1000px]:sr-only min-[1000px]:grid">
+        <Lifecycle view={view} />
+      </span>
+      <span className={`grid ${NARROW_STATUS}`}>
+        <StageStatus at={at} view={view} />
+      </span>
+      <span className={`flex min-w-0 flex-wrap items-center gap-x-2 min-[1000px]:flex-nowrap ${NARROW_UNDER}`}>
+        <PrLink className={NARROW_WRAP} pr={pkg.pr} repos={pkg.goalRepos} />
+        <CiCell ci={pkg.ci} stale={pkg.stale.includes("github")} />
+      </span>
+      <span className={NARROW_HIDDEN}>
+        <Owner owner={pkg.owner} />
+      </span>
       {waitsOnOthers(pkg) ? <ActButton action={{ kind: "finish", pkgId: pkg.id }} confirm="Finish?" label="Finish" tone="text-ink" /> : <span />}
     </div>
   );
@@ -385,13 +414,12 @@ function RestLine({ pkg }: { pkg: Pkg }) {
   return (
     <div className={ROW}>
       <Pip stage={outcome ? "ended" : "planned"} />
-      <span className={`truncate text-sm ${outcome ? "text-faint line-through decoration-faint/60" : "text-dim"}`}>{pkg.title}</span>
-      <span />
-      {/* The outcome starts where the lifecycle would and takes its status column too. */}
-      <span className={`col-span-2 truncate font-mono text-[11px] ${outcome?.tone ?? "text-faint"}`}>{outcome?.label ?? "Planned"}</span>
-      <PrLink pr={pkg.pr} repos={pkg.goalRepos} />
-      <span />
-      <span />
+      <span className={`${PKG_TITLE} ${outcome ? "text-faint line-through decoration-faint/60" : "text-dim"}`}>{pkg.title}</span>
+      {/* The outcome starts where the lifecycle would and takes its status column too; narrow, it sits right of the title. */}
+      <span className={`truncate font-mono text-[11px] min-[1000px]:col-span-2 ${outcome?.tone ?? "text-faint"}`}>{outcome?.label ?? "Planned"}</span>
+      <PrLink className={`${NARROW_WRAP} ${NARROW_UNDER}`} pr={pkg.pr} repos={pkg.goalRepos} />
+      <span className={NARROW_HIDDEN} />
+      <span className={NARROW_HIDDEN} />
     </div>
   );
 }

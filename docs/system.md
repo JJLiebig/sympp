@@ -67,7 +67,7 @@ other fields; resuming parked work keeps the reason and its times. Reports
 neither create/clear blockers nor change the WorkRequest phase. There is no
 worker reporting cadence.
 
-Asks are the only "Needs you". Any Herdr terminal opens one with `ask` on a
+Asks are the only "Needs you". Only a chief opens one with `ask` on a
 WorkRequest, optionally naming a package and a decision prompt. An ask is
 `open` until it is `answered` or `withdrawn`. Both boards show open asks as
 Needs you. The operator answers in the Herdr panel or through the operator HTTP
@@ -192,7 +192,7 @@ isn't detected.
 A ready-for-merge package can acquire a new integration blocker without changing
 its readiness or reviewed evidence. The architect declares and clears it with
 `set_blocker`, following the
-[architect blocker procedure](../packages/sympp/skills/symphony-architect/SKILL.md#ask-and-report).
+[architect blocker procedure](../packages/sympp/skills/symphony-architect/SKILL.md#report).
 An active blocker makes the delivery board's `merge_eligibility.eligible` false.
 Workers route human decisions through the architect or chief.
 

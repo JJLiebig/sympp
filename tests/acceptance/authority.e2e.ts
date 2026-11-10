@@ -149,12 +149,13 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
 
 test('ownership lets every terminal read any request but refuses writes to another owner and its endpoints', async ({ processes }) => {
   const factory = processes.factory();
+  const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
   const architect = await factory.client();
   const own = await architect.request('Owned request', 'beta', 'example/service', [
     { repo: 'example/service', base_branch: 'integration' },
   ]);
   const [ownWp] = await packages(architect, ['Owned package']);
-  const malformedAsk = await architect.reject('ask', { work_request_id: own, question: 'Continue implementation?',
+  const malformedAsk = await chief.reject('ask', { work_request_id: own, question: 'Continue implementation?',
     decision_prompt: { tl_dr: 'Private malformed prompt sentinel', details: 'Missing options' },
   }, 'invalid_decision_prompt');
   expect(malformedAsk.message).toBe('must contain 1 to 4 options');
@@ -163,7 +164,7 @@ test('ownership lets every terminal read any request but refuses writes to anoth
   const peer = await factory.client();
   const other = await peer.request('Other request');
   const [otherWp] = await peer.addPackages([contract('Hidden sibling')]);
-  const question = (await peer.call('ask', { work_request_id: other, question: 'Which behavior is required?' })).ask;
+  const question = (await chief.call('ask', { work_request_id: other, question: 'Which behavior is required?' })).ask;
   expect((await architect.call('read_work_request', { detail: 'full', work_request_id: other })).work_request.id).toBe(other);
   for (const [name, args] of [
     ['edit_plan', { work_request_id: other, ops: [{ op: 'add_package', ...contract('Stolen') }] }],
@@ -362,10 +363,11 @@ deliveryTest('architect CI observations reach the native dashboard with stable p
 
 test('operator reports keep server times and partial edits and only the owner writes them', async ({ processes }) => {
   const factory = processes.factory();
+  const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
   const architect = await factory.client();
   const request = await architect.request('Truthful operator reports');
   const [wp] = await packages(architect, ['Report boundary']);
-  const question = (await architect.call('ask', { work_request_id: request, question: 'Which release should include this?' })).ask;
+  const question = (await chief.call('ask', { work_request_id: request, question: 'Which release should include this?' })).ask;
   const read = async () => (await architect.call('read_work_request', { detail: 'full', work_request_id: request })).work_request.operator_report;
   const peer = await factory.client();
   await peer.reject('set_report', { work_request_id: request, brief: 'Forged brief' }, 'owned_by_other_terminal');
@@ -409,15 +411,16 @@ test('operator reports keep server times and partial edits and only the owner wr
 
 test('asks and decisions preserve provenance and redact their responses', async ({ processes }) => {
   const factory = processes.factory();
+  const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
   const architect = await factory.client();
   const request = await architect.request('Redacted ask authority');
-  const asked = await architect.call('ask', { work_request_id: request, question: 'Avoid Bearer raw_secret_synthetic',
+  const asked = await chief.call('ask', { work_request_id: request, question: 'Avoid Bearer raw_secret_synthetic',
     decision_prompt: { tl_dr: 'Choose scope', details: 'A bounded decision is required.',
       options: [{ id: 'continue', label: 'Continue', answer: 'Proceed with the bounded scope.' }],
     },
   });
   const first = asked.ask.id;
-  expect(asked.ask.asked_by).toBe(architect.address);
+  expect(asked.ask.asked_by).toBe(chief.address);
   expect(JSON.stringify(asked)).not.toContain('raw_secret_synthetic');
   await architect.reject('resolve_ask', { ask_id: first, to: 'closed' }, 'invalid_to');
   await architect.reject('resolve_ask', { ask_id: first, to: 'answered' }, 'missing_answer');
@@ -425,9 +428,9 @@ test('asks and decisions preserve provenance and redact their responses', async 
   expect(answered.ask.state).toBe('answered');
   expect(answered.ask.answered_by).toBe(architect.address);
   expect(JSON.stringify(answered)).not.toContain('raw_secret_synthetic');
-  const closing = (await architect.call('ask', { work_request_id: request, question: 'Can the obsolete alternative be dropped?' })).ask.id;
+  const closing = (await chief.call('ask', { work_request_id: request, question: 'Can the obsolete alternative be dropped?' })).ask.id;
   expect((await architect.call('resolve_ask', { ask_id: closing, to: 'withdrawn' })).ask.state).toBe('withdrawn');
-  const deciding = (await architect.call('ask', { work_request_id: request, question: 'Keep this scope bounded?' })).ask.id;
+  const deciding = (await chief.call('ask', { work_request_id: request, question: 'Keep this scope bounded?' })).ask.id;
   const combined = await architect.call('resolve_ask', { ask_id: deciding, to: 'answered', answer: 'Keep the bounded scope.',
     decision: { source_type: 'architect', decision: 'Keep the bounded scope.', rationale: 'Adjacent work has another owner.', scope_impact: 'No scope expansion.' },
   });
@@ -533,6 +536,7 @@ test('architect descendant planning stays owned through terminal closeout and re
 
 test('the native board\'s operator actions finish, release, complete, archive, restore and delete, each refused when it does not apply and audited', async ({ processes }) => {
   const factory = processes.factory();
+  const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
   const architect = await factory.client();
   const native = new Client(await factory.endpoint, factory.receipt);
   const act = async (path: string) => native.raw({}, {}, 'POST', `/api/v1/sympp/herdr/${path}`);
@@ -571,7 +575,7 @@ test('the native board\'s operator actions finish, release, complete, archive, r
 
   const intake = await architect.request('Native intake stays');
   expect((await act(`work-requests/${intake}/archive`)).body.error.code).toBe('not_completed');
-  const ask = (await architect.call('ask', { work_request_id: request, question: 'Still open at completion?' })).ask.id;
+  const ask = (await chief.call('ask', { work_request_id: request, question: 'Still open at completion?' })).ask.id;
   const completed = await act(`work-requests/${request}/complete`);
   expect(completed.body.work_request.phase).toBe('done');
   expect(completed.body.refresh).toEqual({ dashboard: false, work_request_id: request });
@@ -616,6 +620,7 @@ test('the native board\'s operator actions finish, release, complete, archive, r
 
 test('reads list every request, redact what they return, put open asks first and never write', async ({ processes }) => {
   const factory = processes.factory();
+  const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
   const architect = await factory.client();
   const created = await architect.call('create_work_request', { repo: 'example/service', base_branch: 'beta', title: 'Read WorkRequests',
     description: 'Use Bearer raw-secret-value for validation', work_type: 'feature' });
@@ -624,7 +629,7 @@ test('reads list every request, redact what they return, put open asks first and
   await (await factory.client()).request('Another request', 'beta', 'example/other');
   const [plannedWp, , skippedWp] = await architect.addPackages(['Planned', 'Also planned', 'Skipped'].map((title) => contract(title)));
   await architect.call('close_work_package', { work_package_id: skippedWp, outcome: 'skipped' });
-  const ask = async (question: string) => (await architect.call('ask', { work_request_id: id, question })).ask.id;
+  const ask = async (question: string) => (await chief.call('ask', { work_request_id: id, question })).ask.id;
   const open = await ask('Still open?');
   const withdrawn = await ask('Withdrawn?');
   await architect.call('resolve_ask', { ask_id: withdrawn, to: 'withdrawn' });

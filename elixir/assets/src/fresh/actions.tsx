@@ -4,21 +4,20 @@ import { useEffect, useRef, useState } from "react";
 import type { Goal, GoalView, Phase } from "./model";
 import { useAct, type GoalStep, type OperatorAction } from "./operator";
 
-type Action = { key: GoalStep; label: string; hint: string; confirm: string };
+type Action = { key: GoalStep; label: string; confirm: string };
 
 const STALE_MS = 30 * 24 * 3600e3;
 
-// None of these stops a running worker or merges a PR, so a goal with work in flight says so.
-function actionsFor(phase: Phase, moving: number): Action[] {
-  const running = moving > 0 ? ` ${moving} ${moving === 1 ? "package is" : "packages are"} still moving and will keep running.` : "";
-  const complete: Action = { key: "complete", label: "Complete", hint: `Close this goal as done, whatever its packages say.${running}`, confirm: "Complete?" };
-  const archive: Action = { key: "archive", label: "Archive", hint: `Take it off the board. It can be restored.${running}`, confirm: "Archive?" };
-  const restore: Action = { key: "restore", label: "Restore", hint: "Put it back on the board.", confirm: "Restore?" };
-  const remove: Action = { key: "delete", label: "Delete", hint: `Remove it for good, with its history, its packages and their worktrees.${running}`, confirm: "Delete for good?" };
-  // Only a done or unresolved goal can be archived; anything still open is completed first.
-  if (phase === "archived") return [restore, remove];
-  if (phase === "done") return [archive, remove];
-  return phase === "unresolved" ? [complete, archive, remove] : [complete, remove];
+const COMPLETE: Action = { key: "complete", label: "Complete", confirm: "Complete?" };
+const ARCHIVE: Action = { key: "archive", label: "Archive", confirm: "Archive?" };
+const RESTORE: Action = { key: "restore", label: "Restore", confirm: "Restore?" };
+const DELETE: Action = { key: "delete", label: "Delete", confirm: "Delete for good?" };
+
+// Only a done or unresolved goal can be archived; anything still open is completed first.
+function actionsFor(phase: Phase): Action[] {
+  if (phase === "archived") return [RESTORE, DELETE];
+  if (phase === "done") return [ARCHIVE, DELETE];
+  return phase === "unresolved" ? [COMPLETE, ARCHIVE, DELETE] : [COMPLETE, DELETE];
 }
 
 // A button for one operator action. With `confirm` it takes a second click. A refusal shows next to it.
@@ -53,7 +52,7 @@ export function ActButton({ action, className = "", confirm, label, look = "roun
 }
 
 // Completing, archiving, restoring or deleting a goal. Each takes a second click.
-export function GoalActions({ className, goal, moving = 0, phase }: { className?: string; goal: Goal; moving?: number; phase: Phase }) {
+export function GoalActions({ className, goal, phase }: { className?: string; goal: Goal; phase: Phase }) {
   const act = useAct();
   const [open, setOpen] = useState(false);
   const [armed, setArmed] = useState<string | null>(null);
@@ -91,15 +90,14 @@ export function GoalActions({ className, goal, moving = 0, phase }: { className?
 
   return (
     <span ref={root} className={`relative inline-block shrink-0 ${className ?? ""}`}>
-      <button aria-expanded={open} aria-label={`Actions for ${goal.title}`} className={`flex size-6 items-center justify-center rounded hover:bg-line hover:text-ink ${open ? "bg-line text-ink" : "text-faint"}`} title={actionsFor(phase, moving).map((action) => action.label).join(", ")} type="button" onClick={toggle}>
+      <button aria-expanded={open} aria-label={`Actions for ${goal.title}`} className={`flex size-6 items-center justify-center rounded hover:bg-line hover:text-ink ${open ? "bg-line text-ink" : "text-faint"}`} title={actionsFor(phase).map((action) => action.label).join(", ")} type="button" onClick={toggle}>
         <MoreHorizontal className="size-4" />
       </button>
       {open ? (
-        <span className="absolute right-0 top-full z-30 mt-1 block w-72 rounded border border-line bg-bg p-1 text-left text-sm font-normal shadow-xl">
-          {actionsFor(phase, moving).map((action) => (
+        <span className="absolute right-0 top-full z-30 mt-1 block w-56 rounded border border-line bg-bg p-1 text-left text-sm font-normal shadow-xl">
+          {actionsFor(phase).map((action) => (
             <button key={action.key} className={`block w-full rounded px-2.5 py-1.5 text-left hover:bg-line disabled:opacity-50 ${action.key === "delete" ? "text-fail" : "text-ink"}`} disabled={busy} type="button" onClick={() => void pick(action)}>
               <span className="block font-medium">{armed === action.key ? `${action.confirm} Click again` : action.label}</span>
-              <span className="block text-xs text-dim">{action.hint}</span>
             </button>
           ))}
           {failure ? <span className="block px-2.5 py-1.5 text-xs text-fail">{failure}</span> : null}

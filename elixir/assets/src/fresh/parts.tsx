@@ -26,8 +26,19 @@ export const OUTCOME: Record<Outcome, { label: string; tone: string }> = {
 
 // Package and card rows are fixed column grids, so every column starts at the same x on every row,
 // whatever is in it. Below 1280px the lifecycle shows only its current stage and the PR and owner columns narrow.
-// Package: pip, title, CI, lifecycle, status, PR, owner, action.
-export const PKG_GRID = "grid grid-cols-[10px_minmax(0,1fr)_88px_48px_124px_110px_150px_52px] items-center gap-x-2.5 min-[1280px]:grid-cols-[10px_minmax(0,1fr)_88px_240px_124px_150px_170px_52px]";
+// Package: pip, title, lifecycle, status, PR with its CI, owner, action. Below 1000px only the pip, the title
+// and the action share a line (see NARROW_HIDDEN), the title wraps instead of clipping, and the PR with its CI
+// takes the line under the title (NARROW_UNDER), with an exited worker or the review state under it (NARROW_STATUS).
+export const PKG_GRID = "grid grid-cols-[10px_minmax(0,1fr)_auto] items-center gap-x-2.5 min-[1000px]:grid-cols-[10px_minmax(0,1fr)_48px_124px_200px_150px_52px] min-[1280px]:grid-cols-[10px_minmax(0,1fr)_240px_124px_240px_170px_52px]";
+// A package row cell that only fits from 1000px up.
+export const NARROW_HIDDEN = "hidden min-[1000px]:grid";
+// A package title: wrapped while narrow, clipped to its column once the row has every column.
+export const PKG_TITLE = "text-sm wrap-break-word min-[1000px]:truncate";
+// Narrow, the line under the package title, and the line under that for an exited worker or the review state.
+export const NARROW_UNDER = "max-[1000px]:col-span-2 max-[1000px]:col-start-2 max-[1000px]:row-start-2";
+export const NARROW_STATUS = "max-[1000px]:col-span-2 max-[1000px]:col-start-2 max-[1000px]:row-start-3";
+// Narrow, a PR name wraps rather than clip, so the PR and its CI can take two lines.
+export const NARROW_WRAP = "max-[1000px]:overflow-visible max-[1000px]:whitespace-normal max-[1000px]:wrap-anywhere";
 // Card: pip, task, repo and branch, CI, review, PR, state, owner, dismiss.
 export const CARD_GRID = "grid grid-cols-[10px_minmax(0,1fr)_150px_88px_128px_64px_72px_150px_24px] items-center gap-x-2.5 min-[1280px]:grid-cols-[10px_minmax(0,1fr)_200px_88px_128px_64px_72px_170px_24px]";
 
@@ -92,7 +103,8 @@ export function StageStatus({ at, view }: { at: number; view: PkgView }) {
       </span>
     );
   }
-  return <span className={`${cell} text-dim`}>{view.untimed ? "" : span(at - view.since)}</span>;
+  // Narrow, the plain time in stage drops out; the exceptions above stay.
+  return <span className={`${cell} text-dim max-[1000px]:hidden`}>{view.untimed ? "" : span(at - view.since)}</span>;
 }
 
 const CI: Record<Ci, { label: string; tone: string; icon: typeof Check }> = {
@@ -147,11 +159,11 @@ export function ReviewCell({ review }: { review: Review | null }) {
 }
 
 // A PR in the goal's own repository is its number; one elsewhere also names where it waits.
-export function PrLink({ pr, repos }: { pr: Pr | null; repos: string[] }) {
+export function PrLink({ className = "", pr, repos }: { className?: string; pr: Pr | null; repos: string[] }) {
   if (!pr) return <span />;
   const name = inRepos(pr.repo, repos) ? `#${pr.number}` : `${pr.repo}#${pr.number}`;
   return (
-    <a className="truncate font-mono text-[11px] text-dim underline decoration-dotted underline-offset-2 hover:text-ink" href={pr.url} rel="noreferrer" target="_blank" title={`Open PR ${pr.repo}#${pr.number}`}>
+    <a className={`truncate ${className} font-mono text-[11px] text-dim underline decoration-dotted underline-offset-2 hover:text-ink`} href={pr.url} rel="noreferrer" target="_blank" title={`Open PR ${pr.repo}#${pr.number}`}>
       {name}
     </a>
   );
@@ -187,7 +199,7 @@ export function Shelf({ age, at, cleanup, hint, label, views }: { age: string; a
             <span className="shrink-0 font-mono text-xs text-faint">
               {shelfCount(view)} · {age} {span(at - (view.goal.archivedAt ?? view.goal.report?.parked?.at ?? view.lastMoveAt))}
             </span>
-            <GoalActions phase={view.phase} goal={view.goal} moving={view.live.length} />
+            <GoalActions phase={view.phase} goal={view.goal} />
           </li>
         ))}
       </ul>

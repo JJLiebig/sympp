@@ -8,15 +8,16 @@ async function packageState(architect: Client, request: string, wp: string) {
 }
 
 test('a conversational answer records its decision atomically and a resolved ask stays resolved', async ({ factory }) => {
+  const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
   const architect = await factory.client();
   const id = await architect.request('Human decision');
-  const ask = (await architect.call('ask', {
+  const ask = (await chief.call('ask', {
     work_request_id: id, question: 'Ship the bounded option?',
     decision_prompt: { tl_dr: 'Choose scope', details: 'Keep this delivery bounded.',
       options: [{ id: 'bounded', label: 'Bounded option', answer: 'Ship the bounded option.' }] },
   })).ask;
   expect(ask.state).toBe('open');
-  expect(ask.asked_by).toBe(architect.address);
+  expect(ask.asked_by).toBe(chief.address);
   const args = {
     ask_id: ask.id, to: 'answered', answer: 'Ship the bounded option.',
     decision: { source_type: 'human', decision: 'Ship the bounded option.', rationale: 'It meets the agreed need.', scope_impact: 'Defer adjacent behavior.' },
@@ -41,6 +42,7 @@ test('a conversational answer records its decision atomically and a resolved ask
 });
 
 test('asks and operator reports leave explicit package blockers and sibling state alone', async ({ factory }) => {
+  const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
   const architect = await factory.client();
   const id = await architect.request('Decision versus blocker');
   const [affected, sibling] = await architect.addPackages([contract('Affected work'), contract('Sibling work')]);
@@ -49,7 +51,7 @@ test('asks and operator reports leave explicit package blockers and sibling stat
   const initial = await packageState(architect, id, affected);
   const siblingBefore = await packageState(architect, id, sibling);
   expect(initial.blocker_state['active?']).toBe(false);
-  const ask = (await architect.call('ask', {
+  const ask = (await chief.call('ask', {
     work_request_id: id, work_package_id: affected, question: 'Should we change the optional detail?',
   })).ask.id;
   await architect.call('set_report', { brief: 'Waiting for a human scope choice.', parking: { reason: 'Should the optional detail ship?' } });
@@ -105,8 +107,14 @@ test('an ask on a package is withdrawn when the package ends, and only the asker
 });
 
 test('human choice submission rejects unknown or empty redirects and preserves the selected answer', async ({ factory }) => {
+  const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
   const architect = await factory.client();
   const id = await architect.request('Structured human choices');
+  const refused = await architect.reject('ask', {
+    work_request_id: id, question: 'May this PR exceed the size guide?',
+  }, 'chief_only');
+  expect(refused.next_action).toBe('Only the chief asks the human owner. Send your chief one line instead.');
+  expect((await architect.call('read_work_request', { detail: 'full', work_request_id: id })).asks).toEqual([]);
   const prompt = {
     tl_dr: 'Choose the bounded path.', details: 'The operator decides the product outcome.',
     options: [{ id: 'continue', label: 'Continue', answer: 'Continue with the bounded path.' }],
@@ -115,14 +123,17 @@ test('human choice submission rejects unknown or empty redirects and preserves t
     { tl_dr: 'Missing options', details: 'A choice is required.' },
     { ...prompt, options: [{ id: '__custom_redirect__', label: 'Reserved id', answer: 'Invalid choice.' }] },
   ]) {
-    const response = await architect.rpc('tools/call', architect.toolParams('ask', { work_request_id: id, question: 'Invalid question', decision_prompt: malformed }));
+    const response = await chief.rpc('tools/call', chief.toolParams('ask', { work_request_id: id, question: 'Invalid question', decision_prompt: malformed }));
     expect(response.error.code).toBe(-32602);
   }
   expect((await architect.call('read_work_request', { detail: 'full', work_request_id: id })).asks).toEqual([]);
-  const ask = async (decision_prompt?: object) => (await architect.call('ask', {
+  const ask = async (decision_prompt?: object) => (await chief.call('ask', {
     work_request_id: id, question: 'Which path should ship?', ...(decision_prompt ? { decision_prompt } : {}),
   })).ask.id;
   const first = await ask(prompt);
+  expect((await nativeBoard(chief, id)).asks).toEqual([
+    expect.objectContaining({ id: first, kind: 'ask', text: 'Which path should ship?' }),
+  ]);
   const path = `/api/v1/sympp/operator/asks/${first}/answer`;
   for (const invalid of [
     { answer_choice: 'unknown' }, { answer_choice: '__custom_redirect__' }, { answer: 'Stale autofilled answer.' },
@@ -176,8 +187,8 @@ coreTest('asks go open to answered or withdrawn, take no ownership, and an answe
   const architect = await core.client();
   const id = await architect.request('Ask transitions');
   await (await core.factory.client(null)).reject('ask', { work_request_id: id, question: 'Anyone?' }, 'read_only_outside_herdr');
-  await architect.reject('ask', { work_request_id: 'missing-request', question: 'Where?' }, 'not_found');
-  const asker = await core.client();
+  await (await core.client({ 'sympp.role': 'chief' })).reject('ask', { work_request_id: 'missing-request', question: 'Where?' }, 'not_found');
+  const asker = await core.client({ 'sympp.role': 'chief' });
   const prompt = { tl_dr: 'Pick a region', details: 'Pricing differs by region.',
     options: [{ id: 'eu', label: 'Europe', answer: 'Ship to Europe first.' }, { id: 'us', label: 'US', answer: 'Ship to the US first.' }] };
   const ask = (await asker.call('ask', { work_request_id: id, question: 'Which region first?', decision_prompt: prompt })).ask;
@@ -212,15 +223,15 @@ coreTest('asks go open to answered or withdrawn, take no ownership, and an answe
 
   // Machine names are local aliases: a terminal on another core is never addressed, even under a local address.
   const remote = await asker.rpc('tools/call', { name: 'ask', arguments: { work_request_id: id, question: 'Remote?' },
-    _meta: { herdr: { ...herdr(asker.terminal!), core_id: 'other-core', core_name: 'elsewhere' } } });
+    _meta: { herdr: { ...herdr(asker.terminal!, { 'sympp.role': 'chief' }), core_id: 'other-core', core_name: 'elsewhere' } } });
   const remoteAnswer = await architect.operator(`/api/v1/sympp/operator/asks/${remote.result.structuredContent.ask.id}/answer`, { answer: 'Yes' });
   expect(remoteAnswer.body.delivery).toEqual({ state: 'not_delivered', reason: 'terminal_unreachable' });
   // An asker whose terminal has since finished keeps the answer undelivered.
-  const leaving = await core.client();
+  const leaving = await core.client({ 'sympp.role': 'chief' });
   const late = (await leaving.call('ask', { work_request_id: id, question: 'Which region?', decision_prompt: prompt })).ask.id;
   core.host.terminals.get(leaving.terminal!)!.state = 'finished';
   await core.restart();
-  const operator = await core.factory.client(architect.terminal);
+  const operator = await core.factory.client(architect.terminal, { 'sympp.role': 'chief' });
   const path = `/api/v1/sympp/operator/asks/${late}/answer`;
   expect((await operator.operator(path, { answer_choice: 'mars' })).body.error.code).toBe('invalid_answer_choice');
   const undelivered = await operator.operator(path, { answer_choice: 'eu' });

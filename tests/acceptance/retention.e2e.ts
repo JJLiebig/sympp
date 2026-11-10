@@ -84,9 +84,11 @@ test('dispatched work protects old goals while completed retention restores and 
 });
 
 test('every phase follows actual delivery, open asks never change it, and a successor decides whether superseded scope resolves', async ({ processes }) => {
-  const client = await processes.factory().client();
+  const factory = processes.factory();
+  const client = await factory.client();
   const phase = async (id: string) => (await client.call('read_work_request', { work_request_id: id })).work_request;
-  const ask = (id: string) => client.call('ask', { work_request_id: id, question: 'Anything else?' });
+  const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
+  const ask = (id: string) => chief.call('ask', { work_request_id: id, question: 'Anything else?' });
   const end = (work_package_id: string, outcome: string, extra: object = {}) => client.call('close_work_package', { work_package_id, outcome, ...extra });
   const noPr = { evidence: 'Delivered without a PR.' };
   const intake = await client.request('Phase intake');
