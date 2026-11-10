@@ -77,9 +77,15 @@ Factory updates refuse dirty checkouts and overlapping updates immediately. The
 running readiness revision determines whether a build is needed. Changes confined
 to `skills/`, `docs/`, `plans/`, Markdown under `packages/sympp/skills/`,
 and top-level Markdown files skip the build and
-restart; unknown paths rebuild. Builds finish before the service stops. Failed
+restart; other changes install the CI-built Linux runtime for the exact target
+commit when available. The archive checksum, payload identity, MCP contract and
+dashboard fingerprint are verified before activation. When no verified runtime
+is available, the factory builds from source, retaining build caches and existing
+Hex and Rebar installations. Preparation finishes before the service stops. Failed
 readiness restores the previous release and unit, waits for readiness again, and
-exits nonzero. Build logs are in the factory home's `logs/install.log`. No timer
+exits nonzero. Updates stream fetching, runtime preparation, restart and ready
+phases; failures name the phase and log location. Full install logs are in the
+factory home's `logs/install.log`. No timer
 is installed. Existing MCP sessions keep using unchanged tools; failed calls to
 removed tools or changed input schemas ask the agent to restart its session.
 
