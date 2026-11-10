@@ -53,17 +53,47 @@ function topicsOfRepo(repo, desk, repoTopics) {
   return key ? desk.filter((t) => t.spaces.some((s) => spaceRepo(s) === key)) : [];
 }
 
-// Each job has one home topic, its own repository's first, so the factory counts it once. Every
-// other topic it touches holds a reference to that one job.
-export function placeJobs(jobs, desk, repoTopics) {
+const leaf = (address) => String(address ?? "").split("/").pop();
+
+// The chief domain owning a task: its owner's when a chief works on it; else the chief it was created
+// or dispatched under; else the domain Herdr's labels give the owner's terminal, as an architect a
+// chief started carries its chief's. The factory and Herdr may name that terminal's machine
+// differently, so it is found by its terminal id and its binding to this task.
+export function ownerDomain(job, terminalList) {
+  if (job.owner?.role === "chief" && job.owner.domain) return job.owner.domain;
+  if (job.dispatchedBy) return job.dispatchedBy;
+  if (!job.owner?.address) return null;
+  const term = (terminalList ?? []).find((t) => leaf(t?.address) === leaf(job.owner.address) &&
+    (t.labels?.["sympp.work_request_id"] === job.id || t.labels?.["sympp.session_work_request_id"] === job.id));
+  const domain = term?.labels?.["sympp.domain"];
+  return typeof domain === "string" && domain.trim() ? domain.trim() : null;
+}
+
+// The topic a chief domain is registered for in shared("sympp.chiefs") ({ [topic id]: [{ domain }] }),
+// else the topic its name matches as chiefsFor matches names.
+export function domainTopic(domain, desk, registered) {
+  const key = words(domain).join(" ");
+  if (!key) return null;
+  const topics = desk.filter((t) => t.kind === "topic");
+  const listed = (t) => (Array.isArray(registered?.[t.id]) ? registered[t.id] : []);
+  return topics.find((t) => listed(t).some((c) => words(c?.domain).join(" ") === key))?.id
+    ?? topics.find((t) => chiefsFor(t, [{ domain, repos: [] }], desk).length > 0)?.id ?? null;
+}
+
+// Each job has one home topic, so the factory counts it once: its owning chief's topic, else its
+// own repository's first. Every other topic it touches holds a reference to that one job.
+// owners: { terminals, chiefs } as Herdr reports them, for each job's owning chief.
+export function placeJobs(jobs, desk, repoTopics, owners = {}) {
   const home = new Map();
   const repos = new Map();
   for (const job of jobs) {
     const within = new Map();
+    const chief = domainTopic(ownerDomain(job, owners.terminals), desk, owners.chiefs);
+    if (chief) within.set(chief, [...job.repos]);
     for (const repo of job.repos) {
       for (const topic of topicsOfRepo(repo, desk, repoTopics)) {
         if (!within.has(topic.id)) within.set(topic.id, []);
-        within.get(topic.id).push(repo);
+        if (!within.get(topic.id).includes(repo)) within.get(topic.id).push(repo);
       }
     }
     repos.set(job.id, within);
@@ -261,16 +291,50 @@ export function crumbs(path, desk, jobs) {
 // A tab holding a Topic, Space or the Factory registers this key instead of a job id.
 export const scopeTabKey = (path) => `scope:${path.topic ?? ""}:${path.space ?? ""}`;
 
-// What Herdr's focus shows: an sympp-labelled terminal or a job tab names its job; a mod pane (this
-// panel, a viewer, a scope tab) keeps what is shown; anything else is its space. Labels only pick
-// what to show; they never authorize an agent jump.
-export function focusTarget(focus, terminalList, jobTabs, paneList) {
+// Each chief terminal the panel knows, with its topic: the chiefs it shares ({ [topic id]: [{ terminal }] }),
+// each topic's latest started chief ({ [topic id]: { terminal } }) and terminals labelled as a chief
+// ([{ domain, terminal }]) whose domain names a topic.
+export function chiefTopics(chiefs, sessions, labelled, desk) {
+  const out = new Map();
+  for (const [topic, list] of Object.entries(chiefs && typeof chiefs === "object" ? chiefs : {})) {
+    for (const c of Array.isArray(list) ? list : []) if (c?.terminal) out.set(c.terminal, topic);
+  }
+  for (const [topic, s] of Object.entries(sessions && typeof sessions === "object" ? sessions : {})) {
+    if (s?.terminal && !out.has(s.terminal)) out.set(s.terminal, topic);
+  }
+  for (const c of labelled ?? []) {
+    const topic = out.has(c.terminal) ? null : domainTopic(c.domain, desk, chiefs);
+    if (topic) out.set(c.terminal, topic);
+  }
+  return out;
+}
+
+// The tab bindings that still hold (shared("sympp.jobTabs") = { [tab]: job id | scopeTabKey }): the tab
+// still has a sympp pane and no chief's terminal, and a bound task is on the board and not archived.
+// Opening an agent that has no pane keeps it beside the focused tab, so a task's own tab can come to
+// hold a chief, or only that, long after its task is done with.
+export function liveTabs(jobTabs, jobs, paneList, chiefs = new Map()) {
+  const panes = paneList ?? [];
+  const held = new Set(panes.filter((p) => p.mod === "sympp" && !p.terminal).map((p) => p.tab));
+  const chiefTabs = new Set(panes.filter((p) => p.terminal && chiefs.has(p.terminal)).map((p) => p.tab));
+  const open = new Set(jobs.filter((job) => job.phase !== "archived").map((job) => job.id));
+  return Object.fromEntries(Object.entries(jobTabs && typeof jobTabs === "object" ? jobTabs : {}).filter(([tab, shows]) =>
+    typeof shows === "string" && held.has(tab) && !chiefTabs.has(tab) && (shows.startsWith("scope:") || open.has(shows))));
+}
+
+// What Herdr's focus shows: a chief's terminal or tab is its topic; an sympp-labelled terminal or a job
+// tab names its job; a mod pane (this panel, a viewer, a scope tab) keeps what is shown; anything else
+// is its space. Labels only pick what to show; they never authorize an agent jump.
+export function focusTarget(focus, terminalList, jobTabs, paneList, chiefs = new Map()) {
   if (!focus?.space) return null;
   const address = focus.shown ?? focus.terminal;
+  if (address && chiefs.has(address)) return { kind: "topic", topic: chiefs.get(address), space: focus.space };
   const labels = (address ? (terminalList ?? []).find((t) => t.address === address)?.labels : null) ?? {};
   const job = labels["sympp.work_request_id"] || labels["sympp.session_work_request_id"] || null;
   const pkg = labels["sympp.work_package_id"] || labels["sympp.session_work_package_id"] || null;
   if (job || pkg) return { kind: "job", job, pkg, space: focus.space };
+  const chief = (paneList ?? []).find((p) => p.tab === focus.tab && p.terminal && chiefs.has(p.terminal));
+  if (chief) return { kind: "topic", topic: chiefs.get(chief.terminal), space: focus.space };
   const tabJob = jobTabs && typeof jobTabs === "object" ? jobTabs[focus.tab] : null;
   if (typeof tabJob === "string" && tabJob && !tabJob.startsWith("scope:")) return { kind: "job", job: tabJob, pkg: null, space: focus.space };
   const pane = (paneList ?? []).find((p) => p.pane === focus.pane);
@@ -282,6 +346,7 @@ export function focusTarget(focus, terminalList, jobTabs, paneList) {
 // space's topic; else the space, which says that ordinary Herdr work stays ordinary.
 export function followPath(target, jobs, desk, place) {
   if (!target) return null;
+  if (target.kind === "topic") return desk.some((t) => t.id === target.topic) ? { topic: target.topic, space: null, job: null } : null;
   const found = spaceById(desk, target.space);
   if (target.kind === "job") {
     const job = jobs.find((j) => j.id === target.job) ?? (target.pkg ? jobs.find((j) => j.packages.some((pkg) => pkg.id === target.pkg)) : null);
