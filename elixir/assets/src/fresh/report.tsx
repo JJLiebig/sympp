@@ -5,7 +5,7 @@ import { ActButton } from "./actions";
 import { span, waitsOnOthers, type Goal, type Phase as GoalPhase, type GoalView, type Pkg, type PkgView, type Stage } from "./model";
 import { GLOW, NUDGE, smoothly, spotlight, useFlash } from "./motion";
 import { Owner } from "./owner";
-import { CiCell, Lifecycle, OUTCOME, Pip, PKG_GRID, PrLink, StageStatus } from "./parts";
+import { CiCell, Lifecycle, NARROW_HIDDEN, NARROW_UNDER, NARROW_WRAP, OUTCOME, Pip, PKG_GRID, PKG_TITLE, PrLink, StageStatus } from "./parts";
 import { sampleReport } from "./samples";
 
 // What a goal says when asked "is this coming along?". The architect owns the words and the ETA;
@@ -389,14 +389,20 @@ export function PkgLine({ at, view }: { at: number; view: PkgView }) {
   return (
     <div ref={ref} className={ROW}>
       <Pip stage={view.stage} failed={view.failed} />
-      <span className="truncate text-sm">{pkg.title}</span>
-      <Lifecycle view={view} />
-      <StageStatus at={at} view={view} />
-      <span className="flex min-w-0 items-center gap-2">
-        <PrLink pr={pkg.pr} repos={pkg.goalRepos} />
+      <span className={PKG_TITLE}>{pkg.title}</span>
+      <span className={NARROW_HIDDEN}>
+        <Lifecycle view={view} />
+      </span>
+      <span className={NARROW_HIDDEN}>
+        <StageStatus at={at} view={view} />
+      </span>
+      <span className={`flex min-w-0 flex-wrap items-center gap-x-2 min-[1000px]:flex-nowrap ${NARROW_UNDER}`}>
+        <PrLink className={NARROW_WRAP} pr={pkg.pr} repos={pkg.goalRepos} />
         <CiCell ci={pkg.ci} stale={pkg.stale.includes("github")} />
       </span>
-      <Owner owner={pkg.owner} />
+      <span className={NARROW_HIDDEN}>
+        <Owner owner={pkg.owner} />
+      </span>
       {waitsOnOthers(pkg) ? <ActButton action={{ kind: "finish", pkgId: pkg.id }} confirm="Finish?" label="Finish" tone="text-ink" /> : <span />}
     </div>
   );
@@ -407,12 +413,12 @@ function RestLine({ pkg }: { pkg: Pkg }) {
   return (
     <div className={ROW}>
       <Pip stage={outcome ? "ended" : "planned"} />
-      <span className={`truncate text-sm ${outcome ? "text-faint line-through decoration-faint/60" : "text-dim"}`}>{pkg.title}</span>
-      {/* The outcome starts where the lifecycle would and takes its status column too. */}
-      <span className={`col-span-2 truncate font-mono text-[11px] ${outcome?.tone ?? "text-faint"}`}>{outcome?.label ?? "Planned"}</span>
-      <PrLink pr={pkg.pr} repos={pkg.goalRepos} />
-      <span />
-      <span />
+      <span className={`${PKG_TITLE} ${outcome ? "text-faint line-through decoration-faint/60" : "text-dim"}`}>{pkg.title}</span>
+      {/* The outcome starts where the lifecycle would and takes its status column too; narrow, it sits right of the title. */}
+      <span className={`truncate font-mono text-[11px] min-[1000px]:col-span-2 ${outcome?.tone ?? "text-faint"}`}>{outcome?.label ?? "Planned"}</span>
+      <PrLink className={`${NARROW_WRAP} ${NARROW_UNDER}`} pr={pkg.pr} repos={pkg.goalRepos} />
+      <span className={NARROW_HIDDEN} />
+      <span className={NARROW_HIDDEN} />
     </div>
   );
 }
