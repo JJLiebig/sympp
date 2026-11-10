@@ -46,10 +46,11 @@ export function NeedsYou({ asks, at, board, onGoal, views }: { asks: Ask[]; at: 
 
 // A question lines up with the goals below: the chevron in the same gutter, the text under the title.
 // Open, it says what it is about, then asks; folded, it keeps its title line and the question's first line.
-// What was entered survives folding.
+// What was entered, and a send still under way or refused, survive folding.
 function AskItem({ ask, at, onGoal, ref, subject }: { ask: Ask; at: number; onGoal: (goalId: string) => void; ref: (node: HTMLElement | null) => void; subject: Subject }) {
   const [open, setOpen] = useState(true);
-  const [entered, setEntered] = useState<Entry>({ choice: null, text: "" });
+  const [entered, setEntered] = useState<Entry>({ choice: null, text: "", busy: false, failure: null });
+  const enter = (change: Partial<Entry>) => setEntered((was) => ({ ...was, ...change }));
   useOpenWhenBrought(`ask:${ask.id}`, () => setOpen(true));
 
   return (
@@ -79,7 +80,7 @@ function AskItem({ ask, at, onGoal, ref, subject }: { ask: Ask; at: number; onGo
         ) : null}
         {subject.about ? <p className="mt-1 text-sm text-dim">About: {subject.about}</p> : null}
         <Question text={ask.details ? `${ask.question}\n${ask.details}` : ask.question} />
-        <AnswerForm ask={ask} entered={entered} onEnter={setEntered} />
+        <AnswerForm ask={ask} entered={entered} onEnter={enter} />
       </Reveal>
       <Reveal className="pl-7" show={!open}>
         <p className={`mt-1 truncate text-[15px] leading-snug text-ink ${MEASURE}`}>{ask.question}</p>
@@ -120,19 +121,17 @@ function Question({ text }: { text: string }) {
 // The question and its answer share one measure, so the form lines up under the words it answers.
 const MEASURE = "max-w-[46rem]";
 
-// What has been entered: the picked choice, if any, and the text.
-type Entry = { choice: string | null; text: string };
+// What has been entered: the picked choice, if any, and the text; and whether it is being sent or was refused.
+type Entry = { choice: string | null; text: string; busy: boolean; failure: string | null };
 
 // A free answer, or one of the asker's choices with an optional note, in one frame: the choices, then the note
 // and Send. The asker may also offer to take a free answer instead of its choices; the note is then the answer.
 // Sending plays the checkmark on the question; a refusal plays it back, and keeps what was entered.
-function AnswerForm({ ask, entered, onEnter }: { ask: Ask; entered: Entry; onEnter: (entered: Entry) => void }) {
+function AnswerForm({ ask, entered, onEnter }: { ask: Ask; entered: Entry; onEnter: (change: Partial<Entry>) => void }) {
   const act = useAct();
   const id = useId();
   const form = useRef<HTMLFormElement>(null);
-  const { choice, text } = entered;
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
+  const { busy, choice, failure, text } = entered;
   const chosen = ask.choices.length > 0;
   const redirecting = choice === REDIRECT;
   // With a choice the text is a note, unless the choice is to answer in free text.
@@ -142,12 +141,10 @@ function AnswerForm({ ask, entered, onEnter }: { ask: Ask; entered: Entry; onEnt
 
   const submit = async () => {
     if (!ready || busy) return;
-    setBusy(true);
-    setFailure(null);
+    onEnter({ busy: true, failure: null });
     const refusal = await answerAsk(ask.id, form.current?.closest<HTMLElement>("[data-ask]") ?? null, () => act({ kind: "answer", askId: ask.id, answer }));
     if (refusal === null) return;
-    setFailure(refusal);
-    setBusy(false);
+    onEnter({ busy: false, failure: refusal });
   };
 
   return (
@@ -164,7 +161,7 @@ function AnswerForm({ ask, entered, onEnter }: { ask: Ask; entered: Entry; onEnt
           <fieldset className="divide-y divide-line border-b border-line" disabled={busy}>
             <legend className="sr-only">{ask.question}</legend>
             {choices.map((entry) => (
-              <ChoiceOption key={entry.id} choice={entry} group={id} picked={choice === entry.id} plain={entry.id === REDIRECT} onPick={() => onEnter({ choice: entry.id, text })} />
+              <ChoiceOption key={entry.id} choice={entry} group={id} picked={choice === entry.id} plain={entry.id === REDIRECT} onPick={() => onEnter({ choice: entry.id })} />
             ))}
           </fieldset>
         ) : null}
@@ -178,7 +175,7 @@ function AnswerForm({ ask, entered, onEnter }: { ask: Ask; entered: Entry; onEnt
             placeholder={placeholderFor(noting, redirecting)}
             rows={1}
             value={text}
-            onChange={(event) => onEnter({ choice, text: event.target.value })}
+            onChange={(event) => onEnter({ text: event.target.value })}
             onKeyDown={(event) => {
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) void submit();
             }}
