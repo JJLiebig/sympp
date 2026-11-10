@@ -469,7 +469,9 @@ export default class Lens extends View {
     const tabs = L.liveTabs(stored, board.jobs, panes(), chiefs);
     // A binding that no longer holds goes, so the tab falls back to what it shows.
     if (JSON.stringify(tabs) !== JSON.stringify(stored)) cx.spawn(async () => setShared("sympp.jobTabs", tabs));
-    const seen = f ? [f.space, f.tab, f.pane, f.terminal, f.shown, tabs[f.tab]].join("|") : "";
+    // A chief recognised after it took focus still leads to its topic.
+    const chief = f ? chiefs.get(f.shown ?? f.terminal) ?? panes().find((p) => p.tab === f.tab && chiefs.has(p.terminal))?.terminal : null;
+    const seen = f ? [f.space, f.tab, f.pane, f.terminal, f.shown, tabs[f.tab], chief].join("|") : "";
     if (seen === this.lastFocus) return;
     this.lastFocus = seen;
     const next = L.followPath(L.focusTarget(f, terminals(), tabs, panes(), chiefs), board.jobs, desk, this.place);
@@ -481,9 +483,11 @@ export default class Lens extends View {
   // find it instead of opening a second.
   registerTab(cx, shows) {
     const f = focused();
-    if (!f?.tab || !this.net.data || (this.registered === f.tab && this.registeredAs === shows)) return;
+    if (!f?.tab || !this.net.data) return;
     const before = shared("sympp.jobTabs");
     const current = before && typeof before === "object" ? before : {};
+    // Again once the panel dropped it, should it hold again.
+    if (this.registered === f.tab && this.registeredAs === shows && current[f.tab] === shows) return;
     // Only a binding that holds: never a chief's tab, an archived task or a tab without a sympp pane.
     const next = L.liveTabs({ ...current, [f.tab]: shows }, this.net.data.jobs, panes(), this.chiefTerminals(L.deskOf(this.deskTopics(), this.spaceList())));
     if (next[f.tab] !== shows) return;
@@ -574,7 +578,7 @@ export default class Lens extends View {
 
   // Each chief terminal Herdr shows, with its topic.
   chiefTerminals(desk) {
-    return L.chiefTopics(shared(CHIEFS), shared(CHIEF_SESSIONS), M.chiefsOf(terminals()), desk);
+    return L.chiefTopics(shared(CHIEFS), shared(CHIEF_SESSIONS), M.chiefsOf(terminals()), desk, terminals());
   }
 
   // The chiefs matching a topic, each as an agent.

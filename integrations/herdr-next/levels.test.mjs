@@ -76,7 +76,9 @@ test("a tab's task binding holds only while the tab shows that task: never a chi
   const { topics, spaces } = deskFixture();
   const desk = L.deskOf(topics, spaces);
   const jobs = boardJobs([{ id: 'wr-open', repo: 'owner/web' }, { id: 'wr-old', repo: 'owner/web', phase: 'archived' }]);
-  const chiefs = L.chiefTopics({ 't-herdr': [{ domain: 'Herdr', terminal: 'core/t81' }] }, {}, [], desk);
+  const chiefs = L.chiefTopics({ 't-herdr': [{ domain: 'Herdr', terminal: 'core/t81' }] },
+    { 't-tools': { terminal: 'core/t9', agent: 'codex' } }, [], desk, [{ address: 'core/t9', state: 'live', program: { key: 'shell' } }], NOW);
+  assert.equal(chiefs.has('core/t9'), false, 'a chief whose agent stopped, its terminal left open, is no chief');
   const panes = [
     { pane: 'p1', tab: 'tab-job', mod: 'sympp', terminal: null },
     { pane: 'p2', tab: 'tab-old', mod: 'sympp', terminal: null },

@@ -113,10 +113,10 @@ The levels above a job:
 
 A breadcrumb (Factory > Topic > Space > Job) and Esc move up a level; rows
 take ↑/↓ and Enter. Each copy keeps its place in its own `localStorage`.
-A panel copy follows Herdr's focus without taking it: a chief's terminal or the
-tab holding it shows the chief's topic; an sympp-labelled terminal or a job tab
-shows that job, else the space while sympp work touches it, else the space's
-topic; focusing a mod pane keeps what it shows, and a pin stops it.
+A panel copy follows Herdr's focus without taking it: a running chief's terminal
+shows the chief's topic; an sympp-labelled terminal shows its job, even beside
+the chief; else the tab holding a chief shows its topic, a job tab its job, else
+the space while sympp work touches it, else the space's topic; focusing a mod pane keeps what it shows, and a pin stops it.
 Job tabs record their Herdr tab in `shared("sympp.jobTabs")` while drawn, since
 Herdr does not expose a mod pane's props. A record holds only while its tab has
 a sympp pane and no chief's terminal and its task is on the board and not

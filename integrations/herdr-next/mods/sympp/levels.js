@@ -292,15 +292,15 @@ export function crumbs(path, desk, jobs) {
 export const scopeTabKey = (path) => `scope:${path.topic ?? ""}:${path.space ?? ""}`;
 
 // Each chief terminal the panel knows, with its topic: the chiefs it shares ({ [topic id]: [{ terminal }] }),
-// each topic's latest started chief ({ [topic id]: { terminal } }) and terminals labelled as a chief
-// ([{ domain, terminal }]) whose domain names a topic.
-export function chiefTopics(chiefs, sessions, labelled, desk) {
+// each topic's latest started chief while it still runs ({ [topic id]: { terminal, agent } }) and
+// terminals labelled as a chief ([{ domain, terminal }]) whose domain names a topic.
+export function chiefTopics(chiefs, sessions, labelled, desk, terminalList = [], now = Date.now()) {
   const out = new Map();
   for (const [topic, list] of Object.entries(chiefs && typeof chiefs === "object" ? chiefs : {})) {
     for (const c of Array.isArray(list) ? list : []) if (c?.terminal) out.set(c.terminal, topic);
   }
   for (const [topic, s] of Object.entries(sessions && typeof sessions === "object" ? sessions : {})) {
-    if (s?.terminal && !out.has(s.terminal)) out.set(s.terminal, topic);
+    if (s?.terminal && !out.has(s.terminal) && chiefRunning(s, terminalList, now)) out.set(s.terminal, topic);
   }
   for (const c of labelled ?? []) {
     const topic = out.has(c.terminal) ? null : domainTopic(c.domain, desk, chiefs);
