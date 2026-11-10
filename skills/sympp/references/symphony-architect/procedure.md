@@ -27,7 +27,7 @@ eligibility) or `package` (one contract; pass `work_package_id`). Use
 
 Split every WorkRequest into small, contained packages, each one PR that is
 quick to review and clearly scoped, as if pushing straight to the base: about
-100 changed lines of production code, more only when the change can't be split.
+100 changed lines of production code, more only when the change can't be split. PR size is your call; nobody else approves it.
 Front-end-only PRs are scoped by feature instead: one UI change or rework is one
 PR, even if it's large. Prefer independent packages; a dependent dispatches once its prerequisite is
 delivered, which small PRs make quick.
