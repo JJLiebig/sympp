@@ -362,9 +362,7 @@ export default class Lens extends View {
 
   // The job's open tab when there is one, else a new one.
   jobAction(job) {
-    const tabs = shared("sympp.jobTabs");
-    const open = new Set(this.spaceList().flatMap((s) => (s.tabs ?? []).map((tab) => tab.id)));
-    const tab = Object.entries(tabs && typeof tabs === "object" ? tabs : {}).find(([id, jobId]) => jobId === job.id && open.has(id))?.[0];
+    const tab = L.tabShowing(shared("sympp.jobTabs"), job.id, this.endpoint, new Set(this.openTabs()));
     return tab ? { name: "tab.select", args: { id: tab } } : { name: "tab.new", args: J.jobTabArgs(this.given, job, this.spaceList()) };
   }
 
@@ -464,11 +462,17 @@ export default class Lens extends View {
   // The panel follows Herdr's focus when it changes; the person's own moves stand until it does.
   follow(board, desk, cx) {
     const f = focused();
-    const tabs = shared("sympp.jobTabs");
-    const seen = f ? [f.space, f.tab, f.pane, f.terminal, f.shown, tabs?.[f.tab]].join("|") : "";
+    const stored = shared("sympp.jobTabs") ?? {};
+    const chiefs = this.chiefTerminals(desk);
+    const tabs = L.liveTabs(stored, board.jobs, panes(), chiefs, this.endpoint);
+    // A binding that no longer holds goes, so the tab falls back to what it shows.
+    if (JSON.stringify(tabs) !== JSON.stringify(stored)) cx.spawn(async () => setShared("sympp.jobTabs", tabs));
+    // A chief recognised after it took focus still leads to its topic.
+    const chief = f ? chiefs.get(f.shown ?? f.terminal) ?? panes().find((p) => p.tab === f.tab && chiefs.has(p.terminal))?.terminal : null;
+    const seen = f ? [f.space, f.tab, f.pane, f.terminal, f.shown, tabs[f.tab]?.shows, chief].join("|") : "";
     if (seen === this.lastFocus) return;
     this.lastFocus = seen;
-    const next = L.followPath(L.focusTarget(f, terminals(), tabs, panes()), board.jobs, desk, this.place);
+    const next = L.followPath(L.focusTarget(f, terminals(), tabs, panes(), chiefs), board.jobs, desk, this.place);
     if (next && JSON.stringify(next) !== JSON.stringify(this.path)) this.go(next, cx, { follow: true });
   }
 
@@ -477,16 +481,19 @@ export default class Lens extends View {
   // find it instead of opening a second.
   registerTab(cx, shows) {
     const f = focused();
-    if (!f?.tab || (this.registered === f.tab && this.registeredAs === shows) || !panes().some((p) => p.tab === f.tab && !p.terminal)) return;
-    this.registered = f.tab;
-    this.registeredAs = shows;
+    if (!f?.tab || !this.net.data) return;
     const before = shared("sympp.jobTabs");
     const current = before && typeof before === "object" ? before : {};
-    if (current[f.tab] === shows) return;
-    const open = new Set(this.openTabs());
-    const next = Object.fromEntries(Object.entries(current).filter(([id]) => open.has(id)));
-    next[f.tab] = shows;
-    cx.spawn(async () => setShared("sympp.jobTabs", next));
+    const mine = { shows, endpoint: this.endpoint };
+    // Again once the panel dropped it, should it hold again.
+    if (this.registered === f.tab && this.registeredAs === shows && JSON.stringify(current[f.tab]) === JSON.stringify(mine)) return;
+    // Only a binding that holds: never a chief's tab, an archived task or a tab without a sympp pane.
+    const next = L.liveTabs({ ...current, [f.tab]: mine }, this.net.data.jobs, panes(),
+      this.chiefTerminals(L.deskOf(this.deskTopics(), this.spaceList())), this.endpoint);
+    if (next[f.tab]?.shows !== shows) return;
+    this.registered = f.tab;
+    this.registeredAs = shows;
+    if (JSON.stringify(next) !== JSON.stringify(current)) cx.spawn(async () => setShared("sympp.jobTabs", next));
   }
 
   // The panel's level as a big tab: the task's own tab, else one holding this Topic, Space or the
@@ -494,10 +501,7 @@ export default class Lens extends View {
   openBig(_cx) {
     const path = this.path;
     const job = path.job ? this.net.data?.jobs.find((j) => j.id === path.job) : null;
-    const tabs = shared("sympp.jobTabs");
-    const open = new Set(this.openTabs());
-    const shows = job ? job.id : L.scopeTabKey(path);
-    const tab = Object.entries(tabs && typeof tabs === "object" ? tabs : {}).find(([id, value]) => value === shows && open.has(id))?.[0];
+    const tab = L.tabShowing(shared("sympp.jobTabs"), job ? job.id : L.scopeTabKey(path), this.endpoint, new Set(this.openTabs()));
     if (tab) return run("tab.select", { id: tab });
     if (job) return run("tab.new", J.jobTabArgs(this.given, job, this.spaceList()));
     const { role: _role, job: _job, studio: _studio, scope: _scope, ...rest } = this.given;
@@ -567,6 +571,11 @@ export default class Lens extends View {
     if (!chiefs.length) return watch;
     const list = [...(watch?.bindings ?? []), ...chiefs];
     return { key: `${watch?.key ?? "none"}+chiefs`, bindings: list.filter((b, i) => list.findIndex((o) => o.address === b.address) === i) };
+  }
+
+  // Each chief terminal Herdr shows, with its topic.
+  chiefTerminals(desk) {
+    return L.chiefTopics(shared(CHIEFS), shared(CHIEF_SESSIONS), M.chiefsOf(terminals()), desk, terminals());
   }
 
   // The chiefs matching a topic, each as an agent.
@@ -980,6 +989,12 @@ export default class Lens extends View {
     return M.localAddress(address, this.coreName);
   }
 
+  // The program Herdr says runs in a factory terminal ({ name, icon, tint }), if Herdr shows it.
+  programOf(address) {
+    const here = this.local(address);
+    return terminals().find((k) => k.address === here)?.program ?? null;
+  }
+
   // Focuses a running terminal: its pane when one shows it, else beside the shown space on its
   // machine. Only for the connected factory while it is online: a copied ledger's addresses may name
   // other terminals now.
@@ -991,7 +1006,7 @@ export default class Lens extends View {
     cx.spawn(async (cx) => {
       try {
         await C.requireAgentAccess(this.endpoint, this.request);
-        if (!this.running(address)) throw new Error(`${address} isn't running where Herdr can reach it.`);
+        if (!this.running(address)) throw new Error("That agent isn't running where Herdr can reach it.");
         const split = address.indexOf("/");
         const destination = M.agentDestination({ address, machine: split < 0 ? null : address.slice(0, split) }, panes(), spaces());
         if (destination.pane) run("pane.focus", { pane: destination.pane });
@@ -1137,7 +1152,7 @@ export default class Lens extends View {
     }
 
     const desk = L.deskOf(this.deskTopics(), this.spaceList());
-    this.place = L.placeJobs([...board.jobs, ...board.cards], desk, this.repoTopics);
+    this.place = L.placeJobs([...board.jobs, ...board.cards], desk, this.repoTopics, { terminals: terminals(), chiefs: shared(CHIEFS) });
     if (this.role === "panel" && !this.pin) this.follow(board, desk, cx);
     if (this.awaiting && board.jobs.some((job) => job.id === this.awaiting)) this.awaiting = null;
     const path = this.path = L.resolvePath(this.path, desk, board.jobs, this.awaiting);

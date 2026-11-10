@@ -78,7 +78,7 @@ test('a topic puts each ask first; tasks carry their name, phase and strip, with
   assert.ok(view.has('answer-ask:q1') && view.has('answer-ask:esc-1'), 'every ask is answered here');
   assert.ok(view.has('decision-dec-toast') && at('group-wr-restore') < at('decision-dec-toast'), "a decision sits under its task");
   assert.ok(view.has('phase-wr-recap') && view.has('phase-wr-docs') && !view.has('phase-wr-restore'), 'only a task that is not simply active names its phase');
-  assert.ok(view.has('strip-wr-restore-2') && !view.has('strip-wr-restore-3'), 'the strip runs once per phase');
+  assert.ok(view.has('strip-wr-restore-phase-1') && !view.has('strip-wr-restore-phase-2'), 'a hairline between each two phases');
   for (const id of ['card-card-tokens', 'card-card-flicker', 'card-card-typos', 'ask-ask:ask-flicker', 'dismiss-card-card-flicker', 'owner-card-card-flicker'])
     assert.ok(view.has(id), id);
   assert.equal(view.has('card-card-ocr'), false, "another topic's small work stays there");
@@ -87,6 +87,35 @@ test('a topic puts each ask first; tasks carry their name, phase and strip, with
   const quiet = await render(t, { props: { role: 'panel' }, width: 1400, board: 'quiet', path: { topic: 't-herdr' } });
   assert.equal(quiet.out.includes(':id[Str("ask-') || quiet.out.includes(':id[Str("decision-'), false, 'nothing is said while all is well');
   assert.doesNotMatch(quiet.out, /text "\d+\/\d+/, 'no counts');
+});
+
+// The printed spec as a tree: each element's line and its direct children, by indentation.
+function specTree(out) {
+  const root = { line: '', children: [] }, stack = [{ depth: -1, node: root }];
+  for (const line of out.split('\n').filter((l) => l.trim())) {
+    const depth = line.length - line.trimStart().length, node = { line: line.trim(), children: [] };
+    while (stack.at(-1).depth >= depth) stack.pop();
+    stack.at(-1).node.children.push(node);
+    stack.push({ depth, node });
+  }
+  const all = (node) => [node, ...node.children.flatMap(all)];
+  return all(root);
+}
+
+test('a strip wraps as one flow of package boxes within its width, a phase hairline riding at the end of a box', skip, async (t) => {
+  for (const [width, path] of [[360, { topic: 't-herdr' }], [1400, { topic: 't-herdr' }], [360, { topic: 't-herdr', job: 'wr-restore' }]]) {
+    const view = await render(t, { props: { role: 'panel' }, width, board: 'busy', path });
+    const strips = specTree(view.out).filter((n) => /:id\[Str\("f?strip-[^"]+"\)\]/.test(n.line) && !/-(box|phase)-/.test(n.line));
+    assert.ok(strips.some((n) => n.line.includes('"strip-wr-restore"')), `the strip is drawn at ${width}`);
+    for (const s of strips) {
+      assert.ok(s.line.includes('.flex_wrap') && s.line.includes('.min_w[Number(0.0)]'), `${s.line} wraps and may shrink`);
+      for (const unit of s.children) {
+        assert.match(unit.line, /-box-/, `only package boxes flow in ${s.line}, so each wraps on its own`);
+        const hairline = unit.children.findIndex((c) => c.line.includes('-phase-'));
+        assert.ok(hairline === -1 || hairline === unit.children.length - 1, 'a hairline ends its box, so no line starts with one');
+      }
+    }
+  }
 });
 
 test('a space shows only the tasks on its repository, drawn as its topic draws them', skip, async (t) => {
@@ -106,6 +135,7 @@ test('a task shows its phase and owner, its packages at work under their groups 
       'owner-pkg-r-4', 'fold-Landed:wr-restore', 'fold-Up next:wr-restore', 'pr-step-r-4', 'review-r-4'])
       assert.ok(view.has(id), `${id} at ${width}`);
     assert.equal(view.has('pkg-r-1') || view.has('pkg-r-9'), false, 'ended and planned packages are folded');
+    assert.doesNotMatch(view.out, /box\/t\w+/, 'no terminal address is shown');
     assert.ok(view.text('Build') && view.text('Review') && view.text('Merge') && view.text('deep r3 · 50m') && view.text('r2 · findings'));
     assert.equal(view.text('Checks'), width === 1400, 'narrow, a package shows only its current stage');
     assert.equal(view.has('finish-r-4') || view.has('restore-wr-restore') || view.has('archive-wr-restore'), false, 'no Finish for a PR into its own repository; no Archive or Restore while open');

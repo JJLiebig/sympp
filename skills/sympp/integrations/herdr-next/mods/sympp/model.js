@@ -190,6 +190,7 @@ function buildJob(detail, now) {
 function workedOnOf(owner) {
   if (typeof owner?.address !== "string" || !owner.address.trim()) return null;
   return { address: owner.address.trim(), role: typeof owner.role === "string" ? owner.role : null,
+    domain: typeof owner.domain === "string" && owner.domain.trim() ? owner.domain.trim() : null,
     liveness: LIVENESS.has(owner.liveness) ? owner.liveness : "unknown", since: ms(owner.since) };
 }
 

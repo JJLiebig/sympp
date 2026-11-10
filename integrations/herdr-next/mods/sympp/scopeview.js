@@ -174,13 +174,17 @@ function drawCi(t, state) {
   return base.bg(state === "passed" ? c.merge : c.fail);
 }
 
-// The dashboard's strip: one box per package, a hairline between phases.
+// The dashboard's strip: one box per package, all in one flow that wraps anywhere within the width it
+// gets. A hairline after a phase's last box marks the next phase; it travels with that box, so a line
+// never starts with one.
 function strip(v, t, runs, id, size = 10) {
-  return h_flex().id(id).flex_wrap().gap_y(4).items_center().min_w(0).children(runs.map((run, i) =>
-    h_flex().id(`${id}-${i}`).flex_none().gap(3).items_center()
-      .when(i > 0, (el) => el.ml(4).pl(5).border_l(1).border_color(tint(t.foreground, "26")))
-      .when(Boolean(run.phase), (el) => el.tooltip(run.phase))
-      .children(run.pkgs.map((pkg) => h_flex().id(`${id}-box-${pkg.id}`).flex_none().tooltip(pkg.title).child(box(v, t, pkg, size, `${id}-box-${pkg.id}`))))));
+  const boxes = runs.flatMap((run, r) => run.pkgs.map((pkg, i) => {
+    const ends = r < runs.length - 1 && i === run.pkgs.length - 1;
+    return h_flex().id(`${id}-box-${pkg.id}`).flex_none().gap(3).items_center().tooltip(run.phase ? `${run.phase} · ${pkg.title}` : pkg.title)
+      .child(box(v, t, pkg, size, `${id}-box-${pkg.id}`))
+      .when(ends, (el) => el.child(div().id(`${id}-phase-${r}`).flex_none().mx(1).w(1).h(size + 2).bg(tint(t.foreground, "26"))));
+  }));
+  return h_flex().id(id).flex_wrap().gap_x(3).gap_y(4).items_center().min_w(0).children(boxes);
 }
 
 // ---------- Topic and Space ----------

@@ -2,7 +2,7 @@
 // form, a decision to review with Ack and Feedback, a small-work card, and a task's phase with its
 // operator actions. Drawn in the dashboard's language (ui.js); actions live on the view (main.js).
 
-import { div, svg } from "gpui-kit";
+import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, Button } from "gpui-base";
 import { ago, PHASE_LABEL } from "./model.js";
 import { OPERATOR } from "./controls.js";
@@ -14,30 +14,29 @@ import { CLEAR, MONO, SANS, icon, tint, signal, mono, ghost, youButton, field, b
 
 const ROLE = { chief: "Chief", architect: "Architect", worker: "Worker", card: "Agent" };
 
-// Live is a filled dot, not answering a ring, finished a dash: the same marks as the web board.
-export function liveDot(t, liveness) {
-  if (liveness === "live") return div().size(6).flex_none().rounded(3).bg(signal().merge);
-  if (liveness === "unknown") return div().size(7).flex_none().rounded(4).border(1.5).border_color(signal().checks);
-  return div().w(6).h(1.5).flex_none().bg(t.dim);
-}
-
-// A terminal's address with its liveness. A running one is a link that focuses it; Release appears
-// beside an owner that stopped answering, and asks again before it acts.
+// The agent working on something, by its program's icon and name as Herdr shows that terminal, else
+// its role; never its terminal address. A running one is a control that opens its terminal; one that
+// stopped answering is dimmed, with Release beside it that asks again before it acts. A finished one
+// shows nothing.
 export function ownerChip(v, t, given, id, release = null) {
-  if (!given) return null;
+  if (!given || given.liveness === "finished") return null;
   // A terminal known only by its address is live while Herdr shows it running.
   const owner = given.liveness ? given : { ...given, liveness: v.running(given.address) ? "live" : null };
-  const word = { live: "live", unknown: "not answering", finished: "finished" }[owner.liveness];
-  const tip = [`${ROLE[owner.role] ?? "Terminal"} ${owner.address}`, word, owner.since ? `since ${ago(owner.since, v.now())}` : null].filter(Boolean).join(" · ");
-  // A link only while the online factory itself sees that terminal live: an address alone, or an
+  const program = v.programOf(owner.address);
+  const name = program?.name || ROLE[owner.role] || "Agent";
+  const word = { live: "live", unknown: "not answering" }[owner.liveness];
+  const tip = [ROLE[owner.role] ?? "Agent", program?.name, word, owner.since ? `since ${ago(owner.since, v.now())}` : null].filter(Boolean).join(" · ");
+  // A control only while the online factory itself sees that terminal live: an address alone, or an
   // offline copy's, may name another terminal now.
   const reachable = given.liveness === "live" && v.net.data?.offline === false;
+  const glyph = program?.icon ? (program.tint ? svg(program.icon).size(12).flex_none().text_color(owner.liveness === "live" ? t.foreground : t.dim)
+    : image(program.icon).size(12).flex_none().when(owner.liveness !== "live", (el) => el.opacity(0.5))) : null;
   const chip = Button.new(`owner-${id}`).flex().flex_none().items_center().gap(5).h(20).px(5).rounded(4)
-    .font_family(MONO).text_size(11).text_color(owner.liveness === "finished" ? t.dim : t.muted)
-    .accessibility_label(tip).tooltip(reachable ? `${tip}. Click to focus it.` : tip)
+    .font_family(SANS).text_size(11.5).text_color(owner.liveness === "live" ? t.muted : t.dim)
+    .accessibility_label(reachable ? `Open ${name}` : tip).tooltip(reachable ? `${tip}. Click to open it.` : tip)
     .when(reachable, (el) => el.cursor_pointer().hover((s) => s.bg(tint(t.foreground, "14")).text_color(t.foreground))
       .on_click((_e, cx) => { cx.stop_propagation(); v.focusTerminal(owner.address, cx); }))
-    .when(owner.liveness !== null, (el) => el.child(liveDot(t, owner.liveness))).child(owner.address);
+    .when(Boolean(glyph), (el) => el.child(glyph)).child(div().max_w(96).truncate().child(name));
   const op = release ? v.ops[`release:${release.path}`] : null;
   const error = v.ops[`focus:${owner.address}`]?.error ?? op?.error ?? null;
   return h_flex().id(`owned-${id}`).flex_none().gap(2).items_center()
@@ -84,7 +83,7 @@ export function askBlock(v, t, ask, { where = [], id = ask.key, goTo = null } = 
       .child(div().w(2).flex_none().self_stretch().rounded(1).bg(signal().you))
       .child(v_flex().flex_1().min_w(0).pl(12).gap(4)
         .when(where.length > 0 || Boolean(ask.by), (el) => el.child(h_flex().gap(8).items_center()
-          .child(context(t, where, id, goTo)).when(Boolean(ask.by), (x) => x.child(ownerChip(v, t, ask.by, `ask-${id}`)))))
+          .child(context(t, where, id, goTo)).children([ownerChip(v, t, ask.by, `ask-${id}`)].filter(Boolean))))
         .child(h_flex().gap(10).items_center()
           .child(div().flex_1().min_w(0).py(1).text_size(13.5).line_height("19px").text_color(t.foreground).child(ask.text))
           .when(!open && Boolean(action), (el) => el.child(action)))))
@@ -100,7 +99,7 @@ export function decisionBlock(v, t, d, { where = [], goTo = null } = {}) {
   const draft = v.feedback[d.key];
   const open = Boolean(draft?.open);
   const ack = v.ops[`ack:${d.id}`];
-  const head = h_flex().gap(8).items_center().child(context(t, where, d.key, goTo)).when(Boolean(d.by), (x) => x.child(ownerChip(v, t, d.by, `decision-${d.id}`)));
+  const head = h_flex().gap(8).items_center().child(context(t, where, d.key, goTo)).children([ownerChip(v, t, d.by, `decision-${d.id}`)].filter(Boolean));
   const body = v_flex().gap(2)
     .child(div().text_size(13.5).line_height("19px").text_color(t.foreground).child(d.text))
     .when(Boolean(d.rationale), (el) => el.child(div().text_size(12).line_height("17px").text_color(t.muted).child(d.rationale)));
@@ -166,7 +165,7 @@ export function cardRow(v, t, card, ci) {
       .child(div().size(8).flex_none().rounded(2).bg(tone))
       .child(div().flex_1().min_w(0).truncate().text_size(13).text_color(settled ? t.muted : t.foreground).child(card.task))
       .when(Boolean(ci), (el) => el.child(ci))
-      .when(Boolean(card.owner), (x) => x.child(ownerChip(v, t, card.owner, `card-${card.id}`)))
+      .children([ownerChip(v, t, card.owner, `card-${card.id}`)].filter(Boolean))
       .child(Button.new(`dismiss-card-${card.id}`).flex().flex_none().items_center().justify_center().size(18).rounded(4).cursor_pointer()
         .text_color(t.dim).hover((s) => s.bg(tint(t.foreground, "14")).text_color(t.foreground)).disabled(Boolean(op?.pending))
         .accessibility_label(`Dismiss ${card.task}`).tooltip("Dismiss")

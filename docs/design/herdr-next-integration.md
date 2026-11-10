@@ -97,8 +97,11 @@ The levels above a job:
   unfinished packages), then by age. Then one row per Herdr topic
   (`desk.topics`) with its needs, moving packages and repositories, plus
   unsorted spaces and work without a space when either has any. Each job has
-  one home topic, its own repository's first, so it is counted once; other
-  topics it touches name it as shared.
+  one home topic, so it is counted once: the topic of the chief that owns it
+  (its owner when a chief works on it, else the chief it was created or
+  dispatched under, else the chief domain Herdr labels on its owner's
+  terminal), else its own repository's first by space or `repoTopics`.
+  Other topics it touches name it as shared.
 - **Topic and Space:** one view. A topic shows every task touching it, once; a
   space only the tasks on its repository. Each task is its name, its strip and
   any word for what went wrong, with its asks under it. What asks the person
@@ -110,11 +113,14 @@ The levels above a job:
 
 A breadcrumb (Factory > Topic > Space > Job) and Esc move up a level; rows
 take ↑/↓ and Enter. Each copy keeps its place in its own `localStorage`.
-A panel copy follows Herdr's focus without taking it: an sympp-labelled terminal
-or a job tab shows that job, else the space while sympp work touches it, else the
-space's topic; focusing a mod pane keeps what it shows, and a pin stops it.
-Job tabs record their Herdr tab in `shared("sympp.jobTabs")` while drawn, since
-Herdr does not expose a mod pane's props. A toast posts only for a need that
+A panel copy follows Herdr's focus without taking it: a running chief's terminal
+shows the chief's topic; an sympp-labelled terminal shows its job, even beside
+the chief; else the tab holding a chief shows its topic, a job tab its job, else
+the space while sympp work touches it, else the space's topic; focusing a mod pane keeps what it shows, and a pin stops it.
+Job tabs record their Herdr tab and factory in `shared("sympp.jobTabs")` while
+drawn, since Herdr does not expose a mod pane's props. A record holds only while
+its tab has a sympp pane and no chief's terminal and, for the panel's own
+factory, its task is on the board and not archived; the panel drops any other. A toast posts only for a need that
 appeared between two successful reads of one copy, never on the first read or
 for an offline copy; copies share `shared("sympp.toasted")` so each need is
 announced once. Clicking it selects the job's tab or opens one.
