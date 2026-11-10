@@ -293,7 +293,8 @@ export const scopeTabKey = (path) => `scope:${path.topic ?? ""}:${path.space ?? 
 
 // Each chief terminal the panel knows, with its topic: the chiefs it shares ({ [topic id]: [{ terminal }] }),
 // each topic's latest started chief while it still runs ({ [topic id]: { terminal, agent } }) and
-// terminals labelled as a chief ([{ domain, terminal }]) whose domain names a topic.
+// terminals labelled as a chief ([{ domain, terminal }]) whose domain names a topic, unless only a
+// shell runs there now.
 export function chiefTopics(chiefs, sessions, labelled, desk, terminalList = [], now = Date.now()) {
   const out = new Map();
   for (const [topic, list] of Object.entries(chiefs && typeof chiefs === "object" ? chiefs : {})) {
@@ -303,6 +304,8 @@ export function chiefTopics(chiefs, sessions, labelled, desk, terminalList = [],
     if (s?.terminal && !out.has(s.terminal) && chiefRunning(s, terminalList, now)) out.set(s.terminal, topic);
   }
   for (const c of labelled ?? []) {
+    // A chief that exited leaves its labels on the shell left behind.
+    if ((terminalList ?? []).find((k) => k.address === c.terminal)?.program?.key === "shell") continue;
     const topic = out.has(c.terminal) ? null : domainTopic(c.domain, desk, chiefs);
     if (topic) out.set(c.terminal, topic);
   }
