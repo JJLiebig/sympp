@@ -158,9 +158,10 @@ test('the person answers a question, reviews flagged decisions and releases a go
   // and the goal's flag takes them back to the question.
   const question = browser.locator(`[data-ask="${ask}"]`);
   const goal = browser.locator(`[data-goal="${request}"]`);
+  // Brought into view: the element starts on screen.
   const inView = (selector: string) => browser.evaluate((css: string) => {
     const box = document.querySelector(css)?.getBoundingClientRect();
-    return Boolean(box && box.bottom > 0 && box.top < window.innerHeight);
+    return Boolean(box && box.top >= 0 && box.top < window.innerHeight);
   }, selector);
   await browser.setViewport({ width: 390, height: 640 });
   await screen.getByRole('button', 'Collapsed', { exact: true }).tap();
