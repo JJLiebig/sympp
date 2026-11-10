@@ -26,8 +26,8 @@ export const OUTCOME: Record<Outcome, { label: string; tone: string }> = {
 
 // Package and card rows are fixed column grids, so every column starts at the same x on every row,
 // whatever is in it. Below 1280px the lifecycle shows only its current stage and the PR and owner columns narrow.
-// Package: pip, title, CI, lifecycle, status, PR, owner, action.
-export const PKG_GRID = "grid grid-cols-[10px_minmax(0,1fr)_88px_48px_124px_110px_150px_52px] items-center gap-x-2.5 min-[1280px]:grid-cols-[10px_minmax(0,1fr)_88px_240px_124px_150px_170px_52px]";
+// Package: pip, title, lifecycle, status, PR with its CI, owner, action.
+export const PKG_GRID = "grid grid-cols-[10px_minmax(0,1fr)_48px_124px_200px_150px_52px] items-center gap-x-2.5 min-[1280px]:grid-cols-[10px_minmax(0,1fr)_240px_124px_240px_170px_52px]";
 // Card: pip, task, repo and branch, CI, review, PR, state, owner, dismiss.
 export const CARD_GRID = "grid grid-cols-[10px_minmax(0,1fr)_150px_88px_128px_64px_72px_150px_24px] items-center gap-x-2.5 min-[1280px]:grid-cols-[10px_minmax(0,1fr)_200px_88px_128px_64px_72px_170px_24px]";
 
@@ -187,7 +187,7 @@ export function Shelf({ age, at, cleanup, hint, label, views }: { age: string; a
             <span className="shrink-0 font-mono text-xs text-faint">
               {shelfCount(view)} · {age} {span(at - (view.goal.archivedAt ?? view.goal.report?.parked?.at ?? view.lastMoveAt))}
             </span>
-            <GoalActions phase={view.phase} goal={view.goal} moving={view.live.length} />
+            <GoalActions phase={view.phase} goal={view.goal} />
           </li>
         ))}
       </ul>
