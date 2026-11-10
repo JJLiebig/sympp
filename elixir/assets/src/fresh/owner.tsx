@@ -1,5 +1,6 @@
 import { ActButton } from "./actions";
 import type { Liveness, Role, Terminal } from "./model";
+import { Glyph } from "./parts";
 
 const ROLE: Record<Role, string> = { chief: "chief", architect: "architect", worker: "worker", card: "agent" };
 const LIVENESS: Record<Liveness, string> = { live: "live", unknown: "not answering", finished: "finished" };
@@ -16,7 +17,11 @@ export function Owner({ className = "", goalId, owner }: { className?: string; g
   return (
     <span className={`flex min-w-0 items-center gap-2 ${className}`}>
       <span className={`flex min-w-0 items-center gap-1.5 font-mono text-[11px] ${liveness === "finished" ? "text-faint" : "text-dim"}`} title={title || undefined}>
-        {liveness ? <span aria-hidden className={`shrink-0 ${DOT[liveness]}`} /> : null}
+        {liveness ? (
+          <Glyph>
+            <span aria-hidden className={DOT[liveness]} />
+          </Glyph>
+        ) : null}
         <span className="truncate">{owner.address}</span>
         {liveness ? <span className="sr-only">, {LIVENESS[liveness]}</span> : null}
       </span>

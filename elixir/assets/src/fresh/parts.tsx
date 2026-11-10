@@ -1,4 +1,5 @@
 import { Check, ChevronRight, CircleDashed, ScanSearch, X } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { GoalActions, GoalRefusal, ShelfCleanup } from "./actions";
 import { areaLabel } from "./areas";
@@ -50,11 +51,19 @@ export const GLYPH = "flex size-6 shrink-0 items-center justify-center rounded h
 // A text button that reads as a link.
 export const LINK = "rounded underline-offset-4 hover:text-ink hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-you/70";
 
-// The chevron that opens and closes a goal or a question. Callers let its square overhang the row, so the text keeps its place.
+// A glyph beside text, centred on that text's capitals (`.glyph` in fresh.css). It takes the type of the row it sits in.
+export function Glyph({ children }: { children: ReactNode }) {
+  return <span className="glyph">{children}</span>;
+}
+
+// The chevron that opens and closes a goal or a question. Callers let its square overhang the row, so the text keeps its place,
+// and give it the title's size when that differs from the row's.
 export function Fold({ className = "", label, onToggle, open }: { className?: string; label: string; onToggle: () => void; open: boolean }) {
   return (
     <button aria-expanded={open} aria-label={label} className={`${GLYPH} text-faint ${className}`} type="button" onClick={onToggle}>
-      <ChevronRight className={`size-4 transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`} />
+      <Glyph>
+        <ChevronRight className={`size-4 transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`} />
+      </Glyph>
     </button>
   );
 }
@@ -147,7 +156,9 @@ export function CiCell({ ci, stale = false }: { ci: Ci | null; stale?: boolean }
   if (stale) {
     return (
       <span className="flex min-w-0 items-center gap-1 whitespace-nowrap font-mono text-[11px] text-faint" title="GitHub could not be read on the last look">
-        <CircleDashed aria-hidden className="size-3 shrink-0" />
+        <Glyph>
+          <CircleDashed aria-hidden className="size-3" />
+        </Glyph>
         <span className="truncate">CI unknown</span>
       </span>
     );
@@ -156,7 +167,9 @@ export function CiCell({ ci, stale = false }: { ci: Ci | null; stale?: boolean }
   const check = CI[ci];
   return (
     <span className={`flex min-w-0 items-center gap-1 whitespace-nowrap font-mono text-[11px] ${check.tone}`}>
-      <check.icon aria-hidden className="size-3 shrink-0" />
+      <Glyph>
+        <check.icon aria-hidden className="size-3" />
+      </Glyph>
       <span className="truncate">{check.label}</span>
     </span>
   );
@@ -168,7 +181,9 @@ export function ReviewCell({ review }: { review: Review | null }) {
   const words = reviewLabel(review);
   return (
     <span className={`flex min-w-0 items-center gap-1 whitespace-nowrap font-mono text-[11px] ${words.tone}`} title={`Review: ${words.text}`}>
-      <ScanSearch aria-hidden className="size-3 shrink-0" />
+      <Glyph>
+        <ScanSearch aria-hidden className="size-3" />
+      </Glyph>
       <span className="sr-only">Review </span>
       <span className="truncate">{words.text}</span>
     </span>
