@@ -13,6 +13,7 @@ from pathlib import Path
 import platform
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import urllib.parse
@@ -79,6 +80,16 @@ def install(revision, destination):
             raise ValueError('Runtime dashboard fingerprint mismatch')
         if not (extract / 'bin/symphony_elixir').is_file():
             raise ValueError('Runtime release entrypoint missing')
+        # CI's native Erlang/SQLite binaries may require newer host libraries.
+        # Evaluate without starting applications, opening listeners or migrating
+        # the factory ledger, before replacing the running service.
+        probe_env = {**os.environ, 'SYMPP_SERVICE_MODE': '0',
+                     'SYMPP_RUNTIME_ARTIFACT': '1', 'SYMPP_RUNTIME_ARTIFACT_ACKNOWLEDGED': '1',
+                     'SYMPP_LOGS_ROOT': str(stage / 'logs'), 'SYMPP_BACKEND_PORT': '0',
+                     'RELEASE_TMP': str(stage / 'tmp')}
+        subprocess.run([str(extract / 'bin/symphony_elixir'), 'eval',
+                        '{:ok, db} = Exqlite.Sqlite3.open(":memory:"); :ok = Exqlite.Sqlite3.close(db)'],
+                       env=probe_env, check=True, timeout=30)
         shutil.copytree(extract, destination, dirs_exist_ok=True)
 
 

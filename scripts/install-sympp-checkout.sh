@@ -36,11 +36,12 @@ trap 'echo "factory: failed during $phase; inspect $build_log" >&2' ERR
 release="$SYMPP_HOME/service/releases/$(date -u +%Y%m%dT%H%M%S)-$$"
 mkdir -p "$release" "$SYMPP_SERVICE_CONFIG"
 printf 'factory: checking CI runtime %s\n' "${service_revision:0:12}"
-if python3 "$repo_root/scripts/install-sympp-linux-runtime.py" "$service_revision" "$release" >"$build_log" 2>&1; then
+if [[ -z "$(git -C "$repo_root" status --porcelain)" ]] &&
+   python3 "$repo_root/scripts/install-sympp-linux-runtime.py" "$service_revision" "$release" >"$build_log" 2>&1; then
   printf 'factory: installing runtime %s\n' "${service_revision:0:12}"
 else
   phase=building
-  printf 'factory: building (no verified CI runtime for %s)\n' "${service_revision:0:12}"
+  printf 'factory: building (no usable CI runtime for %s)\n' "${service_revision:0:12}"
 (
 set -e
 cd "$repo_root/elixir" || exit 1

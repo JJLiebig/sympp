@@ -108,7 +108,7 @@ test('update streams factory phases, installs an exact CI runtime, and builds on
     backend: { kind: 'mix_release' }, dashboard: { relative_path: 'dashboard-static', fingerprint: hash('index.html ' + hash(dashboard)) },
   };
   const payloadFile = path.join(root, 'payload.json'); fs.writeFileSync(payloadFile, JSON.stringify(payload));
-  const zipped = spawnSync('python3', ['-c', 'import sys,zipfile\nwith zipfile.ZipFile(sys.argv[1],"w") as z:\n z.write(sys.argv[2],"runtime-manifest.json")\n z.writestr("dashboard-static/index.html",sys.argv[3])\n z.writestr("bin/symphony_elixir","CI release")', archive, payloadFile, dashboard], { encoding: 'utf8' });
+  const zipped = spawnSync('python3', ['-c', 'import sys,zipfile\nwith zipfile.ZipFile(sys.argv[1],"w") as z:\n z.write(sys.argv[2],"runtime-manifest.json")\n z.writestr("dashboard-static/index.html",sys.argv[3])\n i=zipfile.ZipInfo("bin/symphony_elixir"); i.external_attr=0o755<<16; z.writestr(i,"#!/bin/sh\\nexit ${PROBE_FAILURE:-0}\\n# CI release")', archive, payloadFile, dashboard], { encoding: 'utf8' });
   assert.equal(zipped.status, 0, zipped.stderr);
   fs.writeFileSync(manifestFile, JSON.stringify({ ...payload, artifact: { sha256: hash(fs.readFileSync(archive)) }, payload_manifest: { sha256: hash(fs.readFileSync(payloadFile)) } }));
   const settings = {
@@ -129,16 +129,21 @@ test('update streams factory phases, installs an exact CI runtime, and builds on
   fs.writeFileSync(path.join(bundle, 'setup-sympp.js'), '');
   const connection = path.join(root, '.local/share/sympp/connection.json'); fs.mkdirSync(path.dirname(connection), { recursive: true });
   const env = { ...process.env, HOME: root, PATH: bin + path.delimiter + process.env.PATH, XDG_RUNTIME_DIR: root, XDG_CONFIG_HOME: root + '/config', SYMPP_RUNTIME_RELEASE_URL: `http://127.0.0.1:${port}`, SERVICE_ENV: environment, UNIT: config, LISTENER_PID: String(process.pid), PORT: port, STATE: state, REVISION: revision, BUILD_RECEIPT: root + '/builds' };
-  for (const mode of ['artifact', 'missing', 'corrupt', 'local']) {
+  for (const mode of ['artifact', 'missing', 'corrupt', 'incompatible', 'dirty', 'local']) {
     artifactAvailable = mode !== 'missing'; corrupt = mode === 'corrupt'; fs.writeFileSync(state, 'previous');
     fs.rmSync(root + '/builds', { force: true });
+    fs.rmSync(repo + '/local-change', { force: true });
+    if (mode === 'dirty') fs.writeFileSync(repo + '/local-change', 'uncommitted runtime changes');
+    env.PROBE_FAILURE = mode === 'incompatible' ? '1' : '0';
     fs.writeFileSync(connection, JSON.stringify({ env: {}, setup: { server: mode === 'local' ? `http://127.0.0.1:${port}` : 'scratch', hosts: 'codex', cwd: root, remote: { SYMPP_REMOTE_SERVICE: 'qa' } } }));
     const started = performance.now(); let output = '', errors = '', finished = false, sawFetching = false;
-    const child = spawn(process.execPath, [bundle + '/sympp-command.js', 'update'], { env });
+    const child = mode === 'dirty'
+      ? spawn('bash', [repo + '/scripts/install-sympp-checkout.sh'], { env: { ...env, ...settings, SYMPP_SERVICE_NAME: 'qa' } })
+      : spawn(process.execPath, [bundle + '/sympp-command.js', 'update'], { env });
     child.stdout.on('data', data => { output += data; if (output.includes('factory: fetching main')) { assert.equal(finished, false); sawFetching = true; } });
     child.stderr.on('data', data => { errors += data; });
     // The update must expose fetching before the delayed artifact/build finishes.
-    await new Promise((resolve, reject) => {
+    if (mode !== 'dirty') await new Promise((resolve, reject) => {
       const timer = setTimeout(() => { child.kill(); reject(new Error('No live fetching progress: ' + output + errors)); }, 10000);
       const observe = () => { if (sawFetching) { clearTimeout(timer); child.stdout.off('data', observe); assert.equal(output.includes('factory: ready'), false); resolve(); } };
       child.stdout.on('data', observe);
@@ -147,9 +152,9 @@ test('update streams factory phases, installs an exact CI runtime, and builds on
     const code = await new Promise(resolve => child.on('close', code => { finished = true; resolve(code); }));
     assert.equal(code, 0, output + errors); assert.match(output, /factory: ready \(\d+s\)/);
     const builds = fs.existsSync(root + '/builds');
-    assert.equal(builds, mode === 'missing' || mode === 'corrupt');
-    assert.match(output, builds ? /factory: building \(no verified CI runtime/ : /factory: installing runtime/);
-    assert.equal(fs.readFileSync(home + '/service/current/bin/symphony_elixir', 'utf8'), builds ? 'source release' : 'CI release');
+    assert.equal(builds, ['missing', 'corrupt', 'incompatible', 'dirty'].includes(mode));
+    assert.match(output, builds ? /factory: building \(no usable CI runtime/ : /factory: installing runtime/);
+    assert.match(fs.readFileSync(home + '/service/current/bin/symphony_elixir', 'utf8'), builds ? /^source release$/ : /# CI release$/);
     t.diagnostic(`${mode}: ${Math.round(performance.now() - started)}ms (controlled runtime and build commands)`);
   }
 });
