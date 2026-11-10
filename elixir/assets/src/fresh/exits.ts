@@ -324,7 +324,8 @@ async function exitWhile(key: string, node: HTMLElement | null, style: Style | n
   );
   // A finished exit closes its gap at once instead of waiting for the next read to drop the row.
   const exit = (node && style ? (calm() ? fade(node, verdict) : play(node, style, verdict)) : verdict).then(async (ok) => {
-    if (ok && node && style) await collapseOut(node);
+    // With reduced motion the gap closes without a close-up.
+    if (ok && node && style) await (calm() ? void (node.style.display = "none") : collapseOut(node));
     return ok;
   });
   holdLeave(key, exit);
@@ -333,6 +334,7 @@ async function exitWhile(key: string, node: HTMLElement | null, style: Style | n
     setTimeout(() => {
       if (!node.isConnected) return;
       node.getAnimations().forEach((animation) => animation.cancel());
+      node.style.display = "";
       node.style.visibility = "";
     }, 8000);
   return reason;
