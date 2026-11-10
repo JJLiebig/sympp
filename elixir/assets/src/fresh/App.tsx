@@ -13,6 +13,7 @@ import { buildBoard, liveCountAt, openAt, viewAt, type Archived, type Board, typ
 import { focusGoal, smoothly } from "./motion";
 import { ActContext, send, type OperatorAction } from "./operator";
 import { Outline } from "./outline";
+import { coalescedRead } from "./reads";
 import { Phases } from "./phases";
 import { DensityContext, type Density } from "./report";
 import { setSamples, type SampleRule } from "./samples";
@@ -64,22 +65,18 @@ export function App() {
 
   const shownNow = useRef<number | null>(null);
   // The first read opens on the busiest moment; later reads keep the board live unless it is replaying.
-  // Reads can overlap (the timer, a change signal, an action), so only the latest one started is shown.
-  const reads = useRef(0);
-  const read = useCallback(() => {
-    const turn = ++reads.current;
-    void load().then((loaded) => {
-      if (turn !== reads.current) return;
+  // Timer, change signals and actions share one read, followed by a catch-up
+  // read if anything changed in flight. Every completed read reaches the board.
+  const read = useMemo(() => coalescedRead(load, (loaded) => {
       const before = shownNow.current;
       shownNow.current = loaded.now;
       setFailure(null);
       setData(loaded);
       setAt((current) => (before === null ? loaded.busiest : followNow(current, before, loaded.now)));
     }, (caught: unknown) => {
-      if (turn === reads.current) setFailure(caught instanceof Error ? caught.message : "Could not read the ledger");
-    });
-  }, []);
-  useEffect(read, [read]);
+      setFailure(caught instanceof Error ? caught.message : "Could not read the ledger");
+    }), []);
+  useEffect(() => { void read(); }, [read]);
   useChangeSignal(!DEMO, read);
   // A snapshot or the demo never changes on its own, so it is read once. Anything else is reread, also while the first read has yet to succeed.
   useReread(!DEMO && data?.replayable !== true, read);

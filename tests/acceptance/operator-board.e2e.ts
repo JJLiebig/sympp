@@ -157,6 +157,7 @@ test('the person answers a question, reviews flagged decisions and releases a go
   await screen.getByRole('button', 'Send', { exact: true }).tap();
   await expect.poll(async () => (await answer()).state).toBe('answered');
   expect(await answer()).toMatchObject({ answer: 'Ship the bounded option. Keep it small.', answered_by: 'operator' });
+  await expect(browser.locator(`[data-ask="${ask}"]`)).toHaveCount(0);
 
   // The recording terminal is not on this factory's machine, so the feedback stays on the decision, undelivered.
   await screen.getByRole('button', 'Feedback', { exact: true }).tap();
