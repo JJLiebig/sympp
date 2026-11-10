@@ -11,14 +11,16 @@ import { CLEAR, MONO, icon, tint, button, field, mark } from "./ui.js";
 export function answerForm(v, t, question) {
   const draft = v.answers[question.key];
   const prompt = question.prompt;
-  const option = (id, label, description, pros = [], cons = [], answer = null) => Button.new(`choice-${question.key}-${id}`)
+  const option = (id, label, description, pros = [], cons = [], answer = null, recommended = false) => Button.new(`choice-${question.key}-${id}`)
     .flex().w_full().min_w(0).px(10).py(8).rounded(6).border(1).border_color(draft?.choice === id ? t.accent : t.input)
     .bg(draft?.choice === id ? t.selected : CLEAR).text_color(t.foreground).cursor_pointer()
     .hover((s) => s.bg(t.hover)).focus((s) => s.border_color(t.accent)).disabled(Boolean(draft?.pending))
     .accessibility_label(label)
     .on_click((_e, cx) => { draft.choice = id; cx.stop_propagation(); cx.notify(); })
     .child(v_flex().flex_1().min_w(0).gap(4)
-      .child(div().text_size(12.5).font_medium().child(label))
+      .child(h_flex().gap(8).items_center().flex_wrap()
+        .child(div().text_size(12.5).font_medium().child(label))
+        .when(recommended, (el) => el.child(div().text_size(11.5).text_color(t.muted).child("Recommended"))))
       .when(Boolean(description), (el) => el.child(div().text_size(12).text_color(t.muted).child(description)))
       .when(Boolean(answer && answer !== description), (el) => el.child(div().text_size(12).text_color(t.muted).child(answer)))
       .children(pros.map((text) => div().text_size(11.5).text_color(t.muted).child(`For: ${text}`)))
@@ -28,7 +30,7 @@ export function answerForm(v, t, question) {
       .when(Boolean(prompt), (form) => form
         .when(Boolean(prompt.tl_dr), (x) => x.child(div().text_size(13).font_medium().child(prompt.tl_dr)))
         .when(Boolean(prompt.details), (x) => x.child(div().text_size(12).text_color(t.muted).child(prompt.details)))
-        .children((prompt.options ?? []).map((o) => option(o.id, o.label, o.description, o.pros, o.cons, o.answer)))
+        .children((prompt.options ?? []).map((o) => option(o.id, o.label, o.description, o.pros, o.cons, o.answer, o.recommended)))
         .child(option("__custom_redirect__", prompt.custom_redirect_label || "Another direction")))
       .child(field(t, prompt ? draft.choice === "__custom_redirect__" ? "Your direction" : "Note (optional)" : "Your answer", draft.input, true))
       .when(Boolean(draft.error), (form) => form.child(div().role("alert").text_size(12).text_color(t.blocked).child(draft.error)))

@@ -141,7 +141,7 @@ test('the person answers a question, reviews flagged decisions and releases a go
   const request = await client.request('Board review');
   const ask = (await chief.call('ask', { work_request_id: request, question: 'Which scope should ship?', decision_prompt: {
     tl_dr: 'Choose scope', details: 'Keep this delivery bounded.',
-    options: [{ id: 'bounded', label: 'Bounded option', answer: 'Ship the bounded option.' }, { id: 'wide', label: 'Wide option', answer: 'Ship everything.' }],
+    options: [{ id: 'bounded', label: 'Bounded option', answer: 'Ship the bounded option.', recommended: true }, { id: 'wide', label: 'Wide option', answer: 'Ship everything.' }],
   } })).ask.id;
   const recorder = await factory!.client();
   const flag = async (decision: string) => (await recorder.call('record_decision', {
@@ -154,7 +154,9 @@ test('the person answers a question, reviews flagged decisions and releases a go
   const answer = async () => (await full()).asks.find((entry: any) => entry.id === ask);
   const decision = async (id: string) => (await full()).decision_log_entries.find((entry: any) => entry.id === id);
 
-  await screen.getByRole('radio', 'Bounded option', { exact: true }).tap();
+  await expect(browser.locator(`[data-ask="${ask}"]`).getByText('Recommended', { exact: true })).toBeVisible();
+  expect((await answer()).state).toBe('open');
+  await screen.getByRole('radio', 'Bounded option Recommended', { exact: true }).tap();
   await screen.getByLabel('Note', { exact: true }).fill('Keep it small.');
   await screen.getByRole('button', 'Send', { exact: true }).tap();
   await expect.poll(async () => (await answer()).state).toBe('answered');

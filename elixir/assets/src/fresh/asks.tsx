@@ -171,7 +171,10 @@ function ChoiceOption({ choice, group, onPick, picked, plain }: { choice: Choice
         <span className={`size-2 rounded-full bg-you transition-transform duration-150 motion-reduce:transition-none ${picked ? "scale-100" : "scale-0"}`} />
       </span>
       <span className="min-w-0 flex-1">
-        <span className={`block font-medium leading-5 ${picked || !plain ? "text-ink" : "text-dim"}`}>{choice.label}</span>
+        <span className="flex flex-wrap items-baseline gap-x-2">
+          <span className={`font-medium leading-5 ${picked || !plain ? "text-ink" : "text-dim"}`}>{choice.label}</span>
+          {choice.recommended ? <span className="text-xs text-dim">Recommended</span> : null}
+        </span>
         {detailed ? (
           <span className="mt-1 grid gap-0.5 text-xs leading-[1.125rem] text-dim">
             {choice.description ? <span>{choice.description}</span> : null}

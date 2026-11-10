@@ -3,10 +3,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HumanDecisionPrompt do
 
   @custom_redirect_choice_id "__custom_redirect__"
   @top_level_keys ["tl_dr", "details", "options", "custom_redirect_label"]
-  @option_keys ["id", "label", "description", "pros", "cons", "answer"]
+  @option_keys ["id", "label", "description", "pros", "cons", "answer", "recommended"]
 
   @type option :: %{
-          required(String.t()) => String.t() | [String.t()]
+          required(String.t()) => String.t() | [String.t()] | boolean()
         }
   @type t :: %{
           required(String.t()) => String.t() | [option()]
@@ -41,6 +41,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HumanDecisionPrompt do
   def error_message(:duplicate_option_id), do: "must contain unique option ids"
   def error_message(:invalid_list), do: "must contain string lists"
   def error_message(:invalid_options), do: "must contain 1 to 4 options"
+  def error_message(:invalid_recommended), do: "recommended must be a boolean"
+  def error_message(:multiple_recommended_options), do: "at most one option may be recommended"
   def error_message(:must_be_map), do: "must be a map"
   def error_message(:option_must_be_map), do: "options must be maps"
   def error_message(:reserved_option_id), do: "contains a reserved option id"
@@ -121,7 +123,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HumanDecisionPrompt do
 
   defp normalized_options(options) when is_list(options) and length(options) in 1..4 do
     with {:ok, options} <- normalize_option_list(options),
-         :ok <- reject_duplicate_option_ids(options) do
+         :ok <- reject_duplicate_option_ids(options),
+         :ok <- reject_multiple_recommended_options(options) do
       {:ok, options}
     end
   end
@@ -152,16 +155,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HumanDecisionPrompt do
          {:ok, answer} <- required_trimmed_string(option, "answer"),
          {:ok, description} <- optional_trimmed_string(option, "description"),
          {:ok, pros} <- optional_string_list(option, "pros"),
-         {:ok, cons} <- optional_string_list(option, "cons") do
+         {:ok, cons} <- optional_string_list(option, "cons"),
+         {:ok, recommended} <- optional_recommended(option) do
       %{"id" => id, "label" => label, "answer" => answer}
       |> maybe_put("description", description)
       |> maybe_put("pros", pros)
       |> maybe_put("cons", cons)
+      |> maybe_put("recommended", recommended)
       |> then(&{:ok, &1})
     end
   end
 
   defp normalize_option(_option), do: {:error, :option_must_be_map}
+
+  defp optional_recommended(option) do
+    case Map.fetch(option, "recommended") do
+      :error -> {:ok, nil}
+      {:ok, value} when is_boolean(value) -> {:ok, value}
+      {:ok, _value} -> {:error, :invalid_recommended}
+    end
+  end
+
+  defp reject_multiple_recommended_options(options) do
+    if Enum.count(options, &(Map.get(&1, "recommended") == true)) <= 1 do
+      :ok
+    else
+      {:error, :multiple_recommended_options}
+    end
+  end
 
   defp reject_reserved_option_id(@custom_redirect_choice_id), do: {:error, :reserved_option_id}
   defp reject_reserved_option_id(_id), do: :ok
