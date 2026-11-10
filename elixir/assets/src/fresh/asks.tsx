@@ -1,8 +1,11 @@
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 
+import { answerAsk } from "./exits";
 import { span, type Ask, type Board, type Choice } from "./model";
+import { Presence } from "./motion";
 import { REDIRECT, useAct, type Answer } from "./operator";
 import { Owner } from "./owner";
+import { Reveal } from "./reveal";
 
 // What the ask is about: its goal, the package within it, or the card it came from.
 function subjectOf(ask: Ask, board: Board) {
@@ -15,25 +18,27 @@ function subjectOf(ask: Ask, board: Board) {
 // Every question waiting on the operator, oldest first, each with its answer form.
 // `onGoal` lifts the area filter before it goes to the ask's goal, which may be filtered out.
 export function NeedsYou({ asks, at, board, onGoal }: { asks: Ask[]; at: number; board: Board; onGoal: (goalId: string) => void }) {
-  if (asks.length === 0) return null;
+  const sorted = [...asks].sort((left, right) => left.from - right.from);
 
   return (
-    <section className="mb-8" id="needs-you">
-      <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-you">Needs you · {asks.length}</h2>
-      <ul className="divide-y divide-line border-y border-line">
-        {[...asks].sort((left, right) => left.from - right.from).map((ask) => (
-          <AskItem key={ask.id} ask={ask} at={at} board={board} onGoal={onGoal} />
-        ))}
-      </ul>
-    </section>
+    <Reveal className="mb-8" holds={asks.map((ask) => ask.id)} show={asks.length > 0}>
+      <section id="needs-you">
+        <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-you">Needs you · {asks.length}</h2>
+        <ul className="divide-y divide-line border-y border-line">
+          <Presence items={sorted} keyOf={(ask) => ask.id}>
+            {({ item, key, ref }) => <AskItem key={key} ref={ref} ask={item} at={at} board={board} onGoal={onGoal} />}
+          </Presence>
+        </ul>
+      </section>
+    </Reveal>
   );
 }
 
-function AskItem({ ask, at, board, onGoal }: { ask: Ask; at: number; board: Board; onGoal: (goalId: string) => void }) {
+function AskItem({ ask, at, board, onGoal, ref }: { ask: Ask; at: number; board: Board; onGoal: (goalId: string) => void; ref: (node: HTMLElement | null) => void }) {
   const subject = subjectOf(ask, board);
 
   return (
-    <li className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-2 py-3 pr-2" data-ask={ask.id}>
+    <li ref={ref} className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-2 py-3 pr-2" data-ask={ask.id}>
       <p className="flex min-w-0 items-baseline gap-3 text-xs">
         <span className="shrink-0 uppercase tracking-[0.12em] text-faint">{subject.area[0]}</span>
         {subject.goalId ? (
@@ -59,10 +64,12 @@ function AskItem({ ask, at, board, onGoal }: { ask: Ask; at: number; board: Boar
 }
 
 // A free answer, or one of the asker's choices with an optional note. The asker may also offer to take
-// a free answer instead of its choices; the note is then the answer. A failed send keeps what was entered.
+// a free answer instead of its choices; the note is then the answer. Sending plays the checkmark on the question;
+// a refusal plays it back, and keeps what was entered.
 function AnswerForm({ ask }: { ask: Ask }) {
   const act = useAct();
   const id = useId();
+  const form = useRef<HTMLFormElement>(null);
   const [choice, setChoice] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -76,16 +83,14 @@ function AnswerForm({ ask }: { ask: Ask }) {
   const submit = async () => {
     setBusy(true);
     setFailure(null);
-    try {
-      await act({ kind: "answer", askId: ask.id, answer });
-    } catch (caught) {
-      setFailure(caught instanceof Error ? caught.message : "The backend refused this.");
-      setBusy(false);
-    }
+    const refusal = await answerAsk(ask.id, form.current?.closest<HTMLElement>("[data-ask]") ?? null, () => act({ kind: "answer", askId: ask.id, answer }));
+    if (refusal === null) return;
+    setFailure(refusal);
+    setBusy(false);
   };
 
   return (
-    <form className="col-span-2 max-w-[880px] space-y-2" onSubmit={(event) => { event.preventDefault(); if (ready) void submit(); }}>
+    <form ref={form} className="col-span-2 max-w-[880px] space-y-2" onSubmit={(event) => { event.preventDefault(); if (ready) void submit(); }}>
       {chosen ? (
         <fieldset className="grid gap-2 sm:grid-cols-2" disabled={busy}>
           <legend className="sr-only">Choose an answer</legend>

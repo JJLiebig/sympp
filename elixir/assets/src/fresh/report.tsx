@@ -3,9 +3,10 @@ import { createContext, useContext, useState, type MouseEvent, type ReactNode } 
 
 import { ActButton } from "./actions";
 import { span, waitsOnOthers, type Goal, type Phase as GoalPhase, type GoalView, type Pkg, type PkgView, type Stage } from "./model";
-import { GLOW, NUDGE, smoothly, spotlight, useFlash } from "./motion";
+import { GLOW, Presence, spotlight, useFlash, useScramble, useSwap } from "./motion";
 import { Owner } from "./owner";
-import { CiCell, Lifecycle, NARROW_HIDDEN, NARROW_STATUS, NARROW_UNDER, NARROW_WRAP, OUTCOME, Pip, PKG_GRID, PKG_TITLE, PrLink, StageStatus } from "./parts";
+import { CiCell, Lifecycle, NARROW_HIDDEN, slotOf, NARROW_STATUS, NARROW_UNDER, NARROW_WRAP, OUTCOME, Pip, PKG_GRID, PKG_TITLE, PrLink, StageStatus } from "./parts";
+import { Reveal } from "./reveal";
 import { sampleReport } from "./samples";
 
 // What a goal says when asked "is this coming along?". The architect owns the words and the ETA;
@@ -58,8 +59,8 @@ export function useGoalLevel(verdict: Verdict) {
 
   return {
     level,
-    showAll: () => smoothly(() => setOverride({ density, level: "full" })),
-    toggle: () => smoothly(() => setOverride({ density, level: level === "closed" ? reopened : "closed" })),
+    showAll: () => setOverride({ density, level: "full" }),
+    toggle: () => setOverride({ density, level: level === "closed" ? reopened : "closed" }),
   };
 }
 
@@ -72,13 +73,12 @@ export function usePhaseControl(): PhaseControl {
   return {
     all,
     isOpen,
-    open: (state) => smoothly(() => setOverrides({ ...overrides, [state.phase.id]: true })),
-    setAll: (next) =>
-      smoothly(() => {
-        setOverrides({});
-        setAllState(next);
-      }),
-    toggle: (state) => smoothly(() => setOverrides({ ...overrides, [state.phase.id]: !isOpen(state) })),
+    open: (state) => setOverrides({ ...overrides, [state.phase.id]: true }),
+    setAll: (next) => {
+      setOverrides({});
+      setAllState(next);
+    },
+    toggle: (state) => setOverrides({ ...overrides, [state.phase.id]: !isOpen(state) }),
   };
 }
 
@@ -92,14 +92,16 @@ export function reportFor(view: GoalView): Report {
 }
 
 // The brief and its ETA, clamped to two lines; hovering shows the rest and a click opens it in full.
+// A new brief arrives with a letter scramble.
 export function Brief({ at, children, className = "", report }: { at: number; children?: ReactNode; className?: string; report: Report }) {
   const [full, setFull] = useState(false);
+  const text = useScramble(report.brief);
   const said = `${report.brief}${report.eta ? ` ${etaText(report.eta)}` : ""}`.trim();
   if (!said) return null;
 
   return (
     <button className={`w-full text-left wrap-anywhere ${full ? "block" : "line-clamp-2"} ${className}`} title={full ? undefined : said} type="button" onClick={() => setFull(!full)}>
-      {report.brief}
+      <span ref={text} />
       {report.eta ? <span className="text-dim"> {etaText(report.eta)}</span> : null}
       <BriefAge at={at} report={report} />
       {children}
@@ -227,11 +229,13 @@ export function GoalPackages({ at, control, level, onFull, view }: { at: number;
   const rest = [view.done.length > 0 ? `${view.done.length} ended` : "", view.queued.length > 0 ? `${view.queued.length} up next` : ""].filter(Boolean);
   const link = "px-2 font-mono text-xs text-dim underline-offset-4 hover:text-ink hover:underline";
 
+  const filled = sections.map((section) => ({ section, states: states.filter((state) => section.statuses.includes(state.status)) })).filter((entry) => entry.states.length > 0);
+
   return (
     <div className="space-y-3">
-      {sections.map((section) => (
-        <Section key={section.label} at={at} control={use} section={section} states={states.filter((state) => section.statuses.includes(state.status))} />
-      ))}
+      <Presence items={filled} keyOf={(entry) => entry.section.label}>
+        {(entry) => <Section key={entry.key} ref={entry.ref} at={at} control={use} section={entry.item.section} states={entry.item.states} />}
+      </Presence>
       {level === "full" ? (
         <button className={link} type="button" onClick={() => use.setAll(!use.all)}>
           {use.all ? "Show only what is moving" : `See all ${view.live.length + view.done.length + view.queued.length} packages`}
@@ -246,31 +250,33 @@ export function GoalPackages({ at, control, level, onFull, view }: { at: number;
   );
 }
 
-function Section({ at, control, section, states }: { at: number; control: PhaseControl; section: (typeof SECTIONS)[number]; states: PhaseState[] }) {
+function Section({ at, control, ref, section, states }: { at: number; control: PhaseControl; ref: (node: HTMLElement | null) => void; section: (typeof SECTIONS)[number]; states: PhaseState[] }) {
   const [unfolded, setUnfolded] = useState(false);
-  if (states.length === 0) return null;
-
   const fold = section.label !== "Now" && !control.all && !unfolded && states.length > FOLD_AFTER;
   const kept = section.keep === "last" ? states.slice(-FOLD_AFTER) : states.slice(0, FOLD_AFTER);
   // A phase opened by hand stays visible even where the list is folded.
   const shown = fold ? states.filter((state) => kept.includes(state) || control.isOpen(state)) : states;
   const more = fold && shown.length < states.length ? (
-    <button className="flex items-center gap-2 px-2 py-0.5 font-mono text-xs text-faint hover:text-ink" type="button" onClick={() => smoothly(() => setUnfolded(true))}>
+    <button className="flex items-center gap-2 px-2 py-0.5 font-mono text-xs text-faint hover:text-ink" type="button" onClick={() => setUnfolded(true)}>
       <span className="tracking-widest">···</span>
       {states.length - shown.length} more {section.keep === "last" ? "finished earlier" : "after that"}
     </button>
   ) : null;
 
   return (
-    <div>
+    <div ref={ref}>
       <p className={`px-2 pb-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] ${section.tone}`}>{section.label}</p>
       {section.keep === "last" ? more : null}
-      {shown.map((state) => (
-        <div key={state.phase.id}>
-          {state.phase.title ? <PhaseRow control={control} state={state} /> : null}
-          {control.isOpen(state) ? <PhasePackages at={at} state={state} all={control.all || state.status !== "active"} /> : null}
-        </div>
-      ))}
+      <Presence items={shown} keyOf={(state) => state.phase.id}>
+        {({ item: state, key, ref: row }) => (
+          <div key={key} ref={row}>
+            {state.phase.title ? <PhaseRow control={control} state={state} /> : null}
+            <Reveal show={control.isOpen(state)}>
+              <PhasePackages at={at} state={state} all={control.all || state.status !== "active"} />
+            </Reveal>
+          </div>
+        )}
+      </Presence>
       {section.keep === "first" ? more : null}
     </div>
   );
@@ -307,30 +313,36 @@ export function PhasePackages({ all, at, state }: { all: boolean; at: number; st
   return (
     <div className="pl-5">
       <Lines all={all} at={at} keep={(id) => !nested.has(id)} state={state} />
-      {shown.map((sub) => (
-        <div key={sub.id}>
-          <p className="flex items-baseline gap-3 px-2 pb-0.5 pt-1.5 text-xs text-dim">
-            <span className="min-w-0 flex-1 truncate">{sub.title}</span>
-            <span className="shrink-0 font-mono text-faint">{`${state.done.filter((pkg) => sub.ids.has(pkg.id)).length}/${sub.ids.size}`}</span>
-          </p>
-          <div className="pl-3">
-            <Lines all={all} at={at} keep={(id) => sub.ids.has(id)} state={state} />
+      <Presence items={shown} keyOf={(sub) => sub.id}>
+        {({ item: sub, key, ref }) => (
+          <div key={key} ref={ref}>
+            <p className="flex items-baseline gap-3 px-2 pb-0.5 pt-1.5 text-xs text-dim">
+              <span className="min-w-0 flex-1 truncate">{sub.title}</span>
+              <span className="shrink-0 font-mono text-faint">{`${state.done.filter((pkg) => sub.ids.has(pkg.id)).length}/${sub.ids.size}`}</span>
+            </p>
+            <div className="pl-3">
+              <Lines all={all} at={at} keep={(id) => sub.ids.has(id)} state={state} />
+            </div>
           </div>
-        </div>
-      ))}
+        )}
+      </Presence>
     </div>
   );
 }
 
+type Line = { id: string; live: PkgView | null; pkg: Pkg };
+
+// Moving packages first, then planned, then ended ones. A package keeps its row as it moves between them.
 function Lines({ all, at, keep, state }: { all: boolean; at: number; keep: (id: string) => boolean; state: PhaseState }) {
+  const lines: Line[] = [
+    ...state.live.map((live) => ({ id: live.pkg.id, live, pkg: live.pkg })),
+    ...(all ? [...state.queued, ...state.done].map((pkg) => ({ id: pkg.id, live: null, pkg })) : []),
+  ].filter((line) => keep(line.id));
+
   return (
-    <>
-      {state.live.filter((live) => keep(live.pkg.id)).map((live) => (
-        <PkgLine key={live.pkg.id} at={at} view={live} />
-      ))}
-      {all ? state.queued.filter((pkg) => keep(pkg.id)).map((pkg) => <RestLine key={pkg.id} pkg={pkg} />) : null}
-      {all ? state.done.filter((pkg) => keep(pkg.id)).map((pkg) => <RestLine key={pkg.id} pkg={pkg} />) : null}
-    </>
+    <Presence items={lines} keyOf={(line) => line.id}>
+      {({ item, key, ref }) => (item.live ? <PkgLine key={key} ref={ref} at={at} view={item.live} /> : <RestLine key={key} ref={ref} pkg={item.pkg} />)}
+    </Presence>
   );
 }
 
@@ -350,13 +362,12 @@ export function GoalTitle({ goal }: { goal: Goal }) {
   );
 }
 
-// The goal's phase, or Parked while the architect has set it aside. It nudges when it changes.
+// The goal's phase, or Parked while the architect has set it aside. It crossfades when it changes.
 export function PhaseBadge({ small, view }: { small?: boolean; view: GoalView }) {
   const key = reportFor(view).verdict === "parked" ? "parked" : view.phase;
-  const meta = PHASE[key];
-  const ref = useFlash<HTMLSpanElement>(key, NUDGE, 600);
+  const { ref, shown: meta } = useSwap(PHASE[key], key);
   return (
-    <span ref={ref} className={`flex shrink-0 origin-left items-center gap-1.5 font-semibold ${small ? "text-xs" : "text-sm"} ${meta.text}`}>
+    <span ref={ref} className={`flex shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap font-semibold ${small ? "text-xs" : "text-sm"} ${meta.text}`}>
       <span className={`rounded-full ${small ? "size-1.5" : "size-2"} ${meta.dot}`} />
       {meta.label}
     </span>
@@ -383,11 +394,19 @@ export function NeedsYouFlag({ view }: { view: GoalView }) {
 }
 
 // Status on the left, then the lifecycle and time in it, the PR with its checks, who works on it, and Finish where the PR waits on others.
-export function PkgLine({ at, view }: { at: number; view: PkgView }) {
-  const ref = useFlash<HTMLDivElement>(`${view.stage}${view.failed ? ":failed" : ""}`, GLOW, 1400);
+// The row glows whenever its place in the lifecycle changes.
+export function PkgLine({ at, ref, view }: { at: number; ref?: (node: HTMLElement | null) => void; view: PkgView }) {
+  const flash = useFlash(`${slotOf(view)}${view.failed ? ":failed" : ""}`, GLOW, 1400);
   const pkg = view.pkg;
   return (
-    <div ref={ref} className={ROW}>
+    <div
+      ref={(node) => {
+        flash(node);
+        ref?.(node);
+      }}
+      className={ROW}
+      data-pkg-row
+    >
       <Pip stage={view.stage} failed={view.failed} />
       <span className={PKG_TITLE}>{pkg.title}</span>
       {/* Narrow, the strip leaves the screen but screen readers still hear the current stage. */}
@@ -409,10 +428,10 @@ export function PkgLine({ at, view }: { at: number; view: PkgView }) {
   );
 }
 
-function RestLine({ pkg }: { pkg: Pkg }) {
+function RestLine({ pkg, ref }: { pkg: Pkg; ref?: (node: HTMLElement | null) => void }) {
   const outcome = pkg.outcome ? OUTCOME[pkg.outcome] : null;
   return (
-    <div className={ROW}>
+    <div ref={ref} className={ROW} data-pkg-row>
       <Pip stage={outcome ? "ended" : "planned"} />
       <span className={`${PKG_TITLE} ${outcome ? "text-faint line-through decoration-faint/60" : "text-dim"}`}>{pkg.title}</span>
       {/* The outcome starts where the lifecycle would and takes its status column too; narrow, it sits right of the title. */}

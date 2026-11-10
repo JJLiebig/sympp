@@ -1,17 +1,20 @@
 import { MoreHorizontal } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { leaveGoal, useRefusal } from "./exits";
 import type { Goal, GoalView, Phase } from "./model";
+import { calm, EASE } from "./motion";
 import { useAct, type GoalStep, type OperatorAction } from "./operator";
+import { Reveal } from "./reveal";
 
-type Action = { key: GoalStep; label: string; confirm: string };
+type Action = { key: GoalStep; label: string };
 
 const STALE_MS = 30 * 24 * 3600e3;
 
-const COMPLETE: Action = { key: "complete", label: "Complete", confirm: "Complete?" };
-const ARCHIVE: Action = { key: "archive", label: "Archive", confirm: "Archive?" };
-const RESTORE: Action = { key: "restore", label: "Restore", confirm: "Restore?" };
-const DELETE: Action = { key: "delete", label: "Delete", confirm: "Delete for good?" };
+const COMPLETE: Action = { key: "complete", label: "Complete" };
+const ARCHIVE: Action = { key: "archive", label: "Archive" };
+const RESTORE: Action = { key: "restore", label: "Restore" };
+const DELETE: Action = { key: "delete", label: "Delete" };
 
 // Only a done or unresolved goal can be archived; anything still open is completed first.
 function actionsFor(phase: Phase): Action[] {
@@ -20,9 +23,17 @@ function actionsFor(phase: Phase): Action[] {
   return phase === "unresolved" ? [COMPLETE, ARCHIVE, DELETE] : [COMPLETE, DELETE];
 }
 
+// A goal step plays on the goal it belongs to; its refusal shows on the goal too.
+function useGoalStep() {
+  const act = useAct();
+  return (goalId: string, step: GoalStep, from: Element | null) => leaveGoal(goalId, step, from?.closest<HTMLElement>("[data-goal]") ?? null, () => act({ kind: "goal", goalId, step }));
+}
+
 // A button for one operator action. With `confirm` it takes a second click. A refusal shows next to it.
 export function ActButton({ action, className = "", confirm, label, look = "rounded px-1.5 py-0.5 text-xs font-medium", tone = "text-dim" }: { action: OperatorAction; className?: string; confirm?: string; label: string; look?: string; tone?: string }) {
   const act = useAct();
+  const step = useGoalStep();
+  const button = useRef<HTMLButtonElement>(null);
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
@@ -32,7 +43,8 @@ export function ActButton({ action, className = "", confirm, label, look = "roun
     setBusy(true);
     setFailure(null);
     try {
-      await act(action);
+      if (action.kind === "goal") await step(action.goalId, action.step, button.current);
+      else await act(action);
     } catch (caught) {
       setFailure(caught instanceof Error ? caught.message : "The backend refused this.");
     } finally {
@@ -43,7 +55,7 @@ export function ActButton({ action, className = "", confirm, label, look = "roun
 
   return (
     <span className={`flex shrink-0 items-center gap-2 ${className}`}>
-      <button className={`${look} hover:bg-line hover:text-ink disabled:opacity-50 ${armed ? "bg-line text-ink" : tone}`} disabled={busy} type="button" onBlur={() => setArmed(false)} onClick={() => void run()}>
+      <button ref={button} className={`${look} hover:bg-line hover:text-ink disabled:opacity-50 ${armed ? "bg-line text-ink" : tone}`} disabled={busy} type="button" onBlur={() => setArmed(false)} onClick={() => void run()}>
         {armed ? confirm : label}
       </button>
       {failure ? <span className="text-xs text-fail">{failure}</span> : null}
@@ -51,56 +63,77 @@ export function ActButton({ action, className = "", confirm, label, look = "roun
   );
 }
 
-// Completing, archiving, restoring or deleting a goal. Each takes a second click.
+// Why the goal's last step did not go through. It opens under the goal and closes on the next attempt.
+export function GoalRefusal({ className = "", goalId }: { className?: string; goalId: string }) {
+  const refusal = useRefusal(goalId);
+  return (
+    <Reveal className={className} show={refusal !== null}>
+      <p className="text-sm text-fail" role="alert">
+        {refusal}
+      </p>
+    </Reveal>
+  );
+}
+
+// Completing, archiving, restoring or deleting a goal. Each takes a second click: the first arms it.
 export function GoalActions({ className, goal, phase }: { className?: string; goal: Goal; phase: Phase }) {
-  const act = useAct();
+  const step = useGoalStep();
   const [open, setOpen] = useState(false);
-  const [armed, setArmed] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
+  const [armed, setArmed] = useState<GoalStep | null>(null);
   const root = useRef<HTMLSpanElement>(null);
+  const menu = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
     if (!open) return undefined;
-    const close = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    const close = (event: PointerEvent | KeyboardEvent) => {
+      if (event instanceof KeyboardEvent ? event.key === "Escape" : !root.current?.contains(event.target as Node)) setOpen(false);
     };
     window.addEventListener("pointerdown", close);
-    return () => window.removeEventListener("pointerdown", close);
+    window.addEventListener("keydown", close);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", close);
+    };
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (open && !calm()) menu.current?.animate([{ opacity: 0, transform: "scale(0.96) translateY(-4px)" }, { opacity: 1, transform: "none" }], { duration: 150, easing: EASE });
   }, [open]);
 
   const toggle = () => {
     setOpen(!open);
     setArmed(null);
-    setFailure(null);
   };
-  const pick = async (action: Action) => {
-    if (armed !== action.key) return setArmed(action.key);
-    setBusy(true);
-    try {
-      await act({ kind: "goal", goalId: goal.id, step: action.key });
-      setOpen(false);
-    } catch (caught) {
-      setFailure(caught instanceof Error ? caught.message : "The backend refused this.");
-    } finally {
-      setBusy(false);
-      setArmed(null);
+  const pick = (action: Action, item: HTMLButtonElement) => {
+    if (armed !== action.key) {
+      setArmed(action.key);
+      if (!calm()) item.animate([{ transform: "scale(0.98)" }, { transform: "scale(1)" }], { duration: 160, easing: EASE });
+      return;
     }
+    setOpen(false);
+    setArmed(null);
+    void step(goal.id, action.key, root.current);
   };
 
   return (
     <span ref={root} className={`relative inline-block shrink-0 ${className ?? ""}`}>
-      <button aria-expanded={open} aria-label={`Actions for ${goal.title}`} className={`flex size-6 items-center justify-center rounded hover:bg-line hover:text-ink ${open ? "bg-line text-ink" : "text-faint"}`} title={actionsFor(phase).map((action) => action.label).join(", ")} type="button" onClick={toggle}>
+      <button aria-expanded={open} aria-haspopup="menu" aria-label={`Actions for ${goal.title}`} className={`flex size-6 items-center justify-center rounded hover:bg-line hover:text-ink ${open ? "bg-line text-ink" : "text-faint"}`} title={actionsFor(phase).map((action) => action.label).join(", ")} type="button" onClick={toggle}>
         <MoreHorizontal className="size-4" />
       </button>
       {open ? (
-        <span className="absolute right-0 top-full z-30 mt-1 block w-56 rounded border border-line bg-bg p-1 text-left text-sm font-normal shadow-xl">
-          {actionsFor(phase).map((action) => (
-            <button key={action.key} className={`block w-full rounded px-2.5 py-1.5 text-left hover:bg-line disabled:opacity-50 ${action.key === "delete" ? "text-fail" : "text-ink"}`} disabled={busy} type="button" onClick={() => void pick(action)}>
-              <span className="block font-medium">{armed === action.key ? `${action.confirm} Click again` : action.label}</span>
-            </button>
-          ))}
-          {failure ? <span className="block px-2.5 py-1.5 text-xs text-fail">{failure}</span> : null}
+        <span ref={menu} className="absolute right-0 top-full z-30 mt-1 flex w-40 origin-top-right flex-col rounded-lg border border-line bg-[#15171d] p-1 text-left text-sm font-medium shadow-[0_12px_32px_rgba(0,0,0,0.5)]" data-menu role="menu">
+          {actionsFor(phase).map((action) => {
+            const on = armed === action.key;
+            const danger = action.key === "delete";
+            return (
+              <button key={action.key} aria-label={on ? `${action.label}?` : action.label} className={`flex items-center rounded px-2.5 py-1.5 text-left transition-colors ${danger ? "text-fail" : "text-ink"} ${on ? (danger ? "bg-fail/12" : "bg-line") : "hover:bg-white/[0.06]"}`} role="menuitem" type="button" onClick={(event) => pick(action, event.currentTarget)}>
+                {action.label}
+                <span aria-hidden className={`inline-block transition-[max-width,opacity,transform] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none ${on ? "max-w-[1ch] translate-x-0 opacity-100" : "max-w-0 -translate-x-1 opacity-0"}`}>
+                  ?
+                </span>
+              </button>
+            );
+          })}
         </span>
       ) : null}
     </span>

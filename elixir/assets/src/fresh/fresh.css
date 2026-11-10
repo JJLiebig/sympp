@@ -48,22 +48,21 @@ button {
   scroll-margin-top: 116px;
 }
 
-/* Opening, closing and reordering glide: each goal moves to its new place and its box grows like an accordion. */
-.pin-top {
-  view-transition-name: pin-top;
+/* A completing goal gets a short scanline pass before it turns into pips. */
+.exit-scan {
+  position: relative;
 }
 
-.pin-bottom {
-  view-transition-name: pin-bottom;
+.exit-scan::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: var(--scan, 0);
+  background: repeating-linear-gradient(to bottom, rgb(110 168 254 / 0) 0 2px, rgb(110 168 254 / 0.32) 2px 3px);
+  mix-blend-mode: screen;
 }
 
-::view-transition-group(*) {
-  animation-duration: 240ms;
-  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
-  overflow: clip;
-}
-
-::view-transition-old(*),
-::view-transition-new(*) {
-  animation-duration: 180ms;
+.exit-scan > * {
+  filter: saturate(calc(1 - var(--scan, 0))) brightness(calc(1 + var(--scan, 0) * 0.25));
 }

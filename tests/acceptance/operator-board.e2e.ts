@@ -115,13 +115,13 @@ test('operator attention differs from explicit blockers and settings/archive act
   await close(client, wp);
   await browser.reload();
   await screen.getByRole('button', 'Actions for Operator choice', { exact: true }).tap();
-  await screen.getByRole('button', 'Archive', { exact: false }).tap();
-  await screen.getByRole('button', 'Archive? Click again', { exact: false }).tap();
+  await screen.getByRole('menuitem', 'Archive', { exact: true }).tap();
+  await screen.getByRole('menuitem', 'Archive?', { exact: true }).tap();
   await expect.poll(async () => (await client.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.archived_at).toBeTruthy();
   await screen.getByText('Archived', { exact: false, visible: true }).tap();
   await screen.getByRole('button', 'Actions for Operator choice', { exact: true }).tap();
-  await screen.getByRole('button', 'Restore', { exact: false }).tap();
-  await screen.getByRole('button', 'Restore? Click again', { exact: false }).tap();
+  await screen.getByRole('menuitem', 'Restore', { exact: true }).tap();
+  await screen.getByRole('menuitem', 'Restore?', { exact: true }).tap();
   await expect.poll(async () => (await client.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.archived_at).toBeNull();
 
   const intake = await client.operator('/api/v1/sympp/operator/work-requests', {

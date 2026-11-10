@@ -3,9 +3,11 @@ import { useState } from "react";
 
 import { ActButton } from "./actions";
 import { span, type Card, type CardState } from "./model";
+import { Presence } from "./motion";
 import { useAct } from "./operator";
 import { Owner } from "./owner";
-import { CARD_GRID, CiCell, PrLink, ReviewCell } from "./parts";
+import { Reveal } from "./reveal";
+import { CARD_GRID, CARD_UNDER, CiCell, NARROW_HIDDEN, NARROW_WRAP, PKG_TITLE, PrLink, ReviewCell } from "./parts";
 
 const DAY = 24 * 3600e3;
 type Shown = Exclude<CardState, "dismissed">;
@@ -30,42 +32,48 @@ export function visibleCards(cards: Card[], at: number): Array<Card & { state: S
 
 // Small work a chief handed to a child terminal, with no WorkRequest behind it.
 export function Cards({ at, cards }: { at: number; cards: Array<Card & { state: Shown }> }) {
-  if (cards.length === 0) return null;
+  const sorted = [...cards].sort((left, right) => ORDER[left.state] - ORDER[right.state] || right.since - left.since);
   const merged = cards.filter((card) => card.state === "merged");
 
   return (
-    <section className="mt-8">
-      <div className="mb-1 flex items-baseline gap-3">
-        <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">Small work · {cards.length}</h2>
-        {merged.length > 0 ? <ActButton action={{ kind: "dismiss", cardIds: merged.map((card) => card.id) }} className="ml-auto" label={`Hide merged (${merged.length})`} tone="text-faint" /> : null}
-      </div>
-      <div className="border-y border-line py-1">
-        {[...cards].sort((left, right) => ORDER[left.state] - ORDER[right.state] || right.since - left.since).map((card) => (
-          <CardRow key={card.id} at={at} card={card} />
-        ))}
-      </div>
-    </section>
+    <Reveal className="mt-8" show={cards.length > 0}>
+      <section>
+        <div className="mb-1 flex items-baseline gap-3">
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">Small work · {cards.length}</h2>
+          {merged.length > 0 ? <ActButton action={{ kind: "dismiss", cardIds: merged.map((card) => card.id) }} className="ml-auto" label={`Hide merged (${merged.length})`} tone="text-faint" /> : null}
+        </div>
+        <div className="border-y border-line py-1">
+          <Presence items={sorted} keyOf={(card) => card.id}>
+            {({ item, key, ref }) => <CardRow key={key} ref={ref} at={at} card={item} />}
+          </Presence>
+        </div>
+      </section>
+    </Reveal>
   );
 }
 
-function CardRow({ at, card }: { at: number; card: Card & { state: Shown } }) {
+function CardRow({ at, card, ref }: { at: number; card: Card & { state: Shown }; ref: (node: HTMLElement | null) => void }) {
   const meta = STATE[card.state];
   const ended = card.state === "merged" || card.state === "done";
 
   return (
-    <div className={ROW}>
+    <div ref={ref} className={ROW}>
       <span aria-hidden className={`size-2 rounded-[2px] ${meta.pip}`} />
-      <span className={`truncate text-sm ${ended ? "text-dim" : "text-ink"}`}>{card.task}</span>
-      <span className="truncate font-mono text-[11px] text-faint" title={`${card.repo} · ${card.branch}`}>
+      <span className={`${PKG_TITLE} ${ended ? "text-dim" : "text-ink"}`}>{card.task}</span>
+      <span className={`truncate font-mono text-[11px] text-faint ${NARROW_HIDDEN}`} title={`${card.repo} · ${card.branch}`}>
         {card.repo.split("/").pop()} · {card.branch}
       </span>
-      <CiCell ci={card.ci} stale={card.stale.includes("github")} />
-      <ReviewCell review={card.review} />
-      <PrLink pr={card.pr} repos={[card.repo.toLowerCase()]} />
+      <span className={CARD_UNDER}>
+        <CiCell ci={card.ci} stale={card.stale.includes("github")} />
+        <ReviewCell review={card.review} />
+        <PrLink className={NARROW_WRAP} pr={card.pr} repos={[card.repo.toLowerCase()]} />
+      </span>
       <span className={`whitespace-nowrap font-mono text-[11px] font-semibold ${meta.tone}`} title={`${meta.label} for ${span(at - card.since)}`}>
         {meta.label}
       </span>
-      <Owner owner={card.by} />
+      <span className={NARROW_HIDDEN}>
+        <Owner owner={card.by} />
+      </span>
       <Dismiss card={card} />
     </div>
   );

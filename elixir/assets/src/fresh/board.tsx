@@ -1,9 +1,11 @@
 import { Check } from "lucide-react";
 
-import { ActButton, GoalActions } from "./actions";
+import { ActButton, GoalActions, GoalRefusal } from "./actions";
 import { areaLabel } from "./areas";
 import { deployAt, span, unresolvedPkgs, type GoalView } from "./model";
+import { Presence } from "./motion";
 import { Owner } from "./owner";
+import { Reveal } from "./reveal";
 import { Deploy, OUTCOME, Shelf } from "./parts";
 import { GoalTitle, reportFor, type Verdict } from "./report";
 
@@ -59,29 +61,32 @@ export function Rest({ at, lanes }: { at: number; lanes: Lanes }) {
 
 // Done goals report once more, with where the result is running, then leave on their own.
 function Landed({ at, views }: { at: number; views: GoalView[] }) {
-  if (views.length === 0) return null;
-
   return (
-    <section className="mt-8">
-      <h2 className="mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">Landed · last 24 hours</h2>
-      <ul className="divide-y divide-line border-y border-line">
-        {views.map((view) => (
-          <li key={view.goal.id} className="flex items-center gap-3 py-2 pr-2 text-sm" data-goal={view.goal.id}>
-            <Check className="size-4 shrink-0 text-merge" />
-            <span className="max-w-[40%] shrink-0 truncate font-medium">
-              <GoalTitle goal={view.goal} />
-            </span>
-            <span className="shrink-0 text-[11px] uppercase tracking-[0.12em] text-faint" title={view.goal.repo}>{areaLabel(view.goal.area)}</span>
-            <span className="min-w-0 flex-1 truncate text-dim" title={reportFor(view).brief}>
-              {reportFor(view).brief}
-            </span>
-            <Deploy at={at} goal={view.goal} />
-            <span className="w-24 shrink-0 text-right font-mono text-xs text-faint">{span(at - view.lastMoveAt)} ago</span>
-            <GoalActions goal={view.goal} phase={view.phase} />
-          </li>
-        ))}
-      </ul>
-    </section>
+    <Reveal className="mt-8" holds={views.map((view) => view.goal.id)} show={views.length > 0}>
+      <section>
+        <h2 className="mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">Landed · last 24 hours</h2>
+        <ul className="divide-y divide-line border-y border-line">
+          <Presence items={views} keyOf={(view) => view.goal.id}>
+            {({ item: view, key, ref }) => (
+            <li key={key} ref={ref} className="flex flex-wrap items-center gap-x-3 py-2 pr-2 text-sm" data-goal={view.goal.id}>
+              <Check className="size-4 shrink-0 text-merge" />
+              <span className="max-w-[40%] shrink-0 truncate font-medium">
+                <GoalTitle goal={view.goal} />
+              </span>
+              <span className="shrink-0 text-[11px] uppercase tracking-[0.12em] text-faint" title={view.goal.repo}>{areaLabel(view.goal.area)}</span>
+              <span className="min-w-0 flex-1 truncate text-dim" title={reportFor(view).brief}>
+                {reportFor(view).brief}
+              </span>
+              <Deploy at={at} goal={view.goal} />
+              <span className="w-24 shrink-0 text-right font-mono text-xs text-faint">{span(at - view.lastMoveAt)} ago</span>
+              <GoalActions goal={view.goal} phase={view.phase} />
+              <GoalRefusal className="basis-full pl-7" goalId={view.goal.id} />
+            </li>
+            )}
+          </Presence>
+        </ul>
+      </section>
+    </Reveal>
   );
 }
 
