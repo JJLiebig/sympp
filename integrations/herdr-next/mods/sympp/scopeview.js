@@ -163,14 +163,22 @@ function ciDot(v, t, key, state, id, since = null) {
     .child(marked(v, `ci:${key}`, state, (s) => drawCi(t, s), `${id}-mark`));
 }
 
+// The running halo and its dot are drawn concentric on one 14px canvas, and both layers take the same box,
+// so they snap to the same pixels and share a centre at every zoom and pulse frame. Boxes of their own
+// would round to whole pixels apart.
+const HALO = "mods/sympp/ci-halo.svg";
+const HALO_DOT = "mods/sympp/ci-dot.svg";
+
 function drawCi(t, state) {
   const c = signal();
   const base = div().size(8).flex_none().rounded(4);
   if (state === "waiting" || state === "unknown") return base.border(1.5).border_color(tint(t.foreground, "55"));
-  if (state === "running") return div().relative().size(8).flex_none()
-    .child(div().absolute().top(-3).left(-3).size(14).rounded(7).border(1.5).border_color(c.checks)
-      .loop("opacity", { from: 0, to: 0.9, period: 1600 }))
-    .child(base.bg(c.checks));
+  if (state === "running") {
+    const layer = (path) => svg(path).absolute().top(-3).left(-3).size(14).text_color(c.checks);
+    return div().relative().size(8).flex_none()
+      .child(layer(HALO).loop("opacity", { from: 0, to: 0.9, period: 1600 }))
+      .child(layer(HALO_DOT));
+  }
   return base.bg(state === "passed" ? c.merge : c.fail);
 }
 

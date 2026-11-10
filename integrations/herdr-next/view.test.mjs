@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -175,6 +175,24 @@ test('an ask tops its task, and the review opens under its package', skip, async
   assert.ok(at('ask-ask:q1') < at('pkg-wp-build') && at('pkg-wp-build') < at('pkg-wp-review'));
   assert.ok(view.has('answer-ask:q1') && view.has('review-wp-review') && view.has('review-rounds'), 'the review opens under its package');
 });
+// Two boxes of their own snap to whole pixels apart, so the halo and its dot share one box, and their
+// shapes share a centre within it.
+test("a task's running checks pulse a halo that shares its dot's centre", skip, async (t) => {
+  const view = await render(t, { props: { role: 'panel' }, width: 1400, board: 'busy', path: { topic: 't-herdr' } });
+  const lines = view.out.split('\n');
+  const at = lines.findIndex((line) => line.includes(':id[Str("ci-wr-status")]'));
+  const layers = lines.slice(at + 2, at + 4).map((line) => line.match(/svg "mods\/[^/]+\/([\w-]+\.svg)" (\.absolute \.top\S+ \.left\S+ \.size\S+)/));
+  assert.ok(layers.every(Boolean), lines.slice(at, at + 4).join('\n'));
+  const [[, halo, box], [, dot, dotBox]] = layers;
+  assert.equal(dotBox, box, 'one box for both layers');
+  assert.ok(lines[at + 2].includes(':loop[Str("opacity")') && !lines[at + 3].includes(':loop'), 'only the halo pulses');
+  const shape = async (name) => {
+    const body = await readFile(join(here, 'mods', 'sympp', name), 'utf8');
+    return { view: body.match(/viewBox="([^"]+)"/)[1], centre: body.match(/cx="([^"]+)" cy="([^"]+)"/).slice(1).join(',') };
+  };
+  assert.deepEqual(await shape(halo), await shape(dot), 'the same canvas and centre');
+});
+
 test('the panel opens what it shows as a big tab, which draws the same scope wide', skip, async (t) => {
   const panel = await render(t, { props: { role: 'panel' }, width: 1400, board: 'busy', path: { topic: 't-herdr' } });
   assert.ok(panel.has('open-big') && panel.has('ci-wr-restore') && panel.has('ci-wr-cross'));
