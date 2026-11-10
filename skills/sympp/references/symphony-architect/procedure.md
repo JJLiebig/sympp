@@ -147,5 +147,9 @@ Keep messages as short as possible; never send one just to acknowledge.
 - Use `set_report` at milestones or road bumps (`brief`, `eta`, `parking`;
   `null` clears a field) and `set_blocker` for a real package blocker. Asks and
   waits aren't blockers.
+- Write `brief` for the owner in very plain words: what people will get, how
+  far along it is, and what comes next. One sentence, two at most. Name the
+  feature the way a user would, not the code. No file paths, IDs, PR numbers,
+  commits, counts or tool names.
 - Handle silent workers, failing checks and stuck tasks before asking anyone.
   Review rounds, CI and dependencies never need the human.
