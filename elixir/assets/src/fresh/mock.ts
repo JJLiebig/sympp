@@ -160,6 +160,15 @@ const GOALS: GoalPlan[] = [
     ],
   },
   {
+    id: "wr-ci-audit", title: "CI: workflow audit across repositories", repo: SYMPP, phase: "active", owner: architect("jjdev/t1q7"),
+    brief: ["Opus inventoried25repos/115workflowfiles/221jobdefinitions and grouped them by runner, cache and secret use; 14 jobs still pin actions by tag. Report /tmp/ci-audit/2026-11-09/report.txt lists each job with its repo, file and line so the pinning slice can start from it.", 64, "Audit delivered."],
+    plans: [
+      { title: "Inventory workflows and jobs", outcome: "pr_merged", started: 900, ended: 300, pr: [SYMPP, 861], ci: "passing" },
+      { title: "Pin third-party actions by SHA", progress: "implementing", started: 60, worker: ["jjdev/t3fd"] },
+      { title: "Share one cache key scheme" },
+    ],
+  },
+  {
     id: "wr-recap", title: "Nextide web: sponsored-stream recap export", repo: WEB, phase: "unresolved",
     plans: [
       { title: "Recap PDF layout", outcome: "pr_merged", started: 900, ended: 600, pr: [WEB, 1290], ci: "passing" },

@@ -123,7 +123,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     schema(
       %{
         "work_request_id" => string_schema(),
-        "brief" => nullable_text,
+        "brief" => %{
+          "type" => ["string", "null"],
+          "description" => "One or two very plain sentences for the owner: what is being built, how far along it is, what comes next. No paths, IDs, PR numbers or commits."
+        },
         "eta" => nullable_text,
         "parking" => %{
           "type" => ["object", "null"],
