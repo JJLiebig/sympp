@@ -1,23 +1,29 @@
-// Keep one read in flight and remember changes received while it runs. Publishing
-// each result prevents a busy ledger from starving the board of fresh data.
+// Change signals queue one catch-up read without invalidating the active read.
+// Explicit reads supersede earlier work, so saves, timers and reconnects can
+// recover from a stalled fetch and cannot be overwritten by a pre-save response.
 export function coalescedRead<T>(load: () => Promise<T>, show: (value: T) => void, fail: (error: unknown) => void) {
   let running = false;
   let pending = false;
-  return async () => {
-    pending = true;
-    if (running) return;
+  let sequence = 0;
+  const read = async () => {
+    const turn = ++sequence;
+    pending = false;
     running = true;
     try {
-      do {
-        pending = false;
-        try {
-          show(await load());
-        } catch (error) {
-          fail(error);
-        }
-      } while (pending);
+      const value = await load();
+      if (turn === sequence) show(value);
+    } catch (error) {
+      if (turn === sequence) fail(error);
     } finally {
-      running = false;
+      if (turn === sequence) {
+        running = false;
+        if (pending) void read();
+      }
     }
   };
+  const changed = () => {
+    if (running) pending = true;
+    else void read();
+  };
+  return { read, changed };
 }

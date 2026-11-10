@@ -65,9 +65,9 @@ export function App() {
 
   const shownNow = useRef<number | null>(null);
   // The first read opens on the busiest moment; later reads keep the board live unless it is replaying.
-  // Timer, change signals and actions share one read, followed by a catch-up
-  // read if anything changed in flight. Every completed read reaches the board.
-  const read = useMemo(() => coalescedRead(load, (loaded) => {
+  // Background changes share a read and one catch-up; actions, timers and
+  // reconnects supersede earlier reads to recover and respect committed writes.
+  const { read, changed } = useMemo(() => coalescedRead(load, (loaded) => {
       const before = shownNow.current;
       shownNow.current = loaded.now;
       setFailure(null);
@@ -77,7 +77,7 @@ export function App() {
       setFailure(caught instanceof Error ? caught.message : "Could not read the ledger");
     }), []);
   useEffect(() => { void read(); }, [read]);
-  useChangeSignal(!DEMO, read);
+  useChangeSignal(!DEMO, read, changed);
   // A snapshot or the demo never changes on its own, so it is read once. Anything else is reread, also while the first read has yet to succeed.
   useReread(!DEMO && data?.replayable !== true, read);
   const act = useOperator(read, setData);
@@ -283,7 +283,7 @@ function followNow(current: number, before: number, now: number) {
 
 // The backend only says that something changed; the board then reads everything again.
 // This stream is also how the backend knows a board is open, so that it does not open another one.
-function useChangeSignal(active: boolean, read: () => void) {
+function useChangeSignal(active: boolean, read: () => void, changed: () => void) {
   useEffect(() => {
     if (!active) return undefined;
     const stream = new EventSource(api("/dashboard/events"));
@@ -294,9 +294,9 @@ function useChangeSignal(active: boolean, read: () => void) {
       connected = true;
     };
     stream.addEventListener("open", onOpen);
-    stream.addEventListener("dashboard_changed", read);
+    stream.addEventListener("dashboard_changed", changed);
     return () => stream.close();
-  }, [active, read]);
+  }, [active, read, changed]);
 }
 
 function stamp(at: number) {
