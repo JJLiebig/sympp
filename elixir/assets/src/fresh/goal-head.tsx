@@ -1,11 +1,10 @@
-import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { GoalActions, GoalRefusal } from "./actions";
 import { areaLabel } from "./areas";
 import { GoalOwner } from "./board";
 import type { GoalView } from "./model";
-import { Deploy } from "./parts";
+import { Deploy, Fold } from "./parts";
 import { Brief, DotStrip, GoalTitle, NeedsYouFlag, PhaseBadge, type Report } from "./report";
 import { Reveal, Roll } from "./reveal";
 import { SinceChip } from "./since";
@@ -18,9 +17,10 @@ export function GoalHead({ at, area, big, open, report, toggle, view }: { at: nu
   return (
     <>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        <button className="flex min-w-[min(100%,18rem)] flex-1 items-start gap-3 text-left" type="button" onClick={toggle}>
-          <ChevronRight className={`mt-1 size-4 shrink-0 text-faint transition-transform ${open ? "rotate-90" : ""}`} />
-          <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+        <div className="flex min-w-[min(100%,18rem)] flex-1 items-start gap-3">
+          <Fold className="-mx-1" label={view.goal.title} open={open} onToggle={toggle} />
+          {/* A click anywhere on the title line folds too; keyboards use the chevron. */}
+          <span className="flex min-w-0 flex-1 cursor-pointer flex-wrap items-baseline gap-x-3 gap-y-0.5" onClick={toggle}>
             <span className={`min-w-0 max-w-full ${big ? "text-lg font-semibold leading-snug wrap-break-word" : "truncate font-medium"}`}>
               <GoalTitle goal={view.goal} />
             </span>
@@ -29,7 +29,7 @@ export function GoalHead({ at, area, big, open, report, toggle, view }: { at: nu
             <SinceChip goalId={view.goal.id} />
             {area}
           </span>
-        </button>
+        </div>
         <span className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-x-3 gap-y-1">
           <span className="flex max-w-[440px] flex-wrap items-center justify-end gap-y-1">
             <DotStrip view={view} />

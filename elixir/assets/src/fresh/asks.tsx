@@ -1,24 +1,33 @@
 import { LoaderCircle } from "lucide-react";
-import { useId, useRef, useState } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 
 import { answerAsk } from "./exits";
-import { span, type Ask, type Board, type Choice } from "./model";
-import { Presence } from "./motion";
+import { span, type Ask, type Board, type Choice, type GoalView } from "./model";
+import { Presence, useOpenWhenBrought } from "./motion";
 import { REDIRECT, useAct, type Answer } from "./operator";
-import { Owner } from "./owner";
+import { Fold, LINK } from "./parts";
+import { PhaseBadge, reportFor } from "./report";
 import { Reveal } from "./reveal";
 
-// What the ask is about: its goal, the package within it, or the card it came from.
-function subjectOf(ask: Ask, board: Board) {
-  const goal = board.goals.find((entry) => entry.id === ask.goalId);
-  if (goal) return { area: goal.area, title: goal.title, detail: goal.pkgs.find((pkg) => pkg.id === ask.pkgId)?.title ?? null, goalId: goal.id };
+// What the ask is about: its goal, with the package it names, or the card it came from.
+type Subject = { title: string; goalId: string | null; view: GoalView | null; repo: string; summary: string; about: string | null };
+
+function subjectOf(ask: Ask, board: Board, views: GoalView[]): Subject {
+  const view = views.find((entry) => entry.goal.id === ask.goalId) ?? null;
+  const goal = view?.goal ?? board.goals.find((entry) => entry.id === ask.goalId);
+  if (goal) {
+    const about = goal.pkgs.find((pkg) => pkg.id === ask.pkgId)?.title ?? null;
+    return { title: goal.title, goalId: goal.id, view, repo: repoName(goal.repo), summary: view ? reportFor(view).brief : "", about };
+  }
   const card = board.cards.find((entry) => entry.id === ask.cardId);
-  return { area: card?.area ?? [], title: card?.task ?? "", detail: card ? card.branch : null, goalId: null };
+  return { title: card?.task ?? "", goalId: null, view: null, repo: repoName(card?.repo ?? ""), summary: "", about: null };
 }
+
+const repoName = (repo: string) => repo.split("/").pop() ?? "";
 
 // Every question waiting on the operator, oldest first, each with its answer form.
 // `onGoal` lifts the area filter before it goes to the ask's goal, which may be filtered out.
-export function NeedsYou({ asks, at, board, onGoal }: { asks: Ask[]; at: number; board: Board; onGoal: (goalId: string) => void }) {
+export function NeedsYou({ asks, at, board, onGoal, views }: { asks: Ask[]; at: number; board: Board; onGoal: (goalId: string) => void; views: GoalView[] }) {
   const sorted = [...asks].sort((left, right) => left.from - right.from);
 
   return (
@@ -27,7 +36,7 @@ export function NeedsYou({ asks, at, board, onGoal }: { asks: Ask[]; at: number;
         <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-you">Needs you · {asks.length}</h2>
         <ul className="divide-y divide-line border-y border-line">
           <Presence items={sorted} keyOf={(ask) => ask.id}>
-            {({ item, key, ref }) => <AskItem key={key} ref={ref} ask={item} at={at} board={board} onGoal={onGoal} />}
+            {({ item, key, ref }) => <AskItem key={key} ref={ref} ask={item} at={at} subject={subjectOf(item, board, views)} onGoal={onGoal} />}
           </Presence>
         </ul>
       </section>
@@ -35,49 +44,93 @@ export function NeedsYou({ asks, at, board, onGoal }: { asks: Ask[]; at: number;
   );
 }
 
-function AskItem({ ask, at, board, onGoal, ref }: { ask: Ask; at: number; board: Board; onGoal: (goalId: string) => void; ref: (node: HTMLElement | null) => void }) {
-  const subject = subjectOf(ask, board);
+// A question lines up with the goals below: the chevron in the same gutter, the text under the title.
+// Open, it says what it is about, then asks; folded, it keeps its title line and the question's first line.
+// What was entered survives folding.
+function AskItem({ ask, at, onGoal, ref, subject }: { ask: Ask; at: number; onGoal: (goalId: string) => void; ref: (node: HTMLElement | null) => void; subject: Subject }) {
+  const [open, setOpen] = useState(true);
+  const [entered, setEntered] = useState<Entry>({ choice: null, text: "" });
+  useOpenWhenBrought(`ask:${ask.id}`, () => setOpen(true));
 
   return (
     <li ref={ref} className="py-4 pr-2" data-ask={ask.id}>
-      <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-        <p className="flex min-w-0 items-baseline gap-3 text-xs">
-          <span className="shrink-0 uppercase tracking-[0.12em] text-faint">{subject.area[0]}</span>
-          {subject.goalId ? (
-            <button className="min-w-0 truncate text-dim hover:text-ink" type="button" onClick={() => onGoal(subject.goalId!)}>
-              {subject.title}
-            </button>
-          ) : (
-            <span className="min-w-0 truncate text-dim">{subject.title}</span>
-          )}
-          {subject.detail ? <span className="min-w-0 truncate font-mono text-[11px] text-faint">{subject.detail}</span> : null}
-        </p>
-        <p className="flex shrink-0 items-center gap-3">
-          <Owner owner={ask.by} />
-          <span className="font-mono text-[11px] text-faint">{span(at - ask.from)} ago</span>
-        </p>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <div className="flex min-w-[min(100%,18rem)] flex-1 items-start gap-3">
+          <Fold className="-mx-1" label="Question" open={open} onToggle={() => setOpen(!open)} />
+          <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+            {subject.goalId ? (
+              <button className={`min-w-0 max-w-full truncate text-left font-medium ${LINK}`} title="Go to the goal" type="button" onClick={() => onGoal(subject.goalId!)}>
+                {subject.title}
+              </button>
+            ) : (
+              <span className="min-w-0 max-w-full truncate font-medium">{subject.title}</span>
+            )}
+            {subject.view ? <PhaseBadge small view={subject.view} /> : null}
+            {subject.repo ? <span className="min-w-0 truncate text-xs text-faint">· {subject.repo}</span> : null}
+          </span>
+        </div>
+        <span className="ml-auto shrink-0 font-mono text-[11px] text-faint">{span(at - ask.from)} ago</span>
       </div>
-      <div className={`mt-2 ${MEASURE}`}>
-        <p className="text-[15px] leading-snug text-ink">{ask.question}</p>
-        {ask.details ? <p className="mt-1 text-sm leading-snug text-dim">{ask.details}</p> : null}
-      </div>
-      <AnswerForm ask={ask} />
+      <Reveal className="pl-7" show={open}>
+        {subject.summary ? (
+          <p className="mt-1 truncate text-sm text-dim" title={subject.summary}>
+            {subject.summary}
+          </p>
+        ) : null}
+        {subject.about ? <p className="mt-1 text-sm text-dim">About: {subject.about}</p> : null}
+        <Question text={ask.details ? `${ask.question}\n${ask.details}` : ask.question} />
+        <AnswerForm ask={ask} entered={entered} onEnter={setEntered} />
+      </Reveal>
+      <Reveal className="pl-7" show={!open}>
+        <p className={`mt-1 truncate text-[15px] leading-snug text-ink ${MEASURE}`}>{ask.question}</p>
+      </Reveal>
     </li>
+  );
+}
+
+// The question and its details read as one text. A long one shows four lines until "more" opens it.
+function Question({ text }: { text: string }) {
+  const [full, setFull] = useState(false);
+  const [long, setLong] = useState(false);
+  const shown = useRef<HTMLParagraphElement>(null);
+
+  // Whether the clamp hides anything; checked again whenever the width changes the wrapping.
+  useLayoutEffect(() => {
+    const node = shown.current;
+    if (!node) return undefined;
+    const observer = new ResizeObserver(() => setLong(node.scrollHeight > node.clientHeight + 1));
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [text]);
+
+  return (
+    <div className={`mt-2 ${MEASURE}`}>
+      <p ref={shown} className={`whitespace-pre-line text-[15px] leading-snug text-ink wrap-break-word ${full ? "" : "line-clamp-4"}`}>
+        {text}
+      </p>
+      {long || full ? (
+        <button className={`mt-0.5 text-xs text-dim ${LINK}`} type="button" onClick={() => setFull(!full)}>
+          {full ? "less" : "more"}
+        </button>
+      ) : null}
+    </div>
   );
 }
 
 // The question and its answer share one measure, so the form lines up under the words it answers.
 const MEASURE = "max-w-[46rem]";
 
+// What has been entered: the picked choice, if any, and the text.
+type Entry = { choice: string | null; text: string };
+
 // A free answer, or one of the asker's choices with an optional note, in one frame: the choices, then the note
 // and Send. The asker may also offer to take a free answer instead of its choices; the note is then the answer.
 // Sending plays the checkmark on the question; a refusal plays it back, and keeps what was entered.
-function AnswerForm({ ask }: { ask: Ask }) {
+function AnswerForm({ ask, entered, onEnter }: { ask: Ask; entered: Entry; onEnter: (entered: Entry) => void }) {
   const act = useAct();
   const id = useId();
   const form = useRef<HTMLFormElement>(null);
-  const [choice, setChoice] = useState<string | null>(null);
-  const [text, setText] = useState("");
+  const { choice, text } = entered;
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const chosen = ask.choices.length > 0;
@@ -111,7 +164,7 @@ function AnswerForm({ ask }: { ask: Ask }) {
           <fieldset className="divide-y divide-line border-b border-line" disabled={busy}>
             <legend className="sr-only">{ask.question}</legend>
             {choices.map((entry) => (
-              <ChoiceOption key={entry.id} choice={entry} group={id} picked={choice === entry.id} plain={entry.id === REDIRECT} onPick={() => setChoice(entry.id)} />
+              <ChoiceOption key={entry.id} choice={entry} group={id} picked={choice === entry.id} plain={entry.id === REDIRECT} onPick={() => onEnter({ choice: entry.id, text })} />
             ))}
           </fieldset>
         ) : null}
@@ -125,7 +178,7 @@ function AnswerForm({ ask }: { ask: Ask }) {
             placeholder={placeholderFor(noting, redirecting)}
             rows={1}
             value={text}
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => onEnter({ choice, text: event.target.value })}
             onKeyDown={(event) => {
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) void submit();
             }}

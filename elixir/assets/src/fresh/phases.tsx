@@ -5,7 +5,7 @@ import { areaLabel } from "./areas";
 import { GoalOwner, lanesOf, UnresolvedLine } from "./board";
 import { deployAt, type Goal, type GoalView } from "./model";
 import { Presence } from "./motion";
-import { Deploy, deployLabel, Pip } from "./parts";
+import { Deploy, deployLabel, Fold, Pip } from "./parts";
 import { Brief, DotStrip, GoalPackages, GoalTitle, NeedsYouFlag, PhaseBadge, phaseStates, reportFor, useGoalLevel, usePhaseControl, type PhaseState } from "./report";
 import { Reveal } from "./reveal";
 import { SinceChip } from "./since";
@@ -27,7 +27,7 @@ export function Phases({ at, views }: { at: number; views: GoalView[] }) {
 
 function GoalRoute({ at, ref, view }: { at: number; ref: (node: HTMLElement | null) => void; view: GoalView }) {
   const report = reportFor(view);
-  const { level, showAll, toggle } = useGoalLevel(report.verdict);
+  const { level, showAll, toggle } = useGoalLevel(report.verdict, view.goal.id);
   const control = usePhaseControl();
   const phases = phaseStates(view);
   const listed = (state: PhaseState) => level === "full" || (level === "now" && state.status === "active");
@@ -41,8 +41,9 @@ function GoalRoute({ at, ref, view }: { at: number; ref: (node: HTMLElement | nu
   return (
     <section ref={ref} className="py-5" data-goal={view.goal.id}>
       <div className="flex items-center">
-        <button className="flex min-w-0 flex-1 items-baseline gap-3 text-left" type="button" onClick={toggle}>
-          <ChevronRight className={`size-4 shrink-0 self-center text-faint transition-transform ${level === "closed" ? "" : "rotate-90"}`} />
+        <Fold className="-ml-1 mr-2" label={view.goal.title} open={level !== "closed"} onToggle={toggle} />
+        {/* A click anywhere on the title line folds too; keyboards use the chevron. */}
+        <span className="flex min-w-0 flex-1 cursor-pointer items-baseline gap-3" onClick={toggle}>
           <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">{areaLabel(view.goal.area.slice(-1))}</span>
           <span className="min-w-0 flex-1 truncate font-semibold">
             <GoalTitle goal={view.goal} />
@@ -50,7 +51,7 @@ function GoalRoute({ at, ref, view }: { at: number; ref: (node: HTMLElement | nu
           <SinceChip goalId={view.goal.id} />
           <NeedsYouFlag view={view} />
           <PhaseBadge view={view} />
-        </button>
+        </span>
         <GoalOwner className="ml-3" view={view} />
         <GoalActions goal={view.goal} phase={view.phase} />
       </div>
