@@ -126,9 +126,9 @@ export function GoalActions({ className, goal, phase }: { className?: string; go
             const on = armed === action.key;
             const danger = action.key === "delete";
             return (
-              <button key={action.key} className={`flex items-center rounded px-2.5 py-1.5 text-left transition-colors ${danger ? "text-fail" : "text-ink"} ${on ? (danger ? "bg-fail/12" : "bg-line") : "hover:bg-white/[0.06]"}`} role="menuitem" type="button" onClick={(event) => pick(action, event.currentTarget)}>
+              <button key={action.key} aria-label={on ? `${action.label}?` : action.label} className={`flex items-center rounded px-2.5 py-1.5 text-left transition-colors ${danger ? "text-fail" : "text-ink"} ${on ? (danger ? "bg-fail/12" : "bg-line") : "hover:bg-white/[0.06]"}`} role="menuitem" type="button" onClick={(event) => pick(action, event.currentTarget)}>
                 {action.label}
-                <span aria-hidden={!on} className={`inline-block transition-[max-width,opacity,transform] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none ${on ? "max-w-[1ch] translate-x-0 opacity-100" : "max-w-0 -translate-x-1 opacity-0"}`}>
+                <span aria-hidden className={`inline-block transition-[max-width,opacity,transform] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none ${on ? "max-w-[1ch] translate-x-0 opacity-100" : "max-w-0 -translate-x-1 opacity-0"}`}>
                   ?
                 </span>
               </button>
