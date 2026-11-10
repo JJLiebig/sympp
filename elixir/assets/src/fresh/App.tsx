@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 
 import { api } from "./api";
@@ -13,6 +13,7 @@ import { buildBoard, liveCountAt, openAt, viewAt, type Archived, type Board, typ
 import { focusGoal } from "./motion";
 import { ActContext, send, type OperatorAction } from "./operator";
 import { Outline } from "./outline";
+import { coalescedRead } from "./reads";
 import { Phases } from "./phases";
 import { DensityContext, type Density } from "./report";
 import { setSamples, type SampleRule } from "./samples";
@@ -62,25 +63,23 @@ export function App() {
   const [replay, setReplay] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
-  const shownNow = useRef<number | null>(null);
   // The first read opens on the busiest moment; later reads keep the board live unless it is replaying.
-  // Reads can overlap (the timer, a change signal, an action), so only the latest one started is shown.
-  const reads = useRef(0);
-  const read = useCallback(() => {
-    const turn = ++reads.current;
-    void load().then((loaded) => {
-      if (turn !== reads.current) return;
-      const before = shownNow.current;
-      shownNow.current = loaded.now;
+  // Background changes share a read and one catch-up; actions, timers and
+  // reconnects supersede earlier reads to recover and respect committed writes.
+  const [{ read, changed }] = useState(() => {
+    let shownNow: number | null = null;
+    return coalescedRead(load, (loaded) => {
+      const before = shownNow;
+      shownNow = loaded.now;
       setFailure(null);
       setData(loaded);
       setAt((current) => (before === null ? loaded.busiest : followNow(current, before, loaded.now)));
     }, (caught: unknown) => {
-      if (turn === reads.current) setFailure(caught instanceof Error ? caught.message : "Could not read the ledger");
+      setFailure(caught instanceof Error ? caught.message : "Could not read the ledger");
     });
-  }, []);
-  useEffect(read, [read]);
-  useChangeSignal(!DEMO, read);
+  });
+  useEffect(() => { void read(); }, [read]);
+  useChangeSignal(!DEMO, read, changed);
   // A snapshot or the demo never changes on its own, so it is read once. Anything else is reread, also while the first read has yet to succeed.
   useReread(!DEMO && data?.replayable !== true, read);
   const act = useOperator(read, setData);
@@ -289,7 +288,7 @@ function followNow(current: number, before: number, now: number) {
 
 // The backend only says that something changed; the board then reads everything again.
 // This stream is also how the backend knows a board is open, so that it does not open another one.
-function useChangeSignal(active: boolean, read: () => void) {
+function useChangeSignal(active: boolean, read: () => void, changed: () => void) {
   useEffect(() => {
     if (!active) return undefined;
     const stream = new EventSource(api("/dashboard/events"));
@@ -300,9 +299,9 @@ function useChangeSignal(active: boolean, read: () => void) {
       connected = true;
     };
     stream.addEventListener("open", onOpen);
-    stream.addEventListener("dashboard_changed", read);
+    stream.addEventListener("dashboard_changed", changed);
     return () => stream.close();
-  }, [active, read]);
+  }, [active, read, changed]);
 }
 
 function stamp(at: number) {

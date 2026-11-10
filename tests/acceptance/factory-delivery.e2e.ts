@@ -6,6 +6,7 @@ import { close, head, installReviewSuite, pr, prUrl, progress, row, sync, test }
 import { githubCheckout } from '../support/worktree-git.js';
 
 test('deployment observations cover every delivered revision and preserve completion through rollback and unavailable history', async ({ delivery: { factory, provider } }) => {
+  const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
   const architect = await factory.client();
   const request = await architect.request('Deployment truth');
   const ids = (await architect.addPackages([contract('First revision'), contract('Second revision')]));
@@ -23,7 +24,7 @@ test('deployment observations cover every delivered revision and preserve comple
   await configure('unfinished.yml');
   expect((await hydrated()).deployments['example/service'].dev.reason).toBe('unfinished');
   // An open ask does not hold back delivered work.
-  const ask = (await architect.call('ask', { work_request_id: request, question: 'Has the delivered scope answered the remaining operator choice?' })).ask.id;
+  const ask = (await chief.call('ask', { work_request_id: request, question: 'Has the delivered scope answered the remaining operator choice?' })).ask.id;
   for (const [index, wp] of ids.entries()) {
     await architect.call('dispatch_work_package', { work_package_id: wp });
     const number = 710 + index;

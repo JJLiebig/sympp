@@ -27,11 +27,7 @@ tests without asking.
   product policy silently.
 - When you settle an in-scope product call yourself, record it with
   `record_decision(flag: true)` so the operator can review it.
-- Ask the operator only about material product trade-offs, approvals, or
-  access only they hold: `ask` with the `work_request_id` and, for a choice, a
-  `decision_prompt`. Make the question stand alone in plain English: the
-  situation, why it matters, the options and their trade-offs, your
-  recommendation, then the question.
+- Use `ask` when the human owner needs to give guidance; the question shows on the sympp board.
 - When the operator answers in conversation instead, record it with
   `resolve_ask(to: "answered")`.
 
@@ -52,7 +48,6 @@ read them with `read_work_request(detail: "full")`.
 ## Cards
 
 Children you start that open a branch or PR show up on the board as cards, with
-their PR, CI and review. They need no setup. A card agent asks the operator with
-`ask` and no `work_request_id`.
+their PR, CI and review. They need no setup. Card agents send questions to their parent.
 
 Writes need a Herdr terminal; outside Herdr sympp is read-only.
