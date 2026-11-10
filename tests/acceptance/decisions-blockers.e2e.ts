@@ -132,7 +132,7 @@ test('a chief recommends one choice, persists it for both interfaces, and cannot
     ...params, decision_prompt: { ...params.decision_prompt, options: [options[0], { ...options[1], recommended: true }, options[2]] },
   }));
   expect(rejected.error.code).toBe(-32602);
-  expect(rejected.error.data).toMatchObject({ reason: 'invalid_decision_prompt', message: 'at most one option may be recommended' });
+  expect(rejected.error.data).toMatchObject({ code: 'invalid_decision_prompt', message: 'at most one option may be recommended' });
   expect((await owner.call('read_work_request', { detail: 'full', work_request_id: id })).asks).toHaveLength(1);
 });
 
