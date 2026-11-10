@@ -262,8 +262,10 @@ async function play(node: HTMLElement, style: Style, verdict: Promise<boolean>) 
   const ctx = canvas.getContext("2d")!;
   ctx.scale(ratio, ratio);
   const draw = style.make(node, map);
+  let box = node.getBoundingClientRect();
   const ok = await run((progress) => {
-    const box = node.getBoundingClientRect();
+    // A row removed mid-exit keeps its last place, so the effect does not jump to the corner.
+    if (node.isConnected) box = node.getBoundingClientRect();
     canvas.style.transform = `translate(${box.left - padSide}px, ${box.top - padTop}px)`;
     ctx.clearRect(0, 0, width, height);
     draw(progress, ctx, padSide, padTop);
@@ -308,11 +310,10 @@ export function useRefusal(goalId: string) {
 
 export type Leave = "complete" | "delete" | "archive" | "restore";
 
-// Completes, deletes, archives or restores a goal. Complete and Delete play their exit on the goal's element
-// while the factory is asked; the goal's row closes up only once the exit has finished.
-export async function leaveGoal(goalId: string, step: Leave, node: HTMLElement | null, send: () => Promise<void>) {
-  refuse(goalId, null);
-  let reason = "";
+// Asks the factory while the row plays its exit, if it has one. The row's list closes it up only once the exit
+// has finished. Resolves with why the factory refused, or null once it agreed.
+async function exitWhile(key: string, node: HTMLElement | null, style: Style | null, send: () => Promise<void>): Promise<string | null> {
+  let reason: string | null = null;
   const verdict = send().then(
     () => true,
     (caught: unknown) => {
@@ -320,12 +321,22 @@ export async function leaveGoal(goalId: string, step: Leave, node: HTMLElement |
       return false;
     },
   );
-  const style = step === "complete" ? STYLES.check : step === "delete" ? STYLES.wind : null;
   const exit = node && style ? (calm() ? fade(node, verdict) : play(node, style, verdict)) : verdict;
-  holdLeave(goalId, exit);
-  const ok = await exit;
-  if (!ok) refuse(goalId, `Couldn't ${step} it. ${reason}`);
-  // A goal that stays listed after its exit, because the next read still shows it, comes back into view.
-  else if (node && style) setTimeout(() => node.isConnected && (node.style.visibility = ""), 8000);
-  return ok;
+  holdLeave(key, exit);
+  // A row that stays listed after its exit, because the next read still shows it, comes back into view.
+  if ((await exit) && node && style) setTimeout(() => node.isConnected && (node.style.visibility = ""), 8000);
+  return reason;
+}
+
+// Completes, deletes, archives or restores a goal. Complete plays the checkmark, Delete blows the goal away.
+export async function leaveGoal(goalId: string, step: Leave, node: HTMLElement | null, send: () => Promise<void>) {
+  refuse(goalId, null);
+  const reason = await exitWhile(goalId, node, step === "complete" ? STYLES.check : step === "delete" ? STYLES.wind : null, send);
+  if (reason !== null) refuse(goalId, `Couldn't ${step} it. ${reason}`);
+  return reason === null;
+}
+
+// Sends an answer while the question plays the checkmark. Resolves with why it was refused, or null.
+export function answerAsk(askId: string, node: HTMLElement | null, send: () => Promise<void>): Promise<string | null> {
+  return exitWhile(askId, node, STYLES.check, send);
 }

@@ -62,7 +62,7 @@ export function Rest({ at, lanes }: { at: number; lanes: Lanes }) {
 // Done goals report once more, with where the result is running, then leave on their own.
 function Landed({ at, views }: { at: number; views: GoalView[] }) {
   return (
-    <Reveal className="mt-8" show={views.length > 0}>
+    <Reveal className="mt-8" holds={views.map((view) => view.goal.id)} show={views.length > 0}>
       <section>
         <h2 className="mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">Landed · last 24 hours</h2>
         <ul className="divide-y divide-line border-y border-line">

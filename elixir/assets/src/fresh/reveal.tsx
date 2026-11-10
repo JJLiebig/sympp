@@ -6,14 +6,19 @@ const SHOWN = ["shown"];
 const HIDDEN: string[] = [];
 const same = (key: string) => key;
 
-// A section that opens and closes by animating its height. While it closes it keeps showing what it showed last.
-export class Reveal extends Component<{ children: ReactNode; className?: string; show: boolean }> {
+// A section that opens and closes by animating its height. While it closes it keeps showing what it showed last,
+// and it waits for the exits of the rows named in `holds`, as they were when it last showed.
+export class Reveal extends Component<{ children: ReactNode; className?: string; holds?: string[]; show: boolean }> {
   private kept: ReactNode = null;
+  private held: string[] = [];
 
   render() {
-    if (this.props.show) this.kept = this.props.children;
+    if (this.props.show) {
+      this.kept = this.props.children;
+      this.held = this.props.holds ?? [];
+    }
     return (
-      <Presence items={this.props.show ? SHOWN : HIDDEN} keyOf={same}>
+      <Presence holdsOf={() => this.held} items={this.props.show ? SHOWN : HIDDEN} keyOf={same}>
         {(entry) => (
           <div key={entry.key} ref={entry.ref} className={this.props.className}>
             {this.kept}

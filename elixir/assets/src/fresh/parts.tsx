@@ -181,7 +181,7 @@ function shelfCount(view: GoalView) {
 // `age` says what the time on each row means, for example "idle" or "done".
 export function Shelf({ age, at, cleanup, hint, label, views }: { age: string; at: number; cleanup?: boolean; hint?: string; label: string; views: GoalView[] }) {
   return (
-    <Reveal className="mt-8" show={views.length > 0}>
+    <Reveal className="mt-8" holds={views.map((view) => view.goal.id)} show={views.length > 0}>
       <details className="text-sm text-dim">
         <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">
           {label} · {views.length}
