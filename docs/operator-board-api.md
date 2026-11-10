@@ -416,7 +416,7 @@ then the most recently changed.
 | `asks` | The card's open asks, in the ask shape above with `card_id` instead of `work_request_id`. |
 | `since`, `ended_at`, `updated_at` | Timestamps. |
 
-A card agent opens an ask with `ask` and no `work_request_id`; the operator
+A chief opens an ask on its card with `ask` and no `work_request_id`; the operator
 answers it through the same answer routes, and the answer is typed into the
 card's terminal. The answer result names `card_id` instead of
 `work_request_id`. Ending a card withdraws its open asks. A dismissed, merged or

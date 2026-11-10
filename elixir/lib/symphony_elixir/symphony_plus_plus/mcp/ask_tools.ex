@@ -2,7 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AskTools do
   @moduledoc """
   `ask` opens a "Needs you" ask for the operator, on a WorkRequest or, without
   one, on the caller's card; `resolve_ask` records a conversational answer or
-  withdraws one. Neither needs ownership: any Herdr terminal may ask, and the
+  withdraws one. Only a chief may ask, without needing ownership; the
   asker or the WorkRequest owner may resolve.
   """
 
@@ -47,6 +47,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AskTools do
   defp ask_next_action(_ask),
     do:
       "The operator answers on the board. The answer is typed into this terminal when it runs on the factory's machine; otherwise read it from the ask in read_work_request with detail: full. Withdraw it with resolve_ask if it stops mattering."
+
+  defp error(tool, :chief_only),
+    do:
+      {:error, -32_003, "Forbidden",
+       %{
+         "tool" => tool,
+         "reason" => "chief_only",
+         "next_action" => "Only the chief asks the human owner. Send your chief one line instead."
+       }}
 
   defp error(tool, :no_open_card),
     do:

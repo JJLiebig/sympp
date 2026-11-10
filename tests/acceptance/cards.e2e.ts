@@ -91,7 +91,7 @@ test('unknown inputs never end a card, a finished terminal without a PR does, an
   await architect.request('Card parent');
   await mkdir(join(root, 'checkouts'));
   // Before it works on a branch, a terminal has no card to ask on.
-  const early = await factory.client('a1');
+  const early = await factory.client('a1', { 'sympp.role': 'chief' });
   const noCard = await early.reject('ask', { question: 'Before any branch?' }, 'no_open_card');
   expect(noCard.next_action).toContain('work_request_id');
   await early.reject('ask', { work_package_id: 'wp_any', question: 'Which package?' }, 'missing_work_request_id');

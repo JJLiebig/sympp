@@ -4,7 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
 
   | From | Event | To | Actor |
   |---|---|---|---|
-  | — | `open` | open | any Herdr terminal, attributed to it |
+  | — | `open` | open | a chief Herdr terminal, attributed to it |
   | open | `answer` | answered | the operator over HTTP (the answer is delivered to the asking terminal), or the asker or WorkRequest owner recording a conversational answer |
   | open | `withdraw` | withdrawn | the asker or WorkRequest owner; also automatic when the package it names ends, the WorkRequest is archived or the card ends |
 
@@ -33,7 +33,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   without a `work_request_id`, on the asking terminal's open card.
   """
   @spec open(repo(), Terminal.t(), map()) :: {:ok, Ask.t()} | {:error, term()}
-  def open(repo, %Terminal{} = terminal, attrs) when is_map(attrs) do
+  def open(repo, %Terminal{role: "chief"} = terminal, attrs) when is_map(attrs) do
     with {:ok, question} <- text(attrs["question"], :invalid_question),
          {:ok, prompt} <- decision_prompt(attrs["decision_prompt"]) do
       repo
@@ -41,6 +41,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
       |> DashboardPubSub.broadcast_changed_on_success()
     end
   end
+
+  def open(_repo, %Terminal{}, _attrs), do: {:error, :chief_only}
 
   defp insert(repo, terminal, nil, nil, question, prompt) do
     case Cards.open_card(repo, terminal.key) do
