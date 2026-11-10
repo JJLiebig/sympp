@@ -59,7 +59,7 @@ def install(revision, destination):
         with zipfile.ZipFile(archive_file) as zipped:
             for member in zipped.infolist():
                 target = extract / member.filename
-                if not target.resolve().is_relative_to(extract.resolve()) or stat.S_ISLNK(member.external_attr >> 16):
+                if extract.resolve() not in target.resolve().parents or stat.S_ISLNK(member.external_attr >> 16):
                     raise ValueError('Unsafe runtime archive path')
                 zipped.extract(member, extract)
                 if not member.is_dir():
@@ -72,7 +72,7 @@ def install(revision, destination):
             if payload[key] != manifest[key]:
                 raise ValueError('Runtime payload identity mismatch')
         dashboard = (extract / payload['dashboard']['relative_path']).resolve()
-        if not dashboard.is_relative_to(extract.resolve()) or not (dashboard / 'index.html').is_file():
+        if extract.resolve() not in dashboard.parents or not (dashboard / 'index.html').is_file():
             raise ValueError('Runtime dashboard missing')
         lines = sorted(str(file.relative_to(dashboard)).replace('\\', '/') + ' ' + digest(file.read_bytes())
                        for file in dashboard.rglob('*') if file.is_file())
