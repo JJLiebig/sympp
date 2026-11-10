@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 
 import { api } from "./api";
@@ -63,19 +63,21 @@ export function App() {
   const [replay, setReplay] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
-  const shownNow = useRef<number | null>(null);
   // The first read opens on the busiest moment; later reads keep the board live unless it is replaying.
   // Background changes share a read and one catch-up; actions, timers and
   // reconnects supersede earlier reads to recover and respect committed writes.
-  const { read, changed } = useMemo(() => coalescedRead(load, (loaded) => {
-      const before = shownNow.current;
-      shownNow.current = loaded.now;
+  const [{ read, changed }] = useState(() => {
+    let shownNow: number | null = null;
+    return coalescedRead(load, (loaded) => {
+      const before = shownNow;
+      shownNow = loaded.now;
       setFailure(null);
       setData(loaded);
       setAt((current) => (before === null ? loaded.busiest : followNow(current, before, loaded.now)));
     }, (caught: unknown) => {
       setFailure(caught instanceof Error ? caught.message : "Could not read the ledger");
-    }), []);
+    });
+  });
   useEffect(() => { void read(); }, [read]);
   useChangeSignal(!DEMO, read, changed);
   // A snapshot or the demo never changes on its own, so it is read once. Anything else is reread, also while the first read has yet to succeed.
