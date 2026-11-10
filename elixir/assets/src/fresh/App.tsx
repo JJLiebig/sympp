@@ -146,7 +146,7 @@ export function App() {
         <SinceLine at={at} changes={changes} since={since} width={current.width} onPick={goToGoal} onSeen={markSeen} />
         <ActContext.Provider value={act}>
           <div className={`mx-auto ${current.width}`}>
-            <NeedsYou asks={asks} at={at} board={data.board} onGoal={goToGoal} />
+            <NeedsYou asks={asks} at={at} board={data.board} views={views} onGoal={goToGoal} />
             <Decisions at={at} board={data.board} decisions={data.board.decisions.filter((entry) => entry.at <= at)} onGoal={goToGoal} />
           </div>
           {/* Switching the view, the area or the density draws the board afresh, so the switch itself never animates. */}

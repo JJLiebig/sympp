@@ -43,7 +43,7 @@ function Block({ at, block, ref }: { at: number; block: BlockOf; ref: (node: HTM
 
 function GoalRow({ at, ref, tagged, view }: { at: number; ref: (node: HTMLElement | null) => void; tagged?: boolean; view: GoalView }) {
   const report = reportFor(view);
-  const { level, showAll, toggle } = useGoalLevel(report.verdict);
+  const { level, showAll, toggle } = useGoalLevel(report.verdict, view.goal.id);
 
   return (
     <div ref={ref} className="py-2.5 pr-2" data-goal={view.goal.id}>

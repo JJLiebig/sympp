@@ -1,4 +1,4 @@
-import { Check, CircleDashed, ScanSearch, X } from "lucide-react";
+import { Check, ChevronRight, CircleDashed, ScanSearch, X } from "lucide-react";
 
 import { GoalActions, GoalRefusal, ShelfCleanup } from "./actions";
 import { areaLabel } from "./areas";
@@ -44,6 +44,20 @@ export const NARROW_WRAP = "max-[1000px]:overflow-visible max-[1000px]:whitespac
 // dismiss share a line, CI, review and PR take the line under the task (CARD_UNDER), and the rest drops out.
 export const CARD_GRID = "grid grid-cols-[10px_minmax(0,1fr)_auto_auto] items-center gap-x-2.5 min-[1000px]:grid-cols-[10px_minmax(0,1fr)_150px_88px_128px_64px_72px_150px_24px] min-[1280px]:grid-cols-[10px_minmax(0,1fr)_200px_88px_128px_64px_72px_170px_24px]";
 export const CARD_UNDER = "flex flex-wrap items-center gap-x-3 col-span-3 col-start-2 row-start-2 min-[1000px]:contents";
+
+// A button that shows only a glyph: a small square that lights up under the pointer and for the keyboard.
+export const GLYPH = "flex size-6 shrink-0 items-center justify-center rounded hover:bg-line hover:text-ink focus-visible:bg-line focus-visible:text-ink focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-you/70";
+// A text button that reads as a link.
+export const LINK = "rounded underline-offset-4 hover:text-ink hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-you/70";
+
+// The chevron that opens and closes a goal or a question. Callers let its square overhang the row, so the text keeps its place.
+export function Fold({ className = "", label, onToggle, open }: { className?: string; label: string; onToggle: () => void; open: boolean }) {
+  return (
+    <button aria-expanded={open} aria-label={label} className={`${GLYPH} text-faint ${className}`} type="button" onClick={onToggle}>
+      <ChevronRight className={`size-4 transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`} />
+    </button>
+  );
+}
 
 // A live package's way from build to merge, one fixed slot per stage.
 const LIFECYCLE = [

@@ -23,7 +23,7 @@ export function Briefing({ at, views }: { at: number; views: GoalView[] }) {
 
 function GoalReport({ at, ref, view }: { at: number; ref: (node: HTMLElement | null) => void; view: GoalView }) {
   const report = reportFor(view);
-  const { level, showAll, toggle } = useGoalLevel(report.verdict);
+  const { level, showAll, toggle } = useGoalLevel(report.verdict, view.goal.id);
 
   return (
     <article ref={ref} className="rounded-lg border border-line bg-panel p-5" data-goal={view.goal.id}>

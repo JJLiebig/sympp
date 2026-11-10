@@ -154,7 +154,28 @@ test('the person answers a question, reviews flagged decisions and releases a go
   const answer = async () => (await full()).asks.find((entry: any) => entry.id === ask);
   const decision = async (id: string) => (await full()).decision_log_entries.find((entry: any) => entry.id === id);
 
-  await expect(browser.locator(`[data-ask="${ask}"]`).getByText('Recommended', { exact: true })).toBeVisible();
+  // On a phone the goal sits below the question. Its title takes the person to the goal, opened,
+  // and the goal's flag takes them back to the question.
+  const question = browser.locator(`[data-ask="${ask}"]`);
+  const goal = browser.locator(`[data-goal="${request}"]`);
+  // Brought into view: the element starts on screen.
+  const inView = (selector: string) => browser.evaluate((css: string) => {
+    const box = document.querySelector(css)?.getBoundingClientRect();
+    return Boolean(box && box.top >= 0 && box.top < window.innerHeight);
+  }, selector);
+  await browser.setViewport({ width: 390, height: 640 });
+  await screen.getByRole('button', 'Collapsed', { exact: true }).tap();
+  expect(await inView(`[data-goal="${request}"]`)).toBe(false);
+  await question.getByRole('button', 'Board review', { exact: true }).tap();
+  await expect.poll(() => inView(`[data-goal="${request}"]`)).toBe(true);
+  await expect(goal.getByRole('button', 'Board review', { exact: true })).toBeExpanded();
+  await expect.poll(() => inView(`[data-ask="${ask}"]`)).toBe(false);
+  await goal.getByRole('button', 'Needs you', { exact: true }).tap();
+  await expect.poll(() => inView(`[data-ask="${ask}"]`)).toBe(true);
+  expect(await browser.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  await browser.setViewport({ width: 1440, height: 1000 });
+
+  await expect(question.getByText('Recommended', { exact: true })).toBeVisible();
   expect((await answer()).state).toBe('open');
   await screen.getByRole('radio', 'Bounded option Recommended', { exact: true }).tap();
   await screen.getByLabel('Note', { exact: true }).fill('Keep it small.');

@@ -5,6 +5,7 @@ import { ActButton } from "./actions";
 import { span, type Board, type Decision, type Undelivered as Reason } from "./model";
 import { useAct } from "./operator";
 import { Owner } from "./owner";
+import { GLYPH } from "./parts";
 
 const ROW = "grid grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-2 py-3 pr-2";
 
@@ -115,7 +116,7 @@ function Undelivered({ decision, failure, onDismiss }: { decision: Decision; fai
       <span className="min-w-0 flex-1 text-ink">“{decision.feedback}”</span>
       {failure ? <span className="shrink-0 text-xs text-fail">{failure}</span> : null}
       {typing ? null : (
-        <button aria-label="Dismiss undelivered feedback" className="flex size-6 shrink-0 items-center justify-center rounded text-faint hover:bg-line hover:text-ink" title="Dismiss" type="button" onClick={onDismiss}>
+        <button aria-label="Dismiss undelivered feedback" className={`${GLYPH} text-faint`} title="Dismiss" type="button" onClick={onDismiss}>
           <X className="size-3.5" />
         </button>
       )}

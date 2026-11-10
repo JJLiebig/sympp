@@ -3,7 +3,7 @@ import { createContext, useContext, useState, type MouseEvent, type ReactNode } 
 
 import { ActButton } from "./actions";
 import { span, waitsOnOthers, type Goal, type Phase as GoalPhase, type GoalView, type Pkg, type PkgView, type Stage } from "./model";
-import { GLOW, Presence, spotlight, useFlash, useScramble, useSwap } from "./motion";
+import { focusAsk, GLOW, Presence, useFlash, useOpenWhenBrought, useScramble, useSwap } from "./motion";
 import { Owner } from "./owner";
 import { CiCell, Lifecycle, NARROW_HIDDEN, slotOf, NARROW_STATUS, NARROW_UNDER, NARROW_WRAP, OUTCOME, Pip, PKG_GRID, PKG_TITLE, PrLink, StageStatus } from "./parts";
 import { Reveal } from "./reveal";
@@ -50,12 +50,15 @@ function defaultLevel(density: Density, verdict: Verdict): Level {
   return density === "attention" && wantsAttention(verdict) ? "full" : "closed";
 }
 
-// A goal follows the chosen density until it is opened or closed by hand.
-export function useGoalLevel(verdict: Verdict) {
+// A goal follows the chosen density until it is opened or closed by hand, or opened by a jump to it.
+export function useGoalLevel(verdict: Verdict, goalId: string) {
   const density = useContext(DensityContext);
   const [override, setOverride] = useState<{ density: Density; level: Level } | null>(null);
   const level = override?.density === density ? override.level : defaultLevel(density, verdict);
   const reopened: Level = density === "active" ? "now" : "full";
+  useOpenWhenBrought(`goal:${goalId}`, () => {
+    if (level === "closed") setOverride({ density, level: reopened });
+  });
 
   return {
     level,
@@ -374,22 +377,21 @@ export function PhaseBadge({ small, view }: { small?: boolean; view: GoalView })
   );
 }
 
-// Shown while someone waits on the operator for this goal. It sits inside the goal's toggle, so it is status text
-// there, not a control of its own: a click on it is a pointer shortcut to the question, which keyboards reach
-// through the Needs you list and the header's status.
+// Shown while someone waits on the operator for this goal; it takes you to the (first) question in Needs you.
 export function NeedsYouFlag({ view }: { view: GoalView }) {
   const ask = view.ask;
   if (!ask) return null;
+  // The flag sits on the goal's title line, which folds the goal on a click.
   const jump = (event: MouseEvent) => {
     event.stopPropagation();
-    spotlight(`[data-ask="${CSS.escape(ask.id)}"]`);
+    focusAsk(ask.id);
   };
 
   return (
-    <span className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded px-1.5 py-0.5 text-xs font-semibold text-you hover:bg-you/10" onClick={jump}>
-      <span className="size-1.5 animate-pulse rounded-full bg-you" />
+    <button className="flex shrink-0 items-center gap-1.5 rounded px-1.5 py-0.5 text-xs font-semibold text-you hover:bg-you/10 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-you/70" title="Go to the question" type="button" onClick={jump}>
+      <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-you motion-reduce:animate-none" />
       Needs you{view.asks.length > 1 ? ` · ${view.asks.length}` : ""}
-    </span>
+    </button>
   );
 }
 

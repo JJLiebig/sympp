@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { leaveGoal, useRefusal } from "./exits";
 import type { Goal, GoalView, Phase } from "./model";
 import { calm, EASE } from "./motion";
+import { GLYPH } from "./parts";
 import { useAct, type GoalStep, type OperatorAction } from "./operator";
 import { Reveal } from "./reveal";
 
@@ -117,7 +118,7 @@ export function GoalActions({ className, goal, phase }: { className?: string; go
 
   return (
     <span ref={root} className={`relative inline-block shrink-0 ${className ?? ""}`}>
-      <button aria-expanded={open} aria-haspopup="menu" aria-label={`Actions for ${goal.title}`} className={`flex size-6 items-center justify-center rounded hover:bg-line hover:text-ink ${open ? "bg-line text-ink" : "text-faint"}`} title={actionsFor(phase).map((action) => action.label).join(", ")} type="button" onClick={toggle}>
+      <button aria-expanded={open} aria-haspopup="menu" aria-label={`Actions for ${goal.title}`} className={`${GLYPH} ${open ? "bg-line text-ink" : "text-faint"}`} title={actionsFor(phase).map((action) => action.label).join(", ")} type="button" onClick={toggle}>
         <MoreHorizontal className="size-4" />
       </button>
       {open ? (

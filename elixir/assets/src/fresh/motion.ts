@@ -1,6 +1,7 @@
 // Motion has one job here: make a change noticeable. Nothing moves on the first paint or a view switch,
 // and a reread of the ledger moves only what changed, because every list is diffed by key.
-import { Component, useCallback, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Component, useCallback, useEffectEvent, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 
 export const EASE = "cubic-bezier(0.2, 0, 0, 1)";
 export const POP: Keyframe[] = [{ transform: "scale(2.6)", filter: "brightness(1.6)" }, { transform: "scale(1)", filter: "brightness(1)" }];
@@ -273,9 +274,36 @@ export function useSwap<T>(value: T, key: string) {
   return { ref, shown: shown.key === key || calm() ? value : shown.value };
 }
 
-// Bring one goal under the header and light it up. A goal on a closed shelf opens its shelf first.
+const OPEN = "fresh:open";
+
+// Bring one goal under the header, opened, and light it up. A goal on a closed shelf opens its shelf first.
 export function focusGoal(id: string) {
-  spotlight(`[data-goal="${CSS.escape(id)}"]`);
+  bringUp(`goal:${id}`, `[data-goal="${CSS.escape(id)}"]`);
+}
+
+// The same for one question in Needs you.
+export function focusAsk(id: string) {
+  bringUp(`ask:${id}`, `[data-ask="${CSS.escape(id)}"]`);
+}
+
+// The row opens before it is scrolled to. Opening grows its height, so the scroll waits for that:
+// near the bottom of the page the row could not reach its place before.
+function bringUp(key: string, selector: string) {
+  flushSync(() => window.dispatchEvent(new CustomEvent(OPEN, { detail: key })));
+  const growing = document.querySelector(selector)?.getAnimations({ subtree: true }).filter((animation) => animation.effect instanceof KeyframeEffect && animation.effect.getKeyframes().some((frame) => "height" in frame)) ?? [];
+  void Promise.all(growing.map((animation) => animation.finished.catch(() => undefined))).then(() => spotlight(selector));
+}
+
+// Opens a folded row when something brings it up: `goal:<id>` or `ask:<id>`.
+export function useOpenWhenBrought(key: string, open: () => void) {
+  const onOpen = useEffectEvent(open);
+  useLayoutEffect(() => {
+    const listen = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === key) onOpen();
+    };
+    window.addEventListener(OPEN, listen);
+    return () => window.removeEventListener(OPEN, listen);
+  }, [key]);
 }
 
 export function spotlight(selector: string) {

@@ -7,7 +7,7 @@ import { Presence } from "./motion";
 import { useAct } from "./operator";
 import { Owner } from "./owner";
 import { Reveal } from "./reveal";
-import { CARD_GRID, CARD_UNDER, CiCell, NARROW_HIDDEN, NARROW_WRAP, PKG_TITLE, PrLink, ReviewCell } from "./parts";
+import { CARD_GRID, CARD_UNDER, CiCell, GLYPH, NARROW_HIDDEN, NARROW_WRAP, PKG_TITLE, PrLink, ReviewCell } from "./parts";
 
 const DAY = 24 * 3600e3;
 type Shown = Exclude<CardState, "dismissed">;
@@ -84,7 +84,7 @@ function Dismiss({ card }: { card: Card }) {
   const [failure, setFailure] = useState<string | null>(null);
   const dismiss = () => act({ kind: "dismiss", cardIds: [card.id] }).catch((caught: unknown) => setFailure(caught instanceof Error ? caught.message : "The backend refused this."));
   return (
-    <button aria-label={`Dismiss ${card.task}`} className={`flex size-6 items-center justify-center rounded hover:bg-line hover:text-ink ${failure ? "text-fail" : "text-faint"}`} title={failure ?? "Dismiss"} type="button" onClick={() => void dismiss()}>
+    <button aria-label={`Dismiss ${card.task}`} className={`${GLYPH} ${failure ? "text-fail" : "text-faint"}`} title={failure ?? "Dismiss"} type="button" onClick={() => void dismiss()}>
       <X className="size-3.5" />
     </button>
   );
