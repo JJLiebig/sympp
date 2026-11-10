@@ -3,7 +3,7 @@
 // The effect holds part way until the factory answers; a refusal plays it back and the goal returns.
 import { useSyncExternalStore } from "react";
 
-import { calm, holdLeave } from "./motion";
+import { calm, collapseOut, holdLeave } from "./motion";
 
 const PITCH = 7;
 const SIZE = 5;
@@ -14,7 +14,7 @@ const BAYER = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
 type Cell = { cx: number; cy: number; color: string; weight: number; seed: number };
 type Map2 = { width: number; height: number; cells: Cell[] };
 type Draw = (progress: number, ctx: CanvasRenderingContext2D, ox: number, oy: number) => void;
-type Style = { duration: number; pad: [top: number, side: number]; make: (node: HTMLElement, map: Map2) => Draw };
+type Style = { duration: number; pad: [top: number, side: number, bottom: number]; make: (node: HTMLElement, map: Map2) => Draw };
 
 function hash(index: number) {
   let x = Math.imul(index ^ 0x9e3779b9, 0x85ebca6b);
@@ -126,10 +126,11 @@ const STYLES: Record<"check" | "wind", Style> = {
   // Every pip swirls into a pixel checkmark, which holds for a beat and pops into sparks.
   check: {
     duration: 1500,
-    pad: [70, 40],
+    // The checkmark keeps its size on a short goal and spills over its neighbours rather than shrinking.
+    pad: [110, 60, 110],
     make(node, map) {
       const [cx, cy] = [map.width / 2, map.height / 2];
-      const size = Math.min(map.height * 0.8, 130);
+      const size = Math.min(Math.max(map.height * 0.8, 96), 130);
       const corners = [[-0.48, 0.02], [-0.12, 0.38], [0.5, -0.42]].map(([x, y]) => [cx + x * size, cy + y * size]);
       const seen = new Set<string>();
       const targets: Array<[number, number]> = [];
@@ -190,7 +191,7 @@ const STYLES: Record<"check" | "wind", Style> = {
   // The goal comes apart from the left and blows off to the right like dust.
   wind: {
     duration: 1300,
-    pad: [60, 300],
+    pad: [60, 300, 24],
     make(node, map) {
       const rows = Math.ceil(map.height / PITCH);
       const band = 150;
@@ -251,10 +252,10 @@ function run(draw: (progress: number) => void, duration: number, verdict: Promis
 // The canvas floats over the page and follows the goal, so it stays on it when something above moves.
 async function play(node: HTMLElement, style: Style, verdict: Promise<boolean>) {
   const map = pipMap(node);
-  const [padTop, padSide] = style.pad;
+  const [padTop, padSide, padBottom] = style.pad;
   const ratio = window.devicePixelRatio || 1;
   const canvas = document.createElement("canvas");
-  const [width, height] = [map.width + padSide * 2, map.height + padTop];
+  const [width, height] = [map.width + padSide * 2, map.height + padTop + padBottom];
   canvas.width = Math.ceil(width * ratio);
   canvas.height = Math.ceil(height * ratio);
   Object.assign(canvas.style, { position: "fixed", zIndex: "40", pointerEvents: "none", width: `${width}px`, height: `${height}px`, left: "0", top: "0" });
@@ -321,10 +322,21 @@ async function exitWhile(key: string, node: HTMLElement | null, style: Style | n
       return false;
     },
   );
-  const exit = node && style ? (calm() ? fade(node, verdict) : play(node, style, verdict)) : verdict;
+  // A finished exit closes its gap at once instead of waiting for the next read to drop the row.
+  const exit = (node && style ? (calm() ? fade(node, verdict) : play(node, style, verdict)) : verdict).then(async (ok) => {
+    // With reduced motion the gap closes without a close-up.
+    if (ok && node && style) await (calm() ? void (node.style.display = "none") : collapseOut(node));
+    return ok;
+  });
   holdLeave(key, exit);
-  // A row that stays listed after its exit, because the next read still shows it, comes back into view.
-  if ((await exit) && node && style) setTimeout(() => node.isConnected && (node.style.visibility = ""), 8000);
+  // A row that stays listed after its exit, because the next read still shows it, opens and comes back into view.
+  if ((await exit) && node && style)
+    setTimeout(() => {
+      if (!node.isConnected) return;
+      node.getAnimations().forEach((animation) => animation.cancel());
+      node.style.display = "";
+      node.style.visibility = "";
+    }, 8000);
   return reason;
 }
 
