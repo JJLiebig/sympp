@@ -38,6 +38,14 @@ machine the factory can't see, release it with the operator Release route so
 another terminal can take the goal. See
 [worked on by](operator-board-api.md#worked-on-by).
 
+On a phone, or any screen up to 640 px wide, the board has two tabs at the
+bottom. Needs you holds questions, what is broken (failing checks, failed
+deploys), what is stuck (unresolved goals, owners that stopped answering,
+pull requests waiting on another repository, workers that exited) and decisions
+to review, each with its action. Goals lists every goal with what is moving.
+A goal opens on its own screen with its phases; back returns to the list.
+The phone always shows the present, without a replay bar.
+
 A goal can be marked done, archived or deleted from its menu, and a shelf can
 be archived in one go. None of these stops a running worker or merges a pull
 request. The board rereads the ledger when it changes and once a minute; if a

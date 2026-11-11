@@ -5,7 +5,7 @@ import { Glyph } from "./parts";
 const ROLE: Record<Role, string> = { chief: "chief", architect: "architect", worker: "worker", card: "agent" };
 const LIVENESS: Record<Liveness, string> = { live: "live", unknown: "not answering", finished: "finished" };
 // Shape carries the state as well as colour: filled while live, a ring while unknown, a dash once finished.
-const DOT: Record<Liveness, string> = { live: "size-1.5 rounded-full bg-merge", unknown: "size-2 rounded-full border border-checks", finished: "h-px w-2 bg-faint" };
+export const DOT: Record<Liveness, string> = { live: "size-1.5 rounded-full bg-merge", unknown: "size-2 rounded-full border border-checks", finished: "h-px w-2 bg-faint" };
 
 // The terminal working on something. A goal's owner whose machine stopped answering can be released so another terminal can take over.
 export function Owner({ className = "", goalId, owner }: { className?: string; goalId?: string; owner: Terminal | null }) {

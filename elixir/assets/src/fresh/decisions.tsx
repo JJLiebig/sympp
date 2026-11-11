@@ -98,7 +98,7 @@ function Reactions({ decision, onFeedback }: { decision: Decision; onFeedback: (
   );
 }
 
-const REASON: Record<Reason, string> = {
+export const REASON: Record<Reason, string> = {
   delivering: "Being typed into its terminal",
   delivery_interrupted: "The factory stopped while typing it",
   terminal_finished: "Its terminal has finished",
@@ -125,13 +125,21 @@ function Undelivered({ decision, failure, onDismiss }: { decision: Decision; fai
 }
 
 // Free text for the terminal that recorded the decision. A failed send keeps what was written.
-function FeedbackForm({ decision, onCancel }: { decision: Decision; onCancel: () => void }) {
+// `touch` sizes the controls for a finger.
+const FEEDBACK_SIZE = { pointer: { text: "min-h-9 text-sm", send: "h-9 px-3", cancel: "h-9 px-2" }, touch: { text: "min-h-11 text-base", send: "h-11 px-4", cancel: "h-11 px-3" } };
+
+// `touch` sizes the controls for a finger; `unnamed` leaves out who the feedback goes to.
+// With `text` and `onText` the caller keeps what was written.
+export function FeedbackForm({ decision, onCancel, onText, text: kept, touch, unnamed }: { decision: Decision; unnamed?: boolean; onCancel: () => void; onText?: (text: string) => void; text?: string; touch?: boolean }) {
   const act = useAct();
   const id = useId();
-  const [text, setText] = useState("");
+  const [own, setOwn] = useState("");
+  const text = kept ?? own;
+  const setText = onText ?? setOwn;
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const label = decision.by ? `Feedback for ${decision.by.address}` : "Feedback";
+  const size = FEEDBACK_SIZE[touch ? "touch" : "pointer"];
+  const label = !unnamed && decision.by ? `Feedback for ${decision.by.address}` : "Feedback";
 
   const submit = async () => {
     setBusy(true);
@@ -151,7 +159,7 @@ function FeedbackForm({ decision, onCancel }: { decision: Decision; onCancel: ()
         <textarea
           autoFocus
           aria-invalid={failure ? true : undefined}
-          className={`min-h-9 flex-1 resize-y rounded border bg-panel px-3 py-2 text-sm text-ink placeholder:text-faint focus:outline-none focus:ring-2 focus:ring-ink/40 ${failure ? "border-fail" : "border-line"}`}
+          className={`${size.text} flex-1 resize-y rounded border bg-panel px-3 py-2 text-ink placeholder:text-faint focus:outline-none focus:ring-2 focus:ring-ink/40 ${failure ? "border-fail" : "border-line"}`}
           disabled={busy}
           id={id}
           placeholder={label}
@@ -163,10 +171,10 @@ function FeedbackForm({ decision, onCancel }: { decision: Decision; onCancel: ()
             if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && text.trim()) void submit();
           }}
         />
-        <button className="h-9 shrink-0 rounded bg-ink px-3 text-sm font-semibold text-bg disabled:opacity-40" disabled={busy || !text.trim()} type="submit">
+        <button className={`${size.send} shrink-0 rounded bg-ink text-sm font-semibold text-bg disabled:opacity-40`} disabled={busy || !text.trim()} type="submit">
           {busy ? "Sending…" : "Send"}
         </button>
-        <button className="h-9 shrink-0 rounded px-2 text-sm text-dim hover:bg-line hover:text-ink" disabled={busy} type="button" onClick={onCancel}>
+        <button className={`${size.cancel} shrink-0 rounded text-sm text-dim hover:bg-line hover:text-ink`} disabled={busy} type="button" onClick={onCancel}>
           Cancel
         </button>
       </div>

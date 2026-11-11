@@ -267,11 +267,14 @@ function decisions(now: number): DecisionEntry[] {
 // Terminals that finished, so feedback typed for them is not delivered.
 const GONE = new Set(["jjlaptop/t0nm"]);
 
-// `quiet` is the board when nobody needs the operator.
-export function demoLedger(now: number, quiet = false): DemoLedger {
+// `quiet` is the board when nobody needs the operator; `empty` is a board with nothing on it.
+export type DemoVariant = "busy" | "quiet" | "empty";
+
+export function demoLedger(now: number, variant: DemoVariant = "busy"): DemoLedger {
+  if (variant === "empty") return { hydrated: { generated_at: new Date(now).toISOString(), settings: {}, work_request_details: [], cards: [] }, archived: { archived_work_requests: { work_requests: [] } } };
   const details = GOALS.map((goal) => detail(goal, now));
   const cards = CARDS.map((plan) => card(plan, now));
-  if (!quiet) {
+  if (variant === "busy") {
     for (const entry of asks(now)) {
       const target = entry.card_id ? cards.find((item) => item.id === entry.card_id)?.asks : details.find((item) => item.work_request.id === entry.work_request_id)?.asks;
       target?.push(entry);

@@ -21,7 +21,8 @@ function isValid(value: number | boolean) {
 }
 
 // The mark in the corner is the board's menu: the few settings there are live behind it, off the bar.
-export function BoardMenu({ settings, onSaved }: { settings: Settings; onSaved: () => void }) {
+// `touch` makes the mark a fingertip tall.
+export function BoardMenu({ settings, onSaved, touch = false }: { settings: Settings; onSaved: () => void; touch?: boolean }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLSpanElement>(null);
 
@@ -43,7 +44,7 @@ export function BoardMenu({ settings, onSaved }: { settings: Settings; onSaved: 
 
   return (
     <span ref={root} className="relative">
-      <button aria-expanded={open} aria-label="sympp settings" className={`group -ml-1.5 flex items-center gap-1 rounded px-1.5 py-1 text-sm font-semibold tracking-tight hover:bg-line ${open ? "bg-line" : ""}`} title="Settings" type="button" onClick={() => setOpen(!open)}>
+      <button aria-expanded={open} aria-label="sympp settings" className={`group -ml-1.5 flex items-center gap-1 rounded px-1.5 ${touch ? "h-11" : "py-1"} text-sm font-semibold tracking-tight hover:bg-line ${open ? "bg-line" : ""}`} title="Settings" type="button" onClick={() => setOpen(!open)}>
         sympp
         <ChevronDown className={`size-3 transition-colors group-hover:text-ink ${open ? "text-ink" : "text-faint"}`} />
       </button>
@@ -82,7 +83,7 @@ function Panel({ settings, onSaved }: { settings: Settings; onSaved: () => void 
   };
 
   return (
-    <div className="absolute left-0 top-full z-30 mt-2 w-[26rem] rounded border border-line bg-bg p-4 text-sm font-normal shadow-xl">
+    <div className="absolute left-0 top-full z-30 mt-2 w-[min(26rem,calc(100vw-2rem))] rounded border border-line bg-bg p-4 text-sm font-normal shadow-xl">
       {/* Nothing can be edited while a save is on its way, so what was sent is what the fields show. */}
       <fieldset disabled={busy}>
         <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">Leaving the board</p>

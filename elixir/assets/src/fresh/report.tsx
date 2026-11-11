@@ -175,7 +175,7 @@ function phaseState(phase: Phase, view: GoalView): PhaseState {
 }
 
 // A goal without groups still reads as finished work, work in progress and work to come.
-function looseStates(view: GoalView): PhaseState[] {
+export function looseStates(view: GoalView): PhaseState[] {
   const part = (id: string, title: string, status: PhaseStatus, live: PkgView[], queued: Pkg[], done: Pkg[]): PhaseState => ({ phase: { id, title, pkgs: [], subs: [] }, live, queued, done, status });
   return [
     ...(view.done.length > 0 ? [part("done", "Ended packages", "done", [], [], view.done)] : []),

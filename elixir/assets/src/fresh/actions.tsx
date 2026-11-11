@@ -8,7 +8,7 @@ import { GLYPH } from "./parts";
 import { useAct, type GoalStep, type OperatorAction } from "./operator";
 import { Reveal } from "./reveal";
 
-type Action = { key: GoalStep; label: string; danger?: boolean };
+export type Action = { key: GoalStep; label: string; danger?: boolean };
 
 const STALE_MS = 30 * 24 * 3600e3;
 
@@ -18,7 +18,7 @@ const RESTORE: Action = { key: "restore", label: "Restore" };
 const DELETE: Action = { key: "delete", label: "Delete", danger: true };
 
 // Only a done or unresolved goal can be archived; anything still open is completed first.
-function actionsFor(phase: Phase): Action[] {
+export function actionsFor(phase: Phase): Action[] {
   if (phase === "archived") return [RESTORE, DELETE];
   if (phase === "done") return [ARCHIVE, DELETE];
   return phase === "unresolved" ? [COMPLETE, ARCHIVE, DELETE] : [COMPLETE, DELETE];
@@ -76,12 +76,20 @@ export function GoalRefusal({ className = "", goalId }: { className?: string; go
   );
 }
 
-type MenuItem<K extends string> = { key: K; label: string; danger?: boolean };
+export type MenuItem<K extends string> = { key: K; label: string; danger?: boolean };
 
 // A ⋯ button that opens a short menu of actions. Each takes a second click: the first arms it.
 // Opening it puts focus on the first action, and the arrow keys move between them. Closing it from inside, with
 // Escape or a pick, hands focus back to the ⋯ button so the keyboard keeps its place. Focus leaving it closes it unarmed.
-function ActionMenu<K extends string>({ className, items, label, onPick }: { className?: string; items: Array<MenuItem<K>>; label: string; onPick: (key: K, root: HTMLElement | null) => void }) {
+// The ⋯ button and its items, sized for a pointer or, with `touch`, for a finger. Read when drawn: parts.tsx,
+// which holds GLYPH, imports this module in turn.
+function menuSize(touch: boolean) {
+  if (touch) return { trigger: "flex size-11 shrink-0 items-center justify-center rounded-md active:bg-line", menu: "w-48", item: "min-h-11 px-3" };
+  return { trigger: GLYPH, menu: "w-40", item: "px-2.5 py-1.5" };
+}
+
+export function ActionMenu<K extends string>({ className, items, label, onPick, touch = false }: { className?: string; items: Array<MenuItem<K>>; label: string; onPick: (key: K, root: HTMLElement | null) => void; touch?: boolean }) {
+  const size = menuSize(touch);
   const [open, setOpen] = useState(false);
   const [armed, setArmed] = useState<K | null>(null);
   const root = useRef<HTMLSpanElement>(null);
@@ -150,15 +158,15 @@ function ActionMenu<K extends string>({ className, items, label, onPick }: { cla
 
   return (
     <span ref={root} className={`relative inline-block shrink-0 ${className ?? ""}`} onBlur={leave}>
-      <button ref={trigger} aria-expanded={open} aria-haspopup="menu" aria-label={label} className={`${GLYPH} ${open ? "bg-line text-ink" : "text-faint"}`} title={items.map((item) => item.label).join(", ")} type="button" onClick={toggle}>
+      <button ref={trigger} aria-expanded={open} aria-haspopup="menu" aria-label={label} className={`${size.trigger} ${open ? "bg-line text-ink" : "text-faint"}`} title={items.map((item) => item.label).join(", ")} type="button" onClick={toggle}>
         <MoreHorizontal className="size-4" />
       </button>
       {open ? (
-        <span ref={menu} className="absolute right-0 top-full z-30 mt-1 flex w-40 origin-top-right flex-col rounded-lg border border-line bg-[#15171d] p-1 text-left text-sm font-medium shadow-[0_12px_32px_rgba(0,0,0,0.5)]" data-menu role="menu" onKeyDown={move}>
+        <span ref={menu} className={`absolute right-0 top-full z-30 mt-1 flex ${size.menu} origin-top-right flex-col rounded-lg border border-line bg-[#15171d] p-1 text-left text-sm font-medium shadow-[0_12px_32px_rgba(0,0,0,0.5)]`} data-menu role="menu" onKeyDown={move}>
           {items.map((item) => {
             const on = armed === item.key;
             return (
-              <button key={item.key} aria-label={on ? `${item.label}?` : item.label} className={`flex items-center rounded px-2.5 py-1.5 text-left transition-colors ${item.danger ? "text-fail" : "text-ink"} ${on ? (item.danger ? "bg-fail/12" : "bg-line") : "hover:bg-white/[0.06]"}`} role="menuitem" tabIndex={-1} type="button" onClick={(event) => pick(item, event.currentTarget)}>
+              <button key={item.key} aria-label={on ? `${item.label}?` : item.label} className={`flex items-center rounded ${size.item} text-left transition-colors ${item.danger ? "text-fail" : "text-ink"} ${on ? (item.danger ? "bg-fail/12" : "bg-line") : "hover:bg-white/[0.06]"}`} role="menuitem" tabIndex={-1} type="button" onClick={(event) => pick(item, event.currentTarget)}>
                 {item.label}
                 <span aria-hidden className={`inline-block transition-[max-width,opacity,transform] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none ${on ? "max-w-[1ch] translate-x-0 opacity-100" : "max-w-0 -translate-x-1 opacity-0"}`}>
                   ?
