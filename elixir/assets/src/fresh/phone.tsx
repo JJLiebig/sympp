@@ -12,7 +12,7 @@ import { calm, Presence } from "./motion";
 import { useAct } from "./operator";
 import { CiCell, Deploy, OrgIcon, Pip, PrLink, ReviewCell } from "./parts";
 import { GoalScreen, StageWord } from "./phone-goal";
-import { AskCard, DecisionCard, Heading, TroubleCard } from "./phone-parts";
+import { AskCard, CARD, DecisionCard, Heading, INSET, TroubleCard } from "./phone-parts";
 import { DotStrip, GoalTitle, PhaseBadge, reportFor } from "./report";
 import { BoardMenu } from "./settings";
 import { SinceChip, type Changes } from "./since";
@@ -107,71 +107,76 @@ function usePlace(fallback: Tab) {
   };
 }
 
-const openDecisions = (board: Board, at: number) => board.decisions.filter((entry) => entry.at <= at && (entry.state === "recorded" || (entry.state === "feedback" && entry.undelivered !== null)));
+// Everything in Needs you, in its four parts. The tab's count is their sum.
+type Inbox = { asks: Ask[]; broken: Trouble[]; stuck: Trouble[]; decisions: Decision[]; total: number };
+// What the operator can settle from here comes first.
+const STUCK_ORDER = ["unresolved", "release", "waits", "exited", "silent"];
+const stuckKind = (trouble: Trouble) => (trouble.kind === "silent" && trouble.pkg === null ? "release" : trouble.kind);
+
+function inboxOf({ asks, at, board, cards, views }: PhoneProps): Inbox {
+  const troubles = troublesOf(views, cards, at);
+  const decisions = board.decisions.filter((entry) => entry.at <= at && (entry.state === "recorded" || (entry.state === "feedback" && entry.undelivered !== null)));
+  const parts = {
+    asks: [...asks].sort((left, right) => left.from - right.from),
+    broken: troubles.filter(isBroken),
+    stuck: troubles.filter((trouble) => !isBroken(trouble)).sort((left, right) => STUCK_ORDER.indexOf(stuckKind(left)) - STUCK_ORDER.indexOf(stuckKind(right))),
+    decisions: decisions.sort((left, right) => right.at - left.at),
+  };
+  return { ...parts, total: parts.asks.length + parts.broken.length + parts.stuck.length + parts.decisions.length };
+}
 
 export function PhoneBoard(props: PhoneProps) {
-  const { at, asks, board, views } = props;
-  const troubles = troublesOf(views, props.cards, at);
-  const decisions = openDecisions(board, at);
-  const waiting = asks.length + troubles.length + decisions.filter((entry) => entry.state === "recorded").length;
-  const { place, open, back, tab } = usePlace(waiting > 0 ? "you" : "goals");
+  const { at, board, views } = props;
+  const inbox = inboxOf(props);
+  const { place, open, back, tab } = usePlace(inbox.total > 0 ? "you" : "goals");
   const shown = place.goal ? views.find((view) => view.goal.id === place.goal) : undefined;
 
   if (place.goal && shown) {
     return (
-      <GoalScreen
-        key={shown.goal.id}
-        asks={asks.filter((ask) => ask.goalId === shown.goal.id).sort((left, right) => left.from - right.from)}
-        at={at}
-        board={board}
-        decisions={decisions.filter((entry) => entry.goalId === shown.goal.id)}
-        view={shown}
-        views={views}
-        onBack={back}
-        onOpen={open}
-      />
+      <div className="phone">
+        <GoalScreen
+          key={shown.goal.id}
+          asks={inbox.asks.filter((ask) => ask.goalId === shown.goal.id)}
+          at={at}
+          board={board}
+          decisions={inbox.decisions.filter((entry) => entry.goalId === shown.goal.id)}
+          view={shown}
+          views={views}
+          onBack={back}
+          onOpen={open}
+        />
+      </div>
     );
   }
 
   return (
-    <div className="min-h-dvh pb-[calc(env(safe-area-inset-bottom)+5rem)]">
+    <div className="phone min-h-dvh pb-[calc(env(safe-area-inset-bottom)+5rem)]">
       <header className="sticky top-0 z-20 border-b border-line bg-bg/95 pt-[env(safe-area-inset-top)] backdrop-blur">
-        <div className="flex h-13 items-center gap-3 px-4">
+        <div className={`flex h-13 items-center gap-3 ${INSET}`}>
           <BoardMenu touch settings={props.settings} onSaved={props.onSaved} />
-          {props.failure ? <span className="min-w-0 flex-1 truncate text-xs text-fail">Connection lost · showing the last read</span> : <span className="flex-1" />}
-          <Needed count={asks.length} onTap={() => tab("you")} />
+          <span className="min-w-0 flex-1 truncate text-xs text-fail">{props.failure ? "Connection lost · showing the last read" : ""}</span>
+          <StatusDot needed={props.asks.length} />
         </div>
       </header>
-      <main className="px-[max(1rem,env(safe-area-inset-left))]">
-        {place.tab === "you" ? <YouTab {...props} decisions={decisions} troubles={troubles} onGoals={() => tab("goals")} onOpen={open} /> : <GoalsTab {...props} troubles={troubles} onOpen={open} />}
-      </main>
-      <TabBar asks={asks.length} goals={props.lanes.main.length} place={place} waiting={waiting} onTab={tab} />
+      <main>{place.tab === "you" ? <YouTab {...props} inbox={inbox} onGoals={() => tab("goals")} onOpen={open} /> : <GoalsTab {...props} troubles={[...inbox.broken, ...inbox.stuck]} onOpen={open} />}</main>
+      <TabBar asks={inbox.asks.length} goals={props.lanes.main.length} place={place} waiting={inbox.total} onTab={tab} />
     </div>
   );
 }
 
-// The board's first question, answered in the corner as on desktop.
-function Needed({ count, onTap }: { count: number; onTap: () => void }) {
-  if (count === 0) {
-    return (
-      <span className="flex items-center gap-2 text-sm text-dim">
-        Not needed
-        <span className="size-2 rounded-full bg-merge" />
-      </span>
-    );
-  }
+// The board's first question, answered in the corner: orange and pulsing while a question waits, green otherwise.
+function StatusDot({ needed }: { needed: number }) {
   return (
-    <button className="-mr-2 flex h-11 items-center gap-2 rounded px-2 text-sm font-semibold text-you active:bg-you/10" type="button" onClick={onTap}>
-      Needed in {count}
-      <span className="size-2 animate-pulse rounded-full bg-you motion-reduce:animate-none" />
-    </button>
+    <span className="flex size-11 items-center justify-center" role="img" aria-label={needed > 0 ? `You are needed in ${needed}` : "You are not needed"}>
+      <span className={`size-2.5 rounded-full ${needed > 0 ? "animate-pulse bg-you motion-reduce:animate-none" : "bg-merge"}`} />
+    </span>
   );
 }
 
 // The two tabs, at the bottom where the thumb is. Needs you counts everything in it, in orange while a question waits.
 function TabBar({ asks, goals, onTab, place, waiting }: { asks: number; goals: number; onTab: (tab: Tab) => void; place: Place; waiting: number }) {
   const tabs = [
-    { key: "you" as const, label: "Needs you", count: waiting, tone: asks > 0 ? "bg-you text-bg" : waiting > 0 ? "bg-line text-ink" : "" },
+    { key: "you" as const, label: "Needs you", count: waiting, tone: asks > 0 ? "bg-you text-bg" : "bg-line text-ink" },
     { key: "goals" as const, label: "Goals", count: goals, tone: "text-faint" },
   ];
   return (
@@ -191,20 +196,15 @@ function TabBar({ asks, goals, onTab, place, waiting }: { asks: number; goals: n
 }
 
 // Everything that waits on the operator: questions first, then what is broken, what is stuck, and calls to review.
-function YouTab({ asks, at, board, decisions, onGoals, onOpen, troubles, views }: PhoneProps & { decisions: Decision[]; onGoals: () => void; onOpen: (goalId: string) => void; troubles: Trouble[] }) {
-  const sorted = [...asks].sort((left, right) => left.from - right.from);
-  const broken = troubles.filter(isBroken);
-  // What the operator can settle from here comes first.
-  const stuck = troubles.filter((trouble) => !isBroken(trouble)).sort((left, right) => STUCK_ORDER.indexOf(stuckKind(left)) - STUCK_ORDER.indexOf(stuckKind(right)));
-
-  if (sorted.length + troubles.length + decisions.length === 0) {
+function YouTab({ at, board, inbox, onGoals, onOpen, views }: PhoneProps & { inbox: Inbox; onGoals: () => void; onOpen: (goalId: string) => void }) {
+  if (inbox.total === 0) {
     return (
       <div className="flex min-h-[60dvh] flex-col items-center justify-center gap-5 text-center">
         <p className="flex items-center gap-2 text-dim">
           <span className="size-2 rounded-full bg-merge" />
           You are not needed
         </p>
-        <button className="h-11 rounded-md border border-line px-4 text-sm font-medium text-ink" type="button" onClick={onGoals}>
+        <button className="h-11 rounded-md border border-line px-5 text-sm font-medium text-ink" type="button" onClick={onGoals}>
           See what is moving
         </button>
       </div>
@@ -215,26 +215,26 @@ function YouTab({ asks, at, board, decisions, onGoals, onOpen, troubles, views }
     <>
       <Glance
         counts={[
-          { id: "questions", label: "Questions", count: sorted.length, tone: "text-you" },
-          { id: "broken", label: "Broken", count: broken.length, tone: "text-fail" },
-          { id: "stuck", label: "Stuck", count: stuck.length, tone: "text-checks" },
-          { id: "decisions", label: "Decisions", count: decisions.length, tone: "text-ink" },
+          { id: "questions", label: "Questions", count: inbox.asks.length, tone: "text-you" },
+          { id: "broken", label: "Broken", count: inbox.broken.length, tone: "text-fail" },
+          { id: "stuck", label: "Stuck", count: inbox.stuck.length, tone: "text-checks" },
+          { id: "decisions", label: "Decisions", count: inbox.decisions.length, tone: "text-ink" },
         ]}
       />
-      <Group id="questions" items={sorted} keyOf={(ask) => ask.id} label="Questions" tone="text-you">
+      <Group id="questions" items={inbox.asks} keyOf={(ask) => ask.id} label="Questions" tone="text-you">
         {(ask, ref) => <AskCard ref={ref} ask={ask} at={at} board={board} views={views} onOpen={onOpen} />}
       </Group>
-      <Group id="broken" items={broken} keyOf={(trouble) => trouble.key} label="Broken" tone="text-fail">
+      <Group id="broken" items={inbox.broken} keyOf={(trouble) => trouble.key} label="Broken" tone="text-fail">
         {(trouble, ref) => <TroubleCard ref={ref} at={at} trouble={trouble} onOpen={onOpen} />}
       </Group>
-      <Group id="stuck" items={stuck} keyOf={(trouble) => trouble.key} label="Stuck" tone="text-checks">
+      <Group id="stuck" items={inbox.stuck} keyOf={(trouble) => trouble.key} label="Stuck" tone="text-checks">
         {(trouble, ref) => <TroubleCard ref={ref} at={at} trouble={trouble} onOpen={onOpen} />}
       </Group>
-      {decisions.length > 0 ? (
+      {inbox.decisions.length > 0 ? (
         <>
-          <Heading count={decisions.length} id="decisions" tone="text-dim">Decisions to review</Heading>
-          <ul className="space-y-3">
-            {[...decisions].sort((left, right) => right.at - left.at).map((decision) => (
+          <Heading count={inbox.decisions.length} id="decisions" tone="text-dim">Decisions to review</Heading>
+          <ul className="space-y-2">
+            {inbox.decisions.map((decision) => (
               <DecisionCard key={decision.id} at={at} board={board} decision={decision} onOpen={onOpen} />
             ))}
           </ul>
@@ -244,13 +244,10 @@ function YouTab({ asks, at, board, decisions, onGoals, onOpen, troubles, views }
   );
 }
 
-const STUCK_ORDER = ["unresolved", "release", "waits", "exited", "silent"];
-const stuckKind = (trouble: Trouble) => (trouble.kind === "silent" && trouble.pkg === null ? "release" : trouble.kind);
-
 // How much waits in each part, in one row at the top; a tap goes to that part.
 function Glance({ counts }: { counts: Array<{ id: string; label: string; count: number; tone: string }> }) {
   return (
-    <div className="mt-4 grid grid-cols-4 gap-1.5">
+    <div className={`mt-4 grid grid-cols-4 gap-1.5 ${INSET}`}>
       {counts.map((entry) => (
         <button key={entry.id} className="flex min-h-16 flex-col items-start justify-between rounded-lg border border-line bg-panel px-2.5 py-2 text-left disabled:opacity-40" disabled={entry.count === 0} type="button" onClick={() => document.getElementById(entry.id)?.scrollIntoView({ behavior: calm() ? "auto" : "smooth" })}>
           <span className={`font-mono text-xl font-semibold leading-none tabular-nums ${entry.count > 0 ? entry.tone : "text-faint"}`}>{entry.count}</span>
@@ -266,7 +263,7 @@ function Group<T>({ children, id, items, keyOf, label, tone }: { children: (item
   return (
     <>
       <Heading count={items.length} id={id} tone={tone}>{label}</Heading>
-      <ul className="space-y-3">
+      <ul className="space-y-2">
         <Presence items={items} keyOf={keyOf}>
           {({ item, key, ref }) => <Fragment key={key}>{children(item, ref)}</Fragment>}
         </Presence>
@@ -278,13 +275,14 @@ function Group<T>({ children, id, items, keyOf, label, tone }: { children: (item
 // What changed while away, the area filter, then every goal in sight, small work, and the shelves.
 function GoalsTab({ area, areas, at, changes, lanes, onArea, onOpen, onSeen, shownCards, since, troubles }: PhoneProps & { onOpen: (goalId: string) => void; troubles: Trouble[] }) {
   const byGoal = (goalId: string) => troubles.filter((trouble) => "view" in trouble && trouble.view.goal.id === goalId);
-  const empty = lanes.main.length + shownCards.length + lanes.landed.length + lanes.parked.length + lanes.dormant.length + lanes.backlog.length + lanes.settled.length + lanes.archived.length === 0;
+  const shelved = lanes.landed.length + lanes.parked.length + lanes.dormant.length + lanes.backlog.length + lanes.settled.length + lanes.archived.length;
+  if (lanes.main.length + shownCards.length + shelved === 0) return <p className="py-24 text-center text-dim">Nothing on the board</p>;
 
   return (
     <>
-      {empty ? null : <Since at={at} changes={changes} since={since} onOpen={onOpen} onSeen={onSeen} />}
+      <Since at={at} changes={changes} since={since} onOpen={onOpen} onSeen={onSeen} />
       {areas.length > 1 ? (
-        <nav className="-mx-4 mt-1 flex gap-1.5 overflow-x-auto px-4 [scrollbar-width:none]">
+        <nav className={`mt-2 flex gap-1.5 overflow-x-auto [scrollbar-width:none] ${INSET}`}>
           {[null, ...areas].map((name) => (
             <button key={name ?? "all"} className={`h-11 shrink-0 rounded-full px-4 text-sm ${name === area ? "bg-line text-ink" : "text-dim"}`} type="button" onClick={() => onArea(name)}>
               {name ?? "Everything"}
@@ -292,9 +290,8 @@ function GoalsTab({ area, areas, at, changes, lanes, onArea, onOpen, onSeen, sho
           ))}
         </nav>
       ) : null}
-      {empty ? <p className="py-24 text-center text-dim">Nothing on the board</p> : null}
       {lanes.main.length > 0 ? (
-        <ul className="mt-3 space-y-3">
+        <ul className="mt-3 space-y-2">
           <Presence items={lanes.main} keyOf={(view) => view.goal.id}>
             {({ item, key, ref }) => <GoalCard key={key} ref={ref} troubles={byGoal(item.goal.id)} view={item} onOpen={onOpen} />}
           </Presence>
@@ -311,10 +308,10 @@ function GoalsTab({ area, areas, at, changes, lanes, onArea, onOpen, onSeen, sho
   );
 }
 
-// The totals since the last look; each opens the next goal behind it.
+// The totals since the last look; each opens the next goal behind it. Nothing shows while nothing changed.
 function Since({ at, changes, onOpen, onSeen, since }: { at: number; changes: Changes; onOpen: (goalId: string) => void; onSeen: () => void; since: number }) {
   const turns = useRef(new Map<string, number>());
-  if (changes.totals.length === 0) return <p className="pt-4 text-sm text-faint">Nothing has changed since you last looked.</p>;
+  if (changes.totals.length === 0) return null;
   const next = (label: string, goalIds: string[]) => {
     const turn = turns.current.get(label) ?? 0;
     turns.current.set(label, turn + 1);
@@ -322,7 +319,7 @@ function Since({ at, changes, onOpen, onSeen, since }: { at: number; changes: Ch
   };
 
   return (
-    <section className="pt-3">
+    <section className={`pt-3 ${INSET}`}>
       <p className="text-xs text-faint">Since you last looked, {span(at - since)} ago</p>
       <p className="-mx-2 mt-0.5 flex flex-wrap">
         {changes.totals.map((total) => (
@@ -342,14 +339,12 @@ const MOVING_SHOWN = 3;
 
 // One goal at a glance: what it is, whether it needs the operator, what is wrong, and what is moving. A tap opens it.
 function GoalCard({ onOpen, ref, troubles, view }: { onOpen: (goalId: string) => void; ref: (node: HTMLElement | null) => void; troubles: Trouble[]; view: GoalView }) {
-  const total = view.live.length + view.queued.length + view.done.length;
   // The phase badge already says Unresolved.
   const words = [...new Set(troubles.map((trouble) => trouble.kind))].filter((kind) => kind !== "unresolved").map((kind) => TROUBLE_WORD[kind]);
-  const live = [...view.live].sort((left, right) => Number(right.failed) - Number(left.failed));
 
   return (
-    <li ref={ref} data-goal={view.goal.id}>
-      <button className="block w-full rounded-lg border border-line bg-panel px-4 py-3.5 text-left transition-colors active:bg-white/[0.04]" type="button" onClick={() => onOpen(view.goal.id)}>
+    <li ref={ref} className={CARD} data-goal={view.goal.id}>
+      <button className={`block w-full py-3.5 text-left transition-colors active:bg-white/[0.04] ${INSET}`} type="button" onClick={() => onOpen(view.goal.id)}>
         <span className="flex items-start gap-2">
           <span className="min-w-0 flex-1 font-medium leading-snug [overflow-wrap:anywhere]">
             <OrgIcon org={view.goal.org} /> <GoalTitle goal={view.goal} />
@@ -370,31 +365,40 @@ function GoalCard({ onOpen, ref, troubles, view }: { onOpen: (goalId: string) =>
           <SinceChip goalId={view.goal.id} />
         </span>
         <span className="mt-1 block truncate text-[11px] uppercase tracking-[0.12em] text-faint">{areaLabel(view.goal.area)}</span>
-        {total > 0 ? (
-          <span className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1">
-            <DotStrip view={view} />
-            <span className="font-mono text-xs text-dim">
-              {view.live.length > 0 ? `${view.live.length} moving · ` : ""}
-              {view.done.length}/{total} done
-            </span>
-          </span>
-        ) : (
-          <span className="mt-2 block text-sm text-dim">{reportFor(view).brief}</span>
-        )}
-        {live.length > 0 ? (
-          <span className="mt-3 block space-y-1.5 border-t border-line pt-2.5">
-            {live.slice(0, MOVING_SHOWN).map((entry) => (
-              <span key={entry.pkg.id} className="flex items-center gap-2.5 text-sm">
-                <Pip failed={entry.failed} stage={entry.stage} />
-                <span className="min-w-0 flex-1 truncate text-ink/90">{entry.pkg.title}</span>
-                <StageWord view={entry} />
-              </span>
-            ))}
-            {live.length > MOVING_SHOWN ? <span className="block pl-[18px] font-mono text-[11px] text-faint">+{live.length - MOVING_SHOWN} more</span> : null}
-          </span>
-        ) : null}
+        <Progress view={view} />
       </button>
     </li>
+  );
+}
+
+// The goal's dots and counts, then up to three moving packages with their stage, failing ones first.
+function Progress({ view }: { view: GoalView }) {
+  const total = view.live.length + view.queued.length + view.done.length;
+  const live = [...view.live].sort((left, right) => Number(right.failed) - Number(left.failed));
+  if (total === 0) return <span className="mt-2 block text-sm text-dim">{reportFor(view).brief}</span>;
+
+  return (
+    <>
+      <span className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <DotStrip view={view} />
+        <span className="font-mono text-xs text-dim">
+          {view.live.length > 0 ? `${view.live.length} moving · ` : ""}
+          {view.done.length}/{total} done
+        </span>
+      </span>
+      {live.length > 0 ? (
+        <span className="mt-3 block space-y-1.5 border-t border-line pt-2.5">
+          {live.slice(0, MOVING_SHOWN).map((entry) => (
+            <span key={entry.pkg.id} className="flex items-center gap-2.5 text-sm">
+              <Pip failed={entry.failed} stage={entry.stage} />
+              <span className="min-w-0 flex-1 truncate text-ink/90">{entry.pkg.title}</span>
+              <StageWord view={entry} />
+            </span>
+          ))}
+          {live.length > MOVING_SHOWN ? <span className="block pl-[18px] font-mono text-[11px] text-faint">+{live.length - MOVING_SHOWN} more</span> : null}
+        </span>
+      ) : null}
+    </>
   );
 }
 
@@ -410,12 +414,12 @@ function SmallWork({ cards }: { cards: Cards }) {
   return (
     <>
       <Heading count={cards.length}>Small work</Heading>
-      <ul className="space-y-1.5">
+      <ul className="space-y-px">
         <Presence items={sorted} keyOf={(card) => card.id}>
           {({ item: card, key, ref }) => {
             const ended = card.state === "merged" || card.state === "done";
             return (
-              <li key={key} ref={ref} className="flex items-start gap-3 rounded-md bg-white/[0.035] py-1 pl-3">
+              <li key={key} ref={ref} className="flex items-start gap-3 bg-white/[0.035] py-1 pl-[var(--inset-l)] pr-[max(0.25rem,env(safe-area-inset-right))]">
                 <span className="mt-[15px] flex">
                   <Pip stage={card.state === "working" ? "implementing" : card.state === "review_ci" ? "review_ci" : "ended"} failed={card.ci === "failing" && !ended} />
                 </span>
@@ -446,14 +450,14 @@ function Shelf({ at, label, onOpen, views }: { at: number; label: string; onOpen
   const landed = label.startsWith("Landed");
   return (
     <details className="group mt-6 border-t border-line" open={landed}>
-      <summary className="flex min-h-12 cursor-pointer list-none items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-faint [&::-webkit-details-marker]:hidden">
+      <summary className={`flex min-h-12 cursor-pointer list-none items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-faint [&::-webkit-details-marker]:hidden ${INSET}`}>
         <ChevronRight aria-hidden className="size-3.5 transition-transform group-open:rotate-90 motion-reduce:transition-none" />
         {label} · {views.length}
       </summary>
       <ul>
         {views.map((view) => (
           <li key={view.goal.id} data-goal={view.goal.id}>
-            <button className="flex min-h-12 w-full items-center gap-3 rounded py-2 text-left active:bg-white/[0.04]" type="button" onClick={() => onOpen(view.goal.id)}>
+            <button className={`flex min-h-12 w-full items-center gap-3 py-2 text-left active:bg-white/[0.04] ${INSET}`} type="button" onClick={() => onOpen(view.goal.id)}>
               {landed ? <Check aria-hidden className="size-4 shrink-0 text-merge" /> : null}
               <span className="min-w-0 flex-1">
                 <span className="block text-sm leading-snug text-ink/90 [overflow-wrap:anywhere]">{view.goal.title}</span>

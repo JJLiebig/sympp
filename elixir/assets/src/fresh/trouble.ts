@@ -1,5 +1,5 @@
 // What is broken or stuck on the board, read from the same goal views every layout shows.
-import { deployAt, waitsOnOthers, type Card, type GoalView, type Pkg } from "./model";
+import { deployAt, waitsOnOthers, type Card, type GoalView, type Pkg, type PkgView } from "./model";
 
 // Broken: checks fail or a deploy failed. Stuck: nothing will move until someone steps in.
 export type Trouble =
@@ -19,21 +19,30 @@ export function isBroken(trouble: Trouble) {
 
 // Keys match the exits that can play on them: an unresolved goal leaves by its goal id, a finished package by its id.
 export function troublesOf(views: GoalView[], cards: Card[], at: number): Trouble[] {
+  const failing = cards.filter((card) => card.ci === "failing" && (card.state === "working" || card.state === "review_ci"));
+  return [...views.flatMap((view) => goalTroubles(view, at)), ...failing.map((card): Trouble => ({ kind: "card_ci", key: `card:${card.id}`, card }))];
+}
+
+// A done goal can only have failed to deploy; an open one can also be unresolved, lose its owner, or have packages in trouble.
+function goalTroubles(view: GoalView, at: number): Trouble[] {
+  if (view.phase === "archived") return [];
+  const found: Trouble[] = deployAt(view.goal, at)
+    .filter((step) => step.state === "failed")
+    .map((step) => ({ kind: "deploy", key: `deploy:${view.goal.id}:${step.env}`, view, env: step.env }));
+  if (view.phase === "done") return found;
+  if (view.phase === "unresolved") found.push({ kind: "unresolved", key: view.goal.id, view });
+  if (view.goal.owner?.liveness === "unknown") found.push({ kind: "silent", key: `silent:${view.goal.id}`, view, pkg: null });
+  return [...found, ...view.live.flatMap((live) => pkgTroubles(view, live))];
+}
+
+// A worker that exited is stuck for that reason alone, whether or not its machine still answers.
+function pkgTroubles(view: GoalView, live: PkgView): Trouble[] {
+  const pkg = live.pkg;
   const found: Trouble[] = [];
-  for (const view of views) {
-    if (view.phase === "archived") continue;
-    for (const step of deployAt(view.goal, at)) if (step.state === "failed") found.push({ kind: "deploy", key: `deploy:${view.goal.id}:${step.env}`, view, env: step.env });
-    if (view.phase === "unresolved") found.push({ kind: "unresolved", key: view.goal.id, view });
-    if (view.goal.owner?.liveness === "unknown") found.push({ kind: "silent", key: `silent:${view.goal.id}`, view, pkg: null });
-    for (const live of view.live) {
-      const pkg = live.pkg;
-      if (live.failed) found.push({ kind: "ci", key: `ci:${pkg.id}`, view, pkg });
-      if (pkg.exited && live.stage === "implementing") found.push({ kind: "exited", key: `exited:${pkg.id}`, view, pkg });
-      else if (pkg.owner?.liveness === "unknown") found.push({ kind: "silent", key: `silent:${pkg.id}`, view, pkg });
-      if (waitsOnOthers(pkg)) found.push({ kind: "waits", key: pkg.id, view, pkg, since: live.since });
-    }
-  }
-  for (const card of cards) if (card.ci === "failing" && (card.state === "working" || card.state === "review_ci")) found.push({ kind: "card_ci", key: `card:${card.id}`, card });
+  if (live.failed) found.push({ kind: "ci", key: `ci:${pkg.id}`, view, pkg });
+  if (pkg.exited && live.stage === "implementing") found.push({ kind: "exited", key: `exited:${pkg.id}`, view, pkg });
+  else if (pkg.owner?.liveness === "unknown") found.push({ kind: "silent", key: `silent:${pkg.id}`, view, pkg });
+  if (waitsOnOthers(pkg)) found.push({ kind: "waits", key: pkg.id, view, pkg, since: live.since });
   return found;
 }
 

@@ -127,8 +127,10 @@ export type Entry = { choice: string | null; text: string; busy: boolean; failur
 // A free answer, or one of the asker's choices with an optional note, in one frame: the choices, then the note
 // and Send. The asker may also offer to take a free answer instead of its choices; the note is then the answer.
 // Sending plays the checkmark on the question; a refusal plays it back, and keeps what was entered.
+const FORM_SIZE = { pointer: { text: "min-h-8 text-sm", send: "h-8 px-3.5" }, touch: { text: "min-h-11 text-base", send: "h-11 px-5" } };
+
 // `touch` sizes the controls for a finger.
-export function AnswerForm({ ask, entered, onEnter, touch = false }: { ask: Ask; entered: Entry; onEnter: (change: Partial<Entry>) => void; touch?: boolean }) {
+export function AnswerForm({ ask, entered, onEnter, touch }: { ask: Ask; entered: Entry; onEnter: (change: Partial<Entry>) => void; touch?: boolean }) {
   const act = useAct();
   const id = useId();
   const form = useRef<HTMLFormElement>(null);
@@ -139,6 +141,7 @@ export function AnswerForm({ ask, entered, onEnter, touch = false }: { ask: Ask;
   const noting = chosen && !redirecting;
   const { answer, ready } = draft(chosen, choice, text.trim());
   const choices = ask.redirect ? [...ask.choices, { id: REDIRECT, label: ask.redirect, description: null, pros: [], cons: [] }] : ask.choices;
+  const size = FORM_SIZE[touch ? "touch" : "pointer"];
 
   const submit = async () => {
     if (!ready || busy) return;
@@ -170,7 +173,7 @@ export function AnswerForm({ ask, entered, onEnter, touch = false }: { ask: Ask;
           <label className="sr-only" htmlFor={`${id}-text`}>{noting ? "Note" : "Answer"}</label>
           <textarea
             aria-invalid={failure ? true : undefined}
-            className={`max-h-48 flex-1 ${touch ? "min-h-11 text-base" : "min-h-8 text-sm"} resize-none bg-transparent py-1.5 leading-5 text-ink outline-none field-sizing-content placeholder:text-faint disabled:text-dim`}
+            className={`max-h-48 flex-1 ${size.text} resize-none bg-transparent py-1.5 leading-5 text-ink outline-none field-sizing-content placeholder:text-faint disabled:text-dim`}
             disabled={busy}
             id={`${id}-text`}
             placeholder={placeholderFor(noting, redirecting)}
@@ -182,7 +185,7 @@ export function AnswerForm({ ask, entered, onEnter, touch = false }: { ask: Ask;
             }}
           />
           <button
-            className={`flex shrink-0 items-center gap-1.5 rounded-md ${touch ? "h-11 px-5" : "h-8 px-3.5"} text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-you enabled:bg-you enabled:text-bg enabled:hover:bg-you/90 disabled:bg-line disabled:text-faint`}
+            className={`flex shrink-0 items-center gap-1.5 rounded-md ${size.send} text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-you enabled:bg-you enabled:text-bg enabled:hover:bg-you/90 disabled:bg-line disabled:text-faint`}
             disabled={busy || !ready}
             type="submit"
           >

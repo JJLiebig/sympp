@@ -126,13 +126,17 @@ function Undelivered({ decision, failure, onDismiss }: { decision: Decision; fai
 
 // Free text for the terminal that recorded the decision. A failed send keeps what was written.
 // `touch` sizes the controls for a finger.
-export function FeedbackForm({ decision, onCancel, touch = false }: { decision: Decision; onCancel: () => void; touch?: boolean }) {
+const FEEDBACK_SIZE = { pointer: { text: "min-h-9 text-sm", send: "h-9 px-3", cancel: "h-9 px-2" }, touch: { text: "min-h-11 text-base", send: "h-11 px-4", cancel: "h-11 px-3" } };
+
+// `touch` sizes the controls for a finger; `named` says who the feedback goes to.
+export function FeedbackForm({ decision, named = true, onCancel, touch = false }: { decision: Decision; named?: boolean; onCancel: () => void; touch?: boolean }) {
   const act = useAct();
   const id = useId();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const label = decision.by ? `Feedback for ${decision.by.address}` : "Feedback";
+  const size = FEEDBACK_SIZE[touch ? "touch" : "pointer"];
+  const label = named && decision.by ? `Feedback for ${decision.by.address}` : "Feedback";
 
   const submit = async () => {
     setBusy(true);
@@ -152,7 +156,7 @@ export function FeedbackForm({ decision, onCancel, touch = false }: { decision: 
         <textarea
           autoFocus
           aria-invalid={failure ? true : undefined}
-          className={`${touch ? "min-h-11 text-base" : "min-h-9 text-sm"} flex-1 resize-y rounded border bg-panel px-3 py-2 text-ink placeholder:text-faint focus:outline-none focus:ring-2 focus:ring-ink/40 ${failure ? "border-fail" : "border-line"}`}
+          className={`${size.text} flex-1 resize-y rounded border bg-panel px-3 py-2 text-ink placeholder:text-faint focus:outline-none focus:ring-2 focus:ring-ink/40 ${failure ? "border-fail" : "border-line"}`}
           disabled={busy}
           id={id}
           placeholder={label}
@@ -164,10 +168,10 @@ export function FeedbackForm({ decision, onCancel, touch = false }: { decision: 
             if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && text.trim()) void submit();
           }}
         />
-        <button className={`${touch ? "h-11 px-4" : "h-9 px-3"} shrink-0 rounded bg-ink text-sm font-semibold text-bg disabled:opacity-40`} disabled={busy || !text.trim()} type="submit">
+        <button className={`${size.send} shrink-0 rounded bg-ink text-sm font-semibold text-bg disabled:opacity-40`} disabled={busy || !text.trim()} type="submit">
           {busy ? "Sending…" : "Send"}
         </button>
-        <button className={`${touch ? "h-11 px-3" : "h-9 px-2"} shrink-0 rounded text-sm text-dim hover:bg-line hover:text-ink`} disabled={busy} type="button" onClick={onCancel}>
+        <button className={`${size.cancel} shrink-0 rounded text-sm text-dim hover:bg-line hover:text-ink`} disabled={busy} type="button" onClick={onCancel}>
           Cancel
         </button>
       </div>

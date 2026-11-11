@@ -5,11 +5,17 @@ import { GoalRefusal } from "./actions";
 import { AnswerForm, Question, subjectOf, type Entry } from "./asks";
 import { FeedbackForm, REASON } from "./decisions";
 import { finishPkg, leaveGoal } from "./exits";
-import { span, unresolvedPkgs, type Ask, type Board, type Decision, type GoalView } from "./model";
+import { span, unresolvedPkgs, type Ask, type Board, type Decision, type GoalView, type Liveness, type Role, type Terminal } from "./model";
 import { useAct, type GoalStep } from "./operator";
-import { Owner } from "./owner";
+import { DOT } from "./owner";
 import { CiCell, OrgIcon, OUTCOME, Pip, reviewLabel } from "./parts";
+import { Reveal } from "./reveal";
 import type { Trouble } from "./trouble";
+
+// Text and controls keep this inset from the screen's edges; cards run edge to edge behind them (`.phone` in fresh.css).
+export const INSET = "pl-[var(--inset-l)] pr-[var(--inset-r)]";
+// A card: full width, one hairline above and below, with a small gap to the next.
+export const CARD = "border-y border-line bg-panel";
 
 // Every control on the phone is at least 44px tall, the height of a fingertip.
 const LOOK = {
@@ -22,7 +28,7 @@ const ARMED = { primary: "bg-you font-semibold text-bg", plain: "border border-i
 const ARM_MS = 4000;
 
 // A button for one action. With `confirm` the first tap arms it and a second tap within a few seconds runs it.
-// `run` resolves with why the action was refused, which shows under the button, or null.
+// `run` resolves with why the action was refused, which shows under the button, or with nothing.
 export function Tap({ className = "", confirm, label, look = "plain", run }: { className?: string; confirm?: string; label: string; look?: keyof typeof LOOK; run: (button: HTMLButtonElement) => Promise<string | null | void> | void }) {
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -45,7 +51,7 @@ export function Tap({ className = "", confirm, label, look = "plain", run }: { c
 
   return (
     <span className={`flex min-w-0 flex-col gap-1 ${className}`}>
-      <button className={`h-11 rounded-md px-4 text-sm font-medium transition-[color,background-color,border-color,transform] active:scale-[0.98] disabled:opacity-50 motion-reduce:active:scale-100 ${armed ? ARMED[look] : LOOK[look]}`} disabled={busy} type="button" onClick={(event) => void press(event.currentTarget)}>
+      <button className={`h-11 rounded-md px-5 text-sm font-medium transition-[color,background-color,border-color,transform] active:scale-[0.98] disabled:opacity-50 motion-reduce:active:scale-100 ${armed ? ARMED[look] : LOOK[look]}`} disabled={busy} type="button" onClick={(event) => void press(event.currentTarget)}>
         {armed ? confirm : label}
       </button>
       {failure ? (
@@ -66,40 +72,69 @@ export function useGoalStep() {
 
 export function Heading({ children, count, id, tone = "text-faint" }: { children: ReactNode; count?: number; id?: string; tone?: string }) {
   return (
-    <h2 className={`mb-2 mt-7 scroll-mt-[calc(env(safe-area-inset-top)+4rem)] px-1 text-[11px] font-semibold uppercase tracking-[0.14em] first:mt-4 ${tone}`} id={id}>
+    <h2 className={`mb-2 mt-7 scroll-mt-[calc(env(safe-area-inset-top)+4rem)] text-[11px] font-semibold uppercase tracking-[0.14em] first:mt-4 ${INSET} ${tone}`} id={id}>
       {children}
       {count !== undefined ? ` · ${count}` : null}
     </h2>
   );
 }
 
-const CARD = "rounded-lg border border-line bg-panel";
+const ROLE: Record<Role, string> = { chief: "chief", architect: "architect", worker: "worker", card: "agent" };
+const LIVENESS: Record<Liveness, string> = { live: "", unknown: "not answering", finished: "finished" };
+
+// A terminal by what it is, never by its address: "Architect", "Worker", "Herdr chief". Empty when nobody said.
+export function kindOf(terminal: Terminal | null) {
+  if (!terminal?.role) return "";
+  const kind = terminal.topic ? `${terminal.topic} ${ROLE[terminal.role]}` : ROLE[terminal.role];
+  return kind[0].toUpperCase() + kind.slice(1);
+}
+
+// Who works on something, with the same dot as desktop: filled while live, a ring while not answering, a dash once finished.
+export function Who({ terminal }: { terminal: Terminal | null }) {
+  const kind = kindOf(terminal);
+  if (!kind || !terminal) return null;
+  const liveness = terminal.liveness;
+  return (
+    <span className={`flex items-center gap-2 text-xs ${liveness === "unknown" ? "text-checks" : "text-dim"}`}>
+      {liveness ? <span aria-hidden className={DOT[liveness]} /> : null}
+      {kind}
+      {liveness && LIVENESS[liveness] ? ` · ${LIVENESS[liveness]}` : ""}
+    </span>
+  );
+}
 
 // What was entered in a question survives leaving the screen, as it survives folding on desktop.
 const drafts = new Map<string, Entry>();
 const BLANK: Entry = { choice: null, text: "", busy: false, failure: null };
+const drafted = (entry: Entry) => entry.text !== "" || entry.choice !== null;
 
-// One question with its answer form. Without `bare` it starts with the goal it is about, which opens that goal.
+// One question. Its answer form opens on Answer, or is already open while it holds a draft.
+// Without `bare` it starts with the goal it is about, which opens that goal.
 export function AskCard({ ask, at, bare = false, board, onOpen, ref, views }: { ask: Ask; at: number; bare?: boolean; board: Board; onOpen: (goalId: string) => void; ref?: (node: HTMLElement | null) => void; views: GoalView[] }) {
   const subject = subjectOf(ask, board, views);
   const [entered, setEntered] = useState<Entry>(() => drafts.get(ask.id) ?? BLANK);
+  const [open, setOpen] = useState(() => drafted(entered));
   const enter = (change: Partial<Entry>) =>
     setEntered((was) => {
       const next = { ...was, ...change };
       drafts.set(ask.id, { ...next, busy: false });
       return next;
     });
+  const goal = subject.goalId;
 
   return (
-    <li ref={ref} className={`${CARD} px-4 pb-4 pt-1`} data-ask={ask.id}>
-      {bare ? (
-        <p className="pt-3 font-mono text-[11px] text-faint">{span(at - ask.from)} ago</p>
-      ) : (
-        <Subject at={ask.from} now={at} org={subject.view?.goal.org ?? null} title={subject.title} onOpen={subject.goalId ? () => onOpen(subject.goalId!) : undefined} />
-      )}
-      {subject.about ? <p className="mt-1 text-sm text-dim">About: {subject.about}</p> : null}
-      <Question touch text={ask.details ? `${ask.question}\n${ask.details}` : ask.question} />
-      <AnswerForm touch ask={ask} entered={entered} onEnter={enter} />
+    <li ref={ref} className={`${CARD} pb-4`} data-ask={ask.id}>
+      {bare ? null : <Subject at={ask.from} now={at} org={subject.view?.goal.org ?? null} title={subject.title} onOpen={goal ? () => onOpen(goal) : undefined} />}
+      <div className={`${INSET} ${bare ? "pt-3.5" : ""}`}>
+        {subject.about ? <p className="text-sm text-dim">About: {subject.about}</p> : null}
+        <Question touch text={ask.details ? `${ask.question}\n${ask.details}` : ask.question} />
+        <Reveal show={!open}>
+          <Tap className="items-start pt-3" label="Answer" run={() => setOpen(true)} />
+        </Reveal>
+        <Reveal show={open}>
+          <AnswerForm touch ask={ask} entered={entered} onEnter={enter} />
+        </Reveal>
+      </div>
     </li>
   );
 }
@@ -115,9 +150,9 @@ function Subject({ at, now, onOpen, org, title }: { at: number; now: number; onO
       {onOpen ? <ChevronRight aria-hidden className="size-4 shrink-0 text-faint" /> : null}
     </>
   );
-  const line = "-mx-1 flex min-h-11 w-[calc(100%+0.5rem)] items-center gap-2 rounded px-1 text-left text-sm font-medium text-dim";
+  const line = `flex min-h-11 w-full items-center gap-2 text-left text-sm font-medium text-dim ${INSET}`;
   return onOpen ? (
-    <button className={`${line} active:bg-white/[0.04]`} type="button" onClick={onOpen}>
+    <button aria-label={title} className={`${line} active:bg-white/[0.04]`} type="button" onClick={onOpen}>
       {body}
     </button>
   ) : (
@@ -127,45 +162,53 @@ function Subject({ at, now, onOpen, org, title }: { at: number; now: number; onO
 
 // A product call to react to, or feedback on one that reached nobody.
 export function DecisionCard({ at, bare = false, board, decision, onOpen }: { at: number; bare?: boolean; board: Board; decision: Decision; onOpen: (goalId: string) => void }) {
-  const act = useAct();
-  const [writing, setWriting] = useState(false);
   const goal = board.goals.find((entry) => entry.id === decision.goalId);
-  const undelivered = decision.state === "feedback";
-  const typing = decision.undelivered === "delivering";
+  const said = [kindOf(decision.by), bare ? `${span(at - decision.at)} ago` : ""].filter(Boolean).join(" · ");
 
   return (
-    <li className={`${CARD} px-4 pb-4 ${bare ? "pt-4" : "pt-1"}`}>
-      {bare ? null : <Subject at={decision.at} now={at} org={goal?.org ?? null} title={goal?.title ?? ""} onOpen={goal ? () => onOpen(goal.id) : undefined} />}
-      <p className={`text-[15px] leading-snug ${undelivered ? "text-dim" : "text-ink"}`}>{decision.text}</p>
-      {decision.rationale ? <p className="mt-1 text-sm text-dim">{decision.rationale}</p> : null}
-      <p className="mt-2 flex items-center gap-2 text-faint">
-        <Owner owner={decision.by} />
-        {bare ? <span className="font-mono text-[11px]">· {span(at - decision.at)} ago</span> : null}
-      </p>
-      {undelivered ? (
-        <div className="mt-3 rounded border border-line bg-bg/40 px-3 py-2 text-sm">
-          <p className="text-[11px] font-semibold text-checks">{typing ? "Sending" : `Undelivered · ${decision.undelivered ? REASON[decision.undelivered] : ""}`}</p>
-          <p className="mt-1 text-ink">“{decision.feedback}”</p>
-          {typing ? null : <Tap className="mt-2" label="Dismiss" look="plain" run={() => act({ kind: "dismiss_feedback", decisionId: decision.id }).then(() => null)} />}
-        </div>
-      ) : writing ? (
-        <div className="mt-3 grid">
-          <FeedbackForm touch decision={decision} onCancel={() => setWriting(false)} />
-        </div>
-      ) : (
-        <div className="mt-3 flex gap-2">
-          <Tap className="flex-1" label="Ack" look="plain" run={() => act({ kind: "ack", decisionId: decision.id }).then(() => null)} />
-          <Tap className="flex-1" label="Feedback" look="quiet" run={() => setWriting(true)} />
-        </div>
-      )}
+    <li className={`${CARD} pb-4 ${bare ? "pt-4" : ""}`}>
+      {bare || !goal ? null : <Subject at={decision.at} now={at} org={goal.org} title={goal.title} onOpen={() => onOpen(goal.id)} />}
+      <div className={INSET}>
+        <p className={`text-[15px] leading-snug ${decision.state === "feedback" ? "text-dim" : "text-ink"}`}>{decision.text}</p>
+        {decision.rationale ? <p className="mt-1 text-sm text-dim">{decision.rationale}</p> : null}
+        {said ? <p className="mt-2 font-mono text-[11px] text-faint">{said}</p> : null}
+        <Reaction decision={decision} />
+      </div>
     </li>
+  );
+}
+
+// Ack or feedback on a recorded call; for feedback that reached nobody, what it said and a way to clear it.
+function Reaction({ decision }: { decision: Decision }) {
+  const act = useAct();
+  const [writing, setWriting] = useState(false);
+  if (decision.state === "feedback") {
+    const typing = decision.undelivered === "delivering";
+    return (
+      <div className="mt-3 rounded border border-line bg-bg/40 px-3 py-2 text-sm">
+        <p className="text-[11px] font-semibold text-checks">{typing ? "Sending" : `Undelivered · ${decision.undelivered ? REASON[decision.undelivered] : ""}`}</p>
+        <p className="mt-1 text-ink">“{decision.feedback}”</p>
+        {typing ? null : <Tap className="mt-2 items-start" label="Dismiss" run={() => act({ kind: "dismiss_feedback", decisionId: decision.id }).then(() => null)} />}
+      </div>
+    );
+  }
+  if (writing) {
+    return (
+      <div className="mt-3 grid">
+        <FeedbackForm touch decision={decision} named={false} onCancel={() => setWriting(false)} />
+      </div>
+    );
+  }
+  return (
+    <div className="mt-3 flex gap-2">
+      <Tap className="flex-1" label="Ack" run={() => act({ kind: "ack", decisionId: decision.id }).then(() => null)} />
+      <Tap className="flex-1" label="Feedback" look="quiet" run={() => setWriting(true)} />
+    </div>
   );
 }
 
 // Something broken or stuck, with what it is about and, where the operator can do something, the action.
 export function TroubleCard({ at, onOpen, ref, trouble }: { at: number; onOpen: (goalId: string) => void; ref?: (node: HTMLElement | null) => void; trouble: Trouble }) {
-  const act = useAct();
-  const step = useGoalStep();
   const said = describe(trouble, at);
   const goalId = "view" in trouble ? trouble.view.goal.id : null;
   const body = (
@@ -179,81 +222,99 @@ export function TroubleCard({ at, onOpen, ref, trouble }: { at: number; onOpen: 
       {goalId ? <ChevronRight aria-hidden className="mt-0.5 size-4 shrink-0 text-faint" /> : null}
     </>
   );
-  const line = "flex w-full items-start gap-3 px-4 pb-3 pt-3.5 text-left";
+  const line = `flex w-full items-start gap-3 pb-3 pt-3.5 text-left ${INSET}`;
 
   return (
     <li ref={ref} className={CARD} data-goal={trouble.kind === "unresolved" ? trouble.view.goal.id : undefined}>
       {goalId ? (
-        <button className={`${line} rounded-lg active:bg-white/[0.03]`} type="button" onClick={() => onOpen(goalId)}>
+        <button className={`${line} active:bg-white/[0.03]`} type="button" onClick={() => onOpen(goalId)}>
           {body}
         </button>
       ) : (
         <div className={line}>{body}</div>
       )}
-      {trouble.kind === "unresolved" ? (
-        <div className="flex gap-2 px-4 pb-3.5">
-          {(["complete", "archive"] as const).map((key) => (
-            <Tap key={key} className="flex-1" confirm={key === "complete" ? "Complete?" : "Archive?"} label={key === "complete" ? "Complete" : "Archive"} look={key === "complete" ? "primary" : "plain"} run={async (button) => void (await step(trouble.view.goal.id, key, button.closest<HTMLElement>("[data-goal]")))} />
-          ))}
-        </div>
-      ) : null}
-      {trouble.kind === "unresolved" ? <GoalRefusal className="px-4 pb-3.5" goalId={trouble.view.goal.id} /> : null}
-      {trouble.kind === "silent" && trouble.pkg === null ? (
-        <div className="flex px-4 pb-3.5">
-          <Tap className="flex-1" confirm="Release?" label="Release" run={() => act({ kind: "release", goalId: trouble.view.goal.id }).then(() => null)} />
-        </div>
-      ) : null}
-      {trouble.kind === "waits" ? (
-        <div className="flex px-4 pb-3.5">
-          <Tap className="flex-1" confirm="Finish?" label="Finish" run={(button) => finishPkg(trouble.pkg.id, button.closest("li"), () => act({ kind: "finish", pkgId: trouble.pkg.id }))} />
-        </div>
-      ) : null}
+      <TroubleAction trouble={trouble} />
     </li>
   );
 }
 
-function describe(trouble: Trouble, at: number): { mark: ReactNode; headline: string; under: string; reason: ReactNode; tone: string } {
-  switch (trouble.kind) {
-    case "ci": {
-      const review = trouble.pkg.review?.state === "findings" ? reviewLabel(trouble.pkg.review) : null;
-      return { mark: <Pip failed stage="review_ci" />, headline: trouble.pkg.title, under: trouble.view.goal.title, tone: "text-fail", reason: <><CiCell ci="failing" />{review ? <span className={review.tone}>review {review.text}</span> : null}</> };
-    }
-    case "deploy":
-      return { mark: <Pip failed stage="ended" />, headline: `${trouble.env} deploy failed`, under: trouble.view.goal.title, tone: "text-fail", reason: "The last merge did not deploy" };
-    case "card_ci":
-      return { mark: <Pip failed stage="review_ci" />, headline: trouble.card.task, under: trouble.card.repo.split("/").pop() ?? "", tone: "text-fail", reason: <CiCell ci="failing" /> };
-    case "unresolved":
-      return {
-        mark: <Pip stage="ended" />,
-        headline: trouble.view.goal.title,
-        under: "",
-        tone: "text-dim",
-        reason: unresolvedPkgs(trouble.view).map((pkg) => (
-          <span key={pkg.id}>
-            <span className="text-ink">{pkg.title}</span> <span className={pkg.outcome ? OUTCOME[pkg.outcome].tone : ""}>{pkg.outcome ? OUTCOME[pkg.outcome].label.toLowerCase() : ""}</span>
-          </span>
-        )),
-      };
-    case "exited":
-      return { mark: <Pip stage="implementing" />, headline: trouble.pkg.title, under: trouble.view.goal.title, tone: "text-checks", reason: "The worker finished without opening a PR" };
-    case "silent": {
-      const who = trouble.pkg ? trouble.pkg.owner : trouble.view.goal.owner;
-      return { mark: <span className="mt-px size-2 rounded-full border border-checks" />, headline: trouble.pkg?.title ?? trouble.view.goal.title, under: trouble.pkg ? trouble.view.goal.title : "", tone: "text-checks", reason: `${who?.address ?? "Its terminal"} stopped answering` };
-    }
-    case "waits": {
-      const pr = trouble.pkg.pr!;
-      return {
-        mark: <Hourglass aria-hidden className="size-3 text-checks" />,
-        headline: trouble.pkg.title,
-        under: trouble.view.goal.title,
-        tone: "text-checks",
-        reason: (
-          <>
-            <span>Waiting for {pr.repo.split("/").pop()}#{pr.number} to merge</span>
-            <span className="whitespace-nowrap">· {span(at - trouble.since)}</span>
-          </>
-        ),
-      };
-    }
+// What the operator can do about it from here: settle an unresolved goal, release a silent owner, finish a package waiting upstream.
+function TroubleAction({ trouble }: { trouble: Trouble }) {
+  const act = useAct();
+  const step = useGoalStep();
+  if (trouble.kind === "unresolved") {
+    const goalId = trouble.view.goal.id;
+    return (
+      <div className={`pb-3.5 ${INSET}`}>
+        <div className="flex gap-2">
+          <Tap className="flex-1" confirm="Complete?" label="Complete" look="primary" run={async (button) => void (await step(goalId, "complete", button.closest<HTMLElement>("[data-goal]")))} />
+          <Tap className="flex-1" confirm="Archive?" label="Archive" run={async (button) => void (await step(goalId, "archive", button.closest<HTMLElement>("[data-goal]")))} />
+        </div>
+        <GoalRefusal className="pt-2" goalId={goalId} />
+      </div>
+    );
   }
+  if (trouble.kind === "silent" && trouble.pkg === null) {
+    return (
+      <div className={`flex pb-3.5 ${INSET}`}>
+        <Tap className="flex-1" confirm="Release?" label="Release" run={() => act({ kind: "release", goalId: trouble.view.goal.id }).then(() => null)} />
+      </div>
+    );
+  }
+  if (trouble.kind === "waits") {
+    const pkgId = trouble.pkg.id;
+    return (
+      <div className={`flex pb-3.5 ${INSET}`}>
+        <Tap className="flex-1" confirm="Finish?" label="Finish" run={(button) => finishPkg(pkgId, button.closest("li"), () => act({ kind: "finish", pkgId }))} />
+      </div>
+    );
+  }
+  return null;
+}
+
+type Said = { mark: ReactNode; headline: string; under: string; reason: ReactNode; tone: string };
+type Describe = { [K in Trouble["kind"]]: (trouble: Extract<Trouble, { kind: K }>, at: number) => Said };
+
+const DESCRIBE: Describe = {
+  ci: ({ pkg, view }) => {
+    const review = pkg.review?.state === "findings" ? reviewLabel(pkg.review) : null;
+    return { mark: <Pip failed stage="review_ci" />, headline: pkg.title, under: view.goal.title, tone: "text-fail", reason: <><CiCell ci="failing" />{review ? <span className={review.tone}>review {review.text}</span> : null}</> };
+  },
+  deploy: ({ env, view }) => ({ mark: <Pip failed stage="ended" />, headline: `${env} deploy failed`, under: view.goal.title, tone: "text-fail", reason: "The last merge did not deploy" }),
+  card_ci: ({ card }) => ({ mark: <Pip failed stage="review_ci" />, headline: card.task, under: card.repo.split("/").pop() ?? "", tone: "text-fail", reason: <CiCell ci="failing" /> }),
+  unresolved: ({ view }) => ({
+    mark: <Pip stage="ended" />,
+    headline: view.goal.title,
+    under: "",
+    tone: "text-dim",
+    reason: unresolvedPkgs(view).map((pkg) => (
+      <span key={pkg.id}>
+        <span className="text-ink">{pkg.title}</span> <span className={pkg.outcome ? OUTCOME[pkg.outcome].tone : ""}>{pkg.outcome ? OUTCOME[pkg.outcome].label.toLowerCase() : ""}</span>
+      </span>
+    )),
+  }),
+  exited: ({ pkg, view }) => ({ mark: <Pip stage="implementing" />, headline: pkg.title, under: view.goal.title, tone: "text-checks", reason: "The worker finished without opening a PR" }),
+  silent: ({ pkg, view }) => ({
+    mark: <span className="mt-px size-2 rounded-full border border-checks" />,
+    headline: pkg?.title ?? view.goal.title,
+    under: pkg ? view.goal.title : "",
+    tone: "text-checks",
+    reason: `${kindOf(pkg ? pkg.owner : view.goal.owner) || "Its terminal"} stopped answering`,
+  }),
+  waits: ({ pkg, since, view }, at) => ({
+    mark: <Hourglass aria-hidden className="size-3 text-checks" />,
+    headline: pkg.title,
+    under: view.goal.title,
+    tone: "text-checks",
+    reason: (
+      <>
+        <span>Waiting for {pkg.pr!.repo.split("/").pop()}#{pkg.pr!.number} to merge</span>
+        <span className="whitespace-nowrap">· {span(at - since)}</span>
+      </>
+    ),
+  }),
+};
+
+function describe(trouble: Trouble, at: number): Said {
+  return (DESCRIBE[trouble.kind] as (entry: Trouble, at: number) => Said)(trouble, at);
 }

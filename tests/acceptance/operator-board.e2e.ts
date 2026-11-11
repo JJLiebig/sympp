@@ -154,24 +154,19 @@ test('the person answers a question, reviews flagged decisions and releases a go
   const answer = async () => (await full()).asks.find((entry: any) => entry.id === ask);
   const decision = async (id: string) => (await full()).decision_log_entries.find((entry: any) => entry.id === id);
 
-  // On a phone the goal sits below the question. Its title takes the person to the goal, opened,
-  // and the goal's flag takes them back to the question.
+  // On a phone the question comes first, folded to an Answer button. Its goal opens on a screen of its own,
+  // and back returns to the question with what was picked still there.
   const question = browser.locator(`[data-ask="${ask}"]`);
   const goal = browser.locator(`[data-goal="${request}"]`);
-  // Brought into view: the element starts on screen.
-  const inView = (selector: string) => browser.evaluate((css: string) => {
-    const box = document.querySelector(css)?.getBoundingClientRect();
-    return Boolean(box && box.top >= 0 && box.top < window.innerHeight);
-  }, selector);
+  const picked = () => browser.evaluate((css: string) => document.querySelector(`${css} input[type="radio"]:checked`)?.closest('label')?.textContent ?? '', `[data-ask="${ask}"]`);
   await browser.setViewport({ width: 390, height: 640 });
-  await screen.getByRole('button', 'Collapsed', { exact: true }).tap();
-  expect(await inView(`[data-goal="${request}"]`)).toBe(false);
+  await expect(question.getByRole('radio', 'Bounded option Recommended', { exact: true })).toHaveCount(0);
+  await question.getByRole('button', 'Answer', { exact: true }).tap();
+  await question.getByRole('radio', 'Bounded option Recommended', { exact: true }).tap();
   await question.getByRole('button', 'Board review', { exact: true }).tap();
-  await expect.poll(() => inView(`[data-goal="${request}"]`)).toBe(true);
-  await expect(goal.getByRole('button', 'Board review', { exact: true })).toBeExpanded();
-  await expect.poll(() => inView(`[data-ask="${ask}"]`)).toBe(false);
-  await goal.getByRole('button', 'Needs you', { exact: true }).tap();
-  await expect.poll(() => inView(`[data-ask="${ask}"]`)).toBe(true);
+  await expect(goal).toBeVisible();
+  await screen.getByRole('button', 'Back', { exact: true }).tap();
+  await expect.poll(picked).toContain('Bounded option');
   expect(await browser.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   await browser.setViewport({ width: 1440, height: 1000 });
 

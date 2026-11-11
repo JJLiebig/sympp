@@ -111,7 +111,7 @@ export function App() {
         <SinceContext.Provider value={changes.notes}>
           <PhoneBoard area={area} areas={areas} asks={asks} at={at} board={data.board} cards={cards} changes={changes} failure={failure} lanes={lanes} settings={data.settings} shownCards={shownCards} since={since} views={views} onArea={setArea} onSaved={read} onSeen={markSeen} />
         </SinceContext.Provider>
-        {note ? <p className="fixed bottom-24 left-4 right-4 z-30 rounded bg-ink px-3 py-2 text-sm text-bg" role="status">{note}</p> : null}
+        <Toast className="left-4 right-4" note={note} />
       </ActContext.Provider>
     );
   }
@@ -177,7 +177,7 @@ export function App() {
         </ActContext.Provider>
       </main>
       {replay ? <Scrubber at={at} data={data} onChange={setAt} /> : null}
-      {note ? <p className="fixed bottom-24 left-1/2 z-30 max-w-xl -translate-x-1/2 rounded bg-ink px-3 py-2 text-sm text-bg" role="status">{note}</p> : null}
+      <Toast className="left-1/2 max-w-xl -translate-x-1/2" note={note} />
     </div>
   );
 }
@@ -202,6 +202,12 @@ function useShaped(data: Loaded | null, at: number, since: number, area: string 
   // Phases has nothing to add until a goal on the board is grouped, so it is offered only then.
   const grouped = lanesOf(views, at).main.some((view) => view.goal.pkgs.some((pkg) => pkg.group));
   return { views, changes, asks: data?.board.asks.filter((ask) => openAt(ask, at)) ?? [], areas, shown, cards, shownCards: area ? cards.filter((card) => card.area[0] === area) : cards, lanes: lanesOf(shown, at), grouped };
+}
+
+// A short note the board says out loud, such as why a step did not go through.
+function Toast({ className, note }: { className: string; note: string | null }) {
+  if (!note) return null;
+  return <p className={`fixed bottom-24 z-30 rounded bg-ink px-3 py-2 text-sm text-bg ${className}`} role="status">{note}</p>;
 }
 
 // A board that has never loaded shows only that it is reading, or why it could not.
