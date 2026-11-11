@@ -16,8 +16,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
 
   import Ecto.Query, only: [from: 2]
 
+  alias SymphonyElixir.SymphonyPlusPlus.{
+    Cards,
+    DashboardPubSub,
+    HerdrCore,
+    HumanDecisionPrompt,
+    Id,
+    OperatorDelivery,
+    Ownership
+  }
+
   alias SymphonyElixir.SymphonyPlusPlus.Asks.Ask
-  alias SymphonyElixir.SymphonyPlusPlus.{Cards, DashboardPubSub, HerdrCore, HumanDecisionPrompt, Id, Ownership}
   alias SymphonyElixir.SymphonyPlusPlus.Cards.Card
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
@@ -136,38 +145,56 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   chosen option (and note); otherwise free text. The answer is then delivered
   to the asking terminal's input without submitting it.
   """
-  @spec answer_by_operator(repo(), String.t(), map()) :: {:ok, Ask.t(), delivery()} | {:error, term()}
-  def answer_by_operator(repo, ask_id, params) when is_map(params) do
+  @spec answer_by_operator(repo(), String.t(), map(), keyword()) :: {:ok, Ask.t(), delivery()} | {:error, term()}
+  def answer_by_operator(repo, ask_id, params, opts \\ []) when is_map(params) do
     repo
     |> transact(fn ->
       with {:ok, ask} <- fetch_open(repo, ask_id),
            {:ok, answer} <- HumanDecisionPrompt.answer_text_result(ask.decision_prompt, params),
            {:ok, answer} <- text(answer, :missing_answer) do
-        close(repo, ask, "answered", answer, "operator")
+        close(repo, ask, "answered", answer, "operator", undelivered_reason: "delivering")
       end
     end)
     |> DashboardPubSub.broadcast_changed_on_success()
     |> case do
-      {:ok, ask} -> deliver(repo, ask)
+      {:ok, ask} -> maybe_deliver(repo, ask, opts)
       error -> error
+    end
+  end
+
+  defp maybe_deliver(repo, ask, opts) do
+    if Keyword.get(opts, :async, false) and is_binary(ask.asked_by_terminal) do
+      OperatorDelivery.start(repo, fn delivery_repo ->
+        deliver(delivery_repo, ask)
+        DashboardPubSub.broadcast_changed()
+      end)
+
+      {:ok, ask, %{"state" => "pending"}}
+    else
+      deliver(repo, ask)
     end
   end
 
   # The factory types `Answer: …` into the asking terminal's composer without
   # pressing Enter, so the agent sees it on its next turn and a person can
   # still edit it. A finished or unreachable terminal keeps the answer on the ask.
-  defp deliver(_repo, %Ask{asked_by_terminal: nil} = ask), do: {:ok, ask, %{"state" => "not_delivered", "reason" => "no_asking_terminal"}}
+  defp deliver(repo, %Ask{asked_by_terminal: nil} = ask), do: not_delivered(repo, ask, "no_asking_terminal")
 
   defp deliver(repo, %Ask{} = ask) do
     case HerdrCore.deliver(ask.asked_by_terminal, "Answer: " <> ask.answer) do
       :ok ->
         now = DateTime.utc_now(:microsecond)
-        repo.update_all(from(row in Ask, where: row.id == ^ask.id), set: [delivered_at: now, updated_at: now])
-        {:ok, %{ask | delivered_at: now}, %{"state" => "delivered", "to" => ask.asked_by_address}}
+        repo.update_all(from(row in Ask, where: row.id == ^ask.id), set: [delivered_at: now, undelivered_reason: nil, updated_at: now])
+        {:ok, %{ask | delivered_at: now, undelivered_reason: nil}, %{"state" => "delivered", "to" => ask.asked_by_address}}
 
       {:error, reason} ->
-        {:ok, ask, %{"state" => "not_delivered", "reason" => reason}}
+        not_delivered(repo, ask, reason)
     end
+  end
+
+  defp not_delivered(repo, ask, reason) do
+    ask = repo.update!(Ecto.Changeset.change(ask, undelivered_reason: reason, updated_at: DateTime.utc_now(:microsecond)))
+    {:ok, ask, %{"state" => "not_delivered", "reason" => reason}}
   end
 
   @doc "Withdraws the open asks that name these packages, which have just ended. Joins the caller's transaction."
@@ -277,14 +304,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
       "answer" => Redactor.redact_text(ask.answer),
       "answered_by" => ask.answered_by,
       "resolved_at" => iso(ask.resolved_at),
-      "delivered_at" => iso(ask.delivered_at)
+      "delivered_at" => iso(ask.delivered_at),
+      "delivery" => delivery_status(ask)
     }
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
 
-  defp close(repo, %Ask{} = ask, to, answer, by) do
+  @doc "Stored terminal delivery outcome, including interrupted sends."
+  @spec delivery_status(Ask.t()) :: map() | nil
+  def delivery_status(%Ask{delivered_at: %DateTime{}, asked_by_address: to}), do: %{"state" => "delivered", "to" => to}
+
+  def delivery_status(%Ask{undelivered_reason: "delivering", resolved_at: %DateTime{} = at}) do
+    if DateTime.diff(DateTime.utc_now(), at, :millisecond) > 60_000,
+      do: %{"state" => "not_delivered", "reason" => "delivery_interrupted"},
+      else: %{"state" => "pending"}
+  end
+
+  def delivery_status(%Ask{undelivered_reason: reason}) when is_binary(reason),
+    do: %{"state" => "not_delivered", "reason" => reason}
+
+  def delivery_status(%Ask{}), do: nil
+
+  defp close(repo, %Ask{} = ask, to, answer, by, delivery_changes \\ []) do
     now = DateTime.utc_now(:microsecond)
-    {:ok, repo.update!(Ecto.Changeset.change(ask, state: to, answer: answer, answered_by: by, resolved_at: now, updated_at: now))}
+    changes = Keyword.merge(delivery_changes, state: to, answer: answer, answered_by: by, resolved_at: now, updated_at: now)
+    {:ok, repo.update!(Ecto.Changeset.change(ask, changes))}
   end
 
   defp record_decision(_repo, _ask, nil, _by), do: {:ok, nil}

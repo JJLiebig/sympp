@@ -7,8 +7,10 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   alias Plug.Conn
   alias SymphonyElixir.SymphonyPlusPlus.Asks
+  alias SymphonyElixir.SymphonyPlusPlus.Asks.Ask
   alias SymphonyElixir.SymphonyPlusPlus.Cards
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardCache
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit.Target
@@ -153,35 +155,29 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   @spec operator_dashboard(Conn.t(), map()) :: Conn.t()
   def operator_dashboard(conn, %{"surface" => surface}) when surface in ["archived"] do
     send_local_operator_response(conn, :dashboard_read, Target.new(:dashboard), :operator_dashboard_surface, fn repo ->
-      with {:ok, payload} <- LocalOperatorDashboard.operator_dashboard_surface_payload(repo, surface) do
-        json(conn, payload)
-      end
+      dashboard_json(conn, repo, :archived, fn ->
+        LocalOperatorDashboard.operator_dashboard_surface_payload(repo, surface)
+      end)
     end)
   end
 
   def operator_dashboard(conn, _params) do
     send_local_operator_response(conn, :dashboard_read, Target.new(:dashboard), :operator_dashboard, fn repo ->
-      with {:ok, payload} <- LocalOperatorDashboard.operator_dashboard_payload(repo) do
-        json(conn, payload)
-      end
+      dashboard_json(conn, repo, :priority, fn -> LocalOperatorDashboard.operator_dashboard_payload(repo) end)
     end)
   end
 
   @spec operator_dashboard_deferred(Conn.t(), map()) :: Conn.t()
   def operator_dashboard_deferred(conn, _params) do
     send_local_operator_response(conn, :dashboard_read, Target.new(:dashboard), :operator_dashboard_deferred, fn repo ->
-      with {:ok, payload} <- LocalOperatorDashboard.operator_dashboard_deferred_payload(repo) do
-        json(conn, payload)
-      end
+      dashboard_json(conn, repo, :deferred, fn -> LocalOperatorDashboard.operator_dashboard_deferred_payload(repo) end)
     end)
   end
 
   @spec operator_dashboard_hydrated(Conn.t(), map()) :: Conn.t()
   def operator_dashboard_hydrated(conn, _params) do
     send_local_operator_response(conn, :dashboard_read, Target.new(:dashboard), :operator_dashboard_hydrated, fn repo ->
-      with {:ok, payload} <- LocalOperatorDashboard.operator_dashboard_hydrated_payload(repo) do
-        json(conn, payload)
-      end
+      dashboard_json(conn, repo, :hydrated, fn -> LocalOperatorDashboard.operator_dashboard_hydrated_payload(repo) end)
     end)
   end
 
@@ -194,6 +190,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
         conn
         |> Conn.put_resp_header("cache-control", "no-cache")
         |> Conn.put_resp_header("connection", "keep-alive")
+        |> Conn.put_resp_header("x-accel-buffering", "no")
         |> Conn.put_resp_content_type("text/event-stream")
         |> Conn.send_chunked(200)
 
@@ -224,8 +221,18 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   defp herdr_dashboard_response(repo, conn) do
-    with {:ok, payload} <- LocalOperatorDashboard.herdr_dashboard_payload(repo) do
-      json(conn, payload)
+    dashboard_json(conn, repo, :herdr, fn -> LocalOperatorDashboard.herdr_dashboard_payload(repo) end)
+  end
+
+  defp dashboard_json(conn, repo, surface, fun) do
+    with {:ok, body, etag} <- DashboardCache.json(repo, surface, fun) do
+      conn = conn |> put_resp_header("etag", etag) |> put_resp_header("cache-control", "private, no-cache")
+
+      if etag in get_req_header(conn, "if-none-match") do
+        send_resp(conn, 304, "")
+      else
+        conn |> put_resp_content_type("application/json") |> send_resp(200, body)
+      end
     end
   end
 
@@ -265,6 +272,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
         conn
         |> Conn.put_resp_header("cache-control", "no-cache")
         |> Conn.put_resp_header("connection", "keep-alive")
+        |> Conn.put_resp_header("x-accel-buffering", "no")
         |> Conn.put_resp_content_type("text/event-stream")
         |> Conn.send_chunked(200)
 
@@ -505,12 +513,41 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     send_native_operator_response(conn, :ask_answer, Target.new(:ask), :operator_answer_ask, &answer_ask_response(&1, conn, params))
   end
 
+  @spec operator_ask_delivery(Conn.t(), map()) :: Conn.t()
+  def operator_ask_delivery(conn, %{"ask_id" => ask_id}) do
+    send_local_operator_response(conn, :dashboard_read, Target.new(:ask), :operator_ask_delivery, fn repo ->
+      ask_delivery_response(repo, conn, ask_id)
+    end)
+  end
+
+  @spec herdr_ask_delivery(Conn.t(), map()) :: Conn.t()
+  def herdr_ask_delivery(conn, %{"ask_id" => ask_id}) do
+    if herdr_consumer?(conn) do
+      case Runtime.with_dashboard_repo(&ask_delivery_response(&1, conn, ask_id), migrate?: false) do
+        {:error, reason} -> error_response(conn, reason)
+        %Conn{} = response -> response
+      end
+    else
+      error_response(conn, :unauthorized)
+    end
+  end
+
+  defp ask_delivery_response(repo, conn, ask_id) do
+    conn = put_resp_header(conn, "cache-control", "no-store")
+
+    case repo.get(Ask, ask_id) do
+      nil -> error_response(conn, 404, "not_found", "Ask not found")
+      ask -> json(conn, %{ask_id: ask.id, delivery: Asks.delivery_status(ask)})
+    end
+  end
+
   # The answer is stored, then typed into the asking terminal without being
   # submitted; `delivery` says whether that reached it.
   defp answer_ask_response(repo, conn, %{"ask_id" => ask_id} = params) do
-    with {:ok, ask, delivery} <- Asks.answer_by_operator(repo, ask_id, params) do
+    with {:ok, ask, delivery} <- Asks.answer_by_operator(repo, ask_id, params, async: true) do
       subject = if ask.card_id, do: %{card_id: ask.card_id}, else: %{work_request_id: ask.work_request_id}
-      json(conn, mutation_success_payload(Map.merge(%{ask_id: ask.id, delivery: delivery}, subject), subject))
+      payload = %{ask_id: ask.id, delivery: delivery, delivery_route: String.replace_suffix(conn.request_path, "/answer", "/delivery")}
+      json(conn, mutation_success_payload(Map.merge(payload, subject), subject))
     end
   end
 
@@ -561,7 +598,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   # The feedback is stored, then typed into the recording terminal without
   # being submitted; `delivery` says whether that reached it.
   defp feedback_decision_response(repo, conn, %{"decision_id" => decision_id} = params) do
-    with {:ok, decision, delivery} <- DecisionFeedback.feedback(repo, decision_id, params["text"]),
+    with {:ok, decision, delivery} <- DecisionFeedback.feedback(repo, decision_id, params["text"], async: true),
          do: json(conn, decision_review_payload(decision, %{delivery: delivery}))
   end
 
@@ -650,7 +687,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp stream_dashboard_events(conn) do
     receive do
       :operator_dashboard_changed ->
-        case Conn.chunk(conn, "event: dashboard_changed\ndata: {}\n\n") do
+        case Conn.chunk(conn, "event: dashboard_changed\ndata: #{Jason.encode!(%{version: System.unique_integer([:positive, :monotonic]), schema_version: 1})}\n\n") do
           {:ok, conn} -> stream_dashboard_events(conn)
           {:error, _reason} -> conn
         end

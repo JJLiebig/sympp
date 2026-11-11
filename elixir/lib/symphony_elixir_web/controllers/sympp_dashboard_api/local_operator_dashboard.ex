@@ -11,7 +11,9 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     WorkRequestCards
   }
 
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardCache
   alias SymphonyElixir.SymphonyPlusPlus.DeploymentObservation
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.Repository, as: MCPRepository
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.OperatorConfig
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
@@ -27,6 +29,17 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   import Ecto.Query, only: [from: 2]
 
   @local_operator_actor "local-operator"
+
+  @doc false
+  @spec prime(module()) :: :ok | {:error, term()}
+  def prime(repo) do
+    with :ok <- MCPRepository.ensure_migrated(repo),
+         {:ok, _settings} <- OperatorSettingsRepository.get(repo),
+         {:ok, _body, _etag} <- DashboardCache.json(repo, :hydrated, fn -> operator_dashboard_hydrated_payload(repo) end),
+         {:ok, _body, _etag} <- DashboardCache.json(repo, :herdr, fn -> herdr_dashboard_payload(repo) end) do
+      :ok
+    end
+  end
 
   @spec operator_dashboard_payload(module()) :: {:ok, map()} | {:error, term()}
   def operator_dashboard_payload(repo) do
@@ -115,7 +128,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     operator_config = OperatorConfig.load()
 
     case repo.transaction(fn -> hydrated_dashboard_payload(repo, operator_config) end) do
-      {:ok, {:ok, payload}} -> {:ok, DeploymentObservation.enrich(payload, operator_config)}
+      {:ok, {:ok, payload}} -> {:ok, DeploymentObservation.enrich(payload, operator_config, async: true)}
       {:ok, result} -> result
       {:error, reason} -> {:error, reason}
     end
@@ -137,7 +150,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     operator_config = OperatorConfig.load()
 
     case repo.transaction(fn -> native_dashboard_payload(repo, operator_config) end) do
-      {:ok, {:ok, payload}} -> {:ok, payload |> DeploymentObservation.enrich(operator_config) |> native_projection()}
+      {:ok, {:ok, payload}} -> {:ok, payload |> DeploymentObservation.enrich(operator_config, async: true) |> native_projection()}
       {:ok, result} -> result
       {:error, reason} -> {:error, reason}
     end
@@ -150,16 +163,39 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
          {:ok, context} <- operator_execution_context(repo, work_requests),
          context = Map.put(context, :operator_config, operator_config),
          {:ok, projection_context} <- operator_projection_context(repo, work_requests, context),
-         {:ok, active} <- execution_dashboard_payload(repo, context, work_requests, projection_context) do
-      details = Enum.map(active.work_request_details, &native_attention_detail/1)
+         opts = dashboard_opts(context, projection_context),
+         opts =
+           Keyword.merge(opts,
+             work_requests: work_requests,
+             work_packages_by_request: projection_context.work_packages_by_request
+           ),
+         {:ok, details} <-
+           operator_work_request_board_details(repo, work_requests, context.repo_identity_catalog, opts) do
+      details = details |> operator_board_labels(context, projection_context) |> Enum.map(&native_attention_detail/1)
 
       {:ok,
-       active
-       |> Map.put(:work_request_details, details)
-       |> Map.take([:generated_at, :work_request_details, :cards])
-       |> Map.put(:work_packages, Enum.map(active.work_packages, &Map.take(&1, [:id, :active_agent_run])))
+       %{
+         generated_at: timestamp(DateTime.utc_now(:microsecond)),
+         work_request_details: details,
+         cards: Cards.list(repo, context.settings_record.card_retention_days),
+         work_packages: native_active_runs(context, projection_context)
+       }
        |> Map.put(:runtime, %{offline: OfflineSandbox.enabled?(), repos_root: SymphonyElixir.Config.factory_repos_root()})}
     end
+  end
+
+  # Native clients only use the run identity from the package-card projection.
+  # Reuse the loaded run context instead of projecting every card a second time.
+  defp native_active_runs(context, projection_context) do
+    visible = MapSet.difference(MapSet.new(context.active_work_request_work_package_ids), context.hidden_work_package_ids)
+
+    projection_context.work_packages
+    |> Enum.filter(&MapSet.member?(visible, &1.id))
+    |> Enum.map(fn package ->
+      runs = get_in(projection_context, [:work_package_contexts, package.id, :agent_runs]) || []
+      %{id: package.id, active_agent_run: OperationalProjection.latest_active_agent_run(runs)}
+    end)
+    |> Enum.sort_by(& &1.id)
   end
 
   defp native_attention_detail(detail) do

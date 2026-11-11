@@ -17,6 +17,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Repo
+  alias SymphonyElixir.SymphonyPlusPlus.Repo.MigrationFileLock
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
@@ -164,6 +165,66 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   test "hydrated dashboard rejects unsupported methods" do
     assert json_response(post(build_conn(), "/api/v1/sympp/operator/dashboard/hydrated", %{}), 405) ==
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
+  end
+
+  test "the first operator write to a current ledger does not wait for a migration lock" do
+    path = WorkPackageFactory.database_path()
+    {:ok, prepared} = Repo.start_link(database: path, name: nil, log: false)
+    previous_repo = Repo.put_dynamic_repo(prepared)
+    assert :ok = WorkPackageRepository.migrate(Repo)
+    Repo.put_dynamic_repo(previous_repo)
+    GenServer.stop(prepared)
+    previous_database = Application.get_env(:symphony_elixir, :sympp_repo_database)
+    Application.put_env(:symphony_elixir, :sympp_repo_database, path)
+
+    on_exit(fn ->
+      Application.put_env(:symphony_elixir, :sympp_repo_database, previous_database)
+      Enum.each([path, path <> "-wal", path <> "-shm"], &File.rm/1)
+    end)
+
+    caller = self()
+
+    lock =
+      Task.async(fn ->
+        MigrationFileLock.run(path, fn ->
+          send(caller, :migration_locked)
+          receive do: (:release -> :ok)
+        end)
+      end)
+
+    assert_receive :migration_locked
+
+    request =
+      Task.async(fn ->
+        post(local_operator_conn(), "/api/v1/sympp/operator/work-requests", %{
+          "title" => "Ready ledger write",
+          "human_description" => "Record an operator request on the already current ledger.",
+          "repo" => "example/ready",
+          "base_branch" => "main"
+        })
+      end)
+
+    result = Task.yield(request, 1_000)
+
+    response =
+      try do
+        assert {:ok, response} = result
+        json_response(response, 201)
+      after
+        send(lock.pid, :release)
+        Task.await(lock)
+        if is_nil(result), do: Task.await(request)
+      end
+
+    {:ok, reader} = Repo.start_link(database: path, name: nil, log: false)
+    previous_repo = Repo.put_dynamic_repo(reader)
+
+    try do
+      assert Repo.get!(WorkRequest, response["work_request"]["work_request"]["id"]).title == "Ready ledger write"
+    after
+      Repo.put_dynamic_repo(previous_repo)
+      GenServer.stop(reader)
+    end
   end
 
   test "operator notification stream rejects cross-origin requests and unsupported methods" do

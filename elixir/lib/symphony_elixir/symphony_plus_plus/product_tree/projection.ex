@@ -13,10 +13,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
   def project(repo, work_request_id, work_package_payloads, opts \\ [])
       when is_atom(repo) and is_binary(work_request_id) and is_list(work_package_payloads) and is_list(opts) do
     with {:ok, tree} <- product_tree_context(repo, work_request_id, opts),
-         {:ok, execution_graph} <- ExecutionGraph.evaluate(repo, work_request_id, work_package_payloads, tree) do
+         {:ok, execution_graph} <- execution_graph(repo, work_request_id, work_package_payloads, tree, opts) do
       project_tree(tree, execution_graph, work_package_payloads, opts)
     else
       {:error, reason} -> unavailable_projection(reason, work_package_payloads)
+    end
+  end
+
+  defp execution_graph(repo, work_request_id, work_packages, tree, opts) do
+    case Keyword.fetch(opts, :execution_graph) do
+      {:ok, graph} -> {:ok, graph}
+      :error -> ExecutionGraph.evaluate(repo, work_request_id, work_packages, tree)
     end
   end
 

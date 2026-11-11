@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
   @moduledoc false
 
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.DefaultClient
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
@@ -17,10 +18,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
 
   defp enrich_online(payload, config, opts) do
     table = ensure_table(Keyword.get(opts, :cache_table, @cache_table))
-    :ets.select_delete(table, [{{:"$1", :"$2", :"$3", :"$4"}, [{:<, :"$2", now_ms() - @ttl_ms}], [true]}])
+    :ets.select_delete(table, [{{:"$1", :"$2", :"$3", :"$4"}, [{:<, :"$2", now_ms() - @ttl_ms * 10}], [true]}])
 
     state = %{
       table: table,
+      async?: Keyword.get(opts, :async, false),
       fetch: Keyword.get(opts, :fetch, &DefaultClient.get_json/2),
       deadline: now_ms() + Keyword.get(opts, :timeout_ms, @timeout_ms),
       remaining: Keyword.get(opts, :request_limit, @request_limit),
@@ -289,7 +291,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
         {result, observed_at, %{state | memo: Map.put(state.memo, path, {result, observed_at})}}
 
       _missing ->
-        fetch_remote(path, state, now)
+        if state.async?, do: fetch_async(path, state, now), else: fetch_remote(path, state, now)
+    end
+  end
+
+  defp fetch_async(path, state, now) do
+    pending_key = {:pending, path}
+
+    state =
+      if state.remaining > 0 and :ets.insert_new(state.table, {pending_key, now, nil, nil}) do
+        Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
+          try do
+            fetch_remote(path, state, now_ms())
+            DashboardPubSub.broadcast_changed()
+          after
+            :ets.delete(state.table, pending_key)
+          end
+        end)
+
+        %{state | remaining: state.remaining - 1}
+      else
+        state
+      end
+
+    case :ets.lookup(state.table, path) do
+      [{^path, _at, result, observed_at}] -> {result, observed_at, state}
+      _missing -> {{:error, :pending}, nil, state}
     end
   end
 
@@ -320,7 +347,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
     case :ets.whereis(table) do
       :undefined ->
         options = [:named_table, :public, read_concurrency: true]
-        owner = Process.whereis(SymphonyElixir.Supervisor)
+        owner = Process.whereis(SymphonyElixir.Supervisor) || Process.whereis(SymphonyElixir.TaskSupervisor)
         options = if owner, do: [{:heir, owner, :deployment_observation} | options], else: options
 
         try do

@@ -3,6 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
+  alias SymphonyElixir.SymphonyPlusPlus.Asks
   alias SymphonyElixir.SymphonyPlusPlus.Asks.Ask
   alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
 
@@ -1028,7 +1029,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       answer: redacted_text(ask.answer),
       answered_by: redacted_text(ask.answered_by),
       resolved_at: timestamp(ask.resolved_at),
-      delivered_at: timestamp(ask.delivered_at)
+      delivered_at: timestamp(ask.delivered_at),
+      delivery: Asks.delivery_status(ask)
     }
   end
 

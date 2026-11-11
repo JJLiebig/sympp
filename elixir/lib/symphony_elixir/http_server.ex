@@ -4,7 +4,9 @@ defmodule SymphonyElixir.HttpServer do
   """
 
   alias SymphonyElixir.{Config, Orchestrator}
+  alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixirWeb.Endpoint
+  alias SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard
 
   @secret_key_bytes 48
 
@@ -40,6 +42,9 @@ defmodule SymphonyElixir.HttpServer do
             |> Keyword.merge(endpoint_opts)
 
           Application.put_env(:symphony_elixir, Endpoint, endpoint_config)
+          # Explicit factory startup prepares the first full reads before the
+          # listener opens. A cache failure leaves diagnostic routes available.
+          prime_dashboard(opts)
           Endpoint.start_link()
         end
 
@@ -58,6 +63,10 @@ defmodule SymphonyElixir.HttpServer do
     _error -> nil
   catch
     :exit, _reason -> nil
+  end
+
+  defp prime_dashboard(opts) do
+    if Keyword.get(opts, :prime_dashboard, false), do: LocalOperatorDashboard.prime(Repo)
   end
 
   defp parse_host({_, _, _, _} = ip), do: {:ok, ip}

@@ -4,6 +4,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
   use Mix.Task
 
   alias SymphonyElixir.HttpServer
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardCache
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Config, as: MCPConfig
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
@@ -200,6 +201,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
       stop_owned_endpoint(Process.delete(:sympp_cockpit_repo_pid))
       stop_owned_processes(Process.delete(:sympp_cockpit_pubsub_pids))
       stop_owned_endpoint(Process.delete(:sympp_cockpit_task_supervisor_pid))
+      stop_owned_endpoint(Process.delete(:sympp_cockpit_dashboard_cache_pid))
     end
   end
 
@@ -207,7 +209,11 @@ defmodule Mix.Tasks.Sympp.Cockpit do
     previous_trap_exit = Process.flag(:trap_exit, true)
 
     try do
-      case HttpServer.start_link(host: server_host(Keyword.fetch!(opts, :host)), port: Keyword.fetch!(opts, :port)) do
+      case HttpServer.start_link(
+             host: server_host(Keyword.fetch!(opts, :host)),
+             port: Keyword.fetch!(opts, :port),
+             prime_dashboard: not OfflineSandbox.enabled?()
+           ) do
         {:ok, pid} ->
           Process.put(:sympp_cockpit_endpoint_pid, pid)
           :ok
@@ -349,8 +355,26 @@ defmodule Mix.Tasks.Sympp.Cockpit do
          {:ok, _started} <- Application.ensure_all_started(:bandit),
          {:ok, _started} <- Application.ensure_all_started(:ecto_sql),
          {:ok, _started} <- ensure_pubsub_started(),
-         {:ok, _started} <- ensure_task_supervisor_started() do
+         {:ok, _started} <- ensure_task_supervisor_started(),
+         {:ok, _started} <- ensure_dashboard_cache_started() do
       {:ok, []}
+    end
+  end
+
+  defp ensure_dashboard_cache_started do
+    case Process.whereis(SymphonyElixir.SymphonyPlusPlus.DashboardCache) do
+      pid when is_pid(pid) ->
+        {:ok, []}
+
+      nil ->
+        case DashboardCache.start_link([]) do
+          {:ok, pid} ->
+            Process.put(:sympp_cockpit_dashboard_cache_pid, pid)
+            {:ok, [pid]}
+
+          error ->
+            error
+        end
     end
   end
 

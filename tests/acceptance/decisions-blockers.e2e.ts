@@ -178,7 +178,7 @@ test('human choice submission rejects unknown or empty redirects and preserves t
   const answered = await architect.operator(path, { answer_choice: 'continue', answer_note: 'Keep the detail deferred.', answer: 'Stale autofilled answer.' });
   expect(answered.status).toBe(200);
   // The answer is kept whether or not the asking terminal could be reached.
-  expect(answered.body.delivery.state).toMatch(/^(delivered|not_delivered)$/);
+  expect(answered.body.delivery.state).toMatch(/^(pending|delivered|not_delivered)$/);
   const read = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
   expect(read.asks[0].answer).toBe('Continue with the bounded path. Keep the detail deferred.');
   expect(read.asks[0].answered_by).toBe('operator');
@@ -244,8 +244,15 @@ coreTest('asks go open to answered or withdrawn, take no ownership, and an answe
   const live = (await asker.call('ask', { work_request_id: id, question: 'Ship today?' })).ask.id;
   const listed = (await nativeBoard(architect, id)).asks;
   expect(listed).toEqual([expect.objectContaining({ id: live, kind: 'ask', text: 'Ship today?', asked_by: asker.address, answer_route: `/api/v1/sympp/herdr/asks/${live}/answer` })]);
+  let releaseAnswer!: () => void;
+  core.host.hold = new Promise((resolve) => { releaseAnswer = resolve; });
   const delivered = await architect.raw({ answer: 'Yes' }, {}, 'POST', listed[0].answer_route);
-  expect(delivered.body.delivery).toEqual({ state: 'delivered', to: asker.address });
+  expect(delivered.body.delivery).toEqual({ state: 'pending' });
+  await expect.poll(() => core.host.sends.length).toBe(1);
+  expect((await architect.raw(undefined, {}, 'GET', delivered.body.delivery_route)).body.delivery.state).toBe('pending');
+  releaseAnswer();
+  core.host.hold = undefined;
+  await expect.poll(async () => (await architect.raw(undefined, {}, 'GET', delivered.body.delivery_route)).body.delivery.state).toBe('delivered');
   expect(core.host.sends).toEqual([{ target: asker.terminal, text: 'Answer: Yes', submit: false }]);
   expect((await nativeBoard(architect, id)).asks).toEqual([]);
   const stored = (await architect.call('read_work_request', { detail: 'full', work_request_id: id })).asks.find((entry: any) => entry.id === live);
@@ -255,7 +262,11 @@ coreTest('asks go open to answered or withdrawn, take no ownership, and an answe
   const remote = await asker.rpc('tools/call', { name: 'ask', arguments: { work_request_id: id, question: 'Remote?' },
     _meta: { herdr: { ...herdr(asker.terminal!, { 'sympp.role': 'chief' }), core_id: 'other-core', core_name: 'elsewhere' } } });
   const remoteAnswer = await architect.operator(`/api/v1/sympp/operator/asks/${remote.result.structuredContent.ask.id}/answer`, { answer: 'Yes' });
-  expect(remoteAnswer.body.delivery).toEqual({ state: 'not_delivered', reason: 'terminal_unreachable' });
+  expect(remoteAnswer.body.delivery).toEqual({ state: 'pending' });
+  const askDelivery = async (client: typeof architect, askId: string) =>
+    (await client.call('read_work_request', { detail: 'full', work_request_id: id })).asks.find((entry: any) => entry.id === askId)?.delivery;
+  await expect.poll(() => askDelivery(architect, remote.result.structuredContent.ask.id))
+    .toEqual({ state: 'not_delivered', reason: 'terminal_unreachable' });
   // An asker whose terminal has since finished keeps the answer undelivered.
   const leaving = await core.client({ 'sympp.role': 'chief' });
   const late = (await leaving.call('ask', { work_request_id: id, question: 'Which region?', decision_prompt: prompt })).ask.id;
@@ -265,7 +276,8 @@ coreTest('asks go open to answered or withdrawn, take no ownership, and an answe
   const path = `/api/v1/sympp/operator/asks/${late}/answer`;
   expect((await operator.operator(path, { answer_choice: 'mars' })).body.error.code).toBe('invalid_answer_choice');
   const undelivered = await operator.operator(path, { answer_choice: 'eu' });
-  expect(undelivered.body.delivery).toEqual({ state: 'not_delivered', reason: 'terminal_finished' });
+  expect(undelivered.body.delivery).toEqual({ state: 'pending' });
+  await expect.poll(() => askDelivery(operator, late)).toEqual({ state: 'not_delivered', reason: 'terminal_finished' });
   expect((await operator.operator(path, { answer_choice: 'eu' })).body.error.code).toBe('ask_not_open');
   expect(core.host.sends).toHaveLength(1);
 
@@ -333,12 +345,15 @@ coreTest('a flagged decision notifies the live chief once, and its feedback is t
   const route = review[flagged[0]].feedback_route;
   expect((await recorder.raw({ text: '  ' }, {}, 'POST', route)).body.error.code).toBe('missing_feedback');
   const delivered = await recorder.raw({ text: 'Keep the EU default.' }, {}, 'POST', route);
-  expect(delivered.body).toMatchObject({ review_state: 'feedback', delivery: { state: 'delivered', to: recorder.address } });
+  expect(delivered.body).toMatchObject({ review_state: 'feedback', delivery: { state: 'pending' } });
+  await expect.poll(() => core.host.sends.length).toBe(2);
+  await expect.poll(async () => (await toReview())[flagged[0]]).toBeUndefined();
   expect(core.host.sends.at(-1)).toEqual({ target: recorder.terminal, text: 'Decision feedback: Keep the EU default.', submit: false });
   const decision = (id: string, action: string, body: object = {}) => recorder.operator(`/api/v1/sympp/operator/decisions/${id}/${action}`, body);
   expect((await decision(flagged[1], 'ack')).body.review_state).toBe('acknowledged');
   const undelivered = await decision(gone, 'feedback', { text: 'Use the cheaper plan.' });
-  expect(undelivered.body.delivery).toEqual({ state: 'not_delivered', reason: 'terminal_finished' });
+  expect(undelivered.body.delivery).toEqual({ state: 'pending' });
+  await expect.poll(async () => (await toReview())[gone]?.undelivered_reason).toBe('terminal_finished');
   expect(core.host.sends).toHaveLength(2);
   const refused = async (id: string, action: string) => {
     const response = await decision(id, action, { text: 'Again' });

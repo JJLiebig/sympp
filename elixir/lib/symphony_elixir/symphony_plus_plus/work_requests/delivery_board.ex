@@ -153,7 +153,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     slices_by_scope = work_packages_by_scope(visible_request_work_packages)
     slices = Enum.map(visible_request_work_packages, &project_slice(&1, deliveries_by_slice_id, slices_by_scope, context, opts))
 
-    {work_request.id, board_payload(work_request.id, slices)}
+    board = board_payload(work_request.id, slices)
+
+    board =
+      if Keyword.get(opts, :include_execution_graph?, false),
+        do: Map.put(board, :execution_graph, Map.fetch!(context.execution_graphs, work_request.id)),
+        else: board
+
+    {work_request.id, board}
   end
 
   defp work_request(repo, work_request_id, opts) do

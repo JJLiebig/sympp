@@ -10,6 +10,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardPubSub do
   @spec subscribe() :: :ok | {:error, term()}
   def subscribe, do: Phoenix.PubSub.subscribe(@pubsub, @topic)
 
+  @doc false
+  @spec broadcast_refreshed() :: :ok
+  def broadcast_refreshed, do: Phoenix.PubSub.broadcast_from(@pubsub, self(), @topic, @changed)
+
   @spec broadcast_changed() :: :ok
   def broadcast_changed do
     if Process.get(@suppressed_key) do

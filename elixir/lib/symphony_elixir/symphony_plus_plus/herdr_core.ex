@@ -16,10 +16,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   `{:ok, %{core_id: id, terminals: %{address => record}}}` (tests).
   """
 
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
 
   @cache_key {__MODULE__, :snapshot}
   @labels_key {__MODULE__, :labels}
+  @cached_reads_key {__MODULE__, :cached_reads}
+  @refresh_key {__MODULE__, :refresh}
   @cache_ms 15_000
   @last_good_ms 120_000
   @command_timeout_ms 2_000
@@ -66,6 +69,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   @doc "The factory core's current snapshot: cached, or the last good one for up to 2 minutes."
   @spec current() :: {:ok, snapshot()} | :unavailable
   def current, do: snapshot(false)
+
+  @doc false
+  @spec with_cached_reads((-> result)) :: result when result: var
+  def with_cached_reads(fun) do
+    previous = Process.put(@cached_reads_key, true)
+
+    try do
+      fun.()
+    after
+      if is_nil(previous), do: Process.delete(@cached_reads_key), else: Process.put(@cached_reads_key, previous)
+    end
+  end
 
   @doc """
   One terminal's full record from the factory's core (`hc get`), with its
@@ -225,10 +240,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
           {result, good}
 
         cached ->
-          result = load_command(command)
-          good = if result == :unavailable, do: last_good(cached, command), else: {now, result}
-          :persistent_term.put(@cache_key, {command, now, result, good})
-          {result, good}
+          load_uncached_snapshot(command, now, fresh?, cached)
       end
 
     case {result, good} do
@@ -236,6 +248,54 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
       _current -> result
     end
   end
+
+  defp load_uncached_snapshot(command, now, fresh?, cached) do
+    if not fresh? and Process.get(@cached_reads_key, false) do
+      good = last_good(cached, command)
+      refresh_background(command, good, now)
+      {:unavailable, good}
+    else
+      result = load_command(command)
+      good = if result == :unavailable, do: last_good(cached, command), else: {now, result}
+      :persistent_term.put(@cache_key, {command, now, result, good})
+      {result, good}
+    end
+  end
+
+  defp refresh_background(command, previous_good, started_at) do
+    pending? =
+      case :persistent_term.get(@refresh_key, nil) do
+        {^command, pid} -> Process.alive?(pid)
+        _other -> false
+      end
+
+    unless pending? do
+      {:ok, pid} =
+        Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
+          refresh_and_notify(previous_good, started_at)
+        end)
+
+      :persistent_term.put(@refresh_key, {command, pid})
+    end
+  end
+
+  defp refresh_and_notify(previous_good, started_at) do
+    result = refresh()
+    now = System.monotonic_time(:millisecond)
+
+    # Compare against what the dashboard could use, not an expired snapshot
+    # that it had to present as unknown. Capture it when scheduling, before
+    # another caller can update the shared cache.
+    previous = usable_good(previous_good, started_at)
+    fallback = usable_good(previous_good, now)
+    current = if result == :unavailable, do: fallback, else: result
+
+    if current != previous or (fallback == :unavailable and result != :unavailable),
+      do: DashboardPubSub.broadcast_changed()
+  end
+
+  defp usable_good({at, snapshot}, now) when now - at < @last_good_ms, do: snapshot
+  defp usable_good(_expired_or_missing, _now), do: :unavailable
 
   defp last_good({command, _at, _result, good}, command), do: good
   defp last_good(_cached, _command), do: nil
