@@ -311,9 +311,9 @@ export function useRefusal(goalId: string) {
 
 export type Leave = "complete" | "delete" | "archive" | "restore";
 
-// Asks the factory while the row plays its exit, if it has one. The row's list closes it up only once the exit
-// has finished. Resolves with why the factory refused, or null once it agreed.
-async function exitWhile(key: string, node: HTMLElement | null, style: Style | null, send: () => Promise<void>): Promise<string | null> {
+// Asks the factory while the row plays its exit, if it has one. A row that `closes` closes its gap once the factory
+// agrees; its list drops it only after that. Resolves with why the factory refused, or null once it agreed.
+async function exitWhile(key: string, node: HTMLElement | null, style: Style | null, send: () => Promise<void>, closes = style !== null): Promise<string | null> {
   let reason: string | null = null;
   const verdict = send().then(
     () => true,
@@ -325,12 +325,12 @@ async function exitWhile(key: string, node: HTMLElement | null, style: Style | n
   // A finished exit closes its gap at once instead of waiting for the next read to drop the row.
   const exit = (node && style ? (calm() ? fade(node, verdict) : play(node, style, verdict)) : verdict).then(async (ok) => {
     // With reduced motion the gap closes without a close-up.
-    if (ok && node && style) await (calm() ? void (node.style.display = "none") : collapseOut(node));
+    if (ok && node && closes) await (calm() ? void (node.style.display = "none") : collapseOut(node));
     return ok;
   });
   holdLeave(key, exit);
   // A row that stays listed after its exit, because the next read still shows it, opens and comes back into view.
-  if ((await exit) && node && style)
+  if ((await exit) && node && closes)
     setTimeout(() => {
       if (!node.isConnected) return;
       node.getAnimations().forEach((animation) => animation.cancel());
@@ -346,6 +346,11 @@ export async function leaveGoal(goalId: string, step: Leave, node: HTMLElement |
   const reason = await exitWhile(goalId, node, step === "complete" ? STYLES.check : step === "delete" ? STYLES.wind : null, send);
   if (reason !== null) refuse(goalId, `Couldn't ${step} it. ${reason}`);
   return reason === null;
+}
+
+// Finishes a package. Its row has no exit to play; it closes up as soon as the factory agrees.
+export function finishPkg(pkgId: string, node: HTMLElement | null, send: () => Promise<void>): Promise<string | null> {
+  return exitWhile(pkgId, node, null, send, true);
 }
 
 // Sends an answer while the question plays the checkmark. Resolves with why it was refused, or null.

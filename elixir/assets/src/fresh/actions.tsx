@@ -1,7 +1,7 @@
 import { MoreHorizontal } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent as KeyPress } from "react";
 
-import { leaveGoal, useRefusal } from "./exits";
+import { finishPkg, leaveGoal, useRefusal } from "./exits";
 import type { Goal, GoalView, Phase, Pkg } from "./model";
 import { calm, EASE } from "./motion";
 import { GLYPH } from "./parts";
@@ -180,23 +180,20 @@ export function GoalActions({ className, goal, phase }: { className?: string; go
 
 const FINISH: Array<MenuItem<"finish">> = [{ key: "finish", label: "Finish" }];
 
-// Finishing a package whose PR waits on others. A refusal shows under the package's row.
-export function PkgActions({ pkg }: { pkg: Pkg }) {
+// Finishing a package whose PR waits on others. Its row closes up once the factory agrees, unless it `stays`
+// listed as an ended package. A refusal shows under the row.
+export function PkgActions({ pkg, stays }: { pkg: Pkg; stays: boolean }) {
   const act = useAct();
   const [failure, setFailure] = useState<string | null>(null);
 
-  const finish = async () => {
+  const finish = async (root: HTMLElement | null) => {
     setFailure(null);
-    try {
-      await act({ kind: "finish", pkgId: pkg.id });
-    } catch (caught) {
-      setFailure(caught instanceof Error ? caught.message : "The backend refused this.");
-    }
+    setFailure(await finishPkg(pkg.id, stays ? null : (root?.closest<HTMLElement>("[data-pkg-row]") ?? null), () => act({ kind: "finish", pkgId: pkg.id })));
   };
 
   return (
     <>
-      <ActionMenu className="justify-self-end" items={FINISH} label={`Actions for ${pkg.title}`} onPick={() => void finish()} />
+      <ActionMenu className="justify-self-end" items={FINISH} label={`Actions for ${pkg.title}`} onPick={(_, root) => void finish(root)} />
       {failure ? (
         <p className="col-span-full text-xs text-fail" role="alert">
           {failure}
