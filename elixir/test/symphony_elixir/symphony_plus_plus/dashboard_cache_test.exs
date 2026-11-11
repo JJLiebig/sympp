@@ -62,4 +62,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert {:ok, fresh, _etag} = DashboardCache.json(Repo, :racing, &payload/0)
     assert Jason.decode!(fresh)["decision"] == "acknowledged"
   end
+
+  test "an uninitialized schema returns a storage error without taking other reads down" do
+    assert {:error, {:storage_failed, _message}} =
+             DashboardCache.json(Repo, :missing, fn ->
+               Repo.query!("SELECT value FROM missing_table")
+             end)
+
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :native, &payload/0)
+    assert Jason.decode!(body)["decision"] == "recorded"
+  end
 end

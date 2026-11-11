@@ -124,11 +124,12 @@ UI refresh coordination remains the client's responsibility.
 Answer and feedback responses return `delivery: {state: "pending"}` when terminal
 delivery has been scheduled. HTTP 200 confirms the saved answer or feedback,
 not that a terminal received it. Delivery completes asynchronously and sends
-another invalidation. Inspect an ask's `delivered_at` or a decision's
-`undelivered_reason` on a subsequent detail read; `delivering` means wait, a
+another invalidation. Inspect an ask's `delivery` (`pending`, `delivered` with `to`, or `not_delivered`
+with `reason`) or a decision's `undelivered_reason` on a subsequent detail read; `delivering` means wait, a
 settled reason means undelivered, and null means delivered. Feedback interrupted
 by a factory restart becomes `delivery_interrupted` under the existing timeout.
-Answers remain readable on their ask after interruption; sends are not retried
+Interrupted ask delivery likewise settles as `not_delivered` with
+`reason: "delivery_interrupted"` after a minute. Answers remain readable on their ask; sends are not retried
 automatically because typing twice is not idempotent. A client that focuses the
 recording terminal must wait for confirmed delivery rather than treating
 `pending` as delivered.

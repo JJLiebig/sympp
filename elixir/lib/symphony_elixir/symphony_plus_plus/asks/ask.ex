@@ -27,6 +27,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks.Ask do
     field(:answered_by, :string)
     field(:resolved_at, :utc_datetime_usec)
     field(:delivered_at, :utc_datetime_usec)
+    field(:undelivered_reason, :string)
     timestamps(type: :utc_datetime_usec)
   end
 

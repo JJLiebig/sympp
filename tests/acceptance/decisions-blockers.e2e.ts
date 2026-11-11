@@ -257,6 +257,10 @@ coreTest('asks go open to answered or withdrawn, take no ownership, and an answe
     _meta: { herdr: { ...herdr(asker.terminal!, { 'sympp.role': 'chief' }), core_id: 'other-core', core_name: 'elsewhere' } } });
   const remoteAnswer = await architect.operator(`/api/v1/sympp/operator/asks/${remote.result.structuredContent.ask.id}/answer`, { answer: 'Yes' });
   expect(remoteAnswer.body.delivery).toEqual({ state: 'pending' });
+  const askDelivery = async (client: typeof architect, askId: string) =>
+    (await client.call('read_work_request', { detail: 'full', work_request_id: id })).asks.find((entry: any) => entry.id === askId)?.delivery;
+  await expect.poll(() => askDelivery(architect, remote.result.structuredContent.ask.id))
+    .toEqual({ state: 'not_delivered', reason: 'terminal_unreachable' });
   // An asker whose terminal has since finished keeps the answer undelivered.
   const leaving = await core.client({ 'sympp.role': 'chief' });
   const late = (await leaving.call('ask', { work_request_id: id, question: 'Which region?', decision_prompt: prompt })).ask.id;
@@ -267,6 +271,7 @@ coreTest('asks go open to answered or withdrawn, take no ownership, and an answe
   expect((await operator.operator(path, { answer_choice: 'mars' })).body.error.code).toBe('invalid_answer_choice');
   const undelivered = await operator.operator(path, { answer_choice: 'eu' });
   expect(undelivered.body.delivery).toEqual({ state: 'pending' });
+  await expect.poll(() => askDelivery(operator, late)).toEqual({ state: 'not_delivered', reason: 'terminal_finished' });
   expect((await operator.operator(path, { answer_choice: 'eu' })).body.error.code).toBe('ask_not_open');
   expect(core.host.sends).toHaveLength(1);
 

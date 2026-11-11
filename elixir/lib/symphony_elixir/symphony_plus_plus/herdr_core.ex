@@ -22,6 +22,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   @cache_key {__MODULE__, :snapshot}
   @labels_key {__MODULE__, :labels}
   @cached_reads_key {__MODULE__, :cached_reads}
+  @refresh_key {__MODULE__, :refresh}
   @cache_ms 15_000
   @last_good_ms 120_000
   @command_timeout_ms 2_000
@@ -251,19 +252,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   defp load_uncached_snapshot(command, now, fresh?, cached) do
     if not fresh? and Process.get(@cached_reads_key, false) do
       good = last_good(cached, command)
-      :persistent_term.put(@cache_key, {command, now, :unavailable, good})
-
-      Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-        refresh()
-        DashboardPubSub.broadcast_changed()
-      end)
-
+      refresh_background(command)
       {:unavailable, good}
     else
       result = load_command(command)
       good = if result == :unavailable, do: last_good(cached, command), else: {now, result}
       :persistent_term.put(@cache_key, {command, now, result, good})
       {result, good}
+    end
+  end
+
+  defp refresh_background(command) do
+    pending? =
+      case :persistent_term.get(@refresh_key, nil) do
+        {^command, pid} -> Process.alive?(pid)
+        _other -> false
+      end
+
+    unless pending? do
+      {:ok, pid} =
+        Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
+          refresh()
+          DashboardPubSub.broadcast_changed()
+        end)
+
+      :persistent_term.put(@refresh_key, {command, pid})
     end
   end
 

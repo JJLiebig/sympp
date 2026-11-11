@@ -46,7 +46,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
           {:reply, result, state}
 
         _missing ->
-          result = encode(HerdrCore.with_cached_reads(fun))
+          result = build(fun)
           # The projection uses an Ecto read transaction. A commit during that
           # snapshot must never label the old snapshot with the new version.
           entries =
@@ -61,6 +61,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     after
       Repo.put_dynamic_repo(previous)
     end
+  end
+
+  defp build(fun) do
+    encode(HerdrCore.with_cached_reads(fun))
+  rescue
+    error in Exqlite.Error ->
+      message = Exception.message(error)
+
+      if String.contains?(String.downcase(message), ["busy", "locked"]),
+        do: {:error, :database_busy},
+        else: {:error, {:storage_failed, message}}
   end
 
   @impl true
