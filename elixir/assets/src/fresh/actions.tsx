@@ -1,5 +1,5 @@
 import { MoreHorizontal } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as KeyPress } from "react";
 
 import { leaveGoal, useRefusal } from "./exits";
 import type { Goal, GoalView, Phase, Pkg } from "./model";
@@ -79,7 +79,8 @@ export function GoalRefusal({ className = "", goalId }: { className?: string; go
 type MenuItem<K extends string> = { key: K; label: string; danger?: boolean };
 
 // A ⋯ button that opens a short menu of actions. Each takes a second click: the first arms it.
-// Closing it from inside, with Escape or a pick, hands focus back to the ⋯ button so the keyboard keeps its place.
+// Opening it puts focus on the first action, and the arrow keys move between them. Closing it from inside, with
+// Escape or a pick, hands focus back to the ⋯ button so the keyboard keeps its place.
 function ActionMenu<K extends string>({ className, items, label, onPick }: { className?: string; items: Array<MenuItem<K>>; label: string; onPick: (key: K, root: HTMLElement | null) => void }) {
   const [open, setOpen] = useState(false);
   const [armed, setArmed] = useState<K | null>(null);
@@ -105,12 +106,21 @@ function ActionMenu<K extends string>({ className, items, label, onPick }: { cla
   }, [open]);
 
   useLayoutEffect(() => {
-    if (open && !calm()) menu.current?.animate([{ opacity: 0, transform: "scale(0.96) translateY(-4px)" }, { opacity: 1, transform: "none" }], { duration: 150, easing: EASE });
+    if (!open) return;
+    menu.current?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
+    if (!calm()) menu.current?.animate([{ opacity: 0, transform: "scale(0.96) translateY(-4px)" }, { opacity: 1, transform: "none" }], { duration: 150, easing: EASE });
   }, [open]);
 
   const toggle = () => {
     setOpen(!open);
     setArmed(null);
+  };
+  const move = (event: KeyPress<HTMLElement>) => {
+    const step = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
+    if (!step || !menu.current) return;
+    event.preventDefault();
+    const all = [...menu.current.querySelectorAll<HTMLElement>("[role=menuitem]")];
+    all[(all.indexOf(document.activeElement as HTMLElement) + step + all.length) % all.length]?.focus();
   };
   const pick = (item: MenuItem<K>, button: HTMLButtonElement) => {
     if (armed !== item.key) {
@@ -130,7 +140,7 @@ function ActionMenu<K extends string>({ className, items, label, onPick }: { cla
         <MoreHorizontal className="size-4" />
       </button>
       {open ? (
-        <span ref={menu} className="absolute right-0 top-full z-30 mt-1 flex w-40 origin-top-right flex-col rounded-lg border border-line bg-[#15171d] p-1 text-left text-sm font-medium shadow-[0_12px_32px_rgba(0,0,0,0.5)]" data-menu role="menu">
+        <span ref={menu} className="absolute right-0 top-full z-30 mt-1 flex w-40 origin-top-right flex-col rounded-lg border border-line bg-[#15171d] p-1 text-left text-sm font-medium shadow-[0_12px_32px_rgba(0,0,0,0.5)]" data-menu role="menu" onKeyDown={move}>
           {items.map((item) => {
             const on = armed === item.key;
             return (
