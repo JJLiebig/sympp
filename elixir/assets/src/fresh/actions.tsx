@@ -1,5 +1,5 @@
 import { MoreHorizontal } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as KeyPress } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent as KeyPress } from "react";
 
 import { leaveGoal, useRefusal } from "./exits";
 import type { Goal, GoalView, Phase, Pkg } from "./model";
@@ -80,7 +80,7 @@ type MenuItem<K extends string> = { key: K; label: string; danger?: boolean };
 
 // A ⋯ button that opens a short menu of actions. Each takes a second click: the first arms it.
 // Opening it puts focus on the first action, and the arrow keys move between them. Closing it from inside, with
-// Escape or a pick, hands focus back to the ⋯ button so the keyboard keeps its place.
+// Escape or a pick, hands focus back to the ⋯ button so the keyboard keeps its place. Focus leaving it closes it unarmed.
 function ActionMenu<K extends string>({ className, items, label, onPick }: { className?: string; items: Array<MenuItem<K>>; label: string; onPick: (key: K, root: HTMLElement | null) => void }) {
   const [open, setOpen] = useState(false);
   const [armed, setArmed] = useState<K | null>(null);
@@ -122,6 +122,12 @@ function ActionMenu<K extends string>({ className, items, label, onPick }: { cla
     const all = [...menu.current.querySelectorAll<HTMLElement>("[role=menuitem]")];
     all[(all.indexOf(document.activeElement as HTMLElement) + step + all.length) % all.length]?.focus();
   };
+  const leave = (event: FocusEvent) => {
+    if (open && !root.current?.contains(event.relatedTarget as Node | null)) {
+      setOpen(false);
+      setArmed(null);
+    }
+  };
   const pick = (item: MenuItem<K>, button: HTMLButtonElement) => {
     if (armed !== item.key) {
       setArmed(item.key);
@@ -135,7 +141,7 @@ function ActionMenu<K extends string>({ className, items, label, onPick }: { cla
   };
 
   return (
-    <span ref={root} className={`relative inline-block shrink-0 ${className ?? ""}`}>
+    <span ref={root} className={`relative inline-block shrink-0 ${className ?? ""}`} onBlur={leave}>
       <button ref={trigger} aria-expanded={open} aria-haspopup="menu" aria-label={label} className={`${GLYPH} ${open ? "bg-line text-ink" : "text-faint"}`} title={items.map((item) => item.label).join(", ")} type="button" onClick={toggle}>
         <MoreHorizontal className="size-4" />
       </button>
@@ -144,7 +150,7 @@ function ActionMenu<K extends string>({ className, items, label, onPick }: { cla
           {items.map((item) => {
             const on = armed === item.key;
             return (
-              <button key={item.key} aria-label={on ? `${item.label}?` : item.label} className={`flex items-center rounded px-2.5 py-1.5 text-left transition-colors ${item.danger ? "text-fail" : "text-ink"} ${on ? (item.danger ? "bg-fail/12" : "bg-line") : "hover:bg-white/[0.06]"}`} role="menuitem" type="button" onClick={(event) => pick(item, event.currentTarget)}>
+              <button key={item.key} aria-label={on ? `${item.label}?` : item.label} className={`flex items-center rounded px-2.5 py-1.5 text-left transition-colors ${item.danger ? "text-fail" : "text-ink"} ${on ? (item.danger ? "bg-fail/12" : "bg-line") : "hover:bg-white/[0.06]"}`} role="menuitem" tabIndex={-1} type="button" onClick={(event) => pick(item, event.currentTarget)}>
                 {item.label}
                 <span aria-hidden className={`inline-block transition-[max-width,opacity,transform] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none ${on ? "max-w-[1ch] translate-x-0 opacity-100" : "max-w-0 -translate-x-1 opacity-0"}`}>
                   ?
