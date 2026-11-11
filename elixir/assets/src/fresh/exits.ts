@@ -3,7 +3,7 @@
 // The effect holds part way until the factory answers; a refusal plays it back and the goal returns.
 import { useSyncExternalStore } from "react";
 
-import { calm, collapseOut, holdLeave } from "./motion";
+import { calm, closeUp, holdLeave, markShut, reopen } from "./motion";
 
 const PITCH = 7;
 const SIZE = 5;
@@ -325,18 +325,21 @@ async function exitWhile(key: string, node: HTMLElement | null, style: Style | n
   // A finished exit closes its gap at once instead of waiting for the next read to drop the row.
   const exit = (node && style ? (calm() ? fade(node, verdict) : play(node, style, verdict)) : verdict).then(async (ok) => {
     // With reduced motion the gap closes without a close-up.
-    if (ok && node && closes) await (calm() ? void (node.style.display = "none") : collapseOut(node));
+    if (ok && node && closes) await closeUp(node);
     return ok;
   });
   holdLeave(key, exit);
   // A row that stays listed after its exit, because the next read still shows it, opens and comes back into view.
-  if ((await exit) && node && closes)
+  if ((await exit) && node && closes) {
+    markShut(key, node, true);
     setTimeout(() => {
-      if (!node.isConnected) return;
-      node.getAnimations().forEach((animation) => animation.cancel());
-      node.style.display = "";
-      node.style.visibility = "";
+      if (node.isConnected) {
+        reopen(node);
+        node.style.visibility = "";
+      }
+      markShut(key, node, false);
     }, 8000);
+  }
   return reason;
 }
 
