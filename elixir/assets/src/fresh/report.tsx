@@ -1,7 +1,7 @@
 import { Check, Circle, type LucideIcon } from "lucide-react";
 import { createContext, useContext, useState, type MouseEvent, type ReactNode } from "react";
 
-import { ActButton } from "./actions";
+import { PkgActions } from "./actions";
 import { span, waitsOnOthers, type Goal, type Phase as GoalPhase, type GoalView, type Pkg, type PkgView, type Stage } from "./model";
 import { focusAsk, GLOW, Presence, useFlash, useOpenWhenBrought, useScramble, useSwap } from "./motion";
 import { Owner } from "./owner";
@@ -395,7 +395,7 @@ export function NeedsYouFlag({ view }: { view: GoalView }) {
   );
 }
 
-// Status on the left, then the lifecycle and time in it, the PR with its checks, who works on it, and Finish where the PR waits on others.
+// Status on the left, then the lifecycle and time in it, the PR with its checks, who works on it, and a menu to finish it where the PR waits on others.
 // The row glows whenever its place in the lifecycle changes.
 export function PkgLine({ at, ref, view }: { at: number; ref?: (node: HTMLElement | null) => void; view: PkgView }) {
   const flash = useFlash(`${slotOf(view)}${view.failed ? ":failed" : ""}`, GLOW, 1400);
@@ -425,7 +425,7 @@ export function PkgLine({ at, ref, view }: { at: number; ref?: (node: HTMLElemen
       <span className={NARROW_HIDDEN}>
         <Owner owner={pkg.owner} />
       </span>
-      {waitsOnOthers(pkg) ? <ActButton action={{ kind: "finish", pkgId: pkg.id }} confirm="Finish?" label="Finish" tone="text-ink" /> : <span />}
+      {waitsOnOthers(pkg) ? <PkgActions pkg={pkg} /> : <span />}
     </div>
   );
 }

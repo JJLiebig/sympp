@@ -133,10 +133,11 @@ export function StageStatus({ at, view }: { at: number; view: PkgView }) {
   return <span className={`${cell} text-dim max-[1000px]:hidden`}>{view.untimed ? "" : span(at - view.since)}</span>;
 }
 
-const CI: Record<Ci, { label: string; tone: string; icon: typeof Check }> = {
+// Failing CI reads "CI" beside its ✗ like passing CI beside its ✓; hover and screen readers still get the state in words.
+const CI: Record<Ci, { label: string; spoken?: string; tone: string; icon: typeof Check }> = {
   passing: { label: "CI", tone: "text-merge", icon: Check },
   pending: { label: "CI running", tone: "text-checks", icon: CircleDashed },
-  failing: { label: "CI failing", tone: "text-fail", icon: X },
+  failing: { label: "CI", spoken: "CI failing", tone: "text-fail", icon: X },
 };
 
 // The mode, then the state. A card's review has no known mode, so it shows the state alone.
@@ -166,11 +167,14 @@ export function CiCell({ ci, stale = false }: { ci: Ci | null; stale?: boolean }
   if (!ci) return <span />;
   const check = CI[ci];
   return (
-    <span className={`flex min-w-0 items-center gap-1 whitespace-nowrap font-mono text-[11px] ${check.tone}`}>
+    <span className={`flex min-w-0 items-center gap-1 whitespace-nowrap font-mono text-[11px] ${check.tone}`} title={check.spoken}>
       <Glyph>
         <check.icon aria-hidden className="size-3" />
       </Glyph>
-      <span className="truncate">{check.label}</span>
+      <span aria-hidden={check.spoken ? true : undefined} className="truncate">
+        {check.label}
+      </span>
+      {check.spoken ? <span className="sr-only">{check.spoken}</span> : null}
     </span>
   );
 }
