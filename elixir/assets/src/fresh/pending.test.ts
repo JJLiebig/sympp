@@ -61,6 +61,8 @@ it("a refusal that says the outcome already holds counts as done", async () => {
   expect(await operate({ kind: "ack", decisionId: "dec-recap-pdf" }, send, () => undefined)).toBeNull();
   // The read taken before the factory caught up still lists it; the board does not.
   expect(reviewing(board)).not.toContain("dec-recap-pdf");
+  // Feedback the factory did not record is refused, so what the operator wrote is not lost.
+  expect(await operate({ kind: "feedback", decisionId: "dec-alerts-scope", text: "Too narrow." }, send, () => undefined)).not.toBeNull();
 });
 
 it("a read taken before the factory caught up does not bring an answered question back", async () => {
@@ -77,4 +79,21 @@ it("a read taken before the factory caught up does not bring an answered questio
   settle(fresh);
   expect(pendingActions()).not.toContainEqual(answer);
   expect(asking(fresh)).not.toContain("ask-slack");
+});
+
+it("a goal's next step, picked while the last is sent, is sent after it", async () => {
+  const board = read(demoLedger(NOW));
+  const completing = deferred();
+  const factory = vi.fn((action: OperatorAction) => (action.kind === "goal" && action.step === "complete" ? completing.promise : Promise.resolve()));
+
+  const complete = operate({ kind: "goal", goalId: "wr-recap", step: "complete" }, factory, () => undefined);
+  const archive = operate({ kind: "goal", goalId: "wr-recap", step: "archive" }, factory, () => undefined);
+  expect(shown(board).goals.find((goal) => goal.id === "wr-recap")?.phase).toBe("archived");
+  await Promise.resolve();
+  expect(factory).toHaveBeenCalledTimes(1);
+
+  completing.resolve();
+  expect(await complete).toBeNull();
+  expect(await archive).toBeNull();
+  expect(factory.mock.calls.map(([action]) => action.kind === "goal" && action.step)).toEqual(["complete", "archive"]);
 });

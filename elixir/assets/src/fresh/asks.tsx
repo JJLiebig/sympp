@@ -7,7 +7,7 @@ import { span, type Ask, type Board, type Choice, type GoalView } from "./model"
 import { Presence, useOpenWhenBrought } from "./motion";
 import { REDIRECT, useAct, type Answer } from "./operator";
 import { Fold, LINK } from "./parts";
-import { keyOf, useOperation } from "./pending";
+import { useOperation } from "./pending";
 import { PhaseBadge, reportFor } from "./report";
 import { Reveal } from "./reveal";
 
@@ -131,7 +131,7 @@ export type Entry = { choice: string | null; text: string };
 
 // Whether the answer to a question is on its way, and why the last one was refused.
 export function useAnswering(askId: string) {
-  const { busy, refused } = useOperation(keyOf({ kind: "answer", askId, answer: { text: "" } }));
+  const { busy, refused } = useOperation({ kind: "answer", askId, answer: { text: "" } });
   return { busy, failure: refused?.reason ?? null };
 }
 

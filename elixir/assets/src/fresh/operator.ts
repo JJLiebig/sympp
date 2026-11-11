@@ -70,13 +70,22 @@ const NEXT: Record<string, string> = {
 
 type Refusal = { error?: { code?: string; message?: string; next_action?: string } | null };
 
-// Refusals that say the outcome already holds: the decision was reviewed, the question is closed, the package
-// ended, nobody owns the goal. Another click or another screen got there first, so they count as done.
-const HANDLED = new Set(["ask_not_open", "already_ended", "not_owned"]);
-
-function handled(payload: Refusal | null) {
+// Refusals that say the outcome already holds: the decision was reviewed, the package ended, nobody owns the goal.
+// Another click or another screen got there first, so they count as done. An answer or feedback carries what the
+// operator wrote, which such a refusal did not record, so it stays a refusal.
+function handled(action: OperatorAction, payload: Refusal | null) {
   const error = payload?.error;
-  return (error?.next_action ?? "").split(":")[0] === "none" || HANDLED.has(error?.code ?? "");
+  switch (action.kind) {
+    case "ack":
+    case "dismiss_feedback":
+      return (error?.next_action ?? "").split(":")[0] === "none";
+    case "finish":
+      return error?.code === "already_ended";
+    case "release":
+      return error?.code === "not_owned";
+    default:
+      return false;
+  }
 }
 
 // A refusal in plain words: what to do next where the backend says, else its message.
@@ -92,6 +101,6 @@ export async function send(action: OperatorAction) {
     if (response?.ok) continue;
     if (!response) throw new Error("Could not reach the backend.");
     const payload = (await response.json().catch(() => null)) as Refusal | null;
-    if (!handled(payload)) throw new Error(refusalText(payload));
+    if (!handled(action, payload)) throw new Error(refusalText(payload));
   }
 }

@@ -1,7 +1,7 @@
 // What the operator did on the board shows as done the moment they click; the request goes to the factory meanwhile.
 // Every read is shown through the actions still under way, and through the ones the factory agreed to until a read
 // shows them, so a read taken before the factory caught up cannot bring an item back. A refusal takes the action back
-// and is kept, with why, until the next attempt.
+// and is kept, with why, until the next attempt on the same thing.
 import { useSyncExternalStore } from "react";
 
 import type { Board, Decision, Goal, Pkg } from "./model";
@@ -25,10 +25,10 @@ function subscribe(listener: () => void) {
   return () => listeners.delete(listener);
 }
 
-export const goalKey = (goalId: string) => `goal:${goalId}`;
+const goalKey = (goalId: string) => `goal:${goalId}`;
 
-// One action at a time per thing it acts on. A goal takes one step at a time; shelf cleanup runs once at a time.
-export function keyOf(action: OperatorAction) {
+// The same action is never under way twice. Several cards hidden in one go, and shelf cleanup, run one at a time.
+function keyOf(action: OperatorAction) {
   switch (action.kind) {
     case "answer":
       return `answer:${action.askId}`;
@@ -39,25 +39,32 @@ export function keyOf(action: OperatorAction) {
     case "release":
       return `release:${action.goalId}`;
     case "goal":
-      return goalKey(action.goalId);
+      return `${goalKey(action.goalId)}:${action.step}`;
     case "finish":
       return `finish:${action.pkgId}`;
     case "dismiss":
-      return `dismiss:${action.cardIds.join(",")}`;
+      return action.cardIds.length === 1 ? `dismiss:${action.cardIds[0]}` : "dismiss";
     case "archive":
       return "archive";
   }
+}
+
+// What the action acts on. A goal's steps are sent one after another, and the goal shows why its last one was refused.
+function subjectOf(action: OperatorAction) {
+  return action.kind === "goal" ? goalKey(action.goalId) : keyOf(action);
 }
 
 // Shows the action's outcome at once and sends it. An action already under way is not sent again.
 // Resolves with why the factory refused, or null once it agreed; the board is read again after either.
 export function operate(action: OperatorAction, send: (action: OperatorAction) => Promise<void>, reread: () => void): Promise<string | null> {
   const key = keyOf(action);
+  const subject = subjectOf(action);
   const known = entries.get(key);
   if (known) return known.answer;
-  refusals.delete(key);
+  refusals.delete(subject);
+  const earlier = [...entries.values()].filter((entry) => !entry.agreed && subjectOf(entry.action) === subject).map((entry) => entry.answer);
   const entry: Entry = { action, agreed: false, answer: Promise.resolve(null) };
-  entry.answer = send(action).then(
+  entry.answer = (earlier.length > 0 ? Promise.all(earlier).then(() => send(action)) : send(action)).then(
     () => {
       entry.agreed = true;
       return null;
@@ -65,7 +72,7 @@ export function operate(action: OperatorAction, send: (action: OperatorAction) =
     (caught: unknown) => {
       const reason = caught instanceof Error ? caught.message : "The backend refused this.";
       entries.delete(key);
-      refusals.set(key, { action, reason });
+      refusals.set(subject, { action, reason });
       return reason;
     },
   ).then((reason) => {
@@ -97,11 +104,16 @@ export function usePending() {
   return useSyncExternalStore(subscribe, pendingActions);
 }
 
-// Whether the action under `key` is on its way to the factory, and why its last attempt was refused.
-export function useOperation(key: string | null) {
-  const busy = useSyncExternalStore(subscribe, () => (key ? entries.get(key)?.agreed === false : false));
-  const refused = useSyncExternalStore(subscribe, () => (key ? (refusals.get(key) ?? null) : null));
+// Whether the action is on its way to the factory, and why the last attempt on what it acts on was refused.
+export function useOperation(action: OperatorAction | null) {
+  const busy = useSyncExternalStore(subscribe, () => (action ? entries.get(keyOf(action))?.agreed === false : false));
+  const refused = useSyncExternalStore(subscribe, () => (action ? (refusals.get(subjectOf(action)) ?? null) : null));
   return { busy, refused };
+}
+
+// Why the goal's last step was refused.
+export function useGoalRefusal(goalId: string) {
+  return useSyncExternalStore(subscribe, () => refusals.get(goalKey(goalId)) ?? null);
 }
 
 export function project(board: Board, actions: readonly OperatorAction[]): Board {

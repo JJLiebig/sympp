@@ -11,7 +11,7 @@ import { needsReview, span, type Ask, type Board, type Decision, type GoalView, 
 import { calm, Presence } from "./motion";
 import { useAct, type OperatorAction } from "./operator";
 import { CiCell, Deploy, OrgIcon, Pip, PrLink, ReviewCell } from "./parts";
-import { keyOf, useOperation } from "./pending";
+import { useOperation } from "./pending";
 import { GoalScreen, StageWord } from "./phone-goal";
 import { AskCard, CARD, DecisionCard, Heading, INSET, TroubleCard } from "./phone-parts";
 import { DotStrip, GoalTitle, PhaseBadge, reportFor } from "./report";
@@ -433,7 +433,7 @@ function SmallWork({ cards }: { cards: Cards }) {
 function SmallRow({ card, ref }: { card: Cards[number]; ref: (node: HTMLElement | null) => void }) {
   const act = useAct();
   const dismissal: OperatorAction = { kind: "dismiss", cardIds: [card.id] };
-  const failure = useOperation(keyOf(dismissal)).refused?.reason ?? null;
+  const failure = useOperation(dismissal).refused?.reason ?? null;
   const ended = card.state === "merged" || card.state === "done";
   const dismiss = () => void act(dismissal);
 

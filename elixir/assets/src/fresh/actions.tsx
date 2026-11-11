@@ -6,7 +6,7 @@ import type { Goal, GoalView, Phase, Pkg } from "./model";
 import { calm, EASE } from "./motion";
 import { GLYPH } from "./parts";
 import { useAct, type GoalStep, type OperatorAction } from "./operator";
-import { goalKey, keyOf, useOperation } from "./pending";
+import { useGoalRefusal, useOperation } from "./pending";
 import { Reveal } from "./reveal";
 
 export type Action = { key: GoalStep; label: string; danger?: boolean };
@@ -38,7 +38,7 @@ export function ActButton({ action, className = "", confirm, label, look = "roun
   const step = useGoalStep();
   const button = useRef<HTMLButtonElement>(null);
   const [armed, setArmed] = useState(false);
-  const { busy, refused } = useOperation(keyOf(action));
+  const { busy, refused } = useOperation(action);
 
   const run = () => {
     if (confirm && !armed) return setArmed(true);
@@ -58,7 +58,7 @@ export function ActButton({ action, className = "", confirm, label, look = "roun
 
 // Why the goal's last step did not go through. It opens under the goal and closes on the next attempt.
 export function GoalRefusal({ className = "", goalId }: { className?: string; goalId: string }) {
-  const { refused } = useOperation(goalKey(goalId));
+  const refused = useGoalRefusal(goalId);
   const refusal = refused?.action.kind === "goal" ? `Couldn't ${refused.action.step} it. ${refused.reason}` : null;
   return (
     <Reveal className={className} show={refusal !== null}>
@@ -185,7 +185,7 @@ const FINISH: Array<MenuItem<"finish">> = [{ key: "finish", label: "Finish" }];
 export function PkgActions({ pkg }: { pkg: Pkg }) {
   const act = useAct();
   const finish: OperatorAction = { kind: "finish", pkgId: pkg.id };
-  const { refused } = useOperation(keyOf(finish));
+  const { refused } = useOperation(finish);
 
   return (
     <>
@@ -204,7 +204,7 @@ export function PkgActions({ pkg }: { pkg: Pkg }) {
 export function ShelfCleanup({ at, views }: { at: number; views: GoalView[] }) {
   const act = useAct();
   const [armed, setArmed] = useState<string | null>(null);
-  const { busy, refused } = useOperation(keyOf({ kind: "archive", goalIds: [] }));
+  const { busy, refused } = useOperation({ kind: "archive", goalIds: [] });
   // A goal counts as old from its last package move or its completion, whichever came later.
   const stale = views.filter((view) => at - Math.max(view.lastMoveAt, view.goal.completedAt ?? 0) > STALE_MS);
   const choices = [

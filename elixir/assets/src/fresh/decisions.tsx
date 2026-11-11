@@ -8,7 +8,7 @@ import { Presence } from "./motion";
 import { useAct } from "./operator";
 import { Owner } from "./owner";
 import { GLYPH } from "./parts";
-import { keyOf, useOperation } from "./pending";
+import { useOperation } from "./pending";
 import { Reveal } from "./reveal";
 
 const ROW = "grid grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-2 py-3 pr-2";
@@ -52,7 +52,7 @@ function DecisionItem({ at, board, decision, onGoal, ref }: { at: number; board:
   const writing = draft.writing;
   const setWriting = (on: boolean) => update((was) => ({ ...was, writing: on }));
   const dismissal = { kind: "dismiss_feedback", decisionId: decision.id } as const;
-  const { refused } = useOperation(keyOf(dismissal));
+  const { refused } = useOperation(dismissal);
   const undelivered = decision.state === "feedback";
   // Feedback still being typed into its terminal can't be dismissed yet.
   const typing = decision.undelivered === "delivering";
@@ -147,7 +147,7 @@ export function FeedbackForm({ decision, onCancel, onText, text, touch, unnamed 
   const act = useAct();
   const id = useId();
   const feedback = { kind: "feedback", decisionId: decision.id, text: text.trim() } as const;
-  const { busy, refused } = useOperation(keyOf(feedback));
+  const { busy, refused } = useOperation(feedback);
   const failure = refused?.reason ?? null;
   const size = FEEDBACK_SIZE[touch ? "touch" : "pointer"];
   const label = !unnamed && decision.by ? `Feedback for ${decision.by.address}` : "Feedback";

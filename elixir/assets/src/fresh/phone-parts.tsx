@@ -10,7 +10,7 @@ import { span, unresolvedPkgs, type Ask, type Board, type Decision, type GoalVie
 import { useAct, type GoalStep, type OperatorAction } from "./operator";
 import { DOT } from "./owner";
 import { CiCell, OrgIcon, OUTCOME, Pip, reviewLabel } from "./parts";
-import { keyOf, useOperation } from "./pending";
+import { useOperation } from "./pending";
 import { Reveal } from "./reveal";
 import type { Trouble } from "./trouble";
 
@@ -35,7 +35,7 @@ export function Tap({ action, className = "", confirm, label, look = "plain", ru
   const act = useAct();
   const [armed, setArmed] = useState(false);
   const [running, setRunning] = useState(false);
-  const operation = useOperation(action ? keyOf(action) : null);
+  const operation = useOperation(action ?? null);
   const busy = running || operation.busy;
   const failure = operation.refused?.reason ?? null;
   useEffect(() => {
