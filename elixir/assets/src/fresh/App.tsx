@@ -59,7 +59,7 @@ export function App() {
   const [direction, setDirection] = useState(START.direction);
   const [area, setArea] = useState<string | null>(LINKED.get("area"));
   const [density, setDensity] = useState<Density>(START.density);
-  const [at, setAt] = useState(0);
+  const [picked, setAt] = useState(0);
   const [seenAt, setSeenAt] = useState<number | null>(rememberedVisit);
   const [replay, setReplay] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -86,6 +86,8 @@ export function App() {
   const act = useOperator(read, setData);
   useShortcuts(setDirection, setNote);
 
+  const phone = usePhone();
+  const at = shownAt(phone, data, picked);
   const since = lastLookAt(seenAt, at, data?.replayable !== false);
   const markSeen = () => {
     rememberVisit(at);
@@ -101,7 +103,6 @@ export function App() {
   const current = directions.find((entry) => entry.key === DIRECTIONS[direction]?.key) ?? directions[0];
   const View = current.view;
   useTabSignal(asks.length);
-  const phone = usePhone();
 
   if (!data) return <Unread failure={failure} />;
   // A phone gets its own arrangement of the same views; see phone.tsx.
@@ -299,6 +300,11 @@ function useReread(active: boolean, read: () => void) {
     const timer = window.setInterval(read, REREAD_MS);
     return () => window.clearInterval(timer);
   }, [active, read]);
+}
+
+// The phone has no replay bar, so it always shows the present.
+function shownAt(phone: boolean, data: Loaded | null, picked: number) {
+  return phone && data ? data.now : picked;
 }
 
 function followNow(current: number, before: number, now: number) {

@@ -128,15 +128,18 @@ function Undelivered({ decision, failure, onDismiss }: { decision: Decision; fai
 // `touch` sizes the controls for a finger.
 const FEEDBACK_SIZE = { pointer: { text: "min-h-9 text-sm", send: "h-9 px-3", cancel: "h-9 px-2" }, touch: { text: "min-h-11 text-base", send: "h-11 px-4", cancel: "h-11 px-3" } };
 
-// `touch` sizes the controls for a finger; `named` says who the feedback goes to.
-export function FeedbackForm({ decision, named = true, onCancel, touch = false }: { decision: Decision; named?: boolean; onCancel: () => void; touch?: boolean }) {
+// `touch` sizes the controls for a finger; `unnamed` leaves out who the feedback goes to.
+// With `text` and `onText` the caller keeps what was written.
+export function FeedbackForm({ decision, onCancel, onText, text: kept, touch, unnamed }: { decision: Decision; unnamed?: boolean; onCancel: () => void; onText?: (text: string) => void; text?: string; touch?: boolean }) {
   const act = useAct();
   const id = useId();
-  const [text, setText] = useState("");
+  const [own, setOwn] = useState("");
+  const text = kept ?? own;
+  const setText = onText ?? setOwn;
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const size = FEEDBACK_SIZE[touch ? "touch" : "pointer"];
-  const label = named && decision.by ? `Feedback for ${decision.by.address}` : "Feedback";
+  const label = !unnamed && decision.by ? `Feedback for ${decision.by.address}` : "Feedback";
 
   const submit = async () => {
     setBusy(true);

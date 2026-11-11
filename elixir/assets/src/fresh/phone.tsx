@@ -276,20 +276,14 @@ function Group<T>({ children, id, items, keyOf, label, tone }: { children: (item
 function GoalsTab({ area, areas, at, changes, lanes, onArea, onOpen, onSeen, shownCards, since, troubles }: PhoneProps & { onOpen: (goalId: string) => void; troubles: Trouble[] }) {
   const byGoal = (goalId: string) => troubles.filter((trouble) => "view" in trouble && trouble.view.goal.id === goalId);
   const shelved = lanes.landed.length + lanes.parked.length + lanes.dormant.length + lanes.backlog.length + lanes.settled.length + lanes.archived.length;
-  if (lanes.main.length + shownCards.length + shelved === 0) return <p className="py-24 text-center text-dim">Nothing on the board</p>;
+  const nothing = lanes.main.length + shownCards.length + shelved === 0;
+  if (nothing && area === null) return <p className="py-24 text-center text-dim">Nothing on the board</p>;
 
   return (
     <>
       <Since at={at} changes={changes} since={since} onOpen={onOpen} onSeen={onSeen} />
-      {areas.length > 1 ? (
-        <nav className={`mt-2 flex gap-1.5 overflow-x-auto [scrollbar-width:none] ${INSET}`}>
-          {[null, ...areas].map((name) => (
-            <button key={name ?? "all"} className={`h-11 shrink-0 rounded-full px-4 text-sm ${name === area ? "bg-line text-ink" : "text-dim"}`} type="button" onClick={() => onArea(name)}>
-              {name ?? "Everything"}
-            </button>
-          ))}
-        </nav>
-      ) : null}
+      <AreaChips area={area} areas={areas} onArea={onArea} />
+      {nothing ? <p className="py-16 text-center text-dim">Nothing here</p> : null}
       {lanes.main.length > 0 ? (
         <ul className="mt-3 space-y-2">
           <Presence items={lanes.main} keyOf={(view) => view.goal.id}>
@@ -305,6 +299,21 @@ function GoalsTab({ area, areas, at, changes, lanes, onArea, onOpen, onSeen, sho
       <Shelf at={at} label="Settled" views={lanes.settled} onOpen={onOpen} />
       <Shelf at={at} label="Archived" views={lanes.archived} onOpen={onOpen} />
     </>
+  );
+}
+
+// The area filter. A chosen area stays offered after its last goal leaves, so the way back to Everything stays.
+function AreaChips({ area, areas, onArea }: { area: string | null; areas: string[]; onArea: (area: string | null) => void }) {
+  const names = area === null || areas.includes(area) ? areas : [...areas, area];
+  if (names.length < 2 && area === null) return null;
+  return (
+    <nav className={`mt-2 flex gap-1.5 overflow-x-auto [scrollbar-width:none] ${INSET}`}>
+      {[null, ...names].map((name) => (
+        <button key={name ?? "all"} className={`h-11 shrink-0 rounded-full px-4 text-sm ${name === area ? "bg-line text-ink" : "text-dim"}`} type="button" onClick={() => onArea(name)}>
+          {name ?? "Everything"}
+        </button>
+      ))}
+    </nav>
   );
 }
 
@@ -404,10 +413,10 @@ function Progress({ view }: { view: GoalView }) {
 
 const CARD_STATE = { working: { label: "Working", tone: "text-build" }, review_ci: { label: "Review/CI", tone: "text-review" }, merged: { label: "Merged", tone: "text-merge/80" }, done: { label: "Done", tone: "text-dim" } };
 const CARD_ORDER = { review_ci: 0, working: 1, merged: 2, done: 3 };
+const CARD_PIP = { working: "implementing", review_ci: "review_ci", merged: "ended", done: "ended" } as const;
 
 // Small work without a goal: its state, checks, review and PR, and a way to clear it off.
 function SmallWork({ cards }: { cards: Cards }) {
-  const act = useAct();
   const sorted = [...cards].sort((left, right) => CARD_ORDER[left.state] - CARD_ORDER[right.state] || right.since - left.since);
   if (sorted.length === 0) return null;
 
@@ -416,31 +425,46 @@ function SmallWork({ cards }: { cards: Cards }) {
       <Heading count={cards.length}>Small work</Heading>
       <ul className="space-y-px">
         <Presence items={sorted} keyOf={(card) => card.id}>
-          {({ item: card, key, ref }) => {
-            const ended = card.state === "merged" || card.state === "done";
-            return (
-              <li key={key} ref={ref} className="flex items-start gap-3 bg-white/[0.035] py-1 pl-[var(--inset-l)] pr-[max(0.25rem,env(safe-area-inset-right))]">
-                <span className="mt-[15px] flex">
-                  <Pip stage={card.state === "working" ? "implementing" : card.state === "review_ci" ? "review_ci" : "ended"} failed={card.ci === "failing" && !ended} />
-                </span>
-                <span className="min-w-0 flex-1 py-2">
-                  <span className={`block text-sm leading-snug [overflow-wrap:anywhere] ${ended ? "text-dim" : "text-ink"}`}>{card.task}</span>
-                  <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5">
-                    <span className={`font-mono text-[11px] font-semibold ${CARD_STATE[card.state].tone}`}>{CARD_STATE[card.state].label}</span>
-                    <CiCell ci={card.ci} stale={card.stale.includes("github")} />
-                    <ReviewCell review={card.review} />
-                    <PrLink className="-mx-2.5 -my-3.5 px-2.5 py-3.5" pr={card.pr} repos={[card.repo.toLowerCase()]} />
-                  </span>
-                </span>
-                <button aria-label={`Dismiss ${card.task}`} className="flex size-11 shrink-0 items-center justify-center rounded-md text-faint active:bg-line" type="button" onClick={() => void act({ kind: "dismiss", cardIds: [card.id] }).catch(() => undefined)}>
-                  <X className="size-4" />
-                </button>
-              </li>
-            );
-          }}
+          {({ item, key, ref }) => <SmallRow key={key} ref={ref} card={item} />}
         </Presence>
       </ul>
     </>
+  );
+}
+
+// One card. A dismissal the backend refuses says why under the task.
+function SmallRow({ card, ref }: { card: Cards[number]; ref: (node: HTMLElement | null) => void }) {
+  const act = useAct();
+  const [failure, setFailure] = useState<string | null>(null);
+  const ended = card.state === "merged" || card.state === "done";
+  const dismiss = () => {
+    setFailure(null);
+    act({ kind: "dismiss", cardIds: [card.id] }).catch((caught: unknown) => setFailure(caught instanceof Error ? caught.message : "The backend refused this."));
+  };
+
+  return (
+    <li ref={ref} className="flex items-start gap-3 bg-white/[0.035] py-1 pl-[var(--inset-l)] pr-[max(0.25rem,env(safe-area-inset-right))]">
+      <span className="mt-[15px] flex">
+        <Pip stage={CARD_PIP[card.state]} failed={card.ci === "failing" && !ended} />
+      </span>
+      <span className="min-w-0 flex-1 py-2">
+        <span className={`block text-sm leading-snug [overflow-wrap:anywhere] ${ended ? "text-dim" : "text-ink"}`}>{card.task}</span>
+        <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+          <span className={`font-mono text-[11px] font-semibold ${CARD_STATE[card.state].tone}`}>{CARD_STATE[card.state].label}</span>
+          <CiCell ci={card.ci} stale={card.stale.includes("github")} />
+          <ReviewCell review={card.review} />
+          <PrLink className="-mx-2.5 -my-3.5 px-2.5 py-3.5" pr={card.pr} repos={[card.repo.toLowerCase()]} />
+        </span>
+        {failure ? (
+          <span className="mt-1 block text-xs text-fail" role="alert">
+            {failure}
+          </span>
+        ) : null}
+      </span>
+      <button aria-label={`Dismiss ${card.task}`} className="flex size-11 shrink-0 items-center justify-center rounded-md text-faint active:bg-line" type="button" onClick={dismiss}>
+        <X className="size-4" />
+      </button>
+    </li>
   );
 }
 

@@ -1,5 +1,5 @@
 import { ChevronRight, Hourglass } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import { GoalRefusal } from "./actions";
 import { AnswerForm, Question, subjectOf, type Entry } from "./asks";
@@ -103,8 +103,27 @@ export function Who({ terminal }: { terminal: Terminal | null }) {
   );
 }
 
-// What was entered in a question survives leaving the screen, as it survives folding on desktop.
-const drafts = new Map<string, Entry>();
+// What the operator entered, and a send still under way or refused, kept outside the cards: a card unmounts when
+// the operator changes tab or screen, and what it held must be there when it comes back.
+const kept = new Map<string, unknown>();
+const keepers = new Set<() => void>();
+
+// `blank` must be the same object on every call.
+function useKept<T>(key: string, blank: T): [T, (change: (was: T) => T) => void] {
+  const value = useSyncExternalStore(
+    (listen) => {
+      keepers.add(listen);
+      return () => keepers.delete(listen);
+    },
+    () => (kept.get(key) as T | undefined) ?? blank,
+  );
+  const update = (change: (was: T) => T) => {
+    kept.set(key, change((kept.get(key) as T | undefined) ?? blank));
+    keepers.forEach((listen) => listen());
+  };
+  return [value, update];
+}
+
 const BLANK: Entry = { choice: null, text: "", busy: false, failure: null };
 const drafted = (entry: Entry) => entry.text !== "" || entry.choice !== null;
 
@@ -112,14 +131,9 @@ const drafted = (entry: Entry) => entry.text !== "" || entry.choice !== null;
 // Without `bare` it starts with the goal it is about, which opens that goal.
 export function AskCard({ ask, at, bare = false, board, onOpen, ref, views }: { ask: Ask; at: number; bare?: boolean; board: Board; onOpen: (goalId: string) => void; ref?: (node: HTMLElement | null) => void; views: GoalView[] }) {
   const subject = subjectOf(ask, board, views);
-  const [entered, setEntered] = useState<Entry>(() => drafts.get(ask.id) ?? BLANK);
-  const [open, setOpen] = useState(() => drafted(entered));
-  const enter = (change: Partial<Entry>) =>
-    setEntered((was) => {
-      const next = { ...was, ...change };
-      drafts.set(ask.id, { ...next, busy: false });
-      return next;
-    });
+  const [entered, update] = useKept(`ask:${ask.id}`, BLANK);
+  const [open, setOpen] = useState(() => drafted(entered) || entered.busy || entered.failure !== null);
+  const enter = (change: Partial<Entry>) => update((was) => ({ ...was, ...change }));
   const goal = subject.goalId;
 
   return (
@@ -178,10 +192,12 @@ export function DecisionCard({ at, bare = false, board, decision, onOpen }: { at
   );
 }
 
+const NO_FEEDBACK = { writing: false, text: "" };
+
 // Ack or feedback on a recorded call; for feedback that reached nobody, what it said and a way to clear it.
 function Reaction({ decision }: { decision: Decision }) {
   const act = useAct();
-  const [writing, setWriting] = useState(false);
+  const [draft, update] = useKept(`feedback:${decision.id}`, NO_FEEDBACK);
   if (decision.state === "feedback") {
     const typing = decision.undelivered === "delivering";
     return (
@@ -192,17 +208,17 @@ function Reaction({ decision }: { decision: Decision }) {
       </div>
     );
   }
-  if (writing) {
+  if (draft.writing) {
     return (
       <div className="mt-3 grid">
-        <FeedbackForm touch decision={decision} named={false} onCancel={() => setWriting(false)} />
+        <FeedbackForm touch unnamed decision={decision} text={draft.text} onCancel={() => update(() => NO_FEEDBACK)} onText={(text) => update(() => ({ writing: true, text }))} />
       </div>
     );
   }
   return (
     <div className="mt-3 flex gap-2">
       <Tap className="flex-1" label="Ack" run={() => act({ kind: "ack", decisionId: decision.id }).then(() => null)} />
-      <Tap className="flex-1" label="Feedback" look="quiet" run={() => setWriting(true)} />
+      <Tap className="flex-1" label="Feedback" look="quiet" run={() => update(() => ({ writing: true, text: "" }))} />
     </div>
   );
 }
