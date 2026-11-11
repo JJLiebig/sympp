@@ -9,6 +9,9 @@ import type { Ask } from "./model";
 export type Delivery = { state: "pending" | "delivered" | "not_delivered"; reason?: string | null };
 export type Unarrived = { ask: Ask; answer: string; reason: string | null };
 
+// Kept in this browser, so an answer still being typed or one that did not arrive survives a reload.
+const KEY = "sympp.board.answers";
+
 // The factory gives up on a send cut short after a minute; the board looks again just after, even without a change
 // signal, and then every half minute while any answer is still being typed.
 const SETTLE_MS = 62e3;
@@ -23,7 +26,27 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 
 function changed() {
   unarrived = [...entries.values()].filter((entry) => entry.state === "not_delivered").map(({ ask, answer, reason }) => ({ ask, answer, reason }));
+  save();
   listeners.forEach((listener) => listener());
+}
+
+function save() {
+  try {
+    window.localStorage.setItem(KEY, JSON.stringify([...entries].filter(([, entry]) => entry.state !== "answering")));
+  } catch {
+    // Without storage the board still follows its answers; it only forgets them on reload.
+  }
+}
+
+// Answers still being typed are looked at again on the board's first change signal, or shortly without one.
+function restore() {
+  try {
+    (JSON.parse(window.localStorage.getItem(KEY) ?? "[]") as Array<[string, Entry]>).forEach(([askId, entry]) => entries.set(askId, entry));
+  } catch {
+    // Nothing kept, or storage is unavailable.
+  }
+  changed();
+  if ([...entries.values()].some((entry) => entry.state === "pending")) lookAgain(AGAIN_MS);
 }
 
 async function readRoute(route: string): Promise<Delivery | null> {
@@ -59,6 +82,7 @@ function apply(askId: string, entry: Entry, delivery: Delivery | null) {
   if (delivery?.state === "pending") {
     if (entry.state !== "pending") lookAgain(SETTLE_MS);
     entry.state = "pending";
+    save();
     return;
   }
   if (delivery?.state === "not_delivered") {
@@ -93,6 +117,8 @@ function lookAgain(ms: number) {
 export function dismiss(askId: string) {
   if (entries.delete(askId)) changed();
 }
+
+restore();
 
 // The answers that did not arrive, oldest sent first. Changes whenever one settles or is dismissed.
 export const unarrivedAnswers = () => unarrived;

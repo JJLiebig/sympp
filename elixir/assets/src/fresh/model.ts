@@ -61,7 +61,8 @@ export type Goal = { id: string; title: string; area: string[]; org: string | nu
 
 // A question for the operator. Its subject is a goal (optionally one of its packages) or a card.
 // With choices the answer is one of them; `redirect` names the extra choice of answering in free text instead.
-export type Choice = { recommended?: boolean; id: string; label: string; description: string | null; pros: string[]; cons: string[] };
+// `answer` is what the factory types into the asking terminal when the choice is picked.
+export type Choice = { recommended?: boolean; id: string; label: string; answer: string; description: string | null; pros: string[]; cons: string[] };
 // `until` is when it was answered or withdrawn; null while it is open. A replay shows it only in between.
 // `answer` is the answer as the factory saved it, once answered.
 export type Ask = { id: string; question: string; details: string | null; from: number; until: number | null; by: Terminal | null; goalId: string | null; pkgId: string | null; cardId: string | null; choices: Choice[]; redirect: string | null; answer: string | null };
@@ -237,7 +238,7 @@ function closedAt(entry: AskEntry, now: number) {
 }
 
 function choicesOf(prompt: Prompt | null | undefined): Choice[] {
-  return (prompt?.options ?? []).map((option) => ({ recommended: option.recommended, id: option.id, label: option.label || option.id, description: option.description || null, pros: option.pros ?? [], cons: option.cons ?? [] }));
+  return (prompt?.options ?? []).map((option) => ({ recommended: option.recommended, id: option.id, label: option.label || option.id, answer: option.answer || option.label || option.id, description: option.description || null, pros: option.pros ?? [], cons: option.cons ?? [] }));
 }
 
 function decisionOf(entry: DecisionEntry, now: number): Decision {

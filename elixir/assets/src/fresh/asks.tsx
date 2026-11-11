@@ -159,7 +159,7 @@ export function AnswerForm({ ask, entered, onEnter, touch }: { ask: Ask; entered
   // With a choice the text is a note, unless the choice is to answer in free text.
   const noting = chosen && !redirecting;
   const { answer, ready } = draft(chosen, choice, text.trim());
-  const choices = ask.redirect ? [...ask.choices, { id: REDIRECT, label: ask.redirect, description: null, pros: [], cons: [] }] : ask.choices;
+  const choices = ask.redirect ? [...ask.choices, { id: REDIRECT, label: ask.redirect, answer: "", description: null, pros: [], cons: [] }] : ask.choices;
   const size = FORM_SIZE[touch ? "touch" : "pointer"];
 
   const submit = () => {
@@ -231,13 +231,12 @@ function draft(chosen: boolean, choice: string | null, text: string): { answer: 
   return { answer: { choice: choice ?? "", note: text }, ready: choice !== null && (choice !== REDIRECT || text !== "") };
 }
 
-// The answer in words, for when it has to be given by hand: the factory's own wording replaces it once the board reads it.
+// The answer as the factory saves it, for when it has to be given by hand: a choice's answer, then the note.
 function spoken(ask: Ask, answer: Answer) {
   if (!("choice" in answer)) return answer.text;
   if (answer.choice === REDIRECT) return answer.note;
-  const label = ask.choices.find((choice) => choice.id === answer.choice)?.label ?? answer.choice;
-  return answer.note ? `${label}
-${answer.note}` : label;
+  const picked = ask.choices.find((choice) => choice.id === answer.choice)?.answer ?? "";
+  return [picked, answer.note].filter(Boolean).join(" ");
 }
 
 // One choice as a row of the form: a radio, the label, and what speaks for and against it. Arrow keys move

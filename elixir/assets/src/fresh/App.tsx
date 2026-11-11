@@ -14,8 +14,8 @@ import { buildBoard, liveCountAt, openAt, viewAt, type Board, type HistoryEvent,
 import { focusGoal } from "./motion";
 import { ActContext, send, type OperatorAction } from "./operator";
 import { Outline } from "./outline";
-import { operate, project, settle, usePending } from "./pending";
-import { coalescedRead, listen, readBoard, type Fetched } from "./reads";
+import { operate, project, usePending } from "./pending";
+import { boardReads, listen, readBoard, type Fetched, type Read } from "./reads";
 import { Phases } from "./phases";
 import { PhoneBoard, usePhone } from "./phone";
 import { DensityContext, type Density } from "./report";
@@ -57,7 +57,7 @@ const START = {
 // `replayable` is true on a snapshot, which carries recorded history; a backend only knows the present.
 type Loaded = { board: Board; now: number; busiest: number; samples: number[]; replayable: boolean; settings: Settings };
 // A read and what it was read from, which the next read asks with; null when the backend said nothing changed.
-type Fresh = { loaded: Loaded; fetched: Fetched | null } | null;
+type Fresh = Read<Loaded> | null;
 
 export function App() {
   const { loaded, failure, picked, setAt, read } = useLiveBoard();
@@ -182,22 +182,19 @@ function useLiveBoard() {
   // recover and respect committed writes: a read started before a write the factory agreed to is thrown away.
   const [{ read, changed, tick }] = useState(() => {
     let shownNow: number | null = null;
-    let shown: Fetched | null = null;
     let readAt = { now: 0, wall: 0 };
     const follow = (now: number) => {
       const before = shownNow;
       shownNow = now;
       return (current: number) => followNow(current, before ?? now, now);
     };
-    const reads = coalescedRead(() => load(shown), (fresh: Fresh) => {
+    const reads = boardReads(load, (fresh: Fresh) => {
       setFailure(null);
-      // Nothing changed: the board stays exactly as it is.
+      // Nothing changed: the board stays as it is.
       if (!fresh) return;
       const first = shownNow === null;
-      shown = fresh.fetched;
       readAt = { now: fresh.loaded.now, wall: Date.now() };
       const moved = follow(fresh.loaded.now);
-      settle(fresh.loaded.board);
       setLoaded(fresh.loaded);
       setAt((current) => (first ? fresh.loaded.busiest : moved(current)));
     }, (caught: unknown) => {

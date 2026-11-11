@@ -55,6 +55,20 @@ it("an answer typed into its terminal leaves nothing behind", async () => {
   expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
 });
 
+it("an undelivered answer is still there after the board reloads", async () => {
+  const kept = new Map<string, string>();
+  vi.stubGlobal("window", { localStorage: { getItem: (key: string) => kept.get(key) ?? null, setItem: (key: string, value: string) => kept.set(key, value) } });
+  const ask = askOf("ask-vod");
+  track(ask, "Yes, drop them.");
+  answered(ask.id, { state: "not_delivered", reason: "send_failed" }, "/asks/ask-vod/delivery");
+
+  vi.resetModules();
+  const reloaded = await import("./delivery");
+  expect(reloaded.unarrivedAnswers()).toEqual([{ ask, answer: "Yes, drop them.", reason: "send_failed" }]);
+  reloaded.dismiss(ask.id);
+  dismiss(ask.id);
+});
+
 it("an answer with no terminal to type into is undelivered at once", async () => {
   factory([]);
   const ask = askOf("ask-vod");

@@ -1,5 +1,6 @@
 import { api } from "./api";
-import type { Archived, Hydrated } from "./model";
+import type { Archived, Board, Hydrated } from "./model";
+import { settle } from "./pending";
 
 // Change signals queue one catch-up read without invalidating the active read.
 // Explicit reads supersede earlier work, so saves, timers and reconnects can
@@ -55,6 +56,21 @@ export async function readBoard(shown: Fetched | null): Promise<Fetched | null> 
     conditional<Archived>(api("/dashboard?surface=archived"), shown?.archived ?? null).catch(() => null),
   ]);
   return shown && hydrated === shown.hydrated && archived === shown.archived ? null : { hydrated, archived };
+}
+
+// A board read, and the routes it was read from, which the next read asks with.
+export type Read<L extends { board: Board }> = { loaded: L; fetched: Fetched | null };
+
+// The board's reads, each against what it shows: `show` gets each read, or null when nothing changed. Every read
+// that arrives ends the operator's actions it shows done, even an unchanged one: a change signal can read an
+// action's outcome before the factory has answered the action, and the read after its answer is then unchanged.
+export function boardReads<L extends { board: Board }>(load: (shown: Fetched | null) => Promise<Read<L> | null>, show: (fresh: Read<L> | null) => void, fail: (error: unknown) => void) {
+  let shown: Read<L> | null = null;
+  return coalescedRead(() => load(shown?.fetched ?? null), (fresh: Read<L> | null) => {
+    if (fresh) shown = fresh;
+    if (shown) settle(shown.loaded.board);
+    show(fresh);
+  }, fail);
 }
 
 // After a dropped stream, wait longer each time it fails again.

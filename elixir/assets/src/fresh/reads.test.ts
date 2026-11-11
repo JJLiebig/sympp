@@ -1,10 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 
 import { applyDemo, demoLedger, type DemoLedger } from "./mock";
-import { buildBoard, openAt } from "./model";
+import { buildBoard, openAt, type Board } from "./model";
 import type { OperatorAction } from "./operator";
-import { operate, project, pendingActions, settle } from "./pending";
-import { coalescedRead, listen, readBoard, type Fetched } from "./reads";
+import { operate, project, pendingActions } from "./pending";
+import { boardReads, coalescedRead, listen, readBoard, type Fetched, type Read } from "./reads";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -142,18 +142,21 @@ class FakeStream {
 }
 
 // The board's read path, as App wires it: change signals and reconnects read against what is shown.
+async function load(shown: Fetched | null) {
+  const fetched = await readBoard(shown);
+  return fetched && { loaded: { board: buildBoard(fetched.hydrated.body, {}).board }, fetched };
+}
+
 function liveBoard() {
-  let shown: Fetched | null = null;
-  const show = vi.fn((fresh: Fetched | null) => {
-    if (!fresh) return;
-    shown = fresh;
-    settle(buildBoard(fresh.hydrated.body, {}).board);
+  let shown: Board | null = null;
+  const show = vi.fn((fresh: Read<{ board: Board }> | null) => {
+    if (fresh) shown = fresh.loaded.board;
   });
-  const { read, changed } = coalescedRead(() => readBoard(shown), show, (error) => { throw error; });
+  const { read, changed } = boardReads(load, show, (error) => { throw error; });
   FakeStream.opened = [];
   vi.stubGlobal("EventSource", FakeStream);
   const stop = listen("/events", { read, changed });
-  const openAsks = () => (shown ? project(buildBoard(shown.hydrated.body, {}).board, pendingActions()).asks.filter((ask) => openAt(ask, Infinity)).map((ask) => ask.id) : []);
+  const openAsks = () => (shown ? project(shown, pendingActions()).asks.filter((ask) => openAt(ask, Infinity)).map((ask) => ask.id) : []);
   return { read, show, stop, openAsks, stream: () => FakeStream.opened.at(-1)! };
 }
 
@@ -205,6 +208,26 @@ it("a dropped stream reconnects later each time, and reads on every connect", as
   expect(FakeStream.opened.every((stream) => stream.closed)).toBe(true);
 });
 
+it("an action whose outcome a change signal read first ends when the factory agrees, though the next read is unchanged", async () => {
+  const server = factory(demoLedger(NOW));
+  const board = liveBoard();
+  board.stream().emit("open");
+  await vi.waitFor(() => expect(board.show).toHaveBeenCalledTimes(1));
+
+  // The factory commits and signals before its answer to the action reaches the board.
+  const ack: OperatorAction = { kind: "ack", decisionId: "dec-alerts-scope" };
+  const agreed = operate(ack, async (action) => {
+    server.change(applyDemo(server.ledger, action, NOW));
+    board.stream().emit("dashboard_changed");
+    await vi.waitFor(() => expect(board.show).toHaveBeenCalledTimes(2));
+  }, () => void board.read());
+  expect(await agreed).toBeNull();
+  await vi.waitFor(() => expect(board.show).toHaveBeenCalledTimes(3));
+  expect(board.show).toHaveBeenLastCalledWith(null);
+  expect(pendingActions()).not.toContainEqual(ack);
+  board.stop();
+});
+
 it("a read started before an agreed answer is thrown away and cannot bring the question back", async () => {
   const server = factory(demoLedger(NOW));
   const board = liveBoard();
@@ -224,7 +247,7 @@ it("a read started before an agreed answer is thrown away and cannot bring the q
   await new Promise((resolve) => setTimeout(resolve, 0));
   // Only the read after the answer was shown, and once it shows the answer the pending action ends.
   expect(board.show).toHaveBeenCalledTimes(2);
-  expect(board.show.mock.lastCall?.[0]?.hydrated.etag).toBe('"v3"');
+  expect(board.show.mock.lastCall?.[0]?.fetched?.hydrated.etag).toBe('"v3"');
   expect(pendingActions()).not.toContainEqual(answer);
   expect(board.openAsks()).not.toContain("ask-slack");
 
