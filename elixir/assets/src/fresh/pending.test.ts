@@ -97,3 +97,17 @@ it("a goal's next step, picked while the last is sent, is sent after it", async 
   expect(await archive).toBeNull();
   expect(factory.mock.calls.map(([action]) => action.kind === "goal" && action.step)).toEqual(["complete", "archive"]);
 });
+
+it("a step undone before the board read it does not stick", async () => {
+  let ledger = demoLedger(NOW);
+  const factory = async (action: OperatorAction) => void (ledger = applyDemo(ledger, action, NOW));
+  const phase = () => shown(read(ledger)).goals.find((goal) => goal.id === "wr-qr")?.phase;
+
+  await operate({ kind: "goal", goalId: "wr-qr", step: "archive" }, factory, () => undefined);
+  await operate({ kind: "goal", goalId: "wr-qr", step: "restore" }, factory, () => undefined);
+  settle(read(ledger));
+  expect(phase()).toBe("done");
+  // Archiving it again is a new step, not the first one taken twice.
+  await operate({ kind: "goal", goalId: "wr-qr", step: "archive" }, factory, () => undefined);
+  expect(read(ledger).goals.find((goal) => goal.id === "wr-qr")?.phase).toBe("archived");
+});

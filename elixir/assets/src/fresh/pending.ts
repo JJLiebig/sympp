@@ -7,16 +7,17 @@ import { useSyncExternalStore } from "react";
 import type { Board, Decision, Goal, Pkg } from "./model";
 import type { OperatorAction } from "./operator";
 
-type Entry = { action: OperatorAction; agreed: boolean; answer: Promise<string | null> };
+// `touches` names what the action acts on: actions on the same thing are sent, and end, in the order they were taken.
+type Entry = { action: OperatorAction; key: string; touches: string[]; agreed: boolean; answer: Promise<string | null> };
 export type Refused = { action: OperatorAction; reason: string };
 
-const entries = new Map<string, Entry>();
+const entries: Entry[] = [];
 const refusals = new Map<string, Refused>();
 const listeners = new Set<() => void>();
 let shown: readonly OperatorAction[] = [];
 
 function changed() {
-  shown = [...entries.values()].map((entry) => entry.action);
+  shown = entries.map((entry) => entry.action);
   listeners.forEach((listener) => listener());
 }
 
@@ -27,7 +28,7 @@ function subscribe(listener: () => void) {
 
 const goalKey = (goalId: string) => `goal:${goalId}`;
 
-// The same action is never under way twice. Several cards hidden in one go, and shelf cleanup, run one at a time.
+// Which action this is. Several cards hidden in one go, and shelf cleanup, are one action however many they take.
 function keyOf(action: OperatorAction) {
   switch (action.kind) {
     case "answer":
@@ -49,21 +50,30 @@ function keyOf(action: OperatorAction) {
   }
 }
 
-// What the action acts on. A goal's steps are sent one after another, and the goal shows why its last one was refused.
-function subjectOf(action: OperatorAction) {
+function touchesOf(action: OperatorAction) {
+  if (action.kind === "goal") return [goalKey(action.goalId)];
+  if (action.kind === "archive") return action.goalIds.map(goalKey);
+  return [keyOf(action)];
+}
+
+// Where a refusal shows: a goal's step under the goal, anything else where it was taken.
+function homeOf(action: OperatorAction) {
   return action.kind === "goal" ? goalKey(action.goalId) : keyOf(action);
 }
 
-// Shows the action's outcome at once and sends it. An action already under way is not sent again.
+const overlaps = (entry: Entry, touches: string[]) => entry.touches.some((thing) => touches.includes(thing));
+
+// Shows the action's outcome at once and sends it, after any earlier action on the same thing still on its way.
+// Taking the latest action on something again, such as a second click, does not send it again.
 // Resolves with why the factory refused, or null once it agreed; the board is read again after either.
 export function operate(action: OperatorAction, send: (action: OperatorAction) => Promise<void>, reread: () => void): Promise<string | null> {
   const key = keyOf(action);
-  const subject = subjectOf(action);
-  const known = entries.get(key);
-  if (known) return known.answer;
-  refusals.delete(subject);
-  const earlier = [...entries.values()].filter((entry) => !entry.agreed && subjectOf(entry.action) === subject).map((entry) => entry.answer);
-  const entry: Entry = { action, agreed: false, answer: Promise.resolve(null) };
+  const touches = touchesOf(action);
+  const latest = entries.findLast((entry) => overlaps(entry, touches));
+  if (latest?.key === key) return latest.answer;
+  refusals.delete(homeOf(action));
+  const earlier = entries.filter((entry) => !entry.agreed && overlaps(entry, touches)).map((entry) => entry.answer);
+  const entry: Entry = { action, key, touches, agreed: false, answer: Promise.resolve(null) };
   entry.answer = (earlier.length > 0 ? Promise.all(earlier).then(() => send(action)) : send(action)).then(
     () => {
       entry.agreed = true;
@@ -71,8 +81,8 @@ export function operate(action: OperatorAction, send: (action: OperatorAction) =
     },
     (caught: unknown) => {
       const reason = caught instanceof Error ? caught.message : "The backend refused this.";
-      entries.delete(key);
-      refusals.set(subject, { action, reason });
+      entries.splice(entries.indexOf(entry), 1);
+      refusals.set(homeOf(action), { action, reason });
       return reason;
     },
   ).then((reason) => {
@@ -80,21 +90,22 @@ export function operate(action: OperatorAction, send: (action: OperatorAction) =
     reread();
     return reason;
   });
-  entries.set(key, entry);
+  entries.push(entry);
   changed();
   return entry.answer;
 }
 
-// A fresh read that shows an agreed action's outcome ends it.
+// A fresh read that shows an agreed action's outcome ends it, along with the agreed actions taken before it on the
+// same thing: the factory took them first, so the read has them too, even where a later one undid them.
 export function settle(board: Board) {
-  let ended = false;
-  for (const [key, entry] of entries) {
-    if (entry.agreed && outcome(board, entry.action) === null) {
-      entries.delete(key);
-      ended = true;
-    }
-  }
-  if (ended) changed();
+  const ended = new Set<Entry>();
+  entries.forEach((entry, index) => {
+    if (!entry.agreed || outcome(board, entry.action) !== null) return;
+    entries.slice(0, index + 1).filter((before) => before.agreed && overlaps(before, entry.touches)).forEach((before) => ended.add(before));
+  });
+  if (ended.size === 0) return;
+  entries.splice(0, entries.length, ...entries.filter((entry) => !ended.has(entry)));
+  changed();
 }
 
 // The actions the board is shown through. Changes whenever one starts, is refused or ends.
@@ -106,8 +117,8 @@ export function usePending() {
 
 // Whether the action is on its way to the factory, and why the last attempt on what it acts on was refused.
 export function useOperation(action: OperatorAction | null) {
-  const busy = useSyncExternalStore(subscribe, () => (action ? entries.get(keyOf(action))?.agreed === false : false));
-  const refused = useSyncExternalStore(subscribe, () => (action ? (refusals.get(subjectOf(action)) ?? null) : null));
+  const busy = useSyncExternalStore(subscribe, () => (action ? entries.some((entry) => entry.key === keyOf(action) && !entry.agreed) : false));
+  const refused = useSyncExternalStore(subscribe, () => (action ? (refusals.get(homeOf(action)) ?? null) : null));
   return { busy, refused };
 }
 
