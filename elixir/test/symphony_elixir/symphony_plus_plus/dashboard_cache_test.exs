@@ -72,4 +72,49 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert {:ok, body, _etag} = DashboardCache.json(Repo, :native, &payload/0)
     assert Jason.decode!(body)["decision"] == "recorded"
   end
+
+  defp controlled_clock do
+    clock = :atomics.new(1, signed: true)
+    :atomics.put(clock, 1, System.monotonic_time(:millisecond))
+    original_clock = :sys.get_state(DashboardCache).clock
+    :sys.replace_state(DashboardCache, &%{&1 | clock: fn -> :atomics.get(clock, 1) end})
+    on_exit(fn -> :sys.replace_state(DashboardCache, &%{&1 | clock: original_clock}) end)
+    clock
+  end
+
+  test "quiet reads return immediately during timed refresh and a racing write stays fresh", %{path: path} do
+    clock = controlled_clock()
+    assert {:ok, old, etag} = DashboardCache.json(Repo, :expiry, &payload/0)
+    :atomics.add(clock, 1, 15_001)
+    caller = self()
+
+    assert {:ok, ^old, ^etag} =
+             DashboardCache.json(Repo, :expiry, fn ->
+               captured = payload()
+               send(caller, {:refreshing, self()})
+               receive do: (:continue -> captured)
+             end)
+
+    assert_receive {:refreshing, worker}
+    ref = Process.monitor(worker)
+    {:ok, connection} = Exqlite.Sqlite3.open(path)
+    :ok = Exqlite.Sqlite3.execute(connection, "UPDATE probe SET value = 'acknowledged'")
+    :ok = Exqlite.Sqlite3.close(connection)
+    assert {:ok, fresh, fresh_etag} = DashboardCache.json(Repo, :expiry, &payload/0)
+    assert Jason.decode!(fresh)["decision"] == "acknowledged"
+    send(worker, :continue)
+    assert_receive {:DOWN, ^ref, :process, ^worker, :normal}
+    assert {:ok, ^fresh, ^fresh_etag} = DashboardCache.json(Repo, :expiry, &payload/0)
+  end
+
+  test "time-derived changes notify clients and leave the refreshed response ready to read" do
+    clock = controlled_clock()
+    :ok = SymphonyElixir.SymphonyPlusPlus.DashboardPubSub.subscribe()
+    assert {:ok, old, _etag} = DashboardCache.json(Repo, :time, &payload/0)
+    :atomics.add(clock, 1, 15_001)
+    assert {:ok, ^old, _etag} = DashboardCache.json(Repo, :time, fn -> {:ok, %{decision: "elapsed"}} end)
+    assert_receive :operator_dashboard_changed
+    assert {:ok, fresh, _etag} = DashboardCache.json(Repo, :time, &payload/0)
+    assert Jason.decode!(fresh)["decision"] == "elapsed"
+  end
 end

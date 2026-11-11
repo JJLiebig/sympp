@@ -272,12 +272,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
     unless pending? do
       {:ok, pid} =
         Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-          refresh()
-          DashboardPubSub.broadcast_changed()
+          refresh_and_notify(command)
         end)
 
       :persistent_term.put(@refresh_key, {command, pid})
     end
+  end
+
+  defp refresh_and_notify(command) do
+    previous =
+      case :persistent_term.get(@cache_key, nil) do
+        {^command, _at, result, _good} -> result
+        _missing -> :unavailable
+      end
+
+    if refresh() != previous, do: DashboardPubSub.broadcast_changed()
   end
 
   defp last_good({command, _at, _result, good}, command), do: good

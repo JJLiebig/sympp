@@ -96,7 +96,9 @@ clients must discard reads started before their successful mutation.
 The backend reuses encoded projections while the ledger is unchanged. A
 separate read-only SQLite connection checks commits from every writer before
 reuse. Runtime notifications invalidate observations too; time-derived signals
-refresh within 15 seconds even without a notification. The full response fields
+refresh in the background after 15 seconds even without a notification. A quiet
+board remains immediately readable during that refresh; committed writes still
+force a fresh projection before reuse. The full response fields
 are preserved. GitHub deployment/default-branch observations and Herdr terminal
 refreshes run in the background: unavailable evidence stays unknown, then a
 notification causes the next read to include the observation.

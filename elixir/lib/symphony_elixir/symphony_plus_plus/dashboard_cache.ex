@@ -28,7 +28,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   @impl true
   def init(_opts) do
     :ok = DashboardPubSub.subscribe()
-    {:ok, %{sources: %{}, entries: %{}}}
+    {:ok, %{sources: %{}, entries: %{}, refreshing: %{}, clock: fn -> System.monotonic_time(:millisecond) end}}
   end
 
   @impl true
@@ -39,11 +39,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
       {connection, state} = connection(source, state)
       version = data_version(connection)
       key = {source, surface}
-      now = System.monotonic_time(:millisecond)
+      now = state.clock.()
 
       case Map.get(state.entries, key) do
         {^version, expires, result} when not is_nil(version) and expires > now ->
           {:reply, result, state}
+
+        {^version, _expires, result} when not is_nil(version) ->
+          # Ledger data is still current. Refresh time-derived observations
+          # without making a quiet board's next poll rebuild the projection.
+          {:reply, result, refresh(state, key, version, source, fun)}
 
         _missing ->
           result = build(fun)
@@ -63,6 +68,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     end
   end
 
+  defp refresh(state, key, version, source, fun) do
+    case Map.get(state.refreshing, key) do
+      {pid, _ref} when is_pid(pid) ->
+        if Process.alive?(pid), do: state, else: start_refresh(state, key, version, source, fun)
+
+      _missing ->
+        start_refresh(state, key, version, source, fun)
+    end
+  end
+
+  defp start_refresh(state, key, version, source, fun) do
+    owner = self()
+    ref = make_ref()
+
+    {:ok, pid} =
+      Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
+        Repo.put_dynamic_repo(source)
+        send(owner, {:refreshed, key, ref, version, build(fun)})
+      end)
+
+    %{state | refreshing: Map.put(state.refreshing, key, {pid, ref})}
+  end
+
   defp build(fun) do
     encode(HerdrCore.with_cached_reads(fun))
   rescue
@@ -75,12 +103,42 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   end
 
   @impl true
-  def handle_info(:operator_dashboard_changed, state), do: {:noreply, %{state | entries: %{}}}
+  def handle_info(:operator_dashboard_changed, state), do: {:noreply, %{state | entries: %{}, refreshing: %{}}}
+
+  def handle_info({:refreshed, {source, _surface} = key, ref, version, result}, state) do
+    case Map.get(state.refreshing, key) do
+      {_pid, ^ref} ->
+        entries = refreshed_entries(state, source, key, version, result)
+
+        {:noreply, %{state | entries: entries, refreshing: Map.delete(state.refreshing, key)}}
+
+      _superseded ->
+        {:noreply, state}
+    end
+  end
 
   def handle_info({:DOWN, _ref, :process, source, _reason}, state) do
     Sqlite3.close(Map.get(state.sources, source))
     entries = Map.reject(state.entries, fn {{owner, _surface}, _entry} -> owner == source end)
-    {:noreply, %{state | sources: Map.delete(state.sources, source), entries: entries}}
+    refreshing = Map.reject(state.refreshing, fn {{owner, _surface}, _entry} -> owner == source end)
+    {:noreply, %{state | sources: Map.delete(state.sources, source), entries: entries, refreshing: refreshing}}
+  end
+
+  defp refreshed_entries(state, source, key, version, result) do
+    if match?({:ok, _, _}, result) and data_version(Map.get(state.sources, source)) == version do
+      entry = {version, state.clock.() + @ttl_ms, result}
+
+      case Map.get(state.entries, key) do
+        {^version, _expires, {:ok, _body, etag}} when elem(result, 2) != etag ->
+          DashboardPubSub.broadcast_refreshed()
+          %{key => entry}
+
+        _unchanged ->
+          Map.put(state.entries, key, entry)
+      end
+    else
+      state.entries
+    end
   end
 
   defp connection(source, state) do
