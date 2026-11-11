@@ -963,12 +963,12 @@ export default class Lens extends View {
   }
 
   // One operator action, then a fresh read. A refusal stays beside the control that sent it; `refused`
-  // runs too, so a view that moved on can go back to it.
+  // runs too, so a view that moved on can go back to it. Each click is its own attempt: a repeat of the
+  // latest action on its task isn't sent again, but the same step after another one is (controls.js).
   operate(key, path, body, cx, refused = null) {
-    const op = this.ops[key] = { ...(this.ops[key] ?? {}), armed: false };
-    if (op.pending) return;
+    const op = this.ops[key] = { armed: false, pending: false, error: null };
     cx.spawn(async (cx) => {
-      const submission = C.submitAction(op, async () => this.send(path, body, cx), () => { delete this.ops[key]; this.retry(cx); });
+      const submission = C.submitAction(op, async () => this.send(path, body, cx), () => { if (this.ops[key] === op) delete this.ops[key]; this.retry(cx); });
       cx.notify();
       await submission;
       if (op.error) refused?.(cx);
