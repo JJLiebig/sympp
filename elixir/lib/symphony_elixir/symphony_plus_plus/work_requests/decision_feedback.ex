@@ -24,7 +24,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
 
   import Ecto.Query, only: [from: 2]
 
-  alias SymphonyElixir.SymphonyPlusPlus.{DashboardPubSub, HerdrCore}
+  alias SymphonyElixir.SymphonyPlusPlus.{DashboardPubSub, HerdrCore, OperatorDelivery}
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{DecisionLogEntry, Phase, WorkRequest}
@@ -83,12 +83,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
   `Decision feedback: <text>` into the recording terminal without submitting
   it. `delivery` says whether that reached the terminal.
   """
-  @spec feedback(repo(), String.t(), term()) :: {:ok, DecisionLogEntry.t(), delivery()} | {:error, refusal() | term()}
-  def feedback(repo, decision_id, text) do
+  @spec feedback(repo(), String.t(), term(), keyword()) ::
+          {:ok, DecisionLogEntry.t(), delivery()} | {:error, refusal() | term()}
+  def feedback(repo, decision_id, text, opts \\ []) do
     with {:ok, text} <- feedback_text(text),
          {:ok, decision} <-
            review_recorded(repo, decision_id, review_state: "feedback", feedback: text, undelivered_reason: @delivering) do
-      deliver(repo, decision)
+      if Keyword.get(opts, :async, false) and is_binary(decision.recorded_by_terminal) do
+        OperatorDelivery.start(repo, &deliver(&1, decision))
+        {:ok, decision, %{"state" => "pending"}}
+      else
+        deliver(repo, decision)
+      end
     end
   end
 

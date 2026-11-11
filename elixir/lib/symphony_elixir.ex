@@ -45,6 +45,7 @@ defmodule SymphonyElixir.Application do
     [
       {Phoenix.PubSub, name: SymphonyElixir.PubSub},
       {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
+      SymphonyElixir.SymphonyPlusPlus.DashboardCache,
       SymphonyElixirWeb.BoardLoginCodes,
       SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
     ] ++

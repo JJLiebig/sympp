@@ -16,8 +16,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
 
   import Ecto.Query, only: [from: 2]
 
+  alias SymphonyElixir.SymphonyPlusPlus.{
+    Cards,
+    DashboardPubSub,
+    HerdrCore,
+    HumanDecisionPrompt,
+    Id,
+    OperatorDelivery,
+    Ownership
+  }
+
   alias SymphonyElixir.SymphonyPlusPlus.Asks.Ask
-  alias SymphonyElixir.SymphonyPlusPlus.{Cards, DashboardPubSub, HerdrCore, HumanDecisionPrompt, Id, Ownership}
   alias SymphonyElixir.SymphonyPlusPlus.Cards.Card
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
@@ -136,8 +145,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   chosen option (and note); otherwise free text. The answer is then delivered
   to the asking terminal's input without submitting it.
   """
-  @spec answer_by_operator(repo(), String.t(), map()) :: {:ok, Ask.t(), delivery()} | {:error, term()}
-  def answer_by_operator(repo, ask_id, params) when is_map(params) do
+  @spec answer_by_operator(repo(), String.t(), map(), keyword()) :: {:ok, Ask.t(), delivery()} | {:error, term()}
+  def answer_by_operator(repo, ask_id, params, opts \\ []) when is_map(params) do
     repo
     |> transact(fn ->
       with {:ok, ask} <- fetch_open(repo, ask_id),
@@ -148,8 +157,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
     end)
     |> DashboardPubSub.broadcast_changed_on_success()
     |> case do
-      {:ok, ask} -> deliver(repo, ask)
+      {:ok, ask} -> maybe_deliver(repo, ask, opts)
       error -> error
+    end
+  end
+
+  defp maybe_deliver(repo, ask, opts) do
+    if Keyword.get(opts, :async, false) and is_binary(ask.asked_by_terminal) do
+      OperatorDelivery.start(repo, fn delivery_repo ->
+        deliver(delivery_repo, ask)
+        DashboardPubSub.broadcast_changed()
+      end)
+
+      {:ok, ask, %{"state" => "pending"}}
+    else
+      deliver(repo, ask)
     end
   end
 

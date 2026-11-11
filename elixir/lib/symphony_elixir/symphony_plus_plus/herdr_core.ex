@@ -16,10 +16,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   `{:ok, %{core_id: id, terminals: %{address => record}}}` (tests).
   """
 
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
 
   @cache_key {__MODULE__, :snapshot}
   @labels_key {__MODULE__, :labels}
+  @cached_reads_key {__MODULE__, :cached_reads}
   @cache_ms 15_000
   @last_good_ms 120_000
   @command_timeout_ms 2_000
@@ -66,6 +68,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   @doc "The factory core's current snapshot: cached, or the last good one for up to 2 minutes."
   @spec current() :: {:ok, snapshot()} | :unavailable
   def current, do: snapshot(false)
+
+  @doc false
+  @spec with_cached_reads((-> result)) :: result when result: var
+  def with_cached_reads(fun) do
+    previous = Process.put(@cached_reads_key, true)
+
+    try do
+      fun.()
+    after
+      if is_nil(previous), do: Process.delete(@cached_reads_key), else: Process.put(@cached_reads_key, previous)
+    end
+  end
 
   @doc """
   One terminal's full record from the factory's core (`hc get`), with its
@@ -225,15 +239,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
           {result, good}
 
         cached ->
-          result = load_command(command)
-          good = if result == :unavailable, do: last_good(cached, command), else: {now, result}
-          :persistent_term.put(@cache_key, {command, now, result, good})
-          {result, good}
+          load_uncached_snapshot(command, now, fresh?, cached)
       end
 
     case {result, good} do
       {:unavailable, {at, good_result}} when last_good? and now - at < @last_good_ms -> good_result
       _current -> result
+    end
+  end
+
+  defp load_uncached_snapshot(command, now, fresh?, cached) do
+    if not fresh? and Process.get(@cached_reads_key, false) do
+      good = last_good(cached, command)
+      :persistent_term.put(@cache_key, {command, now, :unavailable, good})
+
+      Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
+        refresh()
+        DashboardPubSub.broadcast_changed()
+      end)
+
+      {:unavailable, good}
+    else
+      result = load_command(command)
+      good = if result == :unavailable, do: last_good(cached, command), else: {now, result}
+      :persistent_term.put(@cache_key, {command, now, result, good})
+      {result, good}
     end
   end
 

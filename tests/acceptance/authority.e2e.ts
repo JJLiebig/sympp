@@ -485,6 +485,33 @@ test('any Herdr terminal flags a decision, redacted, and the operator reviews it
     .work_request_details.find((detail: any) => detail.work_request.id === request).decisions_to_review;
   expect((await toReview()).map((entry: any) => entry.id)).toEqual([flagged.decision_log_entry.id]);
   const decisionPath = (id: string, action: string) => `/api/v1/sympp/operator/decisions/${id}/${action}`;
+  const ackable = await other.call('record_decision', { ...decisionArgs, flag: true });
+  const origin = new URL(await factory.endpoint).origin;
+  const nativeRead = (etag?: string) => fetch(`${origin}/api/v1/sympp/herdr/dashboard`, {
+    headers: { accept: 'application/json', ...(etag ? { 'if-none-match': etag } : {}) },
+  });
+  const warm = await nativeRead();
+  expect(warm.status).toBe(200);
+  const etag = warm.headers.get('etag')!;
+  expect((await nativeRead(etag)).status).toBe(304);
+  const stop = new AbortController();
+  const events = await fetch(`${origin}/api/v1/sympp/operator/dashboard/events`, { headers: { origin }, signal: stop.signal });
+  expect(events.status).toBe(200);
+  expect(events.headers.get('x-accel-buffering')).toBe('no');
+  const reader = events.body!.getReader();
+  expect((await architect.operator(decisionPath(ackable.decision_log_entry.id, 'ack'), {})).status).toBe(200);
+  let event = '';
+  while (!event.includes('event: dashboard_changed')) event += new TextDecoder().decode((await reader.read()).value);
+  const tick = JSON.parse(event.split('data: ')[1].split('\n')[0]);
+  expect(tick.schema_version).toBe(1);
+  expect(tick.version).toBeGreaterThan(0);
+  stop.abort();
+  const fresh = await nativeRead(etag);
+  expect(fresh.status).toBe(200);
+  const decisions = (await fresh.json()).work_request_details.find((detail: any) => detail.work_request.id === request).decisions_to_review;
+  expect(decisions.map((entry: any) => entry.id)).toEqual([flagged.decision_log_entry.id]);
+  expect((await toReview()).map((entry: any) => entry.id)).toEqual([flagged.decision_log_entry.id]);
+
   const refused = await architect.operator(decisionPath(plain.decision_log_entry.id, 'ack'), {});
   expect(refused.status).toBe(409);
   expect(refused.body.error).toMatchObject({ state: 'not_flagged' });
@@ -493,7 +520,8 @@ test('any Herdr terminal flags a decision, redacted, and the operator reviews it
   expect(feedback.status).toBe(200);
   expect(feedback.body.review_state).toBe('feedback');
   // The synthetic recording terminal isn't on the factory's own herdr-core, so the feedback stays on the decision, marked undelivered.
-  expect(feedback.body.delivery).toEqual({ state: 'not_delivered', reason: 'terminal_unreachable' });
+  expect(feedback.body.delivery).toEqual({ state: 'pending' });
+  await expect.poll(async () => (await toReview())[0]?.undelivered_reason).toBe('terminal_unreachable');
   const [undelivered] = await toReview();
   expect(undelivered).toMatchObject({ review_state: 'feedback', feedback: 'Prefer [REDACTED] the bounded option.', undelivered_reason: 'terminal_unreachable', next_action: 'dismiss' });
   const again = await architect.operator(decisionPath(flagged.decision_log_entry.id, 'ack'), {});

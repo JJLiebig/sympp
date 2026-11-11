@@ -83,6 +83,56 @@ returns only the newest three decisions. An uninitialized ledger returns HTTP
 503 with `{error:{code:"database_busy",message}}`. These reads do not initialize
 or repair the ledger.
 
+## Conditional reads and live updates
+
+Dashboard reads (priority, deferred, hydrated, archived, and Herdr) return an
+`ETag` and `Cache-Control: private, no-cache`. Send that route's previous ETag
+as `If-None-Match`; HTTP 304 has no body and means keep the existing board.
+Successful writes are durable before HTTP 200. A read started after that
+response sees the committed state, including an acknowledged decision leaving
+`decisions_to_review`. An earlier in-flight read may describe an older snapshot;
+clients must discard reads started before their successful mutation.
+
+The backend reuses encoded projections while the ledger is unchanged. A
+separate read-only SQLite connection checks commits from every writer before
+reuse. Runtime notifications invalidate observations too; time-derived signals
+refresh within 15 seconds even without a notification. The full response fields
+are preserved. GitHub deployment/default-branch observations and Herdr terminal
+refreshes run in the background: unavailable evidence stays unknown, then a
+notification causes the next read to include the observation.
+
+The browser stream is `GET /api/v1/sympp/operator/dashboard/events`, under the
+same board authority as browser reads. It uses Phoenix PubSub and SSE:
+
+```text
+event: dashboard_changed
+data: {"schema_version":1,"version":123}
+
+```
+
+`schema_version` versions the event envelope. `version` is an opaque positive
+notification token, not a ledger revision, ETag or cross-restart ordering key.
+Treat each notification as an invalidation, coalesce overlapping notifications,
+and refetch the displayed route with its ETag. Subscribe before the first read;
+refetch on every reconnect because events are not replayed. The stream sends a
+comment heartbeat every 30 seconds and disables proxy buffering. Herdr keeps its
+existing `/api/v1/sympp/herdr/events` contract (`event: invalidated`, `data: {}`).
+Plain reads remain the fallback if streaming fails. Clients must tolerate extra
+event and response fields. This backend contract supports immediate invalidation;
+UI refresh coordination remains the client's responsibility.
+
+Answer and feedback responses return `delivery: {state: "pending"}` when terminal
+delivery has been scheduled. HTTP 200 confirms the saved answer or feedback,
+not that a terminal received it. Delivery completes asynchronously and sends
+another invalidation. Inspect an ask's `delivered_at` or a decision's
+`undelivered_reason` on a subsequent detail read; `delivering` means wait, a
+settled reason means undelivered, and null means delivered. Feedback interrupted
+by a factory restart becomes `delivery_interrupted` under the existing timeout.
+Answers remain readable on their ask after interruption; sends are not retried
+automatically because typing twice is not idempotent. A client that focuses the
+recording terminal must wait for confirmed delivery rather than treating
+`pending` as delivered.
+
 ## Native human actions
 
 These optional native POST routes use the same canonical input validation,
@@ -138,10 +188,10 @@ prompt does not accept `answer` alone. The custom choice `__custom_redirect__`
 requires a nonblank `answer_note`. Without a structured prompt, submit
 `{"answer":"the human's answer"}`. The backend records `operator` as the answer
 author, then types `Answer: <answer>` into the asking terminal's input without
-submitting it. `delivery` reports the outcome: `{state: "delivered", to}`, or
-`{state: "not_delivered", reason}` with `reason` `terminal_finished`,
-`terminal_unreachable` (the factory's own herdr-core doesn't see that terminal live; answers are not typed into other machines yet),
-`no_asking_terminal` or `send_failed`; the answer stays on the ask either way.
+submitting it. `delivery` initially reports `{state: "pending"}` when a terminal is recorded.
+Without a target it reports
+`{state: "not_delivered", reason: "no_asking_terminal"}`. The answer stays on
+the ask either way; `delivered_at` records a later successful delivery.
 An answer does not resume or unblock work by itself.
 
 Flagged decisions move `recorded → acknowledged` (ack) or `recorded → feedback`
