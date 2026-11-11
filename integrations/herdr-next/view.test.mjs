@@ -269,3 +269,15 @@ test('a studio shows a published preview with Open, says when there is none, and
   assert.ok(landed.text('Landed'));
   assert.equal(landed.has('studio-retry'), false);
 });
+
+test('actions on their way show their outcome at once: what they settle leaves, feedback shows as sent', skip, async (t) => {
+  const H = '/api/v1/sympp/herdr';
+  const view = await render(t, { props: { role: 'panel' }, width: 1400, board: 'busy', taken: [
+    [`${H}/decisions/dec-toast/ack`, {}], [`${H}/decisions/dec-share/dismiss`, {}], [`${H}/asks/ask-flicker/answer`, { answer: 'Yes.' }],
+    [`${H}/decisions/dec-order/feedback`, { text: 'Keep them listed.' }],
+  ] });
+  for (const id of ['decision-dec-toast', 'decision-dec-share', 'ask-ask:ask-flicker', 'ack-dec-order']) assert.equal(view.has(id), false, id);
+  assert.ok(view.has('decision-dec-order') && view.text('Sending “Keep them listed.”…'), 'the feedback shows on its way');
+  assert.ok(view.text("You're needed in 2"), 'the answered question no longer counts');
+});
+
