@@ -79,16 +79,22 @@ export function GoalRefusal({ className = "", goalId }: { className?: string; go
 type MenuItem<K extends string> = { key: K; label: string; danger?: boolean };
 
 // A ⋯ button that opens a short menu of actions. Each takes a second click: the first arms it.
-function ActionMenu<K extends string>({ busy = false, className, items, label, onPick }: { busy?: boolean; className?: string; items: Array<MenuItem<K>>; label: string; onPick: (key: K, root: HTMLElement | null) => void }) {
+// Closing it from inside, with Escape or a pick, hands focus back to the ⋯ button so the keyboard keeps its place.
+function ActionMenu<K extends string>({ className, items, label, onPick }: { className?: string; items: Array<MenuItem<K>>; label: string; onPick: (key: K, root: HTMLElement | null) => void }) {
   const [open, setOpen] = useState(false);
   const [armed, setArmed] = useState<K | null>(null);
   const root = useRef<HTMLSpanElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
     if (!open) return undefined;
     const close = (event: PointerEvent | KeyboardEvent) => {
-      if (event instanceof KeyboardEvent ? event.key === "Escape" : !root.current?.contains(event.target as Node)) setOpen(false);
+      if (event instanceof KeyboardEvent) {
+        if (event.key !== "Escape") return;
+        if (menu.current?.contains(document.activeElement)) trigger.current?.focus();
+      } else if (root.current?.contains(event.target as Node)) return;
+      setOpen(false);
     };
     window.addEventListener("pointerdown", close);
     window.addEventListener("keydown", close);
@@ -112,6 +118,7 @@ function ActionMenu<K extends string>({ busy = false, className, items, label, o
       if (!calm()) button.animate([{ transform: "scale(0.98)" }, { transform: "scale(1)" }], { duration: 160, easing: EASE });
       return;
     }
+    trigger.current?.focus();
     setOpen(false);
     setArmed(null);
     onPick(item.key, root.current);
@@ -119,7 +126,7 @@ function ActionMenu<K extends string>({ busy = false, className, items, label, o
 
   return (
     <span ref={root} className={`relative inline-block shrink-0 ${className ?? ""}`}>
-      <button aria-expanded={open} aria-haspopup="menu" aria-label={label} className={`${GLYPH} disabled:opacity-50 ${open ? "bg-line text-ink" : "text-faint"}`} disabled={busy} title={items.map((item) => item.label).join(", ")} type="button" onClick={toggle}>
+      <button ref={trigger} aria-expanded={open} aria-haspopup="menu" aria-label={label} className={`${GLYPH} ${open ? "bg-line text-ink" : "text-faint"}`} title={items.map((item) => item.label).join(", ")} type="button" onClick={toggle}>
         <MoreHorizontal className="size-4" />
       </button>
       {open ? (
@@ -152,24 +159,20 @@ const FINISH: Array<MenuItem<"finish">> = [{ key: "finish", label: "Finish" }];
 // Finishing a package whose PR waits on others. A refusal shows under the package's row.
 export function PkgActions({ pkg }: { pkg: Pkg }) {
   const act = useAct();
-  const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
 
   const finish = async () => {
-    setBusy(true);
     setFailure(null);
     try {
       await act({ kind: "finish", pkgId: pkg.id });
     } catch (caught) {
       setFailure(caught instanceof Error ? caught.message : "The backend refused this.");
-    } finally {
-      setBusy(false);
     }
   };
 
   return (
     <>
-      <ActionMenu busy={busy} className="justify-self-end" items={FINISH} label={`Actions for ${pkg.title}`} onPick={() => void finish()} />
+      <ActionMenu className="justify-self-end" items={FINISH} label={`Actions for ${pkg.title}`} onPick={() => void finish()} />
       {failure ? (
         <p className="col-span-full text-xs text-fail" role="alert">
           {failure}
