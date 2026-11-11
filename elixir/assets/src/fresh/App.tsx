@@ -13,6 +13,7 @@ import { buildBoard, liveCountAt, openAt, viewAt, type Archived, type Board, typ
 import { focusGoal } from "./motion";
 import { ActContext, send, type OperatorAction } from "./operator";
 import { Outline } from "./outline";
+import { operate, project, settle, usePending } from "./pending";
 import { coalescedRead } from "./reads";
 import { Phases } from "./phases";
 import { PhoneBoard, usePhone } from "./phone";
@@ -50,11 +51,10 @@ const START = {
 };
 
 // `replayable` is true on a snapshot, which carries recorded history; a backend only knows the present.
-// The demo keeps its ledger, so actions change it the way the backend would.
-type Loaded = { board: Board; now: number; busiest: number; samples: number[]; replayable: boolean; settings: Settings; demo?: DemoLedger };
+type Loaded = { board: Board; now: number; busiest: number; samples: number[]; replayable: boolean; settings: Settings };
 
 export function App() {
-  const [data, setData] = useState<Loaded | null>(null);
+  const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [direction, setDirection] = useState(START.direction);
   const [area, setArea] = useState<string | null>(LINKED.get("area"));
@@ -69,12 +69,13 @@ export function App() {
   // reconnects supersede earlier reads to recover and respect committed writes.
   const [{ read, changed }] = useState(() => {
     let shownNow: number | null = null;
-    return coalescedRead(load, (loaded) => {
+    return coalescedRead(load, (fresh) => {
       const before = shownNow;
-      shownNow = loaded.now;
+      shownNow = fresh.now;
       setFailure(null);
-      setData(loaded);
-      setAt((current) => (before === null ? loaded.busiest : followNow(current, before, loaded.now)));
+      settle(fresh.board);
+      setLoaded(fresh);
+      setAt((current) => (before === null ? fresh.busiest : followNow(current, before, fresh.now)));
     }, (caught: unknown) => {
       setFailure(caught instanceof Error ? caught.message : "Could not read the ledger");
     });
@@ -82,9 +83,12 @@ export function App() {
   useEffect(() => { void read(); }, [read]);
   useChangeSignal(!DEMO, read, changed);
   // A snapshot or the demo never changes on its own, so it is read once. Anything else is reread, also while the first read has yet to succeed.
-  useReread(!DEMO && data?.replayable !== true, read);
-  const act = useOperator(read, setData);
+  useReread(!DEMO && loaded?.replayable !== true, read);
+  const act = useOperator(read);
   useShortcuts(setDirection, setNote);
+  // The board shows what the operator just did before the factory has caught up; see pending.ts.
+  const pending = usePending();
+  const data = useMemo(() => (loaded ? { ...loaded, board: project(loaded.board, pending) } : null), [loaded, pending]);
 
   const phone = usePhone();
   const at = shownAt(phone, data, picked);
@@ -183,13 +187,10 @@ export function App() {
   );
 }
 
-// The demo applies actions to its own invented work; a backend is told, then read again.
-function useOperator(read: () => void, setData: (update: (current: Loaded | null) => Loaded | null) => void) {
-  return useCallback(async (action: OperatorAction) => {
-    if (DEMO) return setData((current) => (current?.demo ? demoRead(applyDemo(current.demo, action, current.now), current.now) : current));
-    await send(action);
-    read();
-  }, [read, setData]);
+// Every action goes the same way: shown as done at once, sent, then the board is read again. The demo's own
+// ledger stands in for the factory.
+function useOperator(read: () => void) {
+  return useCallback((action: OperatorAction) => operate(action, DEMO ? demoSend : send, read), [read]);
 }
 
 // What the board shows at `at`, with the area filter applied to goals and cards. Questions and decisions ignore the filter.
@@ -222,14 +223,26 @@ function Lost({ failure }: { failure: string | null }) {
   return <span className="whitespace-nowrap text-xs text-fail" title={failure}>Connection lost · showing the last read</span>;
 }
 
-function demoRead(demo: DemoLedger, now: number): Loaded {
-  return { board: buildBoard(demo.hydrated, {}, demo.archived).board, now, busiest: now, samples: [], replayable: false, settings: {}, demo };
+// The demo's invented work, made on the first read. Actions change it the way the backend would.
+let demo: { ledger: DemoLedger; now: number } | null = null;
+
+function demoNow() {
+  if (!demo) {
+    const now = Date.now();
+    demo = { ledger: demoLedger(now, LINKED.get("demo") === "quiet" || LINKED.get("demo") === "empty" ? LINKED.get("demo") as DemoVariant : "busy"), now };
+  }
+  return demo;
+}
+
+async function demoSend(action: OperatorAction) {
+  const current = demoNow();
+  current.ledger = applyDemo(current.ledger, action, current.now);
 }
 
 async function load(): Promise<Loaded> {
   if (DEMO) {
-    const now = Date.now();
-    return demoRead(demoLedger(now, LINKED.get("demo") === "quiet" || LINKED.get("demo") === "empty" ? LINKED.get("demo") as DemoVariant : "busy"), now);
+    const { ledger, now } = demoNow();
+    return { board: buildBoard(ledger.hydrated, {}, ledger.archived).board, now, busiest: now, samples: [], replayable: false, settings: {} };
   }
   const [hydrated, archived, history, local] = await Promise.all([
     ledger(),

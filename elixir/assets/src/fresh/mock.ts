@@ -315,6 +315,9 @@ export function applyDemo(ledger: DemoLedger, action: OperatorAction, now: numbe
     case "goal":
       moveGoal(next, action.goalId, action.step, stamp);
       break;
+    case "archive":
+      action.goalIds.forEach((goalId) => moveGoal(next, goalId, "archive", stamp));
+      break;
   }
   return next;
 }

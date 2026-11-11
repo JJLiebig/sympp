@@ -7,6 +7,7 @@ import { span, type Ask, type Board, type Choice, type GoalView } from "./model"
 import { Presence, useOpenWhenBrought } from "./motion";
 import { REDIRECT, useAct, type Answer } from "./operator";
 import { Fold, LINK } from "./parts";
+import { keyOf, useOperation } from "./pending";
 import { PhaseBadge, reportFor } from "./report";
 import { Reveal } from "./reveal";
 
@@ -122,11 +123,17 @@ export function Question({ text, touch = false }: { text: string; touch?: boolea
 // The question and its answer share one measure, so the form lines up under the words it answers.
 const MEASURE = "max-w-[46rem]";
 
-// What has been entered: the picked choice, if any, and the text; and whether it is being sent or was refused.
-// Shared by the desktop and phone forms, so a draft survives the board changing layout.
-export const BLANK_ENTRY: Entry = { choice: null, text: "", busy: false, failure: null };
+// What has been entered: the picked choice, if any, and the text. Shared by the desktop and phone forms, so a draft
+// survives the board changing layout, and a refusal that brings the question back.
+export const BLANK_ENTRY: Entry = { choice: null, text: "" };
 export const answerKey = (askId: string) => `ask:${askId}`;
-export type Entry = { choice: string | null; text: string; busy: boolean; failure: string | null };
+export type Entry = { choice: string | null; text: string };
+
+// Whether the answer to a question is on its way, and why the last one was refused.
+export function useAnswering(askId: string) {
+  const { busy, refused } = useOperation(keyOf({ kind: "answer", askId, answer: { text: "" } }));
+  return { busy, failure: refused?.reason ?? null };
+}
 
 // A free answer, or one of the asker's choices with an optional note, in one frame: the choices, then the note
 // and Send. The asker may also offer to take a free answer instead of its choices; the note is then the answer.
@@ -138,7 +145,8 @@ export function AnswerForm({ ask, entered, onEnter, touch }: { ask: Ask; entered
   const act = useAct();
   const id = useId();
   const form = useRef<HTMLFormElement>(null);
-  const { busy, choice, failure, text } = entered;
+  const { choice, text } = entered;
+  const { busy, failure } = useAnswering(ask.id);
   const chosen = ask.choices.length > 0;
   const redirecting = choice === REDIRECT;
   // With a choice the text is a note, unless the choice is to answer in free text.
@@ -147,12 +155,9 @@ export function AnswerForm({ ask, entered, onEnter, touch }: { ask: Ask; entered
   const choices = ask.redirect ? [...ask.choices, { id: REDIRECT, label: ask.redirect, description: null, pros: [], cons: [] }] : ask.choices;
   const size = FORM_SIZE[touch ? "touch" : "pointer"];
 
-  const submit = async () => {
+  const submit = () => {
     if (!ready || busy) return;
-    onEnter({ busy: true, failure: null });
-    const refusal = await answerAsk(ask.id, form.current?.closest<HTMLElement>("[data-ask]") ?? null, () => act({ kind: "answer", askId: ask.id, answer }));
-    if (refusal === null) return;
-    onEnter({ busy: false, failure: refusal });
+    void answerAsk(ask.id, form.current?.closest<HTMLElement>("[data-ask]") ?? null, () => act({ kind: "answer", askId: ask.id, answer }));
   };
 
   return (
@@ -161,7 +166,7 @@ export function AnswerForm({ ask, entered, onEnter, touch }: { ask: Ask; entered
       className={`mt-3 ${MEASURE}`}
       onSubmit={(event) => {
         event.preventDefault();
-        void submit();
+        submit();
       }}
     >
       <div className={`overflow-hidden rounded-lg border bg-panel transition-colors ${failure ? "border-fail has-[textarea:focus]:ring-2 has-[textarea:focus]:ring-fail/35" : "border-line has-[textarea:focus]:border-you/70"}`}>
@@ -185,7 +190,7 @@ export function AnswerForm({ ask, entered, onEnter, touch }: { ask: Ask; entered
             value={text}
             onChange={(event) => onEnter({ text: event.target.value })}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) void submit();
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) submit();
             }}
           />
           <button

@@ -1,30 +1,41 @@
 import { X } from "lucide-react";
-import { useId, useState, type MouseEvent } from "react";
+import { useId, type MouseEvent } from "react";
 
 import { ActButton } from "./actions";
-import { span, type Board, type Decision, type Undelivered as Reason } from "./model";
+import { useKept } from "./kept";
+import { needsReview, span, type Board, type Decision, type Undelivered as Reason } from "./model";
+import { Presence } from "./motion";
 import { useAct } from "./operator";
 import { Owner } from "./owner";
 import { GLYPH } from "./parts";
+import { keyOf, useOperation } from "./pending";
+import { Reveal } from "./reveal";
 
 const ROW = "grid grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-2 py-3 pr-2";
+
+// Feedback being written for a decision, shared by the desktop and phone boards so it survives a change of
+// layout, and a refusal that brings the decision back.
+export type Draft = { writing: boolean; text: string };
+export const NO_FEEDBACK: Draft = { writing: false, text: "" };
+export const feedbackKey = (decisionId: string) => `feedback:${decisionId}`;
 
 // Product calls chiefs and architects flagged for review, and feedback that could not reach its terminal.
 // They follow the questions' layout, in neutral tones: these calls are made already and only want a reaction.
 export function Decisions({ at, board, decisions, onGoal }: { at: number; board: Board; decisions: Decision[]; onGoal: (goalId: string) => void }) {
-  const shown = decisions.filter((entry) => entry.state === "recorded" || (entry.state === "feedback" && entry.undelivered !== null));
-  if (shown.length === 0) return null;
+  const shown = decisions.filter(needsReview).sort((left, right) => right.at - left.at);
   const waiting = shown.filter((entry) => entry.state === "recorded").length;
 
   return (
-    <section className="mb-8">
-      <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-dim">Decisions to review{waiting > 0 ? ` · ${waiting}` : ""}</h2>
-      <ul className="divide-y divide-line border-y border-line">
-        {[...shown].sort((left, right) => right.at - left.at).map((entry) => (
-          <DecisionItem key={entry.id} at={at} board={board} decision={entry} onGoal={onGoal} />
-        ))}
-      </ul>
-    </section>
+    <Reveal className="mb-8" show={shown.length > 0}>
+      <section>
+        <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-dim">Decisions to review{waiting > 0 ? ` · ${waiting}` : ""}</h2>
+        <ul className="divide-y divide-line border-y border-line">
+          <Presence items={shown} keyOf={(entry) => entry.id}>
+            {({ item, key, ref }) => <DecisionItem key={key} ref={ref} at={at} board={board} decision={item} onGoal={onGoal} />}
+          </Presence>
+        </ul>
+      </section>
+    </Reveal>
   );
 }
 
@@ -34,27 +45,30 @@ function rowClick(event: MouseEvent) {
   return !target.closest("button, a, input, textarea, label, form") && !window.getSelection()?.toString();
 }
 
-function DecisionItem({ at, board, decision, onGoal }: { at: number; board: Board; decision: Decision; onGoal: (goalId: string) => void }) {
+function DecisionItem({ at, board, decision, onGoal, ref }: { at: number; board: Board; decision: Decision; onGoal: (goalId: string) => void; ref: (node: HTMLElement | null) => void }) {
   const act = useAct();
   const goal = board.goals.find((entry) => entry.id === decision.goalId);
-  const [writing, setWriting] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
+  const [draft, update] = useKept(feedbackKey(decision.id), NO_FEEDBACK);
+  const writing = draft.writing;
+  const setWriting = (on: boolean) => update((was) => ({ ...was, writing: on }));
+  const dismissal = { kind: "dismiss_feedback", decisionId: decision.id } as const;
+  const { refused } = useOperation(keyOf(dismissal));
   const undelivered = decision.state === "feedback";
   // Feedback still being typed into its terminal can't be dismissed yet.
   const typing = decision.undelivered === "delivering";
-  const dismiss = () => act({ kind: "dismiss_feedback", decisionId: decision.id }).catch((caught: unknown) => setFailure(caught instanceof Error ? caught.message : "The backend refused this."));
+  const dismiss = () => void act(dismissal);
   // The whole row answers a click: a decision opens its feedback form, undelivered feedback is dismissed.
   const onRow = (event: MouseEvent) => {
     if (!rowClick(event)) return;
     if (undelivered) {
-      if (!typing) void dismiss();
+      if (!typing) dismiss();
     }
     else setWriting(true);
   };
   const clickable = undelivered ? !typing : !writing;
 
   return (
-    <li className={`${ROW} ${clickable ? "cursor-pointer hover:bg-white/[0.025]" : ""}`} onClick={onRow}>
+    <li ref={ref} className={`${ROW} ${clickable ? "cursor-pointer hover:bg-white/[0.025]" : ""}`} onClick={onRow}>
       <Subject goal={goal} onGoal={onGoal} />
       <p className="flex items-center justify-end gap-3">
         <Owner owner={decision.by} />
@@ -64,10 +78,10 @@ function DecisionItem({ at, board, decision, onGoal }: { at: number; board: Boar
         <p className={`text-[15px] leading-snug ${undelivered ? "text-dim" : "text-ink"}`}>{decision.text}</p>
         {decision.rationale ? <p className="mt-0.5 text-sm text-dim">{decision.rationale}</p> : null}
       </div>
-      {undelivered ? <Undelivered decision={decision} failure={failure} onDismiss={() => void dismiss()} /> : null}
+      {undelivered ? <Undelivered decision={decision} failure={refused?.reason ?? null} onDismiss={dismiss} /> : null}
       {!undelivered && !writing ? <Reactions decision={decision} onFeedback={() => setWriting(true)} /> : null}
       {/* Feedback that could not be delivered comes back as the Undelivered notice, which replaces the form. */}
-      {writing && !undelivered ? <FeedbackForm decision={decision} onCancel={() => setWriting(false)} /> : null}
+      {writing && !undelivered ? <FeedbackForm decision={decision} text={draft.text} onCancel={() => update(() => NO_FEEDBACK)} onText={(text) => update(() => ({ writing: true, text }))} /> : null}
     </li>
   );
 }
@@ -124,36 +138,23 @@ function Undelivered({ decision, failure, onDismiss }: { decision: Decision; fai
   );
 }
 
-// Free text for the terminal that recorded the decision. A failed send keeps what was written.
-// `touch` sizes the controls for a finger.
+// Free text for the terminal that recorded the decision. The caller keeps what was written, so a refusal that
+// brings the decision back finds it still there. `touch` sizes the controls for a finger.
 const FEEDBACK_SIZE = { pointer: { text: "min-h-9 text-sm", send: "h-9 px-3", cancel: "h-9 px-2" }, touch: { text: "min-h-11 text-base", send: "h-11 px-4", cancel: "h-11 px-3" } };
 
-// `touch` sizes the controls for a finger; `unnamed` leaves out who the feedback goes to.
-// With `text` and `onText` the caller keeps what was written.
-export function FeedbackForm({ decision, onCancel, onText, text: kept, touch, unnamed }: { decision: Decision; unnamed?: boolean; onCancel: () => void; onText?: (text: string) => void; text?: string; touch?: boolean }) {
+// `unnamed` leaves out who the feedback goes to.
+export function FeedbackForm({ decision, onCancel, onText, text, touch, unnamed }: { decision: Decision; unnamed?: boolean; onCancel: () => void; onText: (text: string) => void; text: string; touch?: boolean }) {
   const act = useAct();
   const id = useId();
-  const [own, setOwn] = useState("");
-  const text = kept ?? own;
-  const setText = onText ?? setOwn;
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
+  const feedback = { kind: "feedback", decisionId: decision.id, text: text.trim() } as const;
+  const { busy, refused } = useOperation(keyOf(feedback));
+  const failure = refused?.reason ?? null;
   const size = FEEDBACK_SIZE[touch ? "touch" : "pointer"];
   const label = !unnamed && decision.by ? `Feedback for ${decision.by.address}` : "Feedback";
-
-  const submit = async () => {
-    setBusy(true);
-    setFailure(null);
-    try {
-      await act({ kind: "feedback", decisionId: decision.id, text: text.trim() });
-    } catch (caught) {
-      setFailure(caught instanceof Error ? caught.message : "The backend refused this.");
-      setBusy(false);
-    }
-  };
+  const submit = () => void act(feedback);
 
   return (
-    <form className="col-span-2 max-w-[880px] space-y-2" onSubmit={(event) => { event.preventDefault(); if (text.trim()) void submit(); }}>
+    <form className="col-span-2 max-w-[880px] space-y-2" onSubmit={(event) => { event.preventDefault(); if (text.trim()) submit(); }}>
       <div className="flex items-start gap-2">
         <label className="sr-only" htmlFor={id}>{label}</label>
         <textarea
@@ -165,10 +166,10 @@ export function FeedbackForm({ decision, onCancel, onText, text: kept, touch, un
           placeholder={label}
           rows={1}
           value={text}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => onText(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Escape") onCancel();
-            if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && text.trim()) void submit();
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && text.trim()) submit();
           }}
         />
         <button className={`${size.send} shrink-0 rounded bg-ink text-sm font-semibold text-bg disabled:opacity-40`} disabled={busy || !text.trim()} type="submit">

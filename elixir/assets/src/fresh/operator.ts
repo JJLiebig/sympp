@@ -14,13 +14,15 @@ export type OperatorAction =
   | { kind: "release"; goalId: string }
   | { kind: "finish"; pkgId: string }
   | { kind: "dismiss"; cardIds: string[] }
+  | { kind: "archive"; goalIds: string[] }
   | { kind: "goal"; goalId: string; step: GoalStep };
 
 // The free-text choice of a question with choices: the note is then the answer.
 export const REDIRECT = "__custom_redirect__";
 
-// Resolves once the action went through; rejects with a message the operator can act on.
-export const ActContext = createContext<(action: OperatorAction) => Promise<void>>(async () => undefined);
+// Shows the action as done and sends it. Resolves with why the factory refused, in words the operator can act on,
+// or null once it agreed.
+export const ActContext = createContext<(action: OperatorAction) => Promise<string | null>>(async () => null);
 
 export function useAct() {
   return useContext(ActContext);
@@ -48,6 +50,9 @@ function requests(action: OperatorAction): Array<[path: string, body: Record<str
       return [[`${at("work-packages", action.pkgId)}/finish`, {}]];
     case "dismiss":
       return action.cardIds.map((id) => [`${at("cards", id)}/dismiss`, {}]);
+    // One after another, so the ledger takes one write at a time.
+    case "archive":
+      return action.goalIds.map((id) => [`${at("work-requests", id)}/archive`, {}]);
     case "goal":
       return [[`${at("work-requests", action.goalId)}/${action.step}`, {}]];
   }
@@ -61,22 +66,32 @@ const NEXT: Record<string, string> = {
   "ack or feedback": "This decision still waits for an ack or feedback.",
   "wait: the feedback is being typed": "The feedback is still being typed into its terminal. Try again in a minute.",
   wait: "The factory has not caught up yet. Try again in a minute.",
-  none: "Nothing is left to do here. It was already handled.",
 };
 
-type Refusal = { error?: { message?: string; next_action?: string } | null };
+type Refusal = { error?: { code?: string; message?: string; next_action?: string } | null };
+
+// Refusals that say the outcome already holds: the decision was reviewed, the question is closed, the package
+// ended, nobody owns the goal. Another click or another screen got there first, so they count as done.
+const HANDLED = new Set(["ask_not_open", "already_ended", "not_owned"]);
+
+function handled(payload: Refusal | null) {
+  const error = payload?.error;
+  return (error?.next_action ?? "").split(":")[0] === "none" || HANDLED.has(error?.code ?? "");
+}
 
 // A refusal in plain words: what to do next where the backend says, else its message.
-export function refusalText(payload: Refusal | null) {
+function refusalText(payload: Refusal | null) {
   const next = payload?.error?.next_action ?? "";
   return NEXT[next] ?? NEXT[next.split(":")[0]] ?? payload?.error?.message ?? "The backend refused this.";
 }
 
+// Resolves once every request of the action went through, or was already done; rejects with a refusal in words.
 export async function send(action: OperatorAction) {
   for (const [path, body] of requests(action)) {
     const response = await fetch(api(path), { method: "POST", headers: { accept: "application/json", "content-type": "application/json" }, body: JSON.stringify(body) }).catch(() => null);
     if (response?.ok) continue;
     if (!response) throw new Error("Could not reach the backend.");
-    throw new Error(refusalText((await response.json().catch(() => null)) as Refusal | null));
+    const payload = (await response.json().catch(() => null)) as Refusal | null;
+    if (!handled(payload)) throw new Error(refusalText(payload));
   }
 }

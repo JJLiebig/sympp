@@ -42,16 +42,9 @@ export function collapseOut(node: HTMLElement) {
   return clipped(node, node.animate([{ ...boxOf(node), opacity: 1 }, { ...FLAT, opacity: 0 }], { duration: 200, easing: EASE, fill: "forwards" })).finished;
 }
 
-// Closes the gap of something its list still shows; with reduced motion it just goes. `reopen` brings it back.
-export function closeUp(node: HTMLElement) {
-  if (!calm()) return collapseOut(node);
-  node.style.display = "none";
-  return Promise.resolve();
-}
-
-export function reopen(node: HTMLElement) {
+// A row that came back while it was closing opens again where it was.
+function reopen(node: HTMLElement) {
   node.getAnimations().forEach((animation) => animation.cancel());
-  node.style.display = "";
 }
 
 // A row that changed places glides from where it was.
@@ -63,7 +56,6 @@ function glide(node: HTMLElement, dy: number) {
 type Entry<T> = { key: string; item: T; leaving: boolean; fresh: boolean };
 export type Present<T> = { key: string; item: T; leaving: boolean; ref: (node: HTMLElement | null) => void };
 // `holdsOf` names the rows inside an item whose exits it waits for before it closes up; by default, only its own.
-// Once all of them have closed their own gaps, the item closes up with them.
 type PresenceProps<T> = { children: (entry: Present<T>) => ReactNode; holdsOf?: (item: T) => string[]; items: readonly T[]; keyOf: (item: T) => string };
 type PresenceState<T> = { items: readonly T[]; entries: Array<Entry<T>> };
 
@@ -72,16 +64,6 @@ const holds = new Map<string, Promise<unknown>>();
 export function holdLeave(key: string, until: Promise<unknown>) {
   holds.set(key, until);
   void until.finally(() => holds.get(key) === until && holds.delete(key));
-}
-
-// Rows whose exit closed their gap while their list still shows them, so what holds them can close up too.
-const shut = new Map<string, HTMLElement>();
-const watchers = new Set<() => void>();
-export function markShut(key: string, node: HTMLElement, closed: boolean) {
-  if (closed) shut.set(key, node);
-  else if (shut.get(key) === node) shut.delete(key);
-  else return;
-  watchers.forEach((watch) => watch());
 }
 
 // The new list, with rows that left kept in place after whatever came before them.
@@ -117,19 +99,10 @@ export class Presence<T> extends Component<PresenceProps<T>, PresenceState<T>> {
   private handles = new Map<string, (node: HTMLElement | null) => void>();
   private closing = new Set<string>();
   private grown = new WeakSet<Entry<T>>();
-  private folded = new Set<string>();
 
   constructor(props: PresenceProps<T>) {
     super(props);
     this.state = { items: props.items, entries: props.items.map((item) => ({ key: props.keyOf(item), item, leaving: false, fresh: false })) };
-  }
-
-  componentDidMount() {
-    watchers.add(this.fold);
-  }
-
-  componentWillUnmount() {
-    watchers.delete(this.fold);
   }
 
   static getDerivedStateFromProps<T>(props: PresenceProps<T>, state: PresenceState<T>): Partial<PresenceState<T>> | null {
@@ -151,33 +124,12 @@ export class Presence<T> extends Component<PresenceProps<T>, PresenceState<T>> {
       const node = this.nodes.get(key);
       if (node) glide(node, top - node.getBoundingClientRect().top);
     }
-    this.fold();
   }
-
-  // An item whose held rows have all closed their own gaps closes up with them, before its list drops it.
-  // It opens again when one of them comes back or a new row joins it.
-  private fold = () => {
-    const { holdsOf } = this.props;
-    if (!holdsOf) return;
-    for (const entry of this.state.entries) {
-      const node = this.nodes.get(entry.key);
-      if (entry.leaving || !node) continue;
-      const rows = holdsOf(entry.item);
-      const empty = rows.length > 0 && rows.every((row) => node.contains(shut.get(row) ?? null));
-      if (empty && !this.folded.has(entry.key)) {
-        this.folded.add(entry.key);
-        void closeUp(node);
-      } else if (!empty && this.folded.delete(entry.key)) reopen(node);
-    }
-  };
 
   // A row that left closes up; one that came back before it had closed stays; a new one grows in, once.
   private settle(entry: Entry<T>, node: HTMLElement | undefined) {
     if (entry.leaving) return this.close(entry.key, node, this.props.holdsOf?.(entry.item) ?? [entry.key]);
-    if (this.closing.delete(entry.key)) {
-      this.folded.delete(entry.key);
-      return node && reopen(node);
-    }
+    if (this.closing.delete(entry.key)) return node && reopen(node);
     if (!entry.fresh || !node || this.grown.has(entry)) return;
     this.grown.add(entry);
     growIn(node);
@@ -191,7 +143,6 @@ export class Presence<T> extends Component<PresenceProps<T>, PresenceState<T>> {
       .then(() => (node && this.closing.has(key) ? collapseOut(node) : undefined))
       .then(() => {
         if (!this.closing.delete(key)) return;
-        this.folded.delete(key);
         this.setState((state) => ({ entries: state.entries.filter((entry) => !(entry.key === key && entry.leaving)) }));
       });
   }

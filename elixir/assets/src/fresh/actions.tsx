@@ -1,11 +1,12 @@
 import { MoreHorizontal } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent as KeyPress } from "react";
 
-import { finishPkg, leaveGoal, useRefusal } from "./exits";
+import { leaveGoal } from "./exits";
 import type { Goal, GoalView, Phase, Pkg } from "./model";
 import { calm, EASE } from "./motion";
 import { GLYPH } from "./parts";
 import { useAct, type GoalStep, type OperatorAction } from "./operator";
+import { goalKey, keyOf, useOperation } from "./pending";
 import { Reveal } from "./reveal";
 
 export type Action = { key: GoalStep; label: string; danger?: boolean };
@@ -30,43 +31,35 @@ function useGoalStep() {
   return (goalId: string, step: GoalStep, from: Element | null) => leaveGoal(goalId, step, from?.closest<HTMLElement>("[data-goal]") ?? null, () => act({ kind: "goal", goalId, step }));
 }
 
-// A button for one operator action. With `confirm` it takes a second click. A refusal shows next to it.
+// A button for one operator action. With `confirm` it takes a second click. A refusal shows next to it; a goal's
+// shows under the goal.
 export function ActButton({ action, className = "", confirm, label, look = "rounded px-1.5 py-0.5 text-xs font-medium", tone = "text-dim" }: { action: OperatorAction; className?: string; confirm?: string; label: string; look?: string; tone?: string }) {
   const act = useAct();
   const step = useGoalStep();
   const button = useRef<HTMLButtonElement>(null);
   const [armed, setArmed] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
+  const { busy, refused } = useOperation(keyOf(action));
 
-  const run = async () => {
+  const run = () => {
     if (confirm && !armed) return setArmed(true);
-    setBusy(true);
-    setFailure(null);
-    try {
-      if (action.kind === "goal") await step(action.goalId, action.step, button.current);
-      else await act(action);
-    } catch (caught) {
-      setFailure(caught instanceof Error ? caught.message : "The backend refused this.");
-    } finally {
-      setBusy(false);
-      setArmed(false);
-    }
+    setArmed(false);
+    void (action.kind === "goal" ? step(action.goalId, action.step, button.current) : act(action));
   };
 
   return (
     <span className={`flex shrink-0 items-center gap-2 ${className}`}>
-      <button ref={button} className={`${look} hover:bg-line hover:text-ink disabled:opacity-50 ${armed ? "bg-line text-ink" : tone}`} disabled={busy} type="button" onBlur={() => setArmed(false)} onClick={() => void run()}>
+      <button ref={button} className={`${look} hover:bg-line hover:text-ink disabled:opacity-50 ${armed ? "bg-line text-ink" : tone}`} disabled={busy} type="button" onBlur={() => setArmed(false)} onClick={run}>
         {armed ? confirm : label}
       </button>
-      {failure ? <span className="text-xs text-fail">{failure}</span> : null}
+      {refused && action.kind !== "goal" ? <span className="text-xs text-fail">{refused.reason}</span> : null}
     </span>
   );
 }
 
 // Why the goal's last step did not go through. It opens under the goal and closes on the next attempt.
 export function GoalRefusal({ className = "", goalId }: { className?: string; goalId: string }) {
-  const refusal = useRefusal(goalId);
+  const { refused } = useOperation(goalKey(goalId));
+  const refusal = refused?.action.kind === "goal" ? `Couldn't ${refused.action.step} it. ${refused.reason}` : null;
   return (
     <Reveal className={className} show={refusal !== null}>
       <p className="text-sm text-fail" role="alert">
@@ -188,23 +181,18 @@ export function GoalActions({ className, goal, phase }: { className?: string; go
 
 const FINISH: Array<MenuItem<"finish">> = [{ key: "finish", label: "Finish" }];
 
-// Finishing a package whose PR waits on others. Its row closes up once the factory agrees, unless it `stays`
-// listed as an ended package. A refusal shows under the row.
-export function PkgActions({ pkg, stays }: { pkg: Pkg; stays: boolean }) {
+// Finishing a package whose PR waits on others. Its row ends at once; a refusal brings it back and shows under it.
+export function PkgActions({ pkg }: { pkg: Pkg }) {
   const act = useAct();
-  const [failure, setFailure] = useState<string | null>(null);
-
-  const finish = async (root: HTMLElement | null) => {
-    setFailure(null);
-    setFailure(await finishPkg(pkg.id, stays ? null : (root?.closest<HTMLElement>("[data-pkg-row]") ?? null), () => act({ kind: "finish", pkgId: pkg.id })));
-  };
+  const finish: OperatorAction = { kind: "finish", pkgId: pkg.id };
+  const { refused } = useOperation(keyOf(finish));
 
   return (
     <>
-      <ActionMenu className="justify-self-end" items={FINISH} label={`Actions for ${pkg.title}`} onPick={(_, root) => void finish(root)} />
-      {failure ? (
+      <ActionMenu className="justify-self-end" items={FINISH} label={`Actions for ${pkg.title}`} onPick={() => void act(finish)} />
+      {refused ? (
         <p className="col-span-full text-xs text-fail" role="alert">
-          {failure}
+          {refused.reason}
         </p>
       ) : null}
     </>
@@ -212,11 +200,11 @@ export function PkgActions({ pkg, stays }: { pkg: Pkg; stays: boolean }) {
 }
 
 // Clears a shelf in one go: everything on it, or only what has sat there for a month. Each takes a second click.
+// The goals leave at once and are archived one after another; a refusal brings them back and shows here.
 export function ShelfCleanup({ at, views }: { at: number; views: GoalView[] }) {
   const act = useAct();
   const [armed, setArmed] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
+  const { busy, refused } = useOperation(keyOf({ kind: "archive", goalIds: [] }));
   // A goal counts as old from its last package move or its completion, whichever came later.
   const stale = views.filter((view) => at - Math.max(view.lastMoveAt, view.goal.completedAt ?? 0) > STALE_MS);
   const choices = [
@@ -225,29 +213,21 @@ export function ShelfCleanup({ at, views }: { at: number; views: GoalView[] }) {
   ].filter((choice) => choice.picked.length > 0);
   if (choices.length === 0) return null;
 
-  const pick = async (choice: (typeof choices)[number]) => {
+  const pick = (choice: (typeof choices)[number]) => {
     if (armed !== choice.key) return setArmed(choice.key);
-    setBusy(true);
-    setFailure(null);
-    try {
-      for (const view of choice.picked) await act({ kind: "goal", goalId: view.goal.id, step: "archive" });
-    } catch (caught) {
-      setFailure(caught instanceof Error ? caught.message : "The backend refused this.");
-    } finally {
-      setBusy(false);
-      setArmed(null);
-    }
+    setArmed(null);
+    void act({ kind: "archive", goalIds: choice.picked.map((view) => view.goal.id) });
   };
 
   return (
     <p className="flex items-center gap-1 text-xs text-faint">
       <span title="Takes them off the board. They can be restored.">Archive</span>
       {choices.map((choice) => (
-        <button key={choice.key} className={`rounded px-1.5 py-0.5 hover:bg-line hover:text-ink disabled:opacity-50 ${armed === choice.key ? "bg-line text-ink" : ""}`} disabled={busy} type="button" onClick={() => void pick(choice)}>
+        <button key={choice.key} className={`rounded px-1.5 py-0.5 hover:bg-line hover:text-ink disabled:opacity-50 ${armed === choice.key ? "bg-line text-ink" : ""}`} disabled={busy} type="button" onClick={() => pick(choice)}>
           {armed === choice.key ? `Archive ${choice.picked.length}? Click again` : choice.label}
         </button>
       ))}
-      {failure ? <span className="text-fail">{failure}</span> : null}
+      {refused ? <span className="text-fail">{refused.reason}</span> : null}
     </p>
   );
 }

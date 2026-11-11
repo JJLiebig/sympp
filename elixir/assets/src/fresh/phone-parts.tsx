@@ -2,14 +2,15 @@ import { ChevronRight, Hourglass } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { GoalRefusal } from "./actions";
-import { AnswerForm, answerKey, BLANK_ENTRY, Question, subjectOf, type Entry } from "./asks";
-import { FeedbackForm, REASON } from "./decisions";
-import { finishPkg, leaveGoal } from "./exits";
+import { AnswerForm, answerKey, BLANK_ENTRY, Question, subjectOf, useAnswering, type Entry } from "./asks";
+import { feedbackKey, FeedbackForm, NO_FEEDBACK, REASON } from "./decisions";
+import { leaveGoal } from "./exits";
 import { useKept } from "./kept";
 import { span, unresolvedPkgs, type Ask, type Board, type Decision, type GoalView, type Liveness, type Role, type Terminal } from "./model";
-import { useAct, type GoalStep } from "./operator";
+import { useAct, type GoalStep, type OperatorAction } from "./operator";
 import { DOT } from "./owner";
 import { CiCell, OrgIcon, OUTCOME, Pip, reviewLabel } from "./parts";
+import { keyOf, useOperation } from "./pending";
 import { Reveal } from "./reveal";
 import type { Trouble } from "./trouble";
 
@@ -29,11 +30,14 @@ const ARMED = { primary: "bg-you font-semibold text-bg", plain: "border border-i
 const ARM_MS = 4000;
 
 // A button for one action. With `confirm` the first tap arms it and a second tap within a few seconds runs it.
-// `run` resolves with why the action was refused, which shows under the button, or with nothing.
-export function Tap({ className = "", confirm, label, look = "plain", run }: { className?: string; confirm?: string; label: string; look?: keyof typeof LOOK; run: (button: HTMLButtonElement) => Promise<string | null | void> | void }) {
+// An operator `action` is sent, and its refusal shows under the button; otherwise the button calls `run`.
+export function Tap({ action, className = "", confirm, label, look = "plain", run }: { action?: OperatorAction; className?: string; confirm?: string; label: string; look?: keyof typeof LOOK; run?: (button: HTMLButtonElement) => Promise<unknown> | void }) {
+  const act = useAct();
   const [armed, setArmed] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const operation = useOperation(action ? keyOf(action) : null);
+  const busy = running || operation.busy;
+  const failure = operation.refused?.reason ?? null;
   useEffect(() => {
     if (!armed) return undefined;
     const timer = window.setTimeout(() => setArmed(false), ARM_MS);
@@ -43,11 +47,10 @@ export function Tap({ className = "", confirm, label, look = "plain", run }: { c
   const press = async (button: HTMLButtonElement) => {
     if (confirm && !armed) return setArmed(true);
     setArmed(false);
-    setBusy(true);
-    setFailure(null);
-    const refusal = await Promise.resolve(run(button)).catch((caught: unknown) => (caught instanceof Error ? caught.message : "The backend refused this."));
-    setBusy(false);
-    setFailure(refusal ?? null);
+    if (action) return void act(action);
+    setRunning(true);
+    await run?.(button);
+    setRunning(false);
   };
 
   return (
@@ -112,7 +115,8 @@ const drafted = (entry: Entry) => entry.text !== "" || entry.choice !== null;
 export function AskCard({ ask, at, bare = false, board, onOpen, ref, views }: { ask: Ask; at: number; bare?: boolean; board: Board; onOpen: (goalId: string) => void; ref?: (node: HTMLElement | null) => void; views: GoalView[] }) {
   const subject = subjectOf(ask, board, views);
   const [entered, update] = useKept(answerKey(ask.id), BLANK_ENTRY);
-  const [open, setOpen] = useState(() => drafted(entered) || entered.busy || entered.failure !== null);
+  const answering = useAnswering(ask.id);
+  const [open, setOpen] = useState(() => drafted(entered) || answering.busy || answering.failure !== null);
   const enter = (change: Partial<Entry>) => update((was) => ({ ...was, ...change }));
   const goal = subject.goalId;
 
@@ -155,12 +159,12 @@ function Subject({ at, now, onOpen, org, title }: { at: number; now: number; onO
 }
 
 // A product call to react to, or feedback on one that reached nobody.
-export function DecisionCard({ at, bare = false, board, decision, onOpen }: { at: number; bare?: boolean; board: Board; decision: Decision; onOpen: (goalId: string) => void }) {
+export function DecisionCard({ at, bare = false, board, decision, onOpen, ref }: { at: number; bare?: boolean; board: Board; decision: Decision; onOpen: (goalId: string) => void; ref?: (node: HTMLElement | null) => void }) {
   const goal = board.goals.find((entry) => entry.id === decision.goalId);
   const said = [kindOf(decision.by), bare ? `${span(at - decision.at)} ago` : ""].filter(Boolean).join(" · ");
 
   return (
-    <li className={`${CARD} pb-4 ${bare ? "pt-4" : ""}`}>
+    <li ref={ref} className={`${CARD} pb-4 ${bare ? "pt-4" : ""}`}>
       {bare || !goal ? null : <Subject at={decision.at} now={at} org={goal.org} title={goal.title} onOpen={() => onOpen(goal.id)} />}
       <div className={INSET}>
         <p className={`text-[15px] leading-snug ${decision.state === "feedback" ? "text-dim" : "text-ink"}`}>{decision.text}</p>
@@ -172,19 +176,16 @@ export function DecisionCard({ at, bare = false, board, decision, onOpen }: { at
   );
 }
 
-const NO_FEEDBACK = { writing: false, text: "" };
-
 // Ack or feedback on a recorded call; for feedback that reached nobody, what it said and a way to clear it.
 function Reaction({ decision }: { decision: Decision }) {
-  const act = useAct();
-  const [draft, update] = useKept(`feedback:${decision.id}`, NO_FEEDBACK);
+  const [draft, update] = useKept(feedbackKey(decision.id), NO_FEEDBACK);
   if (decision.state === "feedback") {
     const typing = decision.undelivered === "delivering";
     return (
       <div className="mt-3 rounded border border-line bg-bg/40 px-3 py-2 text-sm">
         <p className="text-[11px] font-semibold text-checks">{typing ? "Sending" : `Undelivered · ${decision.undelivered ? REASON[decision.undelivered] : ""}`}</p>
         <p className="mt-1 text-ink">“{decision.feedback}”</p>
-        {typing ? null : <Tap className="mt-2 items-start" label="Dismiss" run={() => act({ kind: "dismiss_feedback", decisionId: decision.id }).then(() => null)} />}
+        {typing ? null : <Tap action={{ kind: "dismiss_feedback", decisionId: decision.id }} className="mt-2 items-start" label="Dismiss" />}
       </div>
     );
   }
@@ -197,7 +198,7 @@ function Reaction({ decision }: { decision: Decision }) {
   }
   return (
     <div className="mt-3 flex gap-2">
-      <Tap className="flex-1" label="Ack" run={() => act({ kind: "ack", decisionId: decision.id }).then(() => null)} />
+      <Tap action={{ kind: "ack", decisionId: decision.id }} className="flex-1" label="Ack" />
       <Tap className="flex-1" label="Feedback" look="quiet" run={() => update(() => ({ writing: true, text: "" }))} />
     </div>
   );
@@ -236,7 +237,6 @@ export function TroubleCard({ at, onOpen, ref, trouble }: { at: number; onOpen: 
 
 // What the operator can do about it from here: settle an unresolved goal, release a silent owner, finish a package waiting upstream.
 function TroubleAction({ trouble }: { trouble: Trouble }) {
-  const act = useAct();
   const step = useGoalStep();
   if (trouble.kind === "unresolved") {
     const goalId = trouble.view.goal.id;
@@ -253,15 +253,14 @@ function TroubleAction({ trouble }: { trouble: Trouble }) {
   if (trouble.kind === "silent" && trouble.pkg === null) {
     return (
       <div className={`flex pb-3.5 ${INSET}`}>
-        <Tap className="flex-1" confirm="Release?" label="Release" run={() => act({ kind: "release", goalId: trouble.view.goal.id }).then(() => null)} />
+        <Tap action={{ kind: "release", goalId: trouble.view.goal.id }} className="flex-1" confirm="Release?" label="Release" />
       </div>
     );
   }
   if (trouble.kind === "waits") {
-    const pkgId = trouble.pkg.id;
     return (
       <div className={`flex pb-3.5 ${INSET}`}>
-        <Tap className="flex-1" confirm="Finish?" label="Finish" run={(button) => finishPkg(pkgId, button.closest("li"), () => act({ kind: "finish", pkgId }))} />
+        <Tap action={{ kind: "finish", pkgId: trouble.pkg.id }} className="flex-1" confirm="Finish?" label="Finish" />
       </div>
     );
   }

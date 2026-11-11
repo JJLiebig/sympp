@@ -7,10 +7,11 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState, useSyncExternal
 import { areaLabel } from "./areas";
 import type { Lanes } from "./board";
 import type { visibleCards } from "./cards";
-import { span, type Ask, type Board, type Decision, type GoalView, type Settings } from "./model";
+import { needsReview, span, type Ask, type Board, type Decision, type GoalView, type Settings } from "./model";
 import { calm, Presence } from "./motion";
-import { useAct } from "./operator";
+import { useAct, type OperatorAction } from "./operator";
 import { CiCell, Deploy, OrgIcon, Pip, PrLink, ReviewCell } from "./parts";
+import { keyOf, useOperation } from "./pending";
 import { GoalScreen, StageWord } from "./phone-goal";
 import { AskCard, CARD, DecisionCard, Heading, INSET, TroubleCard } from "./phone-parts";
 import { DotStrip, GoalTitle, PhaseBadge, reportFor } from "./report";
@@ -115,7 +116,7 @@ const stuckKind = (trouble: Trouble) => (trouble.kind === "silent" && trouble.pk
 
 function inboxOf({ asks, at, board, cards, views }: PhoneProps): Inbox {
   const troubles = troublesOf(views, cards, at);
-  const decisions = board.decisions.filter((entry) => entry.at <= at && (entry.state === "recorded" || (entry.state === "feedback" && entry.undelivered !== null)));
+  const decisions = board.decisions.filter((entry) => entry.at <= at && needsReview(entry));
   const parts = {
     asks: [...asks].sort((left, right) => left.from - right.from),
     broken: troubles.filter(isBroken),
@@ -129,7 +130,9 @@ export function PhoneBoard(props: PhoneProps) {
   const { at, board, views } = props;
   const inbox = inboxOf(props);
   const { place, open, back, tab } = usePlace(inbox.total > 0 ? "you" : "goals");
-  const shown = place.goal ? views.find((view) => view.goal.id === place.goal) : undefined;
+  // A goal that leaves the board from its own screen keeps the screen while its exit plays; the screen then goes back.
+  const [held, setHeld] = useState<GoalView | null>(null);
+  const shown = (place.goal ? views.find((view) => view.goal.id === place.goal) : undefined) ?? (held && held.goal.id === place.goal ? held : undefined);
 
   if (place.goal && shown) {
     return (
@@ -143,6 +146,7 @@ export function PhoneBoard(props: PhoneProps) {
           view={shown}
           views={views}
           onBack={back}
+          onHold={setHeld}
           onOpen={open}
         />
       </div>
@@ -230,16 +234,9 @@ function YouTab({ at, board, inbox, onGoals, onOpen, views }: PhoneProps & { inb
       <Group id="stuck" items={inbox.stuck} keyOf={(trouble) => trouble.key} label="Stuck" tone="text-checks">
         {(trouble, ref) => <TroubleCard ref={ref} at={at} trouble={trouble} onOpen={onOpen} />}
       </Group>
-      {inbox.decisions.length > 0 ? (
-        <>
-          <Heading count={inbox.decisions.length} id="decisions" tone="text-dim">Decisions to review</Heading>
-          <ul className="space-y-2">
-            {inbox.decisions.map((decision) => (
-              <DecisionCard key={decision.id} at={at} board={board} decision={decision} onOpen={onOpen} />
-            ))}
-          </ul>
-        </>
-      ) : null}
+      <Group id="decisions" items={inbox.decisions} keyOf={(decision) => decision.id} label="Decisions to review" tone="text-dim">
+        {(decision, ref) => <DecisionCard ref={ref} at={at} board={board} decision={decision} onOpen={onOpen} />}
+      </Group>
     </>
   );
 }
@@ -435,12 +432,10 @@ function SmallWork({ cards }: { cards: Cards }) {
 // One card. A dismissal the backend refuses says why under the task.
 function SmallRow({ card, ref }: { card: Cards[number]; ref: (node: HTMLElement | null) => void }) {
   const act = useAct();
-  const [failure, setFailure] = useState<string | null>(null);
+  const dismissal: OperatorAction = { kind: "dismiss", cardIds: [card.id] };
+  const failure = useOperation(keyOf(dismissal)).refused?.reason ?? null;
   const ended = card.state === "merged" || card.state === "done";
-  const dismiss = () => {
-    setFailure(null);
-    act({ kind: "dismiss", cardIds: [card.id] }).catch((caught: unknown) => setFailure(caught instanceof Error ? caught.message : "The backend refused this."));
-  };
+  const dismiss = () => void act(dismissal);
 
   return (
     <li ref={ref} className="flex items-start gap-3 bg-white/[0.035] py-1 pl-[var(--inset-l)] pr-[max(0.25rem,env(safe-area-inset-right))]">
