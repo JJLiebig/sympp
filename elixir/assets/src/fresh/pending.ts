@@ -61,6 +61,11 @@ function homeOf(action: OperatorAction) {
   return action.kind === "goal" ? goalKey(action.goalId) : keyOf(action);
 }
 
+// A refusal of several cards hidden in one go also shows on each of them, so it stays in sight however many went.
+function homesOf(action: OperatorAction) {
+  return action.kind === "dismiss" ? [homeOf(action), ...action.cardIds.map((cardId) => `dismiss:${cardId}`)] : [homeOf(action)];
+}
+
 const overlaps = (entry: Entry, touches: string[]) => entry.touches.some((thing) => touches.includes(thing));
 
 // Shows the action's outcome at once and sends it, after any earlier action on the same thing still on its way.
@@ -71,7 +76,7 @@ export function operate(action: OperatorAction, send: (action: OperatorAction) =
   const touches = touchesOf(action);
   const latest = entries.findLast((entry) => overlaps(entry, touches));
   if (latest?.key === key) return latest.answer;
-  refusals.delete(homeOf(action));
+  homesOf(action).forEach((home) => refusals.delete(home));
   const earlier = entries.filter((entry) => !entry.agreed && overlaps(entry, touches)).map((entry) => entry.answer);
   const entry: Entry = { action, key, touches, agreed: false, answer: Promise.resolve(null) };
   entry.answer = (earlier.length > 0 ? Promise.all(earlier).then(() => send(action)) : send(action)).then(
@@ -82,7 +87,7 @@ export function operate(action: OperatorAction, send: (action: OperatorAction) =
     (caught: unknown) => {
       const reason = caught instanceof Error ? caught.message : "The backend refused this.";
       entries.splice(entries.indexOf(entry), 1);
-      refusals.set(homeOf(action), { action, reason });
+      homesOf(action).forEach((home) => refusals.set(home, { action, reason }));
       return reason;
     },
   ).then((reason) => {
