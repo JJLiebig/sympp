@@ -266,7 +266,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
        asks: Enum.map(asks, &Dashboard.ask/1),
        decisions_to_review: decisions_to_review |> Map.get(work_request.id, []) |> Enum.map(&DecisionFeedback.board_entry/1),
        work_packages: work_package_payloads,
-       product_tree: product_tree_projection(repo, work_request.id, work_package_payloads, opts),
+       product_tree: product_tree_projection(repo, work_request.id, work_package_payloads, Keyword.put(opts, :execution_graph, delivery_board.execution_graph)),
        summary: Dashboard.work_request_board_summary(asks, work_packages)
      }}
   end
@@ -401,6 +401,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
 
   defp delivery_board_many_opts(work_package_contexts, work_packages, opts) do
     [
+      include_execution_graph?: true,
       visible_work_package_ids: Map.keys(work_package_contexts),
       work_package_contexts: work_package_contexts
     ] ++ preloaded_delivery_board_opts(work_packages, opts)
@@ -442,7 +443,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
           []
       end
 
-    ProductTree.project(repo, work_request_id, work_package_payloads, product_tree_opts)
+    ProductTree.project(repo, work_request_id, work_package_payloads, Keyword.take(opts, [:execution_graph]) ++ product_tree_opts)
   end
 
   defp delivery_board_work_package_contexts(repo, work_requests, work_package_contexts, opts) when is_list(work_requests) do
