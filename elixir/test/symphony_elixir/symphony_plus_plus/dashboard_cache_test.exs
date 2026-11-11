@@ -296,4 +296,46 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert {:ok, body, _etag} = DashboardCache.json(Repo, :failed, &payload/0)
     assert Jason.decode!(body)["decision"] == "acknowledged"
   end
+
+  test "memory-ledger reads after a write do not join an older unversioned snapshot" do
+    {:ok, pid} = Repo.start_link(database: ":memory:", name: nil, pool_size: 1, log: false)
+    Process.unlink(pid)
+    previous = Repo.put_dynamic_repo(pid)
+
+    on_exit(fn ->
+      Repo.put_dynamic_repo(previous)
+      GenServer.stop(pid)
+    end)
+
+    Repo.query!("CREATE TABLE probe (value TEXT)")
+    Repo.query!("INSERT INTO probe VALUES ('recorded')")
+    caller = self()
+
+    old_read =
+      Task.async(fn ->
+        Repo.put_dynamic_repo(pid)
+
+        DashboardCache.json(Repo, :memory, fn ->
+          old = payload()
+          send(caller, {:memory_projection, self()})
+          receive do: (:continue -> old)
+        end)
+      end)
+
+    assert_receive {:memory_projection, worker}
+    release = release_on_exit(worker)
+    Repo.query!("UPDATE probe SET value = 'acknowledged'")
+
+    new_read =
+      Task.async(fn ->
+        Repo.put_dynamic_repo(pid)
+        DashboardCache.json(Repo, :memory, &payload/0)
+      end)
+
+    result = Task.yield(new_read, 100)
+    release.()
+    assert {:ok, {:ok, fresh, _etag}} = result
+    assert Jason.decode!(fresh)["decision"] == "acknowledged"
+    assert {:ok, _old, _etag} = Task.await(old_read)
+  end
 end
