@@ -344,7 +344,7 @@ function Lines({ all, at, keep, state }: { all: boolean; at: number; keep: (id: 
 
   return (
     <Presence items={lines} keyOf={(line) => line.id}>
-      {({ item, key, ref }) => (item.live ? <PkgLine key={key} ref={ref} at={at} stays={all} view={item.live} /> : <RestLine key={key} ref={ref} pkg={item.pkg} />)}
+      {({ item, key, ref }) => (item.live ? <PkgLine key={key} ref={ref} at={at} view={item.live} /> : <RestLine key={key} ref={ref} pkg={item.pkg} />)}
     </Presence>
   );
 }
@@ -396,8 +396,8 @@ export function NeedsYouFlag({ view }: { view: GoalView }) {
 }
 
 // Status on the left, then the lifecycle and time in it, the PR with its checks, who works on it, and a menu to finish it where the PR waits on others.
-// The row glows whenever its place in the lifecycle changes. Where every package is listed, it `stays` once it ends.
-export function PkgLine({ at, ref, stays = false, view }: { at: number; ref?: (node: HTMLElement | null) => void; stays?: boolean; view: PkgView }) {
+// The row glows whenever its place in the lifecycle changes.
+export function PkgLine({ at, ref, view }: { at: number; ref?: (node: HTMLElement | null) => void; view: PkgView }) {
   const flash = useFlash(`${slotOf(view)}${view.failed ? ":failed" : ""}`, GLOW, 1400);
   const pkg = view.pkg;
   return (
@@ -425,7 +425,7 @@ export function PkgLine({ at, ref, stays = false, view }: { at: number; ref?: (n
       <span className={NARROW_HIDDEN}>
         <Owner owner={pkg.owner} />
       </span>
-      {waitsOnOthers(pkg) ? <PkgActions pkg={pkg} stays={stays} /> : <span />}
+      {waitsOnOthers(pkg) ? <PkgActions pkg={pkg} /> : <span />}
     </div>
   );
 }

@@ -3,10 +3,9 @@ import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 
 import { ActionMenu, actionsFor, GoalRefusal, type Action } from "./actions";
 import { areaLabel } from "./areas";
-import { finishPkg } from "./exits";
 import { deployAt, span, unresolvedPkgs, waitsOnOthers, type Ask, type Board, type Decision, type GoalView, type Phase, type Pkg, type PkgView } from "./model";
 import { calm, EASE, Presence } from "./motion";
-import { useAct, type GoalStep } from "./operator";
+import type { GoalStep } from "./operator";
 import { CiCell, deployLabel, LIFECYCLE, OrgIcon, OUTCOME, Pip, PrLink, ReviewCell, slotOf, StageStatus } from "./parts";
 import { AskCard, DecisionCard, Heading, INSET, Tap, useGoalStep, Who } from "./phone-parts";
 import { BriefAge, etaText, GoalTitle, looseStates, PhaseBadge, phaseStates, reportFor, type PhaseState } from "./report";
@@ -21,7 +20,7 @@ const ROUTE_INSET = "pl-[calc(var(--inset-l)+1.5rem)] pr-[var(--inset-r)]";
 const PINNED = new Set<Phase>(["done", "unresolved", "archived"]);
 
 // One goal on its own screen: what it is and who works on it, what needs the operator, then its route of packages.
-export function GoalScreen({ asks, at, board, decisions, onBack, onOpen, view, views }: { asks: Ask[]; at: number; board: Board; decisions: Decision[]; onBack: () => void; onOpen: (goalId: string) => void; view: GoalView; views: GoalView[] }) {
+export function GoalScreen({ asks, at, board, decisions, onBack, onHold, onOpen, view, views }: { asks: Ask[]; at: number; board: Board; decisions: Decision[]; onBack: () => void; onHold: (view: GoalView | null) => void; onOpen: (goalId: string) => void; view: GoalView; views: GoalView[] }) {
   const root = useRef<HTMLDivElement>(null);
   const head = useRef<HTMLElement>(null);
   const step = useGoalStep();
@@ -29,7 +28,9 @@ export function GoalScreen({ asks, at, board, decisions, onBack, onOpen, view, v
   const pinned = PINNED.has(view.phase);
   // A goal that leaves the board goes back to the list after its exit; a restored one stays.
   const run = async (key: GoalStep) => {
+    onHold(view);
     if ((await step(goal.id, key, head.current)) && key !== "restore") onBack();
+    onHold(null);
   };
 
   // The screen slides in from the side it came from; with reduced motion it only fades.
@@ -72,9 +73,9 @@ export function GoalScreen({ asks, at, board, decisions, onBack, onOpen, view, v
           <>
             <Heading count={decisions.length}>Decisions to review</Heading>
             <ul className="space-y-2">
-              {decisions.map((decision) => (
-                <DecisionCard key={decision.id} bare at={at} board={board} decision={decision} onOpen={onOpen} />
-              ))}
+              <Presence items={decisions} keyOf={(decision) => decision.id}>
+                {({ item, key, ref }) => <DecisionCard key={key} ref={ref} bare at={at} board={board} decision={item} onOpen={onOpen} />}
+              </Presence>
             </ul>
           </>
         ) : null}
@@ -86,7 +87,6 @@ export function GoalScreen({ asks, at, board, decisions, onBack, onOpen, view, v
 
 // The title, who works on it, and the architect's own words. Exits play on this block.
 function GoalHead({ at, head, view }: { at: number; head: RefObject<HTMLElement | null>; view: GoalView }) {
-  const act = useAct();
   const report = reportFor(view);
   const goal = view.goal;
 
@@ -100,7 +100,7 @@ function GoalHead({ at, head, view }: { at: number; head: RefObject<HTMLElement 
         <SinceChip goalId={goal.id} />
         <Who terminal={goal.owner} />
       </p>
-      {goal.owner?.liveness === "unknown" ? <Tap className="mt-3 items-start" confirm="Release?" label="Release" run={() => act({ kind: "release", goalId: goal.id }).then(() => null)} /> : null}
+      {goal.owner?.liveness === "unknown" ? <Tap action={{ kind: "release", goalId: goal.id }} className="mt-3 items-start" confirm="Release?" label="Release" /> : null}
       {report.brief || report.eta ? (
         <p className="mt-3 text-[15px] leading-relaxed text-ink/90 [overflow-wrap:anywhere]">
           {report.brief}
@@ -281,7 +281,6 @@ function PkgCard({ at, ref, view }: { at: number; ref?: (node: HTMLElement | nul
 
 // The lifecycle strip, time in stage, PR and review, the worker, and Finish while the PR waits on another repository.
 function PkgDetail({ at, view }: { at: number; view: PkgView }) {
-  const act = useAct();
   const pkg = view.pkg;
   const now = slotOf(view);
 
@@ -300,7 +299,7 @@ function PkgDetail({ at, view }: { at: number; view: PkgView }) {
         <ReviewCell review={pkg.review} />
       </p>
       <Who terminal={pkg.owner} />
-      {waitsOnOthers(pkg) ? <Tap className="items-start" confirm="Finish?" label="Finish" run={(button) => finishPkg(pkg.id, button.closest<HTMLElement>("[data-pkg-row]"), () => act({ kind: "finish", pkgId: pkg.id }))} /> : null}
+      {waitsOnOthers(pkg) ? <Tap action={{ kind: "finish", pkgId: pkg.id }} className="items-start" confirm="Finish?" label="Finish" /> : null}
     </div>
   );
 }

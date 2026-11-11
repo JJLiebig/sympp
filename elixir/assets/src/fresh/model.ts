@@ -510,6 +510,11 @@ function phaseAt(goal: Goal, at: number, live: number, queued: number, ended: Pk
   return unresolvedOf(goal.pkgs, ended).length > 0 ? "unresolved" : "done";
 }
 
+// Whether a decision waits on the operator: a flagged call to review, or feedback that reached nobody.
+export function needsReview(decision: Decision) {
+  return decision.state === "recorded" || (decision.state === "feedback" && decision.undelivered !== null);
+}
+
 // Whether the ask was waiting for the operator at `at`.
 export function openAt(ask: Ask, at: number) {
   return ask.from <= at && (ask.until === null || at < ask.until);

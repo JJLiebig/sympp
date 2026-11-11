@@ -1,14 +1,10 @@
 // How a goal leaves the board when the operator completes or deletes it. The goal turns into a canvas of pips:
 // on Complete they swirl into a checkmark that pops into sparks, on Delete the goal blows away like dust.
-// The effect holds part way until the factory answers; a refusal plays it back and the goal returns.
-import { useSyncExternalStore } from "react";
-
-import { calm, closeUp, holdLeave, markShut, reopen } from "./motion";
+// The effect plays at once, while the factory is asked; a refusal plays it back and the goal returns.
+import { calm, holdLeave } from "./motion";
 
 const PITCH = 7;
 const SIZE = 5;
-// The point an exit waits at for the factory's answer, and turns back from on a refusal.
-const HOLD = 0.42;
 const BAYER = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
 
 type Cell = { cx: number; cy: number; color: string; weight: number; seed: number };
@@ -213,14 +209,13 @@ const STYLES: Record<"check" | "wind", Style> = {
   },
 };
 
-// Runs an effect whose every frame depends only on progress. It waits at HOLD for the verdict, then
-// finishes, or on a refusal plays back to the start. Resolves with the verdict.
+// Runs an effect whose every frame depends only on progress. A refusal before it ends plays it back to the start.
+// Resolves true once it played to the end.
 function run(draw: (progress: number) => void, duration: number, verdict: Promise<boolean>) {
-  let known: boolean | null = null;
-  void verdict.then((ok) => (known = ok));
+  let refused = false;
+  void verdict.then((ok) => (refused = !ok));
   return new Promise<boolean>((resolve) => {
-    let start = performance.now();
-    let last = start;
+    const start = performance.now();
     let back: { at: number; from: number } | null = null;
     const frame = (now: number) => {
       let progress: number;
@@ -233,14 +228,8 @@ function run(draw: (progress: number) => void, duration: number, verdict: Promis
         }
       } else {
         progress = Math.min(1, (now - start) / duration);
-        if (progress >= HOLD && known !== true) {
-          // Waiting for the factory moves the start along, so the effect resumes where it paused.
-          start += now - last;
-          progress = HOLD;
-          if (known === false) back = { at: now + 180, from: HOLD };
-        }
+        if (refused && progress < 1) back = { at: now + 180, from: progress };
       }
-      last = now;
       draw(progress);
       if (!back && progress >= 1) return resolve(true);
       requestAnimationFrame(frame);
@@ -281,82 +270,45 @@ async function play(node: HTMLElement, style: Style, verdict: Promise<boolean>) 
   return ok;
 }
 
+// With reduced motion the row dims, then goes; a refusal before then brightens it again.
 async function fade(node: HTMLElement, verdict: Promise<boolean>) {
-  await node.animate([{ opacity: 1 }, { opacity: 0.4 }], { duration: 150, fill: "forwards" }).finished;
-  const ok = await verdict;
+  let refused = false;
+  void verdict.then((ok) => (refused = !ok));
+  await node.animate([{ opacity: 1 }, { opacity: 0.4 }], { duration: 150, fill: "forwards" }).finished.catch(() => undefined);
   node.getAnimations().forEach((animation) => animation.cancel());
-  if (ok) node.style.visibility = "hidden";
-  else node.animate([{ opacity: 0.4 }, { opacity: 1 }], { duration: 150 });
-  return ok;
+  if (refused) {
+    node.animate([{ opacity: 0.4 }, { opacity: 1 }], { duration: 150 });
+    return false;
+  }
+  node.style.visibility = "hidden";
+  return true;
 }
 
-// Why the last exit of each goal did not go through, until the next attempt.
-const refusals = new Map<string, string>();
-const listeners = new Set<() => void>();
-function refuse(goalId: string, text: string | null) {
-  if (text === null) refusals.delete(goalId);
-  else refusals.set(goalId, text);
-  listeners.forEach((listener) => listener());
-}
-
-export function useRefusal(goalId: string) {
-  return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    () => refusals.get(goalId) ?? null,
-  );
+// Sends the action while the row plays its exit. Sending takes the row out of its list at once, and the list waits
+// for the exit before it closes the gap. A refusal plays the exit back, or shows the row again once it had played.
+// Resolves with why the factory refused, or null once it agreed.
+async function exitWhile(key: string, node: HTMLElement | null, style: Style, send: () => Promise<string | null>): Promise<string | null> {
+  const answer = send();
+  if (!node) return answer;
+  const verdict = answer.then((reason) => reason === null);
+  const exit = calm() ? fade(node, verdict) : play(node, style, verdict);
+  holdLeave(key, exit);
+  await exit;
+  const reason = await answer;
+  if (reason !== null) node.style.visibility = "";
+  return reason;
 }
 
 export type Leave = "complete" | "delete" | "archive" | "restore";
 
-// Asks the factory while the row plays its exit, if it has one. A row that `closes` closes its gap once the factory
-// agrees; its list drops it only after that. Resolves with why the factory refused, or null once it agreed.
-async function exitWhile(key: string, node: HTMLElement | null, style: Style | null, send: () => Promise<void>, closes = style !== null): Promise<string | null> {
-  let reason: string | null = null;
-  const verdict = send().then(
-    () => true,
-    (caught: unknown) => {
-      reason = caught instanceof Error ? caught.message : "The backend refused this.";
-      return false;
-    },
-  );
-  // A finished exit closes its gap at once instead of waiting for the next read to drop the row.
-  const exit = (node && style ? (calm() ? fade(node, verdict) : play(node, style, verdict)) : verdict).then(async (ok) => {
-    // With reduced motion the gap closes without a close-up.
-    if (ok && node && closes) await closeUp(node);
-    return ok;
-  });
-  holdLeave(key, exit);
-  // A row that stays listed after its exit, because the next read still shows it, opens and comes back into view.
-  if ((await exit) && node && closes) {
-    markShut(key, node, true);
-    setTimeout(() => {
-      if (node.isConnected) {
-        reopen(node);
-        node.style.visibility = "";
-      }
-      markShut(key, node, false);
-    }, 8000);
-  }
-  return reason;
-}
-
-// Completes, deletes, archives or restores a goal. Complete plays the checkmark, Delete blows the goal away.
-export async function leaveGoal(goalId: string, step: Leave, node: HTMLElement | null, send: () => Promise<void>) {
-  refuse(goalId, null);
-  const reason = await exitWhile(goalId, node, step === "complete" ? STYLES.check : step === "delete" ? STYLES.wind : null, send);
-  if (reason !== null) refuse(goalId, `Couldn't ${step} it. ${reason}`);
-  return reason === null;
-}
-
-// Finishes a package. Its row has no exit to play; it closes up as soon as the factory agrees.
-export function finishPkg(pkgId: string, node: HTMLElement | null, send: () => Promise<void>): Promise<string | null> {
-  return exitWhile(pkgId, node, null, send, true);
+// Completes, deletes, archives or restores a goal. Complete plays the checkmark, Delete blows the goal away; the
+// others only close its gap. A refusal shows under the goal. Resolves true once the factory agreed.
+export async function leaveGoal(goalId: string, step: Leave, node: HTMLElement | null, send: () => Promise<string | null>) {
+  const style = step === "complete" ? STYLES.check : step === "delete" ? STYLES.wind : null;
+  return (await (style ? exitWhile(goalId, node, style, send) : send())) === null;
 }
 
 // Sends an answer while the question plays the checkmark. Resolves with why it was refused, or null.
-export function answerAsk(askId: string, node: HTMLElement | null, send: () => Promise<void>): Promise<string | null> {
+export function answerAsk(askId: string, node: HTMLElement | null, send: () => Promise<string | null>): Promise<string | null> {
   return exitWhile(askId, node, STYLES.check, send);
 }

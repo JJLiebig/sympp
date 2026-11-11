@@ -1,10 +1,10 @@
 import { X } from "lucide-react";
-import { useState } from "react";
 
 import { ActButton } from "./actions";
 import { span, type Card, type CardState } from "./model";
 import { Presence } from "./motion";
-import { useAct } from "./operator";
+import { useAct, type OperatorAction } from "./operator";
+import { useOperation } from "./pending";
 import { Owner } from "./owner";
 import { Reveal } from "./reveal";
 import { CARD_GRID, CARD_UNDER, CiCell, GLYPH, NARROW_HIDDEN, NARROW_WRAP, PKG_TITLE, PrLink, ReviewCell } from "./parts";
@@ -81,10 +81,10 @@ function CardRow({ at, card, ref }: { at: number; card: Card & { state: Shown };
 
 function Dismiss({ card }: { card: Card }) {
   const act = useAct();
-  const [failure, setFailure] = useState<string | null>(null);
-  const dismiss = () => act({ kind: "dismiss", cardIds: [card.id] }).catch((caught: unknown) => setFailure(caught instanceof Error ? caught.message : "The backend refused this."));
+  const dismissal: OperatorAction = { kind: "dismiss", cardIds: [card.id] };
+  const failure = useOperation(dismissal).refused?.reason ?? null;
   return (
-    <button aria-label={`Dismiss ${card.task}`} className={`${GLYPH} ${failure ? "text-fail" : "text-faint"}`} title={failure ?? "Dismiss"} type="button" onClick={() => void dismiss()}>
+    <button aria-label={`Dismiss ${card.task}`} className={`${GLYPH} ${failure ? "text-fail" : "text-faint"}`} title={failure ?? "Dismiss"} type="button" onClick={() => void act(dismissal)}>
       <X className="size-3.5" />
     </button>
   );
