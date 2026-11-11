@@ -1,0 +1,473 @@
+// The board on a phone: the same goal views as desktop, arranged for one hand and a glance. Two tabs at the
+// bottom, Needs you and Goals, and one goal at a time on its own screen. Where the operator is lives in the URL,
+// so the phone's back gesture leaves a goal and a link can open one.
+import { Check, ChevronRight, X } from "lucide-react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+
+import { areaLabel } from "./areas";
+import type { Lanes } from "./board";
+import type { visibleCards } from "./cards";
+import { span, type Ask, type Board, type Decision, type GoalView, type Settings } from "./model";
+import { calm, Presence } from "./motion";
+import { useAct } from "./operator";
+import { CiCell, Deploy, OrgIcon, Pip, PrLink, ReviewCell } from "./parts";
+import { GoalScreen, StageWord } from "./phone-goal";
+import { AskCard, DecisionCard, Heading, TroubleCard } from "./phone-parts";
+import { DotStrip, GoalTitle, PhaseBadge, reportFor } from "./report";
+import { BoardMenu } from "./settings";
+import { SinceChip, type Changes } from "./since";
+import { isBroken, TROUBLE_WORD, troublesOf, type Trouble } from "./trouble";
+
+const PHONE = "(max-width: 640px)";
+
+// Whether the board is on a phone-sized screen. It follows the screen as it turns or resizes.
+export function usePhone() {
+  return useSyncExternalStore(
+    (change) => {
+      const query = window.matchMedia(PHONE);
+      query.addEventListener("change", change);
+      return () => query.removeEventListener("change", change);
+    },
+    () => window.matchMedia(PHONE).matches,
+  );
+}
+
+type Cards = ReturnType<typeof visibleCards>;
+export type PhoneProps = {
+  at: number;
+  board: Board;
+  // Every goal, and the lanes after the area filter.
+  views: GoalView[];
+  lanes: Lanes;
+  asks: Ask[];
+  cards: Cards;
+  shownCards: Cards;
+  changes: Changes;
+  since: number;
+  areas: string[];
+  area: string | null;
+  failure: string | null;
+  settings: Settings;
+  onArea: (area: string | null) => void;
+  onSaved: () => void;
+  onSeen: () => void;
+};
+
+type Tab = "you" | "goals";
+// Where the operator is: a tab, or one goal on its own screen above it.
+type Place = { tab: Tab; goal: string | null };
+
+function placeOf(fallback: Tab): Place {
+  const query = new URLSearchParams(window.location.search);
+  const tab = query.get("tab");
+  return { tab: tab === "you" || tab === "goals" ? tab : fallback, goal: query.get("goal") };
+}
+
+function urlOf(place: Place) {
+  const query = new URLSearchParams(window.location.search);
+  query.set("tab", place.tab);
+  if (place.goal) query.set("goal", place.goal);
+  else query.delete("goal");
+  return `${window.location.pathname}?${query}`;
+}
+
+// Opening a goal adds a history entry, so back, the gesture or the button, returns to the list where it was.
+// A goal opened from a link has no list behind it: back replaces it with the tab.
+function usePlace(fallback: Tab) {
+  const [place, setPlace] = useState(() => placeOf(fallback));
+  const first = useRef(fallback);
+  const scrolls = useRef<Record<Tab, number>>({ you: 0, goals: 0 });
+  const restore = useRef<number | null>(null);
+
+  useEffect(() => {
+    const pop = () => {
+      const next = placeOf(first.current);
+      if (!next.goal) restore.current = scrolls.current[next.tab];
+      setPlace(next);
+    };
+    window.addEventListener("popstate", pop);
+    return () => window.removeEventListener("popstate", pop);
+  }, []);
+  useLayoutEffect(() => {
+    window.scrollTo(0, restore.current ?? 0);
+    restore.current = null;
+  }, [place]);
+
+  const go = (next: Place, push: boolean) => {
+    if (!place.goal) scrolls.current[place.tab] = window.scrollY;
+    if (!next.goal) restore.current = scrolls.current[next.tab];
+    window.history[push ? "pushState" : "replaceState"](push ? { phoneGoal: true } : null, "", urlOf(next));
+    setPlace(next);
+  };
+  return {
+    place,
+    open: (goal: string) => go({ ...place, goal }, true),
+    back: () => (window.history.state?.phoneGoal ? window.history.back() : go({ ...place, goal: null }, false)),
+    tab: (tab: Tab) => go({ tab, goal: null }, false),
+  };
+}
+
+const openDecisions = (board: Board, at: number) => board.decisions.filter((entry) => entry.at <= at && (entry.state === "recorded" || (entry.state === "feedback" && entry.undelivered !== null)));
+
+export function PhoneBoard(props: PhoneProps) {
+  const { at, asks, board, views } = props;
+  const troubles = troublesOf(views, props.cards, at);
+  const decisions = openDecisions(board, at);
+  const waiting = asks.length + troubles.length + decisions.filter((entry) => entry.state === "recorded").length;
+  const { place, open, back, tab } = usePlace(waiting > 0 ? "you" : "goals");
+  const shown = place.goal ? views.find((view) => view.goal.id === place.goal) : undefined;
+
+  if (place.goal && shown) {
+    return (
+      <GoalScreen
+        key={shown.goal.id}
+        asks={asks.filter((ask) => ask.goalId === shown.goal.id).sort((left, right) => left.from - right.from)}
+        at={at}
+        board={board}
+        decisions={decisions.filter((entry) => entry.goalId === shown.goal.id)}
+        view={shown}
+        views={views}
+        onBack={back}
+        onOpen={open}
+      />
+    );
+  }
+
+  return (
+    <div className="min-h-dvh pb-[calc(env(safe-area-inset-bottom)+5rem)]">
+      <header className="sticky top-0 z-20 border-b border-line bg-bg/95 pt-[env(safe-area-inset-top)] backdrop-blur">
+        <div className="flex h-13 items-center gap-3 px-4">
+          <BoardMenu touch settings={props.settings} onSaved={props.onSaved} />
+          {props.failure ? <span className="min-w-0 flex-1 truncate text-xs text-fail">Connection lost · showing the last read</span> : <span className="flex-1" />}
+          <Needed count={asks.length} onTap={() => tab("you")} />
+        </div>
+      </header>
+      <main className="px-[max(1rem,env(safe-area-inset-left))]">
+        {place.tab === "you" ? <YouTab {...props} decisions={decisions} troubles={troubles} onGoals={() => tab("goals")} onOpen={open} /> : <GoalsTab {...props} troubles={troubles} onOpen={open} />}
+      </main>
+      <TabBar asks={asks.length} goals={props.lanes.main.length} place={place} waiting={waiting} onTab={tab} />
+    </div>
+  );
+}
+
+// The board's first question, answered in the corner as on desktop.
+function Needed({ count, onTap }: { count: number; onTap: () => void }) {
+  if (count === 0) {
+    return (
+      <span className="flex items-center gap-2 text-sm text-dim">
+        Not needed
+        <span className="size-2 rounded-full bg-merge" />
+      </span>
+    );
+  }
+  return (
+    <button className="-mr-2 flex h-11 items-center gap-2 rounded px-2 text-sm font-semibold text-you active:bg-you/10" type="button" onClick={onTap}>
+      Needed in {count}
+      <span className="size-2 animate-pulse rounded-full bg-you motion-reduce:animate-none" />
+    </button>
+  );
+}
+
+// The two tabs, at the bottom where the thumb is. Needs you counts everything in it, in orange while a question waits.
+function TabBar({ asks, goals, onTab, place, waiting }: { asks: number; goals: number; onTab: (tab: Tab) => void; place: Place; waiting: number }) {
+  const tabs = [
+    { key: "you" as const, label: "Needs you", count: waiting, tone: asks > 0 ? "bg-you text-bg" : waiting > 0 ? "bg-line text-ink" : "" },
+    { key: "goals" as const, label: "Goals", count: goals, tone: "text-faint" },
+  ];
+  return (
+    <nav className="fixed inset-x-0 bottom-0 z-20 flex border-t border-line bg-bg/95 pb-[env(safe-area-inset-bottom)] backdrop-blur">
+      {tabs.map((entry) => {
+        const on = place.tab === entry.key;
+        return (
+          <button key={entry.key} aria-current={on ? "page" : undefined} className={`relative flex h-14 flex-1 items-center justify-center gap-2 text-sm font-medium ${on ? "text-ink" : "text-dim"}`} type="button" onClick={() => onTab(entry.key)}>
+            <span aria-hidden className={`absolute inset-x-8 top-0 h-0.5 rounded-full transition-colors ${on ? "bg-ink" : "bg-transparent"}`} />
+            {entry.label}
+            {entry.count > 0 ? <span className={`min-w-5 rounded-full px-1.5 text-center font-mono text-[11px] leading-5 ${entry.tone}`}>{entry.count}</span> : null}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+// Everything that waits on the operator: questions first, then what is broken, what is stuck, and calls to review.
+function YouTab({ asks, at, board, decisions, onGoals, onOpen, troubles, views }: PhoneProps & { decisions: Decision[]; onGoals: () => void; onOpen: (goalId: string) => void; troubles: Trouble[] }) {
+  const sorted = [...asks].sort((left, right) => left.from - right.from);
+  const broken = troubles.filter(isBroken);
+  // What the operator can settle from here comes first.
+  const stuck = troubles.filter((trouble) => !isBroken(trouble)).sort((left, right) => STUCK_ORDER.indexOf(stuckKind(left)) - STUCK_ORDER.indexOf(stuckKind(right)));
+
+  if (sorted.length + troubles.length + decisions.length === 0) {
+    return (
+      <div className="flex min-h-[60dvh] flex-col items-center justify-center gap-5 text-center">
+        <p className="flex items-center gap-2 text-dim">
+          <span className="size-2 rounded-full bg-merge" />
+          You are not needed
+        </p>
+        <button className="h-11 rounded-md border border-line px-4 text-sm font-medium text-ink" type="button" onClick={onGoals}>
+          See what is moving
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <Glance
+        counts={[
+          { id: "questions", label: "Questions", count: sorted.length, tone: "text-you" },
+          { id: "broken", label: "Broken", count: broken.length, tone: "text-fail" },
+          { id: "stuck", label: "Stuck", count: stuck.length, tone: "text-checks" },
+          { id: "decisions", label: "Decisions", count: decisions.length, tone: "text-ink" },
+        ]}
+      />
+      <Group id="questions" items={sorted} keyOf={(ask) => ask.id} label="Questions" tone="text-you">
+        {(ask, ref) => <AskCard ref={ref} ask={ask} at={at} board={board} views={views} onOpen={onOpen} />}
+      </Group>
+      <Group id="broken" items={broken} keyOf={(trouble) => trouble.key} label="Broken" tone="text-fail">
+        {(trouble, ref) => <TroubleCard ref={ref} at={at} trouble={trouble} onOpen={onOpen} />}
+      </Group>
+      <Group id="stuck" items={stuck} keyOf={(trouble) => trouble.key} label="Stuck" tone="text-checks">
+        {(trouble, ref) => <TroubleCard ref={ref} at={at} trouble={trouble} onOpen={onOpen} />}
+      </Group>
+      {decisions.length > 0 ? (
+        <>
+          <Heading count={decisions.length} id="decisions" tone="text-dim">Decisions to review</Heading>
+          <ul className="space-y-3">
+            {[...decisions].sort((left, right) => right.at - left.at).map((decision) => (
+              <DecisionCard key={decision.id} at={at} board={board} decision={decision} onOpen={onOpen} />
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </>
+  );
+}
+
+const STUCK_ORDER = ["unresolved", "release", "waits", "exited", "silent"];
+const stuckKind = (trouble: Trouble) => (trouble.kind === "silent" && trouble.pkg === null ? "release" : trouble.kind);
+
+// How much waits in each part, in one row at the top; a tap goes to that part.
+function Glance({ counts }: { counts: Array<{ id: string; label: string; count: number; tone: string }> }) {
+  return (
+    <div className="mt-4 grid grid-cols-4 gap-1.5">
+      {counts.map((entry) => (
+        <button key={entry.id} className="flex min-h-16 flex-col items-start justify-between rounded-lg border border-line bg-panel px-2.5 py-2 text-left disabled:opacity-40" disabled={entry.count === 0} type="button" onClick={() => document.getElementById(entry.id)?.scrollIntoView({ behavior: calm() ? "auto" : "smooth" })}>
+          <span className={`font-mono text-xl font-semibold leading-none tabular-nums ${entry.count > 0 ? entry.tone : "text-faint"}`}>{entry.count}</span>
+          <span className="text-[11px] text-dim">{entry.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Group<T>({ children, id, items, keyOf, label, tone }: { children: (item: T, ref: (node: HTMLElement | null) => void) => ReactNode; id: string; items: T[]; keyOf: (item: T) => string; label: string; tone: string }) {
+  if (items.length === 0) return null;
+  return (
+    <>
+      <Heading count={items.length} id={id} tone={tone}>{label}</Heading>
+      <ul className="space-y-3">
+        <Presence items={items} keyOf={keyOf}>
+          {({ item, key, ref }) => <Fragment key={key}>{children(item, ref)}</Fragment>}
+        </Presence>
+      </ul>
+    </>
+  );
+}
+
+// What changed while away, the area filter, then every goal in sight, small work, and the shelves.
+function GoalsTab({ area, areas, at, changes, lanes, onArea, onOpen, onSeen, shownCards, since, troubles }: PhoneProps & { onOpen: (goalId: string) => void; troubles: Trouble[] }) {
+  const byGoal = (goalId: string) => troubles.filter((trouble) => "view" in trouble && trouble.view.goal.id === goalId);
+  const empty = lanes.main.length + shownCards.length + lanes.landed.length + lanes.parked.length + lanes.dormant.length + lanes.backlog.length + lanes.settled.length + lanes.archived.length === 0;
+
+  return (
+    <>
+      {empty ? null : <Since at={at} changes={changes} since={since} onOpen={onOpen} onSeen={onSeen} />}
+      {areas.length > 1 ? (
+        <nav className="-mx-4 mt-1 flex gap-1.5 overflow-x-auto px-4 [scrollbar-width:none]">
+          {[null, ...areas].map((name) => (
+            <button key={name ?? "all"} className={`h-11 shrink-0 rounded-full px-4 text-sm ${name === area ? "bg-line text-ink" : "text-dim"}`} type="button" onClick={() => onArea(name)}>
+              {name ?? "Everything"}
+            </button>
+          ))}
+        </nav>
+      ) : null}
+      {empty ? <p className="py-24 text-center text-dim">Nothing on the board</p> : null}
+      {lanes.main.length > 0 ? (
+        <ul className="mt-3 space-y-3">
+          <Presence items={lanes.main} keyOf={(view) => view.goal.id}>
+            {({ item, key, ref }) => <GoalCard key={key} ref={ref} troubles={byGoal(item.goal.id)} view={item} onOpen={onOpen} />}
+          </Presence>
+        </ul>
+      ) : null}
+      <SmallWork cards={shownCards} />
+      <Shelf at={at} label="Landed · last 24 hours" views={lanes.landed} onOpen={onOpen} />
+      <Shelf at={at} label="Parked" views={lanes.parked} onOpen={onOpen} />
+      <Shelf at={at} label="Dormant" views={lanes.dormant} onOpen={onOpen} />
+      <Shelf at={at} label="Not started" views={lanes.backlog} onOpen={onOpen} />
+      <Shelf at={at} label="Settled" views={lanes.settled} onOpen={onOpen} />
+      <Shelf at={at} label="Archived" views={lanes.archived} onOpen={onOpen} />
+    </>
+  );
+}
+
+// The totals since the last look; each opens the next goal behind it.
+function Since({ at, changes, onOpen, onSeen, since }: { at: number; changes: Changes; onOpen: (goalId: string) => void; onSeen: () => void; since: number }) {
+  const turns = useRef(new Map<string, number>());
+  if (changes.totals.length === 0) return <p className="pt-4 text-sm text-faint">Nothing has changed since you last looked.</p>;
+  const next = (label: string, goalIds: string[]) => {
+    const turn = turns.current.get(label) ?? 0;
+    turns.current.set(label, turn + 1);
+    onOpen(goalIds[turn % goalIds.length]);
+  };
+
+  return (
+    <section className="pt-3">
+      <p className="text-xs text-faint">Since you last looked, {span(at - since)} ago</p>
+      <p className="-mx-2 mt-0.5 flex flex-wrap">
+        {changes.totals.map((total) => (
+          <button key={total.label} className="h-11 rounded px-2 text-sm text-ink active:bg-line" type="button" onClick={() => next(total.label, total.goalIds)}>
+            {total.label}
+          </button>
+        ))}
+        <button className="h-11 rounded px-2 text-sm text-dim active:bg-line" type="button" onClick={onSeen}>
+          Mark as seen
+        </button>
+      </p>
+    </section>
+  );
+}
+
+const MOVING_SHOWN = 3;
+
+// One goal at a glance: what it is, whether it needs the operator, what is wrong, and what is moving. A tap opens it.
+function GoalCard({ onOpen, ref, troubles, view }: { onOpen: (goalId: string) => void; ref: (node: HTMLElement | null) => void; troubles: Trouble[]; view: GoalView }) {
+  const total = view.live.length + view.queued.length + view.done.length;
+  // The phase badge already says Unresolved.
+  const words = [...new Set(troubles.map((trouble) => trouble.kind))].filter((kind) => kind !== "unresolved").map((kind) => TROUBLE_WORD[kind]);
+  const live = [...view.live].sort((left, right) => Number(right.failed) - Number(left.failed));
+
+  return (
+    <li ref={ref} data-goal={view.goal.id}>
+      <button className="block w-full rounded-lg border border-line bg-panel px-4 py-3.5 text-left transition-colors active:bg-white/[0.04]" type="button" onClick={() => onOpen(view.goal.id)}>
+        <span className="flex items-start gap-2">
+          <span className="min-w-0 flex-1 font-medium leading-snug [overflow-wrap:anywhere]">
+            <OrgIcon org={view.goal.org} /> <GoalTitle goal={view.goal} />
+          </span>
+          <ChevronRight aria-hidden className="mt-0.5 size-4 shrink-0 text-faint" />
+        </span>
+        <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+          <PhaseBadge small view={view} />
+          {view.ask ? (
+            <span className="flex items-center gap-1.5 text-xs font-semibold text-you">
+              <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-you motion-reduce:animate-none" />
+              Needs you{view.asks.length > 1 ? ` · ${view.asks.length}` : ""}
+            </span>
+          ) : null}
+          {words.map((word) => (
+            <span key={word.text} className={`text-xs font-semibold ${word.tone}`}>{word.text}</span>
+          ))}
+          <SinceChip goalId={view.goal.id} />
+        </span>
+        <span className="mt-1 block truncate text-[11px] uppercase tracking-[0.12em] text-faint">{areaLabel(view.goal.area)}</span>
+        {total > 0 ? (
+          <span className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <DotStrip view={view} />
+            <span className="font-mono text-xs text-dim">
+              {view.live.length > 0 ? `${view.live.length} moving · ` : ""}
+              {view.done.length}/{total} done
+            </span>
+          </span>
+        ) : (
+          <span className="mt-2 block text-sm text-dim">{reportFor(view).brief}</span>
+        )}
+        {live.length > 0 ? (
+          <span className="mt-3 block space-y-1.5 border-t border-line pt-2.5">
+            {live.slice(0, MOVING_SHOWN).map((entry) => (
+              <span key={entry.pkg.id} className="flex items-center gap-2.5 text-sm">
+                <Pip failed={entry.failed} stage={entry.stage} />
+                <span className="min-w-0 flex-1 truncate text-ink/90">{entry.pkg.title}</span>
+                <StageWord view={entry} />
+              </span>
+            ))}
+            {live.length > MOVING_SHOWN ? <span className="block pl-[18px] font-mono text-[11px] text-faint">+{live.length - MOVING_SHOWN} more</span> : null}
+          </span>
+        ) : null}
+      </button>
+    </li>
+  );
+}
+
+const CARD_STATE = { working: { label: "Working", tone: "text-build" }, review_ci: { label: "Review/CI", tone: "text-review" }, merged: { label: "Merged", tone: "text-merge/80" }, done: { label: "Done", tone: "text-dim" } };
+const CARD_ORDER = { review_ci: 0, working: 1, merged: 2, done: 3 };
+
+// Small work without a goal: its state, checks, review and PR, and a way to clear it off.
+function SmallWork({ cards }: { cards: Cards }) {
+  const act = useAct();
+  const sorted = [...cards].sort((left, right) => CARD_ORDER[left.state] - CARD_ORDER[right.state] || right.since - left.since);
+  if (sorted.length === 0) return null;
+
+  return (
+    <>
+      <Heading count={cards.length}>Small work</Heading>
+      <ul className="space-y-1.5">
+        <Presence items={sorted} keyOf={(card) => card.id}>
+          {({ item: card, key, ref }) => {
+            const ended = card.state === "merged" || card.state === "done";
+            return (
+              <li key={key} ref={ref} className="flex items-start gap-3 rounded-md bg-white/[0.035] py-1 pl-3">
+                <span className="mt-[15px] flex">
+                  <Pip stage={card.state === "working" ? "implementing" : card.state === "review_ci" ? "review_ci" : "ended"} failed={card.ci === "failing" && !ended} />
+                </span>
+                <span className="min-w-0 flex-1 py-2">
+                  <span className={`block text-sm leading-snug [overflow-wrap:anywhere] ${ended ? "text-dim" : "text-ink"}`}>{card.task}</span>
+                  <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                    <span className={`font-mono text-[11px] font-semibold ${CARD_STATE[card.state].tone}`}>{CARD_STATE[card.state].label}</span>
+                    <CiCell ci={card.ci} stale={card.stale.includes("github")} />
+                    <ReviewCell review={card.review} />
+                    <PrLink className="-mx-2.5 -my-3.5 px-2.5 py-3.5" pr={card.pr} repos={[card.repo.toLowerCase()]} />
+                  </span>
+                </span>
+                <button aria-label={`Dismiss ${card.task}`} className="flex size-11 shrink-0 items-center justify-center rounded-md text-faint active:bg-line" type="button" onClick={() => void act({ kind: "dismiss", cardIds: [card.id] }).catch(() => undefined)}>
+                  <X className="size-4" />
+                </button>
+              </li>
+            );
+          }}
+        </Presence>
+      </ul>
+    </>
+  );
+}
+
+// Goals that ask for nothing, folded under one line each kind. A goal opens on its own screen with its actions.
+function Shelf({ at, label, onOpen, views }: { at: number; label: string; onOpen: (goalId: string) => void; views: GoalView[] }) {
+  if (views.length === 0) return null;
+  const landed = label.startsWith("Landed");
+  return (
+    <details className="group mt-6 border-t border-line" open={landed}>
+      <summary className="flex min-h-12 cursor-pointer list-none items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-faint [&::-webkit-details-marker]:hidden">
+        <ChevronRight aria-hidden className="size-3.5 transition-transform group-open:rotate-90 motion-reduce:transition-none" />
+        {label} · {views.length}
+      </summary>
+      <ul>
+        {views.map((view) => (
+          <li key={view.goal.id} data-goal={view.goal.id}>
+            <button className="flex min-h-12 w-full items-center gap-3 rounded py-2 text-left active:bg-white/[0.04]" type="button" onClick={() => onOpen(view.goal.id)}>
+              {landed ? <Check aria-hidden className="size-4 shrink-0 text-merge" /> : null}
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm leading-snug text-ink/90 [overflow-wrap:anywhere]">{view.goal.title}</span>
+                <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-faint">
+                  <span className="uppercase tracking-[0.12em]">{areaLabel(view.goal.area)}</span>
+                  {landed ? <Deploy at={at} goal={view.goal} /> : null}
+                  {view.goal.report?.parked ? <span className="normal-case">{view.goal.report.parked.text}</span> : null}
+                </span>
+              </span>
+              <span className="shrink-0 font-mono text-[11px] text-faint">{span(at - (view.goal.archivedAt ?? view.goal.report?.parked?.at ?? view.lastMoveAt))}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}

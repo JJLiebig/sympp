@@ -98,7 +98,7 @@ function Reactions({ decision, onFeedback }: { decision: Decision; onFeedback: (
   );
 }
 
-const REASON: Record<Reason, string> = {
+export const REASON: Record<Reason, string> = {
   delivering: "Being typed into its terminal",
   delivery_interrupted: "The factory stopped while typing it",
   terminal_finished: "Its terminal has finished",
@@ -125,7 +125,8 @@ function Undelivered({ decision, failure, onDismiss }: { decision: Decision; fai
 }
 
 // Free text for the terminal that recorded the decision. A failed send keeps what was written.
-function FeedbackForm({ decision, onCancel }: { decision: Decision; onCancel: () => void }) {
+// `touch` sizes the controls for a finger.
+export function FeedbackForm({ decision, onCancel, touch = false }: { decision: Decision; onCancel: () => void; touch?: boolean }) {
   const act = useAct();
   const id = useId();
   const [text, setText] = useState("");
@@ -151,7 +152,7 @@ function FeedbackForm({ decision, onCancel }: { decision: Decision; onCancel: ()
         <textarea
           autoFocus
           aria-invalid={failure ? true : undefined}
-          className={`min-h-9 flex-1 resize-y rounded border bg-panel px-3 py-2 text-sm text-ink placeholder:text-faint focus:outline-none focus:ring-2 focus:ring-ink/40 ${failure ? "border-fail" : "border-line"}`}
+          className={`${touch ? "min-h-11 text-base" : "min-h-9 text-sm"} flex-1 resize-y rounded border bg-panel px-3 py-2 text-ink placeholder:text-faint focus:outline-none focus:ring-2 focus:ring-ink/40 ${failure ? "border-fail" : "border-line"}`}
           disabled={busy}
           id={id}
           placeholder={label}
@@ -163,10 +164,10 @@ function FeedbackForm({ decision, onCancel }: { decision: Decision; onCancel: ()
             if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && text.trim()) void submit();
           }}
         />
-        <button className="h-9 shrink-0 rounded bg-ink px-3 text-sm font-semibold text-bg disabled:opacity-40" disabled={busy || !text.trim()} type="submit">
+        <button className={`${touch ? "h-11 px-4" : "h-9 px-3"} shrink-0 rounded bg-ink text-sm font-semibold text-bg disabled:opacity-40`} disabled={busy || !text.trim()} type="submit">
           {busy ? "Sending…" : "Send"}
         </button>
-        <button className="h-9 shrink-0 rounded px-2 text-sm text-dim hover:bg-line hover:text-ink" disabled={busy} type="button" onClick={onCancel}>
+        <button className={`${touch ? "h-11 px-3" : "h-9 px-2"} shrink-0 rounded text-sm text-dim hover:bg-line hover:text-ink`} disabled={busy} type="button" onClick={onCancel}>
           Cancel
         </button>
       </div>

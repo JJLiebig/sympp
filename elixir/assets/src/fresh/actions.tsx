@@ -8,7 +8,7 @@ import { GLYPH } from "./parts";
 import { useAct, type GoalStep, type OperatorAction } from "./operator";
 import { Reveal } from "./reveal";
 
-type Action = { key: GoalStep; label: string; danger?: boolean };
+export type Action = { key: GoalStep; label: string; danger?: boolean };
 
 const STALE_MS = 30 * 24 * 3600e3;
 
@@ -18,7 +18,7 @@ const RESTORE: Action = { key: "restore", label: "Restore" };
 const DELETE: Action = { key: "delete", label: "Delete", danger: true };
 
 // Only a done or unresolved goal can be archived; anything still open is completed first.
-function actionsFor(phase: Phase): Action[] {
+export function actionsFor(phase: Phase): Action[] {
   if (phase === "archived") return [RESTORE, DELETE];
   if (phase === "done") return [ARCHIVE, DELETE];
   return phase === "unresolved" ? [COMPLETE, ARCHIVE, DELETE] : [COMPLETE, DELETE];

@@ -10,9 +10,9 @@ import { PhaseBadge, reportFor } from "./report";
 import { Reveal } from "./reveal";
 
 // What the ask is about: its goal, with the package it names, or the card it came from.
-type Subject = { title: string; goalId: string | null; view: GoalView | null; repo: string; summary: string; about: string | null };
+export type Subject = { title: string; goalId: string | null; view: GoalView | null; repo: string; summary: string; about: string | null };
 
-function subjectOf(ask: Ask, board: Board, views: GoalView[]): Subject {
+export function subjectOf(ask: Ask, board: Board, views: GoalView[]): Subject {
   const view = views.find((entry) => entry.goal.id === ask.goalId) ?? null;
   const goal = view?.goal ?? board.goals.find((entry) => entry.id === ask.goalId);
   if (goal) {
@@ -90,7 +90,7 @@ function AskItem({ ask, at, onGoal, ref, subject }: { ask: Ask; at: number; onGo
 }
 
 // The question and its details read as one text. A long one shows four lines until "more" opens it.
-function Question({ text }: { text: string }) {
+export function Question({ text, touch = false }: { text: string; touch?: boolean }) {
   const [full, setFull] = useState(false);
   const [long, setLong] = useState(false);
   const shown = useRef<HTMLParagraphElement>(null);
@@ -110,7 +110,7 @@ function Question({ text }: { text: string }) {
         {text}
       </p>
       {long || full ? (
-        <button className={`mt-0.5 text-xs text-dim ${LINK}`} type="button" onClick={() => setFull(!full)}>
+        <button className={`text-xs text-dim ${touch ? "-mb-3 flex h-11 items-center pr-6" : "mt-0.5"} ${LINK}`} type="button" onClick={() => setFull(!full)}>
           {full ? "less" : "more"}
         </button>
       ) : null}
@@ -122,12 +122,13 @@ function Question({ text }: { text: string }) {
 const MEASURE = "max-w-[46rem]";
 
 // What has been entered: the picked choice, if any, and the text; and whether it is being sent or was refused.
-type Entry = { choice: string | null; text: string; busy: boolean; failure: string | null };
+export type Entry = { choice: string | null; text: string; busy: boolean; failure: string | null };
 
 // A free answer, or one of the asker's choices with an optional note, in one frame: the choices, then the note
 // and Send. The asker may also offer to take a free answer instead of its choices; the note is then the answer.
 // Sending plays the checkmark on the question; a refusal plays it back, and keeps what was entered.
-function AnswerForm({ ask, entered, onEnter }: { ask: Ask; entered: Entry; onEnter: (change: Partial<Entry>) => void }) {
+// `touch` sizes the controls for a finger.
+export function AnswerForm({ ask, entered, onEnter, touch = false }: { ask: Ask; entered: Entry; onEnter: (change: Partial<Entry>) => void; touch?: boolean }) {
   const act = useAct();
   const id = useId();
   const form = useRef<HTMLFormElement>(null);
@@ -161,7 +162,7 @@ function AnswerForm({ ask, entered, onEnter }: { ask: Ask; entered: Entry; onEnt
           <fieldset className="divide-y divide-line border-b border-line" disabled={busy}>
             <legend className="sr-only">{ask.question}</legend>
             {choices.map((entry) => (
-              <ChoiceOption key={entry.id} choice={entry} group={id} picked={choice === entry.id} plain={entry.id === REDIRECT} onPick={() => onEnter({ choice: entry.id })} />
+              <ChoiceOption key={entry.id} touch={touch} choice={entry} group={id} picked={choice === entry.id} plain={entry.id === REDIRECT} onPick={() => onEnter({ choice: entry.id })} />
             ))}
           </fieldset>
         ) : null}
@@ -169,7 +170,7 @@ function AnswerForm({ ask, entered, onEnter }: { ask: Ask; entered: Entry; onEnt
           <label className="sr-only" htmlFor={`${id}-text`}>{noting ? "Note" : "Answer"}</label>
           <textarea
             aria-invalid={failure ? true : undefined}
-            className="max-h-48 min-h-8 flex-1 resize-none bg-transparent py-1.5 text-sm leading-5 text-ink outline-none field-sizing-content placeholder:text-faint disabled:text-dim"
+            className={`max-h-48 flex-1 ${touch ? "min-h-11 text-base" : "min-h-8 text-sm"} resize-none bg-transparent py-1.5 leading-5 text-ink outline-none field-sizing-content placeholder:text-faint disabled:text-dim`}
             disabled={busy}
             id={`${id}-text`}
             placeholder={placeholderFor(noting, redirecting)}
@@ -181,7 +182,7 @@ function AnswerForm({ ask, entered, onEnter }: { ask: Ask; entered: Entry; onEnt
             }}
           />
           <button
-            className="flex h-8 shrink-0 items-center gap-1.5 rounded-md px-3.5 text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-you enabled:bg-you enabled:text-bg enabled:hover:bg-you/90 disabled:bg-line disabled:text-faint"
+            className={`flex shrink-0 items-center gap-1.5 rounded-md ${touch ? "h-11 px-5" : "h-8 px-3.5"} text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-you enabled:bg-you enabled:text-bg enabled:hover:bg-you/90 disabled:bg-line disabled:text-faint`}
             disabled={busy || !ready}
             type="submit"
           >
@@ -212,10 +213,10 @@ function draft(chosen: boolean, choice: string | null, text: string): { answer: 
 
 // One choice as a row of the form: a radio, the label, and what speaks for and against it. Arrow keys move
 // between the rows of one question, as with any radio group.
-function ChoiceOption({ choice, group, onPick, picked, plain }: { choice: Choice; group: string; onPick: () => void; picked: boolean; plain?: boolean }) {
+function ChoiceOption({ choice, group, onPick, picked, plain, touch }: { choice: Choice; group: string; onPick: () => void; picked: boolean; plain?: boolean; touch?: boolean }) {
   const detailed = choice.description || choice.pros.length > 0 || choice.cons.length > 0;
   return (
-    <label className={`relative flex cursor-pointer gap-3 px-3.5 py-2.5 text-sm transition-colors has-[:disabled]:cursor-default has-[:focus-visible]:outline-2 has-[:focus-visible]:-outline-offset-2 has-[:focus-visible]:outline-you/70 ${picked ? "bg-you/[0.1]" : "hover:bg-white/[0.03]"}`}>
+    <label className={`relative flex cursor-pointer gap-3 px-3.5 ${touch ? "min-h-12 py-3" : "py-2.5"} text-sm transition-colors has-[:disabled]:cursor-default has-[:focus-visible]:outline-2 has-[:focus-visible]:-outline-offset-2 has-[:focus-visible]:outline-you/70 ${picked ? "bg-you/[0.1]" : "hover:bg-white/[0.03]"}`}>
       <input checked={picked} className="absolute inset-0 size-full cursor-pointer appearance-none opacity-0 disabled:cursor-default" name={group} type="radio" onChange={onPick} />
       <span aria-hidden className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border transition-colors ${picked ? "border-you" : "border-faint"}`}>
         <span className={`size-2 rounded-full bg-you transition-transform duration-150 motion-reduce:transition-none ${picked ? "scale-100" : "scale-0"}`} />

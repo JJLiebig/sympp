@@ -8,13 +8,14 @@ import { lanesOf, Rest } from "./board";
 import { Briefing } from "./briefing";
 import { Cards, visibleCards } from "./cards";
 import { Decisions } from "./decisions";
-import { applyDemo, demoLedger, type DemoLedger } from "./mock";
+import { applyDemo, demoLedger, type DemoLedger, type DemoVariant } from "./mock";
 import { buildBoard, liveCountAt, openAt, viewAt, type Archived, type Board, type HistoryEvent, type Hydrated, type Settings } from "./model";
 import { focusGoal } from "./motion";
 import { ActContext, send, type OperatorAction } from "./operator";
 import { Outline } from "./outline";
 import { coalescedRead } from "./reads";
 import { Phases } from "./phases";
+import { PhoneBoard, usePhone } from "./phone";
 import { DensityContext, type Density } from "./report";
 import { setSamples, type SampleRule } from "./samples";
 import { BoardMenu } from "./settings";
@@ -39,7 +40,7 @@ const AWAY_MS = 3 * 3600e3;
 const SEEN_KEY = "sympp.board.seenAt";
 const REREAD_MS = 60e3;
 
-// `vite --mode demo` runs the board on invented work with no backend. `?demo=quiet` shows it with nobody waiting.
+// `vite --mode demo` runs the board on invented work with no backend. `?demo=quiet` shows it with nobody waiting, `?demo=empty` with nothing on it.
 const DEMO = import.meta.env.MODE === "demo";
 // A link can open the board on a view, a density and an area: `?view=phases&show=open&area=Herdr`.
 const LINKED = typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search);
@@ -95,13 +96,25 @@ export function App() {
     flushSync(() => setArea(null));
     focusGoal(goalId);
   };
-  const { views, changes, asks, areas, shown, shownCards, lanes, grouped } = useShaped(data, at, since, area);
+  const { views, changes, asks, areas, shown, cards, shownCards, lanes, grouped } = useShaped(data, at, since, area);
   const directions = DIRECTIONS.filter((entry) => entry.key !== "phases" || grouped);
   const current = directions.find((entry) => entry.key === DIRECTIONS[direction]?.key) ?? directions[0];
   const View = current.view;
   useTabSignal(asks.length);
+  const phone = usePhone();
 
   if (!data) return <Unread failure={failure} />;
+  // A phone gets its own arrangement of the same views; see phone.tsx.
+  if (phone) {
+    return (
+      <ActContext.Provider value={act}>
+        <SinceContext.Provider value={changes.notes}>
+          <PhoneBoard area={area} areas={areas} asks={asks} at={at} board={data.board} cards={cards} changes={changes} failure={failure} lanes={lanes} settings={data.settings} shownCards={shownCards} since={since} views={views} onArea={setArea} onSaved={read} onSeen={markSeen} />
+        </SinceContext.Provider>
+        {note ? <p className="fixed bottom-24 left-4 right-4 z-30 rounded bg-ink px-3 py-2 text-sm text-bg" role="status">{note}</p> : null}
+      </ActContext.Provider>
+    );
+  }
 
   return (
     <div className={`min-h-screen ${replay ? "pb-28" : "pb-10"}`}>
@@ -188,7 +201,7 @@ function useShaped(data: Loaded | null, at: number, since: number, area: string 
   const shown = area ? views.filter((view) => view.goal.area[0] === area) : views;
   // Phases has nothing to add until a goal on the board is grouped, so it is offered only then.
   const grouped = lanesOf(views, at).main.some((view) => view.goal.pkgs.some((pkg) => pkg.group));
-  return { views, changes, asks: data?.board.asks.filter((ask) => openAt(ask, at)) ?? [], areas, shown, shownCards: area ? cards.filter((card) => card.area[0] === area) : cards, lanes: lanesOf(shown, at), grouped };
+  return { views, changes, asks: data?.board.asks.filter((ask) => openAt(ask, at)) ?? [], areas, shown, cards, shownCards: area ? cards.filter((card) => card.area[0] === area) : cards, lanes: lanesOf(shown, at), grouped };
 }
 
 // A board that has never loaded shows only that it is reading, or why it could not.
@@ -209,7 +222,7 @@ function demoRead(demo: DemoLedger, now: number): Loaded {
 async function load(): Promise<Loaded> {
   if (DEMO) {
     const now = Date.now();
-    return demoRead(demoLedger(now, LINKED.get("demo") === "quiet"), now);
+    return demoRead(demoLedger(now, LINKED.get("demo") === "quiet" || LINKED.get("demo") === "empty" ? LINKED.get("demo") as DemoVariant : "busy"), now);
   }
   const [hydrated, archived, history, local] = await Promise.all([
     ledger(),

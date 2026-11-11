@@ -88,7 +88,7 @@ export function Fold({ className = "", label, onToggle, open }: { className?: st
 }
 
 // A live package's way from build to merge, one fixed slot per stage.
-const LIFECYCLE = [
+export const LIFECYCLE = [
   { label: "Build", tone: "text-build" },
   { label: "PR", tone: "text-build" },
   { label: "Checks", tone: "text-checks" },
@@ -160,7 +160,7 @@ const CI: Record<Ci, { label: string; spoken?: string; tone: string; icon: typeo
 };
 
 // The mode, then the state. A card's review has no known mode, so it shows the state alone.
-function reviewLabel(review: Review): { text: string; tone: string } {
+export function reviewLabel(review: Review): { text: string; tone: string } {
   if (review.mode === "none") return { text: "none", tone: "text-faint" };
   const words = (state: string) => (review.mode ? `${review.mode} · ${state}` : state);
   // A running first round says so; a later one says which round, which implies it is running.
