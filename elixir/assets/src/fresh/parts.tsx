@@ -1,4 +1,4 @@
-import { Check, ChevronRight, CircleDashed, ScanSearch, X } from "lucide-react";
+import { Check, ChevronRight, CircleDashed, Hourglass, ScanSearch, X } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { GoalActions, GoalRefusal, ShelfCleanup } from "./actions";
@@ -194,12 +194,20 @@ export function ReviewCell({ review }: { review: Review | null }) {
   );
 }
 
-// A PR in the goal's own repository is its number; one elsewhere also names where it waits.
-export function PrLink({ className = "", pr, repos }: { className?: string; pr: Pr | null; repos: string[] }) {
+// A PR in the goal's own repository is its number; one elsewhere also names its repository, without the owner.
+// One that `waits` on that repository's maintainers carries an hourglass and says so on hover.
+export function PrLink({ className = "", pr, repos, waits = false }: { className?: string; pr: Pr | null; repos: string[]; waits?: boolean }) {
   if (!pr) return <span />;
-  const name = inRepos(pr.repo, repos) ? `#${pr.number}` : `${pr.repo}#${pr.number}`;
+  const name = inRepos(pr.repo, repos) ? `#${pr.number}` : `${pr.repo.split("/").at(-1)}#${pr.number}`;
   return (
-    <a className={`truncate ${className} font-mono text-[11px] text-dim underline decoration-dotted underline-offset-2 hover:text-ink`} href={pr.url} rel="noreferrer" target="_blank" title={`Open PR ${pr.repo}#${pr.number}`}>
+    <a className={`truncate ${className} font-mono text-[11px] text-dim underline decoration-dotted underline-offset-2 hover:text-ink`} href={pr.url} rel="noreferrer" target="_blank" title={waits ? `Waiting for ${pr.repo} to merge this` : `Open PR ${pr.repo}#${pr.number}`}>
+      {waits ? (
+        <span className="mr-1 text-checks">
+          <Glyph>
+            <Hourglass aria-hidden className="size-3" />
+          </Glyph>
+        </span>
+      ) : null}
       {name}
     </a>
   );
