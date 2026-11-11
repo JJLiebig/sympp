@@ -58,7 +58,7 @@ function resolveSnapshotDir() {
 }
 
 // Operator-owned names (areas, sample wording) stay out of the repository: an optional, git-ignored
-// board.local file next to this one. Without it the board files every goal as "Unfiled".
+// board.local file next to this one. Without it the board files each goal under its repository's GitHub owner.
 function localBoardConfig(): Json {
   const file = path.resolve("board.local");
   return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as Json) : {};

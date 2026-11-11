@@ -133,7 +133,7 @@ function buildJob(detail, now) {
   const request = detail.work_request;
   const repo = request.repo_display || request.repo || "";
   const repoShort = shortRepo(repo);
-  const area = Array.isArray(request.area_path) && request.area_path.length ? request.area_path : ["Unfiled", repoShort || "Unknown"];
+  const area = Array.isArray(request.area_path) && request.area_path.length ? request.area_path : areaFor(request, repoShort);
   const packages = (detail.work_packages ?? []).map((slice) => buildPackage(slice, repo, now)).sort((a, b) => a.seq - b.seq);
   // Phases are the first segment of each package's group path, in the order their packages are planned.
   const phases = [...new Set(packages.map((pkg) => pkg.phase).filter(Boolean))];
@@ -536,6 +536,18 @@ export function ago(at, now) {
 function sentence(code) {
   const text = String(code).replace(/_/g, " ");
   return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+// Without the operator's area, a GitHub repository is filed under its owner, as the board files it. A display
+// name can be a bare repository name, so the remote is read first; local paths and bare names have no owner.
+const GITHUB_SLUG = /^(?:https?:\/\/github\.com\/|git@github\.com:)?([a-z\d](?:[a-z\d-]*[a-z\d])?)\/([\w.-]+?)(?:\.git)?\/?$/i;
+
+function areaFor(request, repoShort) {
+  for (const name of [request.repo_remote, request.repo_display, request.repo]) {
+    const slug = typeof name === "string" ? GITHUB_SLUG.exec(name.trim()) : null;
+    if (slug) return [slug[1], slug[2]];
+  }
+  return ["Unfiled", repoShort || "Unknown"];
 }
 
 export function shortRepo(repo) {

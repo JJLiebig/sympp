@@ -185,6 +185,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
         :phase,
         :repo,
         :repo_display,
+        :repo_remote,
         :area_path,
         :base_branch,
         :default_branch,
