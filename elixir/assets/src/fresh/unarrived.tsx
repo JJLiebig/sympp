@@ -35,7 +35,8 @@ export function UnarrivedAnswer({ board, className, entry, onGoal, ref, touch = 
         ) : (
           <span className="min-w-0 max-w-full truncate font-medium">{subject.title}</span>
         )}
-        <span className="shrink-0 rounded-full border border-checks/50 px-1.5 text-[11px] font-semibold text-checks">Undelivered</span>
+        {/* On a phone these answers sit under their own heading. */}
+        {touch ? null : <span className="shrink-0 rounded-full border border-checks/50 px-1.5 text-[11px] font-semibold text-checks">Undelivered</span>}
       </p>
       <p className="mt-1 truncate text-sm text-dim" title={ask.question}>{ask.question}</p>
       <div className="mt-2 flex max-w-[46rem] items-start gap-2 rounded border border-line bg-panel py-1.5 pl-3 pr-1.5 text-sm">
