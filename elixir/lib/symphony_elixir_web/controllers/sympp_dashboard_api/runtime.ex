@@ -367,50 +367,46 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.Runtime do
   end
 
   defp ensure_repo_migrated(repo, pid, database_path) when is_atom(repo) and is_pid(pid) do
-    database_key = {repo, Repo.database_key(database_path)}
-
-    if migrated_database?(database_key) and migrated_schema?(repo, pid) do
+    if migrated_schema?(repo, pid) do
       :ok
     else
-      migrate_with_lock(repo, pid, database_path, database_key)
+      migrate_with_lock(repo, pid, database_path)
     end
   end
 
-  defp migrate_with_lock(repo, pid, database_path, database_key) do
+  defp migrate_with_lock(repo, pid, database_path) do
     MigrationFileLock.run(database_path, fn ->
-      migrate_if_needed(repo, pid, database_key)
+      migrate_if_needed(repo, pid)
     end)
   end
 
-  defp migrate_if_needed(repo, pid, database_key) do
-    if migrated_database?(database_key) and migrated_schema?(repo, pid) do
+  defp migrate_if_needed(repo, pid) do
+    if migrated_schema?(repo, pid) do
       :ok
     else
-      migrate_repo(repo, pid, database_key)
+      migrate_repo(repo, pid)
     end
   end
 
-  defp migrate_repo(Repo, pid, database_key) do
+  defp migrate_repo(Repo, pid) do
     migration_opts = [all: true, dynamic_repo: pid, log: false]
 
     Ecto.Migrator.run(Repo, Migrations.all(), :up, migration_opts)
 
-    mark_database_migrated(database_key)
+    :ok
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
     error -> {:error, {:migration_failed, error}}
   end
 
-  defp migrate_repo(repo, _pid, database_key) do
+  defp migrate_repo(repo, _pid) do
     Ecto.Migrator.run(repo, Migrations.all(), :up, all: true, log: false)
 
-    mark_database_migrated(database_key)
+    :ok
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
     error -> {:error, {:migration_failed, error}}
   end
-
-  defp migrated_database?(database_key), do: MapSet.member?(migrated_databases(), database_key)
 
   defp migrated_schema?(Repo, pid) when is_pid(pid) do
     original_repo = Repo.put_dynamic_repo(pid)
@@ -447,18 +443,5 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.Runtime do
 
   defp migration_versions do
     Migrations.version_strings()
-  end
-
-  defp mark_database_migrated(database_key) do
-    migrated_databases = MapSet.put(migrated_databases(), database_key)
-    Application.put_env(:symphony_elixir, :sympp_dashboard_api_migrated_databases, migrated_databases)
-    :ok
-  end
-
-  defp migrated_databases do
-    case Application.get_env(:symphony_elixir, :sympp_dashboard_api_migrated_databases, MapSet.new()) do
-      %MapSet{} = migrated_databases -> migrated_databases
-      _invalid -> MapSet.new()
-    end
   end
 end

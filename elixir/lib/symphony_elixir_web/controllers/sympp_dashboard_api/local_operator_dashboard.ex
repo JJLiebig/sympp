@@ -11,7 +11,9 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     WorkRequestCards
   }
 
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardCache
   alias SymphonyElixir.SymphonyPlusPlus.DeploymentObservation
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.Repository, as: MCPRepository
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.OperatorConfig
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
@@ -27,6 +29,17 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   import Ecto.Query, only: [from: 2]
 
   @local_operator_actor "local-operator"
+
+  @doc false
+  @spec prime(module()) :: :ok | {:error, term()}
+  def prime(repo) do
+    with :ok <- MCPRepository.ensure_migrated(repo),
+         {:ok, _settings} <- OperatorSettingsRepository.get(repo),
+         {:ok, _body, _etag} <- DashboardCache.json(repo, :hydrated, fn -> operator_dashboard_hydrated_payload(repo) end),
+         {:ok, _body, _etag} <- DashboardCache.json(repo, :herdr, fn -> herdr_dashboard_payload(repo) end) do
+      :ok
+    end
+  end
 
   @spec operator_dashboard_payload(module()) :: {:ok, map()} | {:error, term()}
   def operator_dashboard_payload(repo) do

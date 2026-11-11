@@ -6,6 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   alias SymphonyElixir.SymphonyPlusPlus.{DashboardPubSub, HerdrCore, OperatorConfig, Repo}
 
   @ttl_ms 15_000
+  @refresh_interval_ms 250
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -14,7 +15,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   def json(Repo, surface, fun) do
     source = Repo.get_dynamic_repo()
     source = if is_atom(source), do: Process.whereis(source), else: source
-    surface = {surface, OperatorConfig.load()}
 
     if Process.whereis(__MODULE__) do
       GenServer.call(__MODULE__, {:json, source, surface, fun}, :infinity)
@@ -28,17 +28,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   @impl true
   def init(_opts) do
     :ok = DashboardPubSub.subscribe()
-    {:ok, %{sources: %{}, entries: %{}, refreshing: %{}, clock: fn -> System.monotonic_time(:millisecond) end}}
+    Process.send_after(self(), :refresh_tick, @refresh_interval_ms)
+
+    {:ok,
+     %{
+       sources: %{},
+       entries: %{},
+       builders: %{},
+       refreshing: %{},
+       waiters: %{},
+       epoch: 0,
+       clock: fn -> System.monotonic_time(:millisecond) end
+     }}
   end
 
   @impl true
-  def handle_call({:json, source, surface, fun}, _from, state) do
+  def handle_call({:json, source, surface, fun}, from, state) do
     previous = Repo.put_dynamic_repo(source)
 
     try do
       {connection, state} = connection(source, state)
-      version = data_version(connection)
+      version = cache_version(connection)
       key = {source, surface}
+      state = remember_builder(state, key, source, fun, connection)
       now = state.clock.()
 
       case Map.get(state.entries, key) do
@@ -51,31 +63,38 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
           {:reply, result, refresh(state, key, version, source, fun)}
 
         _missing ->
-          result = build(fun)
-          # The projection uses an Ecto read transaction. A commit during that
-          # snapshot must never label the old snapshot with the new version.
-          entries =
-            if match?({:ok, _, _}, result) and version != nil and data_version(connection) == version do
-              Map.put(state.entries, key, {version, now + @ttl_ms, result})
-            else
-              Map.delete(state.entries, key)
-            end
-
-          {:reply, result, %{state | entries: entries}}
+          cache_miss(state, key, version, connection, now, fun, from)
       end
     after
       Repo.put_dynamic_repo(previous)
     end
   end
 
-  defp refresh(state, key, version, source, fun) do
+  defp cache_miss(state, key, version, connection, now, fun, from) do
     case Map.get(state.refreshing, key) do
-      {pid, _ref} when is_pid(pid) ->
-        if Process.alive?(pid), do: state, else: start_refresh(state, key, version, source, fun)
+      {_pid, ref, _epoch, _monitor, ^version} ->
+        waiters = Map.update(state.waiters, ref, [from], &[from | &1])
+        {:noreply, %{state | waiters: waiters}}
 
-      _missing ->
-        start_refresh(state, key, version, source, fun)
+      _different_or_missing ->
+        result = build(fun)
+        # A commit during the snapshot must not label old data with a new version.
+        entries =
+          if match?({:ok, _, _}, result) and version != nil and cache_version(connection) == version,
+            do: Map.put(state.entries, key, {version, now + @ttl_ms, result}),
+            else: Map.delete(state.entries, key)
+
+        {:reply, result, %{state | entries: entries}}
     end
+  end
+
+  defp remember_builder(state, _key, _source, _fun, nil), do: state
+
+  defp remember_builder(state, key, source, fun, _connection),
+    do: %{state | builders: Map.put(state.builders, key, {source, fun})}
+
+  defp refresh(state, key, version, source, fun) do
+    if Map.has_key?(state.refreshing, key), do: state, else: start_refresh(state, key, version, source, fun)
   end
 
   defp start_refresh(state, key, version, source, fun) do
@@ -88,7 +107,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
         send(owner, {:refreshed, key, ref, version, build(fun)})
       end)
 
-    %{state | refreshing: Map.put(state.refreshing, key, {pid, ref})}
+    %{state | refreshing: Map.put(state.refreshing, key, {pid, ref, state.epoch, Process.monitor(pid), version})}
   end
 
   defp build(fun) do
@@ -103,41 +122,126 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   end
 
   @impl true
-  def handle_info(:operator_dashboard_changed, state), do: {:noreply, %{state | entries: %{}, refreshing: %{}}}
+  def handle_info(:operator_dashboard_changed, state) do
+    {:noreply, refresh_registered(%{state | epoch: state.epoch + 1}, true)}
+  end
+
+  def handle_info(:refresh_tick, state) do
+    Process.send_after(self(), :refresh_tick, @refresh_interval_ms)
+    {:noreply, refresh_registered(state, false)}
+  end
 
   def handle_info({:refreshed, {source, _surface} = key, ref, version, result}, state) do
     case Map.get(state.refreshing, key) do
-      {_pid, ^ref} ->
+      {_pid, ^ref, epoch, monitor, _version} ->
+        Process.demonitor(monitor, [:flush])
+        state = reply_waiters(state, ref, result)
         entries = refreshed_entries(state, source, key, version, result)
-
-        {:noreply, %{state | entries: entries, refreshing: Map.delete(state.refreshing, key)}}
+        state = %{state | entries: entries, refreshing: Map.delete(state.refreshing, key)}
+        # Publish completed snapshots for liveness, then catch up if a signal
+        # arrived while building. Continuous signals must not starve readers.
+        state = if epoch != state.epoch, do: refresh_key(state, key), else: state
+        {:noreply, state}
 
       _superseded ->
         {:noreply, state}
     end
   end
 
-  def handle_info({:DOWN, _ref, :process, source, _reason}, state) do
+  def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
+    if Map.has_key?(state.sources, pid) do
+      {:noreply, close_source(state, pid)}
+    else
+      {:noreply, failed_refresh(state, ref)}
+    end
+  end
+
+  defp close_source(state, source) do
     Sqlite3.close(Map.get(state.sources, source))
+    {owned, other} = Enum.split_with(state.refreshing, fn {{owner, _surface}, _job} -> owner == source end)
+
+    state =
+      Enum.reduce(owned, state, fn {_key, {pid, ref, _epoch, monitor, _version}}, state ->
+        Process.demonitor(monitor, [:flush])
+        Process.exit(pid, :shutdown)
+        reply_waiters(state, ref, {:error, {:storage_failed, "Dashboard ledger closed"}})
+      end)
+
     entries = Map.reject(state.entries, fn {{owner, _surface}, _entry} -> owner == source end)
-    refreshing = Map.reject(state.refreshing, fn {{owner, _surface}, _entry} -> owner == source end)
-    {:noreply, %{state | sources: Map.delete(state.sources, source), entries: entries, refreshing: refreshing}}
+    builders = Map.reject(state.builders, fn {{owner, _surface}, _builder} -> owner == source end)
+    %{state | sources: Map.delete(state.sources, source), entries: entries, refreshing: Map.new(other), builders: builders}
+  end
+
+  defp failed_refresh(state, monitor) do
+    case Enum.find(state.refreshing, fn {_key, {_pid, _ref, _epoch, ref, _version}} -> ref == monitor end) do
+      {key, {_pid, ref, _epoch, _monitor, _version}} ->
+        state = reply_waiters(state, ref, {:error, {:storage_failed, "Dashboard refresh interrupted"}})
+        %{state | refreshing: Map.delete(state.refreshing, key)}
+
+      nil ->
+        state
+    end
+  end
+
+  defp reply_waiters(state, ref, result) do
+    {waiters, remaining} = Map.pop(state.waiters, ref, [])
+    Enum.each(waiters, &GenServer.reply(&1, result))
+    %{state | waiters: remaining}
   end
 
   defp refreshed_entries(state, source, key, version, result) do
-    if match?({:ok, _, _}, result) and data_version(Map.get(state.sources, source)) == version do
+    if match?({:ok, _, _}, result) and cache_version(Map.get(state.sources, source)) == version do
       entry = {version, state.clock.() + @ttl_ms, result}
 
       case Map.get(state.entries, key) do
-        {^version, _expires, {:ok, _body, etag}} when elem(result, 2) != etag ->
+        {_old_version, _expires, {:ok, _body, etag}} when elem(result, 2) != etag ->
           DashboardPubSub.broadcast_refreshed()
-          %{key => entry}
+          Map.put(state.entries, key, entry)
+
+        nil ->
+          DashboardPubSub.broadcast_refreshed()
+          Map.put(state.entries, key, entry)
 
         _unchanged ->
           Map.put(state.entries, key, entry)
       end
     else
       state.entries
+    end
+  end
+
+  defp refresh_registered(state, force?) do
+    versions = Map.new(state.sources, fn {source, connection} -> {source, cache_version(connection)} end)
+    now = state.clock.()
+
+    Enum.reduce(state.builders, state, fn {key, {source, fun}}, state ->
+      version = Map.get(versions, source)
+
+      current? =
+        case Map.get(state.entries, key) do
+          {^version, expires, _result} when expires > now -> true
+          _stale -> false
+        end
+
+      if version != nil and (force? or not current?),
+        do: refresh(state, key, version, source, fun),
+        else: state
+    end)
+  end
+
+  defp refresh_key(state, {source, _surface} = key) do
+    with {^source, fun} <- Map.get(state.builders, key),
+         version when not is_nil(version) <- cache_version(Map.get(state.sources, source)) do
+      refresh(state, key, version, source, fun)
+    else
+      _closed -> state
+    end
+  end
+
+  defp cache_version(connection) do
+    case data_version(connection) do
+      nil -> nil
+      version -> {version, OperatorConfig.load()}
     end
   end
 

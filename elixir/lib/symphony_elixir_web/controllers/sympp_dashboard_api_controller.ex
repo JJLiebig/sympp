@@ -533,6 +533,8 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   defp ask_delivery_response(repo, conn, ask_id) do
+    conn = put_resp_header(conn, "cache-control", "no-store")
+
     case repo.get(Ask, ask_id) do
       nil -> error_response(conn, 404, "not_found", "Ask not found")
       ask -> json(conn, %{ask_id: ask.id, delivery: Asks.delivery_status(ask)})

@@ -93,15 +93,20 @@ response sees the committed state, including an acknowledged decision leaving
 `decisions_to_review`. An earlier in-flight read may describe an older snapshot;
 clients must discard reads started before their successful mutation.
 
-The backend reuses encoded projections while the ledger is unchanged. A
-separate read-only SQLite connection checks commits from every writer before
-reuse. Runtime notifications invalidate observations too; time-derived signals
-refresh in the background after 15 seconds even without a notification. A quiet
-board remains immediately readable during that refresh; committed writes still
-force a fresh projection before reuse. The full response fields
-are preserved. GitHub deployment/default-branch observations and Herdr terminal
-refreshes run in the background: unavailable evidence stays unknown, then a
-notification causes the next read to include the observation.
+Factory startup prepares the first hydrated browser and Herdr reads before
+opening its listener. The backend then maintains encoded projections for
+registered views. A dedicated read-only SQLite connection checks commits from
+every writer before reuse and every 250 ms while clients are idle. Runtime
+notifications refresh observations without evicting other usable views;
+time-derived signals refresh every 15 seconds independently of client reads.
+Reads may join a projection already building for their exact ledger version.
+A committed write always requires a projection containing that commit.
+
+The full response fields are preserved. GitHub deployment/default-branch
+observations and Herdr terminal refreshes run in the background at their
+existing provider cadence. Unavailable evidence stays unknown, then a
+notification makes the prepared observation available to clients. The extra
+work happens during startup or background refresh rather than quiet HTTP reads.
 
 The browser stream is `GET /api/v1/sympp/operator/dashboard/events`, under the
 same board authority as browser reads. It uses Phoenix PubSub and SSE:
@@ -128,7 +133,8 @@ delivery has been scheduled. Answer responses also include `delivery_route`:
 `GET /api/v1/sympp/{operator|herdr}/asks/:ask_id/delivery` returns
 `{ask_id, delivery}` under the corresponding dashboard read authority. This
 uncached read works for card asks too, after the answered ask leaves the board.
-Unknown asks return HTTP 404; unsupported methods return HTTP 405.
+Unknown asks return HTTP 404; unsupported methods return HTTP 405. Historical
+asks without a recorded delivery attempt return `delivery: null`.
 HTTP 200 confirms the saved answer or feedback,
 not that a terminal received it. Delivery completes asynchronously and sends
 another invalidation. Inspect an ask's `delivery` (`pending`, `delivered` with `to`, or `not_delivered`
@@ -136,7 +142,9 @@ with `reason`) or a decision's `undelivered_reason` on a subsequent detail read;
 settled reason means undelivered, and null means delivered. Feedback interrupted
 by a factory restart becomes `delivery_interrupted` under the existing timeout.
 Interrupted ask delivery likewise settles as `not_delivered` with
-`reason: "delivery_interrupted"` after a minute. Answers remain readable on their ask; sends are not retried
+`reason: "delivery_interrupted"` after a minute. Answers remain readable on their
+ask. While delivery is pending, refetch its status after invalidation and after
+the interruption window even if the stream is silent. Sends are not retried
 automatically because typing twice is not idempotent. A client that focuses the
 recording terminal must wait for confirmed delivery rather than treating
 `pending` as delivered.
