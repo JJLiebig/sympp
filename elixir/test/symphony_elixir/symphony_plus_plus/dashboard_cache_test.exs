@@ -272,6 +272,45 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert Jason.decode!(body)["observation"] == 2
   end
 
+  test "external writes coalesce behind one background build and catch up to the latest commit", %{path: path} do
+    caller = self()
+    builds = :atomics.new(1, [])
+
+    builder = fn ->
+      :atomics.add(builds, 1, 1)
+      result = payload()
+
+      if elem(result, 1).decision == "building" do
+        send(caller, {:background_projection, self()})
+        receive do: (:continue -> :ok)
+      end
+
+      result
+    end
+
+    assert {:ok, _old, _etag} = DashboardCache.json(Repo, :coalesced, builder)
+    :ok = DashboardPubSub.subscribe()
+    {:ok, writer} = Exqlite.Sqlite3.open(path)
+    on_exit(fn -> Exqlite.Sqlite3.close(writer) end)
+    :ok = Exqlite.Sqlite3.execute(writer, "UPDATE probe SET value = 'building'")
+    send(DashboardCache, :refresh_tick)
+    assert_receive {:background_projection, worker}
+    release = release_on_exit(worker)
+
+    for value <- ["intermediate", "latest"] do
+      :ok = Exqlite.Sqlite3.execute(writer, "UPDATE probe SET value = '#{value}'")
+      send(DashboardCache, :refresh_tick)
+      :sys.get_state(DashboardCache)
+    end
+
+    assert :atomics.get(builds, 1) == 2
+    release.()
+    assert_receive :operator_dashboard_changed, 2_000
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :coalesced, builder)
+    assert Jason.decode!(body)["decision"] == "latest"
+    assert :atomics.get(builds, 1) == 3
+  end
+
   test "a fresh read joins the current projection without blocking other surfaces", %{pid: pid, path: path} do
     caller = self()
 

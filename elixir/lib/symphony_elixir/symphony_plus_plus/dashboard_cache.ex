@@ -74,7 +74,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   end
 
   defp cache_miss(state, key, version, source, fun, from) do
-    state = refresh(state, key, version, source, fun)
+    state =
+      if Map.has_key?(state.refreshing, {key, version}),
+        do: state,
+        else: start_refresh(state, key, version, source, fun)
+
     {_pid, ref, _epoch, _monitor} = Map.fetch!(state.refreshing, {key, version})
     waiters = Map.update(state.waiters, ref, [from], &[from | &1])
     {:noreply, %{state | waiters: waiters}}
@@ -86,7 +90,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     do: %{state | builders: Map.put(state.builders, key, {source, fun})}
 
   defp refresh(state, key, version, source, fun) do
-    if Map.has_key?(state.refreshing, {key, version}), do: state, else: start_refresh(state, key, version, source, fun)
+    # Idle subscribers need only the latest state. Never accumulate builds for
+    # intervening versions while a projection for this surface is still running.
+    if Enum.any?(state.refreshing, fn {{active_key, _version}, _job} -> active_key == key end),
+      do: state,
+      else: start_refresh(state, key, version, source, fun)
   end
 
   defp start_refresh(state, key, version, source, fun) do
@@ -153,7 +161,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
         state = %{state | entries: entries, refreshing: Map.delete(state.refreshing, job_key)}
         # Publish completed snapshots for liveness, then catch up if a signal
         # arrived while building. Continuous signals must not starve readers.
-        state = if epoch != state.epoch, do: refresh_key(state, key), else: state
+        changed? = epoch != state.epoch or cache_version(Map.get(state.sources, source)) != version
+        state = if changed?, do: refresh_key(state, key), else: state
         {:noreply, state}
 
       _superseded ->
