@@ -48,30 +48,34 @@ test('deployment observations cover every delivered revision and preserve comple
   }
   api(`repos/example/service/compare/${head('a')}...${head('d')}?per_page=1`, { status: 'ahead' });
   api(`repos/example/service/compare/${head('b')}...${head('d')}?per_page=1`, { status: 'diverged' });
-  const observe = async (workflow: string, runs: object[], total = runs.length) => {
+  const observe = async (workflow: string, runs: object[], expected: object, total = runs.length) => {
     api(`repos/example/service/actions/workflows/${workflow}/runs?per_page=100&page=1`, { workflow_runs: runs, total_count: total });
     await configure(workflow);
-    const current = await hydrated();
+    let current: any;
+    await expect.poll(async () => {
+      current = await hydrated();
+      return current.deployments['example/service'].dev;
+    }).toMatchObject(expected);
     expect(current.completed_at).toBe(completed);
-    expect(current.default_branch).toBe('trunk');
+    await expect.poll(async () => (await hydrated()).default_branch).toBe('trunk');
     return current.deployments['example/service'].dev;
   };
-  const deployed = await observe('deployed.yml', [run(1, head('c'), 'success')]);
+  const deployed = await observe('deployed.yml', [run(1, head('c'), 'success')], { status: 'ok' });
   expect(deployed.status).toBe('ok');
   expect(deployed.revision).toBe(head('c'));
-  expect((await observe('missing-revision.yml', [run(2, head('d'), 'success')])).status).toBe('pending');
+  expect((await observe('missing-revision.yml', [run(2, head('d'), 'success')], { reason: 'not_deployed' })).status).toBe('pending');
   const old = run(3, head('c'), 'success');
   const rollback = run(4, head('d'), 'success', 12);
   const failed = run(5, head('e'), 'failure', 13);
-  expect((await observe('rollback.yml', [old, rollback, failed])).status).toBe('failed');
-  expect((await observe('failed-after-success.yml', [failed, old])).status).toBe('ok');
+  expect((await observe('rollback.yml', [old, rollback, failed], { status: 'failed' })).status).toBe('failed');
+  expect((await observe('failed-after-success.yml', [failed, old], { status: 'ok' })).status).toBe('ok');
   const retry = run(1, head('d'), 'success', 14, { run_attempt: 2 });
   const foreign = run(6, head('c'), 'success', 15, { head_repository: { full_name: 'outsider/service' } });
   const pullRequest = run(7, head('c'), 'success', 16, { event: 'pull_request' });
-  expect((await observe('retry.yml', [pullRequest, foreign, old, retry])).status).toBe('pending');
+  expect((await observe('retry.yml', [pullRequest, foreign, old, retry], { reason: 'not_deployed' })).status).toBe('pending');
   const pages = Array.from({ length: 100 }, (_, index) => run(index + 20, head('c'), 'success'));
   api('repos/example/service/actions/workflows/pages.yml/runs?per_page=100&page=2', { workflow_runs: [retry], total_count: 101 });
-  expect((await observe('pages.yml', pages, 101)).status).toBe('pending');
+  expect((await observe('pages.yml', pages, { reason: 'not_deployed' }, 101)).status).toBe('pending');
   const calls = provider.calls.filter((call) => call.argv[0] === 'api').length;
   await hydrated();
   expect(provider.calls.filter((call) => call.argv[0] === 'api')).toHaveLength(calls);
@@ -81,12 +85,12 @@ test('deployment observations cover every delivered revision and preserve comple
     ['incomplete.yml', { workflow_runs: [], total_count: 101 }],
   ] as const) {
     api(`repos/example/service/actions/workflows/${workflow}/runs?per_page=100&page=2`, page);
-    expect((await observe(workflow, pages, 101)).reason).toBe('unavailable');
+    expect((await observe(workflow, pages, { reason: 'unavailable', observed_at: expect.any(String) }, 101)).reason).toBe('unavailable');
   }
   await configure('permission.yml');
   api('repos/example/service/actions/workflows/permission.yml/runs?per_page=100&page=1', { message: 'Unavailable synthetic provider' }, 1);
-  expect((await hydrated()).deployments['example/service'].dev.reason).toBe('unavailable');
-  expect((await observe('missing-comparison.yml', [run(8, head('f'), 'success')])).reason).toBe('unavailable');
+  await expect.poll(async () => (await hydrated()).deployments['example/service'].dev).toMatchObject({ reason: 'unavailable', observed_at: expect.any(String) });
+  expect((await observe('missing-comparison.yml', [run(8, head('f'), 'success')], { reason: 'unavailable', observed_at: expect.any(String) })).reason).toBe('unavailable');
 });
 
 test('separate repository deployments preserve live attempt time and no-PR work has no invented revision', async ({ delivery: { factory, provider } }) => {
@@ -115,8 +119,15 @@ test('separate repository deployments preserve live attempt time and no-PR work 
       updated_at: '2026-10-10T11:00:00Z', run_started_at: '2026-10-10T10:30:00Z', repository: { full_name: repo }, head_repository: { full_name: repo },
     }] }) });
   }
-  const response = await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated');
-  const current = response.work_request_details.find((detail: any) => detail.work_request.id === request).work_request;
+  let current: any;
+  await expect.poll(async () => {
+    const response = await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated');
+    current = response.work_request_details.find((detail: any) => detail.work_request.id === request).work_request;
+    return current.deployments;
+  }).toMatchObject({
+    'example/service': { dev: { status: 'ok' } },
+    'example/client': { prod: { status: 'pending', at: '2026-10-10T10:30:00Z' } },
+  });
   expect(current.completed_at).toBeTruthy();
   expect(current.deployments['example/service'].dev.status).toBe('ok');
   expect(current.deployments['example/client'].prod.status).toBe('pending');

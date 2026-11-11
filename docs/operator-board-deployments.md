@@ -97,11 +97,14 @@ Pending observations may include `reason`: `unfinished`, `missing_merge_evidence
 
 ## Read limits
 
-Provider reads happen after the SQLite snapshot transaction. Identical repository,
+Provider reads run asynchronously after the SQLite snapshot transaction. The
+first response may contain pending observations; completion invalidates the
+board through SSE so clients can refetch. Identical repository,
 workflow-page and commit-comparison requests are shared within a read and cached
-for 60 seconds. Stale entries are removed on subsequent reads. A hydrated read
-allows at most 30 provider requests and five seconds of external observation
-work to protect dashboard response time and GitHub API usage. Each workflow is
+for 60 seconds. Expired entries refresh in the background. Their timestamped evidence remains
+available for up to ten minutes while a replacement is fetched. A hydrated read
+schedules at most 30 provider requests, each within the five-second observation
+deadline, to bound background GitHub API work. Each workflow is
 paged at 100 runs per page until complete or the read budget is exhausted. Exhausted budgets, missing
 permissions, unavailable comparisons or incomplete pages yield pending rather
 than a deployment claim. Duplicate run IDs or changing totals across pages also
