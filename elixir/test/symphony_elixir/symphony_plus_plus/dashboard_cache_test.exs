@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
   use ExUnit.Case, async: false
 
-  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, Repo}
+  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub, Repo}
 
   setup do
     path = Path.join(System.tmp_dir!(), "dashboard-cache-#{System.unique_integer([:positive])}.sqlite3")
@@ -109,7 +109,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
 
   test "time-derived changes notify clients and leave the refreshed response ready to read" do
     clock = controlled_clock()
-    :ok = SymphonyElixir.SymphonyPlusPlus.DashboardPubSub.subscribe()
+    :ok = DashboardPubSub.subscribe()
     assert {:ok, old, _etag} = DashboardCache.json(Repo, :time, &payload/0)
     :atomics.add(clock, 1, 15_001)
     assert {:ok, ^old, _etag} = DashboardCache.json(Repo, :time, fn -> {:ok, %{decision: "elapsed"}} end)
