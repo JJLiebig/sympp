@@ -2,20 +2,20 @@ import { MoreHorizontal } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { leaveGoal, useRefusal } from "./exits";
-import type { Goal, GoalView, Phase } from "./model";
+import type { Goal, GoalView, Phase, Pkg } from "./model";
 import { calm, EASE } from "./motion";
 import { GLYPH } from "./parts";
 import { useAct, type GoalStep, type OperatorAction } from "./operator";
 import { Reveal } from "./reveal";
 
-type Action = { key: GoalStep; label: string };
+type Action = { key: GoalStep; label: string; danger?: boolean };
 
 const STALE_MS = 30 * 24 * 3600e3;
 
 const COMPLETE: Action = { key: "complete", label: "Complete" };
 const ARCHIVE: Action = { key: "archive", label: "Archive" };
 const RESTORE: Action = { key: "restore", label: "Restore" };
-const DELETE: Action = { key: "delete", label: "Delete" };
+const DELETE: Action = { key: "delete", label: "Delete", danger: true };
 
 // Only a done or unresolved goal can be archived; anything still open is completed first.
 function actionsFor(phase: Phase): Action[] {
@@ -76,11 +76,12 @@ export function GoalRefusal({ className = "", goalId }: { className?: string; go
   );
 }
 
-// Completing, archiving, restoring or deleting a goal. Each takes a second click: the first arms it.
-export function GoalActions({ className, goal, phase }: { className?: string; goal: Goal; phase: Phase }) {
-  const step = useGoalStep();
+type MenuItem<K extends string> = { key: K; label: string; danger?: boolean };
+
+// A ⋯ button that opens a short menu of actions. Each takes a second click: the first arms it.
+function ActionMenu<K extends string>({ busy = false, className, items, label, onPick }: { busy?: boolean; className?: string; items: Array<MenuItem<K>>; label: string; onPick: (key: K, root: HTMLElement | null) => void }) {
   const [open, setOpen] = useState(false);
-  const [armed, setArmed] = useState<GoalStep | null>(null);
+  const [armed, setArmed] = useState<K | null>(null);
   const root = useRef<HTMLSpanElement>(null);
   const menu = useRef<HTMLSpanElement>(null);
 
@@ -105,30 +106,29 @@ export function GoalActions({ className, goal, phase }: { className?: string; go
     setOpen(!open);
     setArmed(null);
   };
-  const pick = (action: Action, item: HTMLButtonElement) => {
-    if (armed !== action.key) {
-      setArmed(action.key);
-      if (!calm()) item.animate([{ transform: "scale(0.98)" }, { transform: "scale(1)" }], { duration: 160, easing: EASE });
+  const pick = (item: MenuItem<K>, button: HTMLButtonElement) => {
+    if (armed !== item.key) {
+      setArmed(item.key);
+      if (!calm()) button.animate([{ transform: "scale(0.98)" }, { transform: "scale(1)" }], { duration: 160, easing: EASE });
       return;
     }
     setOpen(false);
     setArmed(null);
-    void step(goal.id, action.key, root.current);
+    onPick(item.key, root.current);
   };
 
   return (
     <span ref={root} className={`relative inline-block shrink-0 ${className ?? ""}`}>
-      <button aria-expanded={open} aria-haspopup="menu" aria-label={`Actions for ${goal.title}`} className={`${GLYPH} ${open ? "bg-line text-ink" : "text-faint"}`} title={actionsFor(phase).map((action) => action.label).join(", ")} type="button" onClick={toggle}>
+      <button aria-expanded={open} aria-haspopup="menu" aria-label={label} className={`${GLYPH} disabled:opacity-50 ${open ? "bg-line text-ink" : "text-faint"}`} disabled={busy} title={items.map((item) => item.label).join(", ")} type="button" onClick={toggle}>
         <MoreHorizontal className="size-4" />
       </button>
       {open ? (
         <span ref={menu} className="absolute right-0 top-full z-30 mt-1 flex w-40 origin-top-right flex-col rounded-lg border border-line bg-[#15171d] p-1 text-left text-sm font-medium shadow-[0_12px_32px_rgba(0,0,0,0.5)]" data-menu role="menu">
-          {actionsFor(phase).map((action) => {
-            const on = armed === action.key;
-            const danger = action.key === "delete";
+          {items.map((item) => {
+            const on = armed === item.key;
             return (
-              <button key={action.key} aria-label={on ? `${action.label}?` : action.label} className={`flex items-center rounded px-2.5 py-1.5 text-left transition-colors ${danger ? "text-fail" : "text-ink"} ${on ? (danger ? "bg-fail/12" : "bg-line") : "hover:bg-white/[0.06]"}`} role="menuitem" type="button" onClick={(event) => pick(action, event.currentTarget)}>
-                {action.label}
+              <button key={item.key} aria-label={on ? `${item.label}?` : item.label} className={`flex items-center rounded px-2.5 py-1.5 text-left transition-colors ${item.danger ? "text-fail" : "text-ink"} ${on ? (item.danger ? "bg-fail/12" : "bg-line") : "hover:bg-white/[0.06]"}`} role="menuitem" type="button" onClick={(event) => pick(item, event.currentTarget)}>
+                {item.label}
                 <span aria-hidden className={`inline-block transition-[max-width,opacity,transform] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none ${on ? "max-w-[1ch] translate-x-0 opacity-100" : "max-w-0 -translate-x-1 opacity-0"}`}>
                   ?
                 </span>
@@ -138,6 +138,44 @@ export function GoalActions({ className, goal, phase }: { className?: string; go
         </span>
       ) : null}
     </span>
+  );
+}
+
+// Completing, archiving, restoring or deleting a goal.
+export function GoalActions({ className, goal, phase }: { className?: string; goal: Goal; phase: Phase }) {
+  const step = useGoalStep();
+  return <ActionMenu className={className} items={actionsFor(phase)} label={`Actions for ${goal.title}`} onPick={(key, root) => void step(goal.id, key, root)} />;
+}
+
+const FINISH: Array<MenuItem<"finish">> = [{ key: "finish", label: "Finish" }];
+
+// Finishing a package whose PR waits on others. A refusal shows under the package's row.
+export function PkgActions({ pkg }: { pkg: Pkg }) {
+  const act = useAct();
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const finish = async () => {
+    setBusy(true);
+    setFailure(null);
+    try {
+      await act({ kind: "finish", pkgId: pkg.id });
+    } catch (caught) {
+      setFailure(caught instanceof Error ? caught.message : "The backend refused this.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <ActionMenu busy={busy} className="justify-self-end" items={FINISH} label={`Actions for ${pkg.title}`} onPick={() => void finish()} />
+      {failure ? (
+        <p className="col-span-full text-xs text-fail" role="alert">
+          {failure}
+        </p>
+      ) : null}
+    </>
   );
 }
 
