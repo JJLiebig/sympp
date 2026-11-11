@@ -129,6 +129,9 @@ test('unknown inputs never end a card, a finished terminal without a PR does, an
   const answered = await architect.operator(`/api/v1/sympp/operator/asks/${ask.id}/answer`, { answer: 'Yes, ship it.' });
   expect(answered.status).toBe(200);
   expect(answered.body.card_id).toBe(ask.card_id);
+  expect(answered.body.delivery.state).toBe('pending');
+  await expect.poll(async () => (await architect.inspect(answered.body.delivery_route)).delivery)
+    .toEqual({ state: 'delivered', to: early.address });
   expect(provider.sent).toContain(['--no-submit', '--raw', 'a1', 'Answer: Yes, ship it.']);
   // The agent can also read the answer from its card.
   const health = await early.call('sympp.health');
@@ -141,6 +144,7 @@ test('unknown inputs never end a card, a finished terminal without a PR does, an
   const dismissed = await early.raw({}, {}, 'POST', dismiss);
   expect(dismissed.status).toBe(200);
   expect(dismissed.body).toMatchObject({ ok: true, card_id: board['Asking'].id, state: 'dismissed' });
+  expect((await architect.raw(undefined, {}, 'GET', answered.body.delivery_route.replace('/operator/', '/herdr/'))).body.delivery.state).toBe('delivered');
   expect((await architect.operator(`/api/v1/sympp/operator/cards/${board['Asking'].id}/dismiss`, {})).body.state).toBe('dismissed');
   expect((await architect.operator('/api/v1/sympp/operator/cards/card_missing/dismiss', {})).status).toBe(404);
   // Its open ask was withdrawn, so it can no longer be answered.

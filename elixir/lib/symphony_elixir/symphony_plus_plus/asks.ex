@@ -310,18 +310,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
 
-  defp delivery_status(%Ask{delivered_at: %DateTime{}, asked_by_address: to}), do: %{"state" => "delivered", "to" => to}
+  @doc "Stored terminal delivery outcome, including interrupted sends."
+  @spec delivery_status(Ask.t()) :: map() | nil
+  def delivery_status(%Ask{delivered_at: %DateTime{}, asked_by_address: to}), do: %{"state" => "delivered", "to" => to}
 
-  defp delivery_status(%Ask{undelivered_reason: "delivering", resolved_at: %DateTime{} = at}) do
+  def delivery_status(%Ask{undelivered_reason: "delivering", resolved_at: %DateTime{} = at}) do
     if DateTime.diff(DateTime.utc_now(), at, :millisecond) > 60_000,
       do: %{"state" => "not_delivered", "reason" => "delivery_interrupted"},
       else: %{"state" => "pending"}
   end
 
-  defp delivery_status(%Ask{undelivered_reason: reason}) when is_binary(reason),
+  def delivery_status(%Ask{undelivered_reason: reason}) when is_binary(reason),
     do: %{"state" => "not_delivered", "reason" => reason}
 
-  defp delivery_status(%Ask{}), do: nil
+  def delivery_status(%Ask{}), do: nil
 
   defp close(repo, %Ask{} = ask, to, answer, by, delivery_changes \\ []) do
     now = DateTime.utc_now(:microsecond)

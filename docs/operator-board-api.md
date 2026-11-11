@@ -122,7 +122,12 @@ event and response fields. This backend contract supports immediate invalidation
 UI refresh coordination remains the client's responsibility.
 
 Answer and feedback responses return `delivery: {state: "pending"}` when terminal
-delivery has been scheduled. HTTP 200 confirms the saved answer or feedback,
+delivery has been scheduled. Answer responses also include `delivery_route`:
+`GET /api/v1/sympp/{operator|herdr}/asks/:ask_id/delivery` returns
+`{ask_id, delivery}` under the corresponding dashboard read authority. This
+uncached read works for card asks too, after the answered ask leaves the board.
+Unknown asks return HTTP 404; unsupported methods return HTTP 405.
+HTTP 200 confirms the saved answer or feedback,
 not that a terminal received it. Delivery completes asynchronously and sends
 another invalidation. Inspect an ask's `delivery` (`pending`, `delivered` with `to`, or `not_delivered`
 with `reason`) or a decision's `undelivered_reason` on a subsequent detail read; `delivering` means wait, a

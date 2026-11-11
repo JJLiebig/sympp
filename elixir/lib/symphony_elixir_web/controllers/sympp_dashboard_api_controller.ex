@@ -7,6 +7,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   alias Plug.Conn
   alias SymphonyElixir.SymphonyPlusPlus.Asks
+  alias SymphonyElixir.SymphonyPlusPlus.Asks.Ask
   alias SymphonyElixir.SymphonyPlusPlus.Cards
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.DashboardCache
@@ -512,12 +513,39 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     send_native_operator_response(conn, :ask_answer, Target.new(:ask), :operator_answer_ask, &answer_ask_response(&1, conn, params))
   end
 
+  @spec operator_ask_delivery(Conn.t(), map()) :: Conn.t()
+  def operator_ask_delivery(conn, %{"ask_id" => ask_id}) do
+    send_local_operator_response(conn, :dashboard_read, Target.new(:ask), :operator_ask_delivery, fn repo ->
+      ask_delivery_response(repo, conn, ask_id)
+    end)
+  end
+
+  @spec herdr_ask_delivery(Conn.t(), map()) :: Conn.t()
+  def herdr_ask_delivery(conn, %{"ask_id" => ask_id}) do
+    if herdr_consumer?(conn) do
+      case Runtime.with_dashboard_repo(&ask_delivery_response(&1, conn, ask_id), migrate?: false) do
+        {:error, reason} -> error_response(conn, reason)
+        %Conn{} = response -> response
+      end
+    else
+      error_response(conn, :unauthorized)
+    end
+  end
+
+  defp ask_delivery_response(repo, conn, ask_id) do
+    case repo.get(Ask, ask_id) do
+      nil -> error_response(conn, 404, "not_found", "Ask not found")
+      ask -> json(conn, %{ask_id: ask.id, delivery: Asks.delivery_status(ask)})
+    end
+  end
+
   # The answer is stored, then typed into the asking terminal without being
   # submitted; `delivery` says whether that reached it.
   defp answer_ask_response(repo, conn, %{"ask_id" => ask_id} = params) do
     with {:ok, ask, delivery} <- Asks.answer_by_operator(repo, ask_id, params, async: true) do
       subject = if ask.card_id, do: %{card_id: ask.card_id}, else: %{work_request_id: ask.work_request_id}
-      json(conn, mutation_success_payload(Map.merge(%{ask_id: ask.id, delivery: delivery}, subject), subject))
+      payload = %{ask_id: ask.id, delivery: delivery, delivery_route: String.replace_suffix(conn.request_path, "/answer", "/delivery")}
+      json(conn, mutation_success_payload(Map.merge(payload, subject), subject))
     end
   end
 

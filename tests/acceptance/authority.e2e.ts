@@ -69,8 +69,14 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
     const denied = await native.raw(null, headers, 'GET', nativePath);
     expect(denied.status).toBe(401);
     expect(denied.body.error.code).toBe('unauthorized');
+    expect((await native.raw(null, headers, 'GET', '/api/v1/sympp/herdr/asks/missing/delivery')).status).toBe(401);
   }
   expect((await native.raw({}, {}, 'POST', nativePath)).status).toBe(405);
+  expect((await native.raw(undefined, {}, 'GET', '/api/v1/sympp/herdr/asks/missing/delivery')).status).toBe(404);
+  expect((await native.raw(undefined, {}, 'GET', '/api/v1/sympp/operator/asks/missing/delivery')).status).toBe(401);
+  for (const surface of ['operator', 'herdr']) {
+    expect((await native.raw({}, {}, 'POST', `/api/v1/sympp/${surface}/asks/missing/delivery`)).status).toBe(405);
+  }
   expect((await native.raw(null, {}, 'GET', '/api/v1/sympp/operator/dashboard/hydrated')).status).toBe(401);
   expect((await native.raw({ title: 'Denied native intake' }, {}, 'POST', '/api/v1/sympp/operator/work-requests')).status).toBe(401);
   const intake = {

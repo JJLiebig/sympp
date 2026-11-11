@@ -244,9 +244,15 @@ coreTest('asks go open to answered or withdrawn, take no ownership, and an answe
   const live = (await asker.call('ask', { work_request_id: id, question: 'Ship today?' })).ask.id;
   const listed = (await nativeBoard(architect, id)).asks;
   expect(listed).toEqual([expect.objectContaining({ id: live, kind: 'ask', text: 'Ship today?', asked_by: asker.address, answer_route: `/api/v1/sympp/herdr/asks/${live}/answer` })]);
+  let releaseAnswer!: () => void;
+  core.host.hold = new Promise((resolve) => { releaseAnswer = resolve; });
   const delivered = await architect.raw({ answer: 'Yes' }, {}, 'POST', listed[0].answer_route);
   expect(delivered.body.delivery).toEqual({ state: 'pending' });
   await expect.poll(() => core.host.sends.length).toBe(1);
+  expect((await architect.raw(undefined, {}, 'GET', delivered.body.delivery_route)).body.delivery.state).toBe('pending');
+  releaseAnswer();
+  core.host.hold = undefined;
+  await expect.poll(async () => (await architect.raw(undefined, {}, 'GET', delivered.body.delivery_route)).body.delivery.state).toBe('delivered');
   expect(core.host.sends).toEqual([{ target: asker.terminal, text: 'Answer: Yes', submit: false }]);
   expect((await nativeBoard(architect, id)).asks).toEqual([]);
   const stored = (await architect.call('read_work_request', { detail: 'full', work_request_id: id })).asks.find((entry: any) => entry.id === live);

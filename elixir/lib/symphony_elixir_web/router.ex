@@ -28,6 +28,8 @@ defmodule SymphonyElixirWeb.Router do
     post("/api/v1/sympp/herdr/work-requests", SymppDashboardApiController, :herdr_create_work_request)
 
     post("/api/v1/sympp/herdr/asks/:ask_id/answer", SymppDashboardApiController, :herdr_answer_ask)
+    get("/api/v1/sympp/herdr/asks/:ask_id/delivery", SymppDashboardApiController, :herdr_ask_delivery)
+    match(:*, "/api/v1/sympp/herdr/asks/:ask_id/delivery", ObservabilityApiController, :method_not_allowed)
     post("/api/v1/sympp/herdr/decisions/:decision_id/ack", SymppDashboardApiController, :herdr_ack_decision)
     post("/api/v1/sympp/herdr/decisions/:decision_id/feedback", SymppDashboardApiController, :herdr_feedback_decision)
     post("/api/v1/sympp/herdr/decisions/:decision_id/dismiss", SymppDashboardApiController, :herdr_dismiss_decision)
@@ -79,6 +81,8 @@ defmodule SymphonyElixirWeb.Router do
     post("/api/v1/sympp/operator/work-packages/:work_package_id/blockers/:blocker_id/clear", SymppDashboardApiController, :operator_clear_work_package_blocker)
     post("/api/v1/sympp/operator/work-packages/:work_package_id/archive", SymppDashboardApiController, :operator_archive_work_package)
     post("/api/v1/sympp/operator/asks/:ask_id/answer", SymppDashboardApiController, :operator_answer_ask)
+    get("/api/v1/sympp/operator/asks/:ask_id/delivery", SymppDashboardApiController, :operator_ask_delivery)
+    match(:*, "/api/v1/sympp/operator/asks/:ask_id/delivery", ObservabilityApiController, :method_not_allowed)
     post("/api/v1/sympp/operator/decisions/:decision_id/ack", SymppDashboardApiController, :operator_ack_decision)
     post("/api/v1/sympp/operator/decisions/:decision_id/feedback", SymppDashboardApiController, :operator_feedback_decision)
     post("/api/v1/sympp/operator/decisions/:decision_id/dismiss", SymppDashboardApiController, :operator_dismiss_decision)
