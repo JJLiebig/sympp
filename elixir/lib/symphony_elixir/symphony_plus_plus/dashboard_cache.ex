@@ -33,6 +33,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     {:ok,
      %{
        sources: %{},
+       databases: %{},
        entries: %{},
        builders: %{},
        refreshing: %{},
@@ -91,14 +92,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   defp start_refresh(state, key, version, source, fun) do
     owner = self()
     ref = make_ref()
+    database = Map.get(state.databases, source)
 
     {:ok, pid} =
       Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-        Repo.put_dynamic_repo(source)
-        send(owner, {:refreshed, key, ref, version, build(fun)})
+        Process.flag(:priority, :low)
+        send(owner, {:refreshed, key, ref, version, build_on_ledger(source, database, fun)})
       end)
 
     %{state | refreshing: Map.put(state.refreshing, {key, version}, {pid, ref, state.epoch, Process.monitor(pid)})}
+  end
+
+  defp build_on_ledger(source, nil, fun) do
+    Repo.put_dynamic_repo(source)
+    build(fun)
+  end
+
+  defp build_on_ledger(_source, database, fun) do
+    # Projection snapshots may hold a checkout while doing CPU work. Give each
+    # file-backed build its own connection so it cannot exhaust the write pool.
+    {:ok, reader} = Repo.start_link(database: database, name: nil, pool_size: 1, log: false)
+    Repo.put_dynamic_repo(reader)
+
+    try do
+      build(fun)
+    after
+      GenServer.stop(reader)
+    end
   end
 
   defp build(fun) do
@@ -128,8 +148,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     case Map.get(state.refreshing, job_key) do
       {_pid, ^ref, epoch, monitor} ->
         Process.demonitor(monitor, [:flush])
-        state = reply_waiters(state, ref, result)
         entries = refreshed_entries(state, source, key, version, result)
+        state = reply_waiters(state, ref, result)
         state = %{state | entries: entries, refreshing: Map.delete(state.refreshing, job_key)}
         # Publish completed snapshots for liveness, then catch up if a signal
         # arrived while building. Continuous signals must not starve readers.
@@ -162,7 +182,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
 
     entries = Map.reject(state.entries, fn {{owner, _surface}, _entry} -> owner == source end)
     builders = Map.reject(state.builders, fn {{owner, _surface}, _builder} -> owner == source end)
-    %{state | sources: Map.delete(state.sources, source), entries: entries, refreshing: Map.new(other), builders: builders}
+
+    %{
+      state
+      | sources: Map.delete(state.sources, source),
+        databases: Map.delete(state.databases, source),
+        entries: entries,
+        refreshing: Map.new(other),
+        builders: builders
+    }
   end
 
   defp failed_refresh(state, monitor) do
@@ -193,6 +221,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
           Map.put(state.entries, key, entry)
 
         nil ->
+          DashboardPubSub.broadcast_refreshed()
           Map.put(state.entries, key, entry)
 
         _unchanged ->
@@ -253,7 +282,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
          [_, "main", path] when path != "" <- Enum.find(rows, &(Enum.at(&1, 1) == "main")),
          {:ok, connection} <- Sqlite3.open(path, mode: :readonly) do
       if is_pid(source), do: Process.monitor(source)
-      {connection, %{state | sources: Map.put(state.sources, source, connection)}}
+      {connection, %{state | sources: Map.put(state.sources, source, connection), databases: Map.put(state.databases, source, path)}}
     else
       _unavailable -> {nil, state}
     end

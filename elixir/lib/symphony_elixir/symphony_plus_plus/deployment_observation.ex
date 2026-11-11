@@ -347,7 +347,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
     case :ets.whereis(table) do
       :undefined ->
         options = [:named_table, :public, read_concurrency: true]
-        owner = Process.whereis(SymphonyElixir.Supervisor)
+        owner = Process.whereis(SymphonyElixir.Supervisor) || Process.whereis(SymphonyElixir.TaskSupervisor)
         options = if owner, do: [{:heir, owner, :deployment_observation} | options], else: options
 
         try do

@@ -53,6 +53,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
 
   test "a commit during projection construction cannot poison subsequent reads", %{pid: pid, path: path} do
     caller = self()
+    first_build = :atomics.new(1, [])
 
     read =
       Task.async(fn ->
@@ -60,18 +61,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
 
         DashboardCache.json(Repo, :racing, fn ->
           captured = payload()
-          send(caller, {:captured, self()})
-          receive do: (:continue -> captured)
+
+          if :atomics.exchange(first_build, 1, 1) == 0 do
+            send(caller, {:captured, self()})
+            receive do: (:continue -> :ok)
+          end
+
+          captured
         end)
       end)
 
     assert_receive {:captured, builder}
     release = release_on_exit(builder)
+    :ok = DashboardPubSub.subscribe()
     {:ok, connection} = Exqlite.Sqlite3.open(path)
     :ok = Exqlite.Sqlite3.execute(connection, "UPDATE probe SET value = 'acknowledged'")
     :ok = Exqlite.Sqlite3.close(connection)
     release.()
     assert {:ok, _old, _etag} = Task.await(read)
+    assert_receive :operator_dashboard_changed, 2_000
     assert {:ok, fresh, _etag} = DashboardCache.json(Repo, :racing, &payload/0)
     assert Jason.decode!(fresh)["decision"] == "acknowledged"
   end
@@ -124,8 +132,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
 
   test "time-derived changes notify clients and keep all prepared surfaces ready to read" do
     clock = controlled_clock()
-    :ok = DashboardPubSub.subscribe()
     assert {:ok, old, _etag} = DashboardCache.json(Repo, :time, &payload/0)
+    :ok = DashboardPubSub.subscribe()
     caller = self()
 
     builder = fn ->
@@ -136,6 +144,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     DashboardCache.json(Repo, :time, builder)
     :atomics.add(clock, 1, 15_001)
     assert {:ok, other, other_etag} = DashboardCache.json(Repo, :other, &payload/0)
+    assert_receive :operator_dashboard_changed
     assert {:ok, ^old, _etag} = DashboardCache.json(Repo, :time, builder)
     assert_receive {:time_refresh, worker}
     send(worker, :continue)
@@ -146,8 +155,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
   end
 
   test "external commits notify subscribers without a client read", %{path: path} do
-    :ok = DashboardPubSub.subscribe()
     assert {:ok, _body, _etag} = DashboardCache.json(Repo, :external, &payload/0)
+    :ok = DashboardPubSub.subscribe()
     {:ok, connection} = Exqlite.Sqlite3.open(path)
     :ok = Exqlite.Sqlite3.execute(connection, "UPDATE probe SET value = 'acknowledged'")
     :ok = Exqlite.Sqlite3.close(connection)
@@ -196,8 +205,42 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert {:ok, _body, _etag} = Task.await(slow)
   end
 
+  test "projection checkouts cannot exhaust the operator write pool", %{pid: pid} do
+    caller = self()
+
+    builds =
+      for surface <- [:browser_checkout, :native_checkout] do
+        Task.async(fn ->
+          Repo.put_dynamic_repo(pid)
+
+          DashboardCache.json(Repo, surface, fn ->
+            Repo.checkout(fn ->
+              send(caller, {:checkout_held, self()})
+              receive do: (:continue -> payload())
+            end)
+          end)
+        end)
+      end
+
+    assert_receive {:checkout_held, first}
+    assert_receive {:checkout_held, second}
+    release_first = release_on_exit(first)
+    release_second = release_on_exit(second)
+
+    write =
+      Task.async(fn ->
+        Repo.put_dynamic_repo(pid)
+        Repo.query!("UPDATE probe SET value = 'acknowledged'")
+      end)
+
+    result = Task.yield(write, 100)
+    release_first.()
+    release_second.()
+    assert {:ok, %{num_rows: 1}} = result
+    Enum.each(builds, &Task.await/1)
+  end
+
   test "observation invalidations keep reads available and overlapping signals catch up" do
-    :ok = DashboardPubSub.subscribe()
     value = :atomics.new(1, [])
     caller = self()
 
@@ -213,6 +256,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     end
 
     assert {:ok, old, etag} = DashboardCache.json(Repo, :observation, builder)
+    :ok = DashboardPubSub.subscribe()
     :atomics.put(value, 1, 1)
     DashboardPubSub.broadcast_changed()
     assert_receive :operator_dashboard_changed
