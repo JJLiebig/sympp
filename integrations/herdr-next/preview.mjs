@@ -24,6 +24,7 @@ const VIEW = 'integrations/herdr-next/mods';
 export function previewMain(spec = {}) {
   return `import Lens from "./lens.js";
 import * as M from "./model.js";
+import * as C from "./controls.js";
 import { NOW, boardPayload, variantPayload, deskFixture, applyDemo } from "./fixture.js";
 const CASE = ${JSON.stringify(spec)};
 const answer = (status, body) => ({ ok: status < 300, status, json: async () => body });
@@ -36,7 +37,9 @@ export default class Preview extends Lens {
       return done ? answer(200, done) : answer(404, { error: { message: "The sample board has no such action." } });
     };
     const now = Date.now();
-    this.net = M.fetchSucceeded(this.net, M.parseBoard(this.sample), now);
+    // Actions on their way to a factory that never answers, as drawn the moment they were taken.
+    for (const [path, body] of CASE.taken ?? []) C.take(this.taken, C.actionOf(path, body), () => new Promise(() => {}));
+    this.net = M.fetchSucceeded(this.net, this.drawn(this.sample, null, C.readStarts()), now);
     if (CASE.error) this.net = M.fetchFailed(this.net, CASE.error, now);
     if (CASE.path) this.path = { topic: null, space: null, job: null, ...CASE.path };
     if (CASE.pin) this.pin = true;
@@ -53,7 +56,7 @@ export default class Preview extends Lens {
   tick() {}
   // A read only redraws the sample; it shares nothing with other mods.
   read(cx) {
-    this.net = M.fetchSucceeded(this.net, M.parseBoard(this.sample), Date.now());
+    this.net = M.fetchSucceeded(this.net, this.drawn(this.sample, null, C.readStarts()), Date.now());
     cx.notify();
   }
   openInTab() {}

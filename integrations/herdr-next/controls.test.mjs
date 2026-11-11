@@ -4,6 +4,8 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import * as M from './mods/sympp/model.js';
 import * as C from './mods/sympp/controls.js';
+// The sample board stands in for the factory: a send changes it the way the backend would; a read parses it.
+import { applyDemo, variantPayload } from './fixture.mjs';
 
 const prompt = {
   tl_dr: 'Choose the delivery order.', details: 'The API can ship independently.',
@@ -209,4 +211,102 @@ test('an offline copy with identical job IDs cannot authorize an agent jump', as
   await assert.rejects(C.requireAgentAccess(endpoint), /offline copy/);
   mode = null;
   await assert.rejects(C.requireAgentAccess(endpoint), /verify agent access/);
+});
+
+const H = '/api/v1/sympp/herdr';
+const later = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
+const drawn = (payload, list) => M.parseBoard(C.project(payload, list));
+const decisions = (board) => board.jobs.flatMap((job) => job.decisions).map((d) => d.id);
+const asks = (board) => board.jobs.flatMap((job) => job.asks).map((ask) => ask.id);
+const refused = (code, next = null) => Object.assign(new Error('Refused.'), { code, next });
+
+test('an acked decision leaves at once, and a second click while it is sent sends nothing', async () => {
+  const payload = variantPayload('busy');
+  const list = [];
+  const answer = later();
+  let sends = 0;
+  const send = () => { sends++; return answer.promise; };
+  const ack = C.actionOf(`${H}/decisions/dec-toast/ack`);
+  const first = C.take(list, ack, send);
+  assert.equal(decisions(drawn(payload, list)).includes('dec-toast'), false);
+  const second = C.take(list, ack, send);
+  assert.equal(sends, 1);
+  answer.resolve({ ok: true });
+  assert.deepEqual(await first, { ok: true });
+  assert.deepEqual(await second, { ok: true });
+});
+
+test('a refusal brings the item back as the factory has it and says why', async () => {
+  const payload = variantPayload('busy');
+  const list = [];
+  const answer = later();
+  const sent = C.take(list, C.actionOf(`${H}/decisions/dec-toast/feedback`, { text: 'Fade it after a minute.' }), () => answer.promise);
+  const sending = drawn(payload, list).jobs.flatMap((job) => job.decisions).find((d) => d.id === 'dec-toast');
+  assert.ok(sending.sending && sending.feedback === 'Fade it after a minute.', 'the feedback shows on its way');
+  answer.reject(new Error('Ledger busy. Try again.'));
+  await assert.rejects(sent, { message: 'Ledger busy. Try again.' });
+  assert.deepEqual(drawn(payload, list), M.parseBoard(payload));
+});
+
+test('a refusal that says the outcome already holds counts as done, but never for what the person wrote', async () => {
+  const stale = variantPayload('busy');
+  const list = [];
+  assert.equal(await C.take(list, C.actionOf(`${H}/decisions/dec-toast/ack`), async () => { throw refused('decision_transition_refused', 'none'); }), null);
+  assert.equal(decisions(drawn(stale, list)).includes('dec-toast'), false, 'a read taken before the factory caught up does not bring it back');
+  await assert.rejects(C.take(list, C.actionOf(`${H}/decisions/dec-order/feedback`, { text: 'Keep them listed.' }), async () => { throw refused('decision_transition_refused', 'none'); }));
+  await assert.rejects(C.take(list, C.actionOf(`${H}/asks/q1/answer`, { answer: 'Levels first.' }), async () => { throw refused('ask_not_open'); }));
+  assert.ok(decisions(drawn(stale, list)).includes('dec-order') && asks(drawn(stale, list)).includes('q1'));
+});
+
+test('a read taken before the factory caught up does not bring an answered question back', async () => {
+  let payload = variantPayload('busy');
+  const stale = payload;
+  const list = [];
+  const factory = (path, body) => async () => { payload = structuredClone(payload); applyDemo(payload, path, body); return { ok: true }; };
+  await C.take(list, C.actionOf(`${H}/asks/q1/answer`, { answer: 'Levels first.' }), factory(`${H}/asks/q1/answer`, { answer: 'Levels first.' }));
+  C.settle(list, stale, C.readStarts());
+  assert.equal(asks(drawn(stale, list)).includes('q1'), false);
+  C.settle(list, payload, C.readStarts());
+  assert.equal(list.length, 0, 'a read that shows it answered ends it');
+});
+
+test("a task's steps go to the factory in the order taken, and a step undone before the next read does not stick", async () => {
+  let payload = variantPayload('busy');
+  const before = payload;
+  const list = [];
+  const sent = [];
+  const completing = later();
+  const early = C.readStarts();
+  const step = (name) => C.take(list, C.actionOf(`${H}/work-requests/wr-recap/${name}`), async () => {
+    sent.push(name);
+    if (name === 'complete') await completing.promise;
+    payload = structuredClone(payload);
+    applyDemo(payload, `${H}/work-requests/wr-recap/${name}`);
+    return { ok: true };
+  });
+  const complete = step('complete');
+  const archive = step('archive');
+  await Promise.resolve();
+  assert.deepEqual(sent, ['complete']);
+  assert.equal(drawn(payload, list).jobs.find((job) => job.id === 'wr-recap').phase, 'archived');
+  completing.resolve();
+  await Promise.all([complete, archive]);
+  await step('restore');
+  assert.deepEqual(sent, ['complete', 'archive', 'restore']);
+  // A read begun before the factory agreed predates the steps, though it is not archived either.
+  C.settle(list, before, early);
+  assert.equal(drawn(before, list).jobs.find((job) => job.id === 'wr-recap').phase, 'done');
+  C.settle(list, payload, C.readStarts());
+  assert.equal(list.length, 0);
+  assert.equal(drawn(payload, list).jobs.find((job) => job.id === 'wr-recap').phase, 'done');
+  await step('archive');
+  assert.deepEqual(sent.at(-1), 'archive', 'archiving again is a new step, not a second click');
+});
+
+test('a restored task shows the phase the factory reads off it', () => {
+  const payload = variantPayload('busy');
+  applyDemo(payload, `${H}/work-requests/wr-recap/archive`);
+  const list = [];
+  C.take(list, C.actionOf(`${H}/work-requests/wr-recap/restore`), () => new Promise(() => {}));
+  assert.equal(drawn(payload, list).jobs.find((job) => job.id === 'wr-recap').phase, 'unresolved');
 });

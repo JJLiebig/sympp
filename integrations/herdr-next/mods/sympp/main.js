@@ -164,6 +164,9 @@ export default class Lens extends View {
     this.answers = {};
     this.feedback = {};
     this.ops = {};
+    // Operator actions drawn ahead of the factory (controls.js), and the last read they are drawn on.
+    this.taken = [];
+    this.payload = null;
     // This machine's core name, so the factory's "<core>/t8" addresses find their local terminals.
     this.coreName = null;
     hc(["server", "status", "--json"]).then((result) => {
@@ -212,6 +215,7 @@ export default class Lens extends View {
     if (this.reading || !this.endpoint) return;
     this.reading = true;
     const turn = ++this.turn;
+    const since = C.readStarts();
     this.net = M.fetchStarted(this.net, Date.now());
     cx.spawn(async (cx) => {
       let outcome;
@@ -228,7 +232,7 @@ export default class Lens extends View {
         else {
           const payload = await response.json().catch(() => null);
           try {
-            outcome = { board: M.parseBoard(payload) };
+            outcome = { board: M.parseBoard(payload), payload };
           } catch (caught) {
             outcome = { error: caught.message };
           }
@@ -239,6 +243,7 @@ export default class Lens extends View {
       this.reading = false;
       if (turn !== this.turn) return;
       const now = Date.now();
+      if (outcome.board) outcome.board = this.drawn(outcome.payload, outcome.board, since);
       this.net = outcome.board ? M.fetchSucceeded(this.net, outcome.board, now) : M.fetchFailed(this.net, outcome.error, now);
       if (outcome.unreachable) this.startServer(cx);
       if (outcome.board) {
@@ -916,7 +921,7 @@ export default class Lens extends View {
     const draft = this.answers[question.key];
     cx.spawn(async (cx) => {
       const submission = C.submitAction(draft,
-        async () => C.postAction(this.endpoint, question.route, C.answerBody(question, draft.choice, draft.input.value()), this.request),
+        async () => this.send(question.route, C.answerBody(question, draft.choice, draft.input.value()), cx),
         (payload) => {
           draft.open = false; draft.saved = true; draft.input.set_value("");
           const note = C.undeliveredNote(payload);
@@ -938,15 +943,35 @@ export default class Lens extends View {
     cx.notify();
   }
 
-  // One operator POST on this factory's native routes, then a fresh read. A refusal stays beside
-  // the control that sent it.
-  operate(key, path, body, cx, after = null) {
-    const op = this.ops[key] = { ...(this.ops[key] ?? {}), armed: false };
-    if (op.pending) return;
+  // A read as drawn: the person's actions still on their way, or agreed and not read yet, shown done. Only a
+  // fresh read, begun at `since`, ends the actions it shows; redrawing the last one ends nothing.
+  drawn(payload, board = null, since = null) {
+    this.payload = payload;
+    if (since !== null) C.settle(this.taken, payload, since);
+    return this.taken.length || !board ? M.parseBoard(C.project(payload, this.taken)) : board;
+  }
+
+  redraw(cx) {
+    if (this.payload && this.net.data) this.net = { ...this.net, data: this.drawn(this.payload) };
+    try { cx.notify(); } catch { /* closed meanwhile */ }
+  }
+
+  // One operator POST on this factory's native routes. Its outcome shows at once; the read that follows
+  // its answer draws the factory's own word.
+  send(path, body, cx) {
+    return C.take(this.taken, C.actionOf(path, body), () => C.postAction(this.endpoint, path, body, this.request), () => this.redraw(cx));
+  }
+
+  // One operator action, then a fresh read. A refusal stays beside the control that sent it; `refused`
+  // runs too, so a view that moved on can go back to it. Each click is its own attempt: a repeat of the
+  // latest action on its task isn't sent again, but the same step after another one is (controls.js).
+  operate(key, path, body, cx, refused = null) {
+    const op = this.ops[key] = { armed: false, pending: false, error: null };
     cx.spawn(async (cx) => {
-      const submission = C.submitAction(op, async () => C.postAction(this.endpoint, path, body, this.request), () => { delete this.ops[key]; after?.(cx); this.retry(cx); });
+      const submission = C.submitAction(op, async () => this.send(path, body, cx), () => { if (this.ops[key] === op) delete this.ops[key]; this.retry(cx); });
       cx.notify();
       await submission;
+      if (op.error) refused?.(cx);
       cx.notify();
     });
   }
@@ -966,7 +991,7 @@ export default class Lens extends View {
     const text = draft.input.value().trim();
     if (!text) { draft.error = "Write the feedback first."; cx.notify(); return; }
     cx.spawn(async (cx) => {
-      const submission = C.submitAction(draft, async () => C.postAction(this.endpoint, decision.routes.feedback, { text }, this.request), (payload) => {
+      const submission = C.submitAction(draft, async () => this.send(decision.routes.feedback, { text }, cx), (payload) => {
         draft.open = false;
         draft.input.set_value("");
         if (focus && payload?.delivery?.state === "delivered") this.focusTerminal(decision.by.address, cx);
