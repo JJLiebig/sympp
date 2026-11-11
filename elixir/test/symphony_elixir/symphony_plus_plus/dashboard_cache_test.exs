@@ -156,6 +156,46 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert Jason.decode!(body)["decision"] == "acknowledged"
   end
 
+  test "a read that discovers an external commit also notifies other subscribers", %{path: path} do
+    assert {:ok, _old, _etag} = DashboardCache.json(Repo, :discovered, &payload/0)
+    :ok = DashboardPubSub.subscribe()
+    {:ok, connection} = Exqlite.Sqlite3.open(path)
+    :ok = Exqlite.Sqlite3.execute(connection, "UPDATE probe SET value = 'acknowledged'")
+    :ok = Exqlite.Sqlite3.close(connection)
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :discovered, &payload/0)
+    assert Jason.decode!(body)["decision"] == "acknowledged"
+    assert_receive :operator_dashboard_changed
+  end
+
+  test "an unprimed slow view leaves quiet cached reads available", %{pid: pid} do
+    assert {:ok, quiet, etag} = DashboardCache.json(Repo, :quiet, &payload/0)
+    caller = self()
+
+    slow =
+      Task.async(fn ->
+        Repo.put_dynamic_repo(pid)
+
+        DashboardCache.json(Repo, :cold, fn ->
+          send(caller, {:cold_projection, self()})
+          receive do: (:continue -> payload())
+        end)
+      end)
+
+    assert_receive {:cold_projection, worker}
+    release = release_on_exit(worker)
+
+    read =
+      Task.async(fn ->
+        Repo.put_dynamic_repo(pid)
+        DashboardCache.json(Repo, :quiet, &payload/0)
+      end)
+
+    result = Task.yield(read, 100)
+    release.()
+    assert {:ok, {:ok, ^quiet, ^etag}} = result
+    assert {:ok, _body, _etag} = Task.await(slow)
+  end
+
   test "observation invalidations keep reads available and overlapping signals catch up" do
     :ok = DashboardPubSub.subscribe()
     value = :atomics.new(1, [])

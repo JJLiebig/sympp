@@ -48,7 +48,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
 
     try do
       {connection, state} = connection(source, state)
-      version = cache_version(connection)
+      # Without a file version (for example an in-memory ledger), reads must
+      # build independently rather than join a snapshot predating their write.
+      version = cache_version(connection) || make_ref()
       key = {source, surface}
       state = remember_builder(state, key, source, fun, connection)
       now = state.clock.()
@@ -63,29 +65,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
           {:reply, result, refresh(state, key, version, source, fun)}
 
         _missing ->
-          cache_miss(state, key, version, connection, now, fun, from)
+          cache_miss(state, key, version, source, fun, from)
       end
     after
       Repo.put_dynamic_repo(previous)
     end
   end
 
-  defp cache_miss(state, key, version, connection, now, fun, from) do
-    case Map.get(state.refreshing, key) do
-      {_pid, ref, _epoch, _monitor, ^version} ->
-        waiters = Map.update(state.waiters, ref, [from], &[from | &1])
-        {:noreply, %{state | waiters: waiters}}
-
-      _different_or_missing ->
-        result = build(fun)
-        # A commit during the snapshot must not label old data with a new version.
-        entries =
-          if match?({:ok, _, _}, result) and version != nil and cache_version(connection) == version,
-            do: Map.put(state.entries, key, {version, now + @ttl_ms, result}),
-            else: Map.delete(state.entries, key)
-
-        {:reply, result, %{state | entries: entries}}
-    end
+  defp cache_miss(state, key, version, source, fun, from) do
+    state = refresh(state, key, version, source, fun)
+    {_pid, ref, _epoch, _monitor} = Map.fetch!(state.refreshing, {key, version})
+    waiters = Map.update(state.waiters, ref, [from], &[from | &1])
+    {:noreply, %{state | waiters: waiters}}
   end
 
   defp remember_builder(state, _key, _source, _fun, nil), do: state
@@ -94,7 +85,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     do: %{state | builders: Map.put(state.builders, key, {source, fun})}
 
   defp refresh(state, key, version, source, fun) do
-    if Map.has_key?(state.refreshing, key), do: state, else: start_refresh(state, key, version, source, fun)
+    if Map.has_key?(state.refreshing, {key, version}), do: state, else: start_refresh(state, key, version, source, fun)
   end
 
   defp start_refresh(state, key, version, source, fun) do
@@ -107,7 +98,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
         send(owner, {:refreshed, key, ref, version, build(fun)})
       end)
 
-    %{state | refreshing: Map.put(state.refreshing, key, {pid, ref, state.epoch, Process.monitor(pid), version})}
+    %{state | refreshing: Map.put(state.refreshing, {key, version}, {pid, ref, state.epoch, Process.monitor(pid)})}
   end
 
   defp build(fun) do
@@ -132,12 +123,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   end
 
   def handle_info({:refreshed, {source, _surface} = key, ref, version, result}, state) do
-    case Map.get(state.refreshing, key) do
-      {_pid, ^ref, epoch, monitor, _version} ->
+    job_key = {key, version}
+
+    case Map.get(state.refreshing, job_key) do
+      {_pid, ^ref, epoch, monitor} ->
         Process.demonitor(monitor, [:flush])
         state = reply_waiters(state, ref, result)
         entries = refreshed_entries(state, source, key, version, result)
-        state = %{state | entries: entries, refreshing: Map.delete(state.refreshing, key)}
+        state = %{state | entries: entries, refreshing: Map.delete(state.refreshing, job_key)}
         # Publish completed snapshots for liveness, then catch up if a signal
         # arrived while building. Continuous signals must not starve readers.
         state = if epoch != state.epoch, do: refresh_key(state, key), else: state
@@ -158,10 +151,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
 
   defp close_source(state, source) do
     Sqlite3.close(Map.get(state.sources, source))
-    {owned, other} = Enum.split_with(state.refreshing, fn {{owner, _surface}, _job} -> owner == source end)
+    {owned, other} = Enum.split_with(state.refreshing, fn {{{owner, _surface}, _version}, _job} -> owner == source end)
 
     state =
-      Enum.reduce(owned, state, fn {_key, {pid, ref, _epoch, monitor, _version}}, state ->
+      Enum.reduce(owned, state, fn {_key, {pid, ref, _epoch, monitor}}, state ->
         Process.demonitor(monitor, [:flush])
         Process.exit(pid, :shutdown)
         reply_waiters(state, ref, {:error, {:storage_failed, "Dashboard ledger closed"}})
@@ -173,8 +166,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   end
 
   defp failed_refresh(state, monitor) do
-    case Enum.find(state.refreshing, fn {_key, {_pid, _ref, _epoch, ref, _version}} -> ref == monitor end) do
-      {key, {_pid, ref, _epoch, _monitor, _version}} ->
+    case Enum.find(state.refreshing, fn {_key, {_pid, _ref, _epoch, ref}} -> ref == monitor end) do
+      {key, {_pid, ref, _epoch, _monitor}} ->
         state = reply_waiters(state, ref, {:error, {:storage_failed, "Dashboard refresh interrupted"}})
         %{state | refreshing: Map.delete(state.refreshing, key)}
 
@@ -190,7 +183,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   end
 
   defp refreshed_entries(state, source, key, version, result) do
-    if match?({:ok, _, _}, result) and cache_version(Map.get(state.sources, source)) == version do
+    # Never label a snapshot with a newer commit that raced its construction.
+    if version != nil and match?({:ok, _, _}, result) and cache_version(Map.get(state.sources, source)) == version do
       entry = {version, state.clock.() + @ttl_ms, result}
 
       case Map.get(state.entries, key) do
@@ -199,7 +193,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
           Map.put(state.entries, key, entry)
 
         nil ->
-          DashboardPubSub.broadcast_refreshed()
           Map.put(state.entries, key, entry)
 
         _unchanged ->
