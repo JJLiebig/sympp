@@ -2,6 +2,7 @@ import { LoaderCircle } from "lucide-react";
 import { useId, useLayoutEffect, useRef, useState } from "react";
 
 import { answerAsk } from "./exits";
+import { useKept } from "./kept";
 import { span, type Ask, type Board, type Choice, type GoalView } from "./model";
 import { Presence, useOpenWhenBrought } from "./motion";
 import { REDIRECT, useAct, type Answer } from "./operator";
@@ -49,8 +50,8 @@ export function NeedsYou({ asks, at, board, onGoal, views }: { asks: Ask[]; at: 
 // What was entered, and a send still under way or refused, survive folding.
 function AskItem({ ask, at, onGoal, ref, subject }: { ask: Ask; at: number; onGoal: (goalId: string) => void; ref: (node: HTMLElement | null) => void; subject: Subject }) {
   const [open, setOpen] = useState(true);
-  const [entered, setEntered] = useState<Entry>({ choice: null, text: "", busy: false, failure: null });
-  const enter = (change: Partial<Entry>) => setEntered((was) => ({ ...was, ...change }));
+  const [entered, update] = useKept(answerKey(ask.id), BLANK_ENTRY);
+  const enter = (change: Partial<Entry>) => update((was) => ({ ...was, ...change }));
   useOpenWhenBrought(`ask:${ask.id}`, () => setOpen(true));
 
   return (
@@ -122,6 +123,9 @@ export function Question({ text, touch = false }: { text: string; touch?: boolea
 const MEASURE = "max-w-[46rem]";
 
 // What has been entered: the picked choice, if any, and the text; and whether it is being sent or was refused.
+// Shared by the desktop and phone forms, so a draft survives the board changing layout.
+export const BLANK_ENTRY: Entry = { choice: null, text: "", busy: false, failure: null };
+export const answerKey = (askId: string) => `ask:${askId}`;
 export type Entry = { choice: string | null; text: string; busy: boolean; failure: string | null };
 
 // A free answer, or one of the asker's choices with an optional note, in one frame: the choices, then the note

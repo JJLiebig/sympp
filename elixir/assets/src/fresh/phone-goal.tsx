@@ -177,10 +177,12 @@ function stopCount(state: PhaseState, total: number) {
   return state.status === "done" ? `${total} ended` : `${state.done.length}/${total}`;
 }
 
+// A stop follows its default as the work moves, until the operator opens or closes it by hand.
 function RouteStop({ at, open: opened, stop }: { at: number; open: boolean; stop: Stop }) {
   const { state } = stop;
   const total = state.live.length + state.queued.length + state.done.length;
-  const [open, setOpen] = useState(opened);
+  const [chosen, setOpen] = useState<boolean | null>(null);
+  const open = chosen ?? opened;
   const Mark = state.status === "done" ? Check : Circle;
 
   return (
