@@ -8,13 +8,14 @@ import { lanesOf, Rest } from "./board";
 import { Briefing } from "./briefing";
 import { Cards, visibleCards } from "./cards";
 import { Decisions } from "./decisions";
-import { applyDemo, demoLedger, type DemoLedger, type DemoVariant } from "./mock";
-import { buildBoard, liveCountAt, openAt, viewAt, type Archived, type Board, type HistoryEvent, type Hydrated, type Settings } from "./model";
+import { answered, readDeliveriesWith, recheck, useUnarrived } from "./delivery";
+import { applyDemo, demoDelivery, demoLedger, type DemoLedger, type DemoVariant } from "./mock";
+import { buildBoard, liveCountAt, openAt, viewAt, type Board, type HistoryEvent, type Settings } from "./model";
 import { focusGoal } from "./motion";
 import { ActContext, send, type OperatorAction } from "./operator";
 import { Outline } from "./outline";
 import { operate, project, settle, usePending } from "./pending";
-import { coalescedRead } from "./reads";
+import { coalescedRead, listen, readBoard, type Fetched } from "./reads";
 import { Phases } from "./phases";
 import { PhoneBoard, usePhone } from "./phone";
 import { DensityContext, type Density } from "./report";
@@ -39,7 +40,10 @@ const STEP_MS = 15 * 60 * 1000;
 // A frozen snapshot never changes, so there the sketch pretends the last visit was three hours ago.
 const AWAY_MS = 3 * 3600e3;
 const SEEN_KEY = "sympp.board.seenAt";
-const REREAD_MS = 60e3;
+// Change signals keep the board current. A slow reread covers a signal lost without the stream dropping; between
+// reads the board's clock still moves, so the time each package has spent does too.
+const REREAD_MS = 5 * 60e3;
+const CLOCK_MS = 60e3;
 
 // `vite --mode demo` runs the board on invented work with no backend. `?demo=quiet` shows it with nobody waiting, `?demo=empty` with nothing on it.
 const DEMO = import.meta.env.MODE === "demo";
@@ -52,39 +56,20 @@ const START = {
 
 // `replayable` is true on a snapshot, which carries recorded history; a backend only knows the present.
 type Loaded = { board: Board; now: number; busiest: number; samples: number[]; replayable: boolean; settings: Settings };
+// A read and what it was read from, which the next read asks with; null when the backend said nothing changed.
+type Fresh = { loaded: Loaded; fetched: Fetched | null } | null;
 
 export function App() {
-  const [loaded, setLoaded] = useState<Loaded | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
+  const { loaded, failure, picked, setAt, read } = useLiveBoard();
   const [direction, setDirection] = useState(START.direction);
   const [area, setArea] = useState<string | null>(LINKED.get("area"));
   const [density, setDensity] = useState<Density>(START.density);
-  const [picked, setAt] = useState(0);
   const [seenAt, setSeenAt] = useState<number | null>(rememberedVisit);
   const [replay, setReplay] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
-  // The first read opens on the busiest moment; later reads keep the board live unless it is replaying.
-  // Background changes share a read and one catch-up; actions, timers and
-  // reconnects supersede earlier reads to recover and respect committed writes.
-  const [{ read, changed }] = useState(() => {
-    let shownNow: number | null = null;
-    return coalescedRead(load, (fresh) => {
-      const before = shownNow;
-      shownNow = fresh.now;
-      setFailure(null);
-      settle(fresh.board);
-      setLoaded(fresh);
-      setAt((current) => (before === null ? fresh.busiest : followNow(current, before, fresh.now)));
-    }, (caught: unknown) => {
-      setFailure(caught instanceof Error ? caught.message : "Could not read the ledger");
-    });
-  });
-  useEffect(() => { void read(); }, [read]);
-  useChangeSignal(!DEMO, read, changed);
-  // A snapshot or the demo never changes on its own, so it is read once. Anything else is reread, also while the first read has yet to succeed.
-  useReread(!DEMO && loaded?.replayable !== true, read);
   const act = useOperator(read);
+  const unarrived = useUnarrived();
   useShortcuts(setDirection, setNote);
   // The board shows what the operator just did before the factory has caught up; see pending.ts.
   const pending = usePending();
@@ -106,7 +91,7 @@ export function App() {
   const directions = DIRECTIONS.filter((entry) => entry.key !== "phases" || grouped);
   const current = directions.find((entry) => entry.key === DIRECTIONS[direction]?.key) ?? directions[0];
   const View = current.view;
-  useTabSignal(asks.length);
+  useTabSignal(asks.length + unarrived.length);
 
   if (!data) return <Unread failure={failure} />;
   // A phone gets its own arrangement of the same views; see phone.tsx.
@@ -114,7 +99,7 @@ export function App() {
     return (
       <ActContext.Provider value={act}>
         <SinceContext.Provider value={changes.notes}>
-          <PhoneBoard area={area} areas={areas} asks={asks} at={at} board={data.board} cards={cards} changes={changes} failure={failure} lanes={lanes} settings={data.settings} shownCards={shownCards} since={since} views={views} onArea={setArea} onSaved={read} onSeen={markSeen} />
+          <PhoneBoard area={area} areas={areas} asks={asks} unarrived={unarrived} at={at} board={data.board} cards={cards} changes={changes} failure={failure} lanes={lanes} settings={data.settings} shownCards={shownCards} since={since} views={views} onArea={setArea} onSaved={read} onSeen={markSeen} />
         </SinceContext.Provider>
         <Toast className="left-4 right-4" note={note} />
       </ActContext.Provider>
@@ -156,7 +141,7 @@ export function App() {
               </button>
             ) : null}
             <Lost failure={failure} />
-            <Status needed={asks.length} views={views} />
+            <Status needed={asks.length + unarrived.length} views={views} />
           </span>
         </div>
       </header>
@@ -164,7 +149,7 @@ export function App() {
         <SinceLine at={at} changes={changes} since={since} width={current.width} onPick={goToGoal} onSeen={markSeen} />
         <ActContext.Provider value={act}>
           <div className={`mx-auto ${current.width}`}>
-            <NeedsYou asks={asks} at={at} board={data.board} views={views} onGoal={goToGoal} />
+            <NeedsYou asks={asks} at={at} unarrived={unarrived} board={data.board} views={views} onGoal={goToGoal} />
             <Decisions at={at} board={data.board} decisions={data.board.decisions.filter((entry) => entry.at <= at)} onGoal={goToGoal} />
           </div>
           {/* Switching the view, the area or the density draws the board afresh, so the switch itself never animates. */}
@@ -185,6 +170,56 @@ export function App() {
       <Toast className="left-1/2 max-w-xl -translate-x-1/2" note={note} />
     </div>
   );
+}
+
+// The board as last read, kept current by the factory's change signals.
+function useLiveBoard() {
+  const [loaded, setLoaded] = useState<Loaded | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [picked, setAt] = useState(0);
+  // The first read opens on the busiest moment; later reads keep the board live unless it is replaying.
+  // Background changes share a read and one catch-up; actions, timers and reconnects supersede earlier reads to
+  // recover and respect committed writes: a read started before a write the factory agreed to is thrown away.
+  const [{ read, changed, tick }] = useState(() => {
+    let shownNow: number | null = null;
+    let shown: Fetched | null = null;
+    let readAt = { now: 0, wall: 0 };
+    const follow = (now: number) => {
+      const before = shownNow;
+      shownNow = now;
+      return (current: number) => followNow(current, before ?? now, now);
+    };
+    const reads = coalescedRead(() => load(shown), (fresh: Fresh) => {
+      setFailure(null);
+      // Nothing changed: the board stays exactly as it is.
+      if (!fresh) return;
+      const first = shownNow === null;
+      shown = fresh.fetched;
+      readAt = { now: fresh.loaded.now, wall: Date.now() };
+      const moved = follow(fresh.loaded.now);
+      settle(fresh.loaded.board);
+      setLoaded(fresh.loaded);
+      setAt((current) => (first ? fresh.loaded.busiest : moved(current)));
+    }, (caught: unknown) => {
+      setFailure(caught instanceof Error ? caught.message : "Could not read the ledger");
+    });
+    const tick = () => {
+      if (shownNow === null) return;
+      const now = readAt.now + Date.now() - readAt.wall;
+      const moved = follow(now);
+      setLoaded((current) => (current ? { ...current, now } : current));
+      setAt(moved);
+    };
+    return { ...reads, tick };
+  });
+  // The stream is opened before the first read, so a change made meanwhile is read too.
+  useChangeSignal(!DEMO, read, changed);
+  useEffect(() => { void read(); }, [read]);
+  // A snapshot or the demo never changes on its own, so it is read once. Anything else is reread, also while the first read has yet to succeed.
+  const live = !DEMO && loaded?.replayable !== true;
+  useEvery(live, REREAD_MS, read);
+  useEvery(live, CLOCK_MS, tick);
+  return { loaded, failure, picked, setAt, read };
 }
 
 // Every action goes the same way: shown as done at once, sent, then the board is read again. The demo's own
@@ -224,6 +259,7 @@ function Lost({ failure }: { failure: string | null }) {
 }
 
 // The demo's invented work, made on the first read. Actions change it the way the backend would.
+if (DEMO) readDeliveriesWith(async (askId) => demoDelivery(askId));
 let demo: { ledger: DemoLedger; now: number } | null = null;
 
 function demoNow() {
@@ -234,46 +270,38 @@ function demoNow() {
   return demo;
 }
 
+// The demo types an answer into its terminal a moment after it is sent.
 async function demoSend(action: OperatorAction) {
   const current = demoNow();
   current.ledger = applyDemo(current.ledger, action, current.now);
+  if (action.kind !== "answer") return;
+  answered(action.askId, { state: "pending" }, action.askId);
+  window.setTimeout(() => void recheck(), 1500);
 }
 
-async function load(): Promise<Loaded> {
+async function load(shown: Fetched | null): Promise<Fresh> {
   if (DEMO) {
     const { ledger, now } = demoNow();
-    return { board: buildBoard(ledger.hydrated, {}, ledger.archived).board, now, busiest: now, samples: [], replayable: false, settings: {} };
+    return { loaded: { board: buildBoard(ledger.hydrated, {}, ledger.archived).board, now, busiest: now, samples: [], replayable: false, settings: {} }, fetched: null };
   }
-  const [hydrated, archived, history, local] = await Promise.all([
-    ledger(),
-    shelf(),
+  const [fetched, history, local] = await Promise.all([
+    readBoard(shown),
     sketchOnly<Record<string, HistoryEvent[]>>("/__snapshot/history"),
     sketchOnly<{ areas?: AreaRule[]; samples?: SampleRule[] }>("/__snapshot/local"),
   ]);
+  if (!fetched) return null;
   setAreas(local?.areas ?? []);
   setSamples(local?.samples ?? []);
-  const { board, now } = buildBoard(hydrated, history ?? {}, archived);
+  const { hydrated, archived } = fetched;
+  const { board, now } = buildBoard(hydrated.body, history ?? {}, archived?.body ?? null);
   // Against a backend there is no history to replay: the board shows the present.
-  const settings = hydrated.settings ?? {};
-  if (!history) return { board, now, busiest: now, samples: [], replayable: false, settings };
+  const settings = hydrated.body.settings ?? {};
+  if (!history) return { loaded: { board, now, busiest: now, samples: [], replayable: false, settings }, fetched };
 
   const start = now - REPLAY_DAYS * 24 * 3600e3;
   const samples = Array.from({ length: (now - start) / STEP_MS + 1 }, (_unused, index) => liveCountAt(board.goals, start + index * STEP_MS));
   const busiest = start + samples.indexOf(Math.max(...samples)) * STEP_MS;
-  return { board, now, busiest, samples, replayable: true, settings };
-}
-
-// A refused or failed read is an error, not an empty ledger.
-async function ledger(): Promise<Hydrated> {
-  const response = await fetch(api("/dashboard/hydrated"), { headers: { accept: "application/json" } });
-  if (!response.ok) throw new Error(`Could not read the ledger (${response.status})`);
-  return (await response.json()) as Hydrated;
-}
-
-// Archived goals are read separately. Without them the board still shows everything else.
-async function shelf(): Promise<Archived | null> {
-  const response = await fetch(api("/dashboard?surface=archived"), { headers: { accept: "application/json" } }).catch(() => null);
-  return response?.ok ? ((await response.json()) as Archived) : null;
+  return { loaded: { board, now, busiest, samples, replayable: true, settings }, fetched };
 }
 
 // These routes exist on the snapshot server only, so only a development server is asked.
@@ -306,13 +334,12 @@ function lastLookAt(seenAt: number | null, at: number, replayable: boolean) {
   return replayable ? at - AWAY_MS : at;
 }
 
-// Against a backend the board also rereads once a minute, so the time each package has spent keeps moving.
-function useReread(active: boolean, read: () => void) {
+function useEvery(active: boolean, ms: number, run: () => void) {
   useEffect(() => {
     if (!active) return undefined;
-    const timer = window.setInterval(read, REREAD_MS);
+    const timer = window.setInterval(run, ms);
     return () => window.clearInterval(timer);
-  }, [active, read]);
+  }, [active, ms, run]);
 }
 
 // The phone has no replay bar, so it always shows the present.
@@ -324,21 +351,22 @@ function followNow(current: number, before: number, now: number) {
   return current >= before ? now : current;
 }
 
-// The backend only says that something changed; the board then reads everything again.
-// This stream is also how the backend knows a board is open, so that it does not open another one.
+// The backend only says that something changed; the board then asks whether its read is still current, and looks
+// again at answers still being typed. This stream is also how the backend knows a board is open, so that it does
+// not open another one.
 function useChangeSignal(active: boolean, read: () => void, changed: () => void) {
   useEffect(() => {
     if (!active) return undefined;
-    const stream = new EventSource(api("/dashboard/events"));
-    let connected = false;
-    // The stream also opens after a reconnect, when changes may have been missed.
-    const onOpen = () => {
-      if (connected) read();
-      connected = true;
-    };
-    stream.addEventListener("open", onOpen);
-    stream.addEventListener("dashboard_changed", changed);
-    return () => stream.close();
+    return listen(api("/dashboard/events"), {
+      read: () => {
+        read();
+        void recheck();
+      },
+      changed: () => {
+        changed();
+        void recheck();
+      },
+    });
   }, [active, read, changed]);
 }
 

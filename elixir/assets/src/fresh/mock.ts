@@ -1,6 +1,7 @@
 // The demo ledger: invented work shaped like the owner's real repositories and chief topics, in the backend's
 // own payload, with every v2 state on it at least once. Operator actions change it in memory the way the
 // backend would. It is the preview's data and the model's test fixture.
+import type { Delivery } from "./delivery";
 import type { Archived, AskEntry, CardEntry, DecisionEntry, Detail, Hydrated, Owned, Prompt, Request, Slice } from "./model";
 import type { OperatorAction } from "./operator";
 
@@ -283,6 +284,11 @@ export function demoLedger(now: number, variant: DemoVariant = "busy"): DemoLedg
   }
   const vod: Request = { id: "wr-vod", title: "Kraken: VOD playback retry", phase: "archived", repo: KRAKEN, repo_display: KRAKEN, base_branch: "main", inserted_at: iso(now, 12 * DAY), completed_at: iso(now, 9 * DAY), archived_at: iso(now, 6 * DAY), area_path: AREAS[KRAKEN] };
   return { hydrated: { generated_at: new Date(now).toISOString(), settings: {}, work_request_details: details, cards }, archived: { archived_work_requests: { work_requests: [vod] } } };
+}
+
+// What became of an answer once the demo typed it: the alerts worker's terminal stopped mid-send, the rest arrived.
+export function demoDelivery(askId: string): Delivery {
+  return askId === "ask-slack" ? { state: "not_delivered", reason: "delivery_interrupted" } : { state: "delivered" };
 }
 
 // The demo answers an action the way the backend would, on a copy of the ledger.

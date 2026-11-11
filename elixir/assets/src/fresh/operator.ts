@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react";
 
 import { api } from "./api";
+import { answered, type Delivery } from "./delivery";
 
 // Everything the operator can do from the board. None of it stops a running worker or merges a PR.
 export type GoalStep = "complete" | "archive" | "restore" | "delete";
@@ -95,10 +96,17 @@ function refusalText(payload: Refusal | null) {
 }
 
 // Resolves once every request of the action went through, or was already done; rejects with a refusal in words.
+// A saved answer is then followed until the factory has typed it into the terminal that asked, or could not.
 export async function send(action: OperatorAction) {
   for (const [path, body] of requests(action)) {
     const response = await fetch(api(path), { method: "POST", headers: { accept: "application/json", "content-type": "application/json" }, body: JSON.stringify(body) }).catch(() => null);
-    if (response?.ok) continue;
+    if (response?.ok) {
+      if (action.kind === "answer") {
+        const saved = (await response.json().catch(() => null)) as { delivery?: Delivery | null; delivery_route?: string | null } | null;
+        answered(action.askId, saved?.delivery ?? null, saved?.delivery_route ?? null);
+      }
+      continue;
+    }
     if (!response) throw new Error("Could not reach the backend.");
     const payload = (await response.json().catch(() => null)) as Refusal | null;
     if (!handled(action, payload)) throw new Error(refusalText(payload));

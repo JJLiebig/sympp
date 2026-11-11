@@ -1,15 +1,18 @@
 import { LoaderCircle } from "lucide-react";
 import { useId, useLayoutEffect, useRef, useState } from "react";
 
+import { track } from "./delivery";
 import { answerAsk } from "./exits";
 import { useKept } from "./kept";
 import { span, type Ask, type Board, type Choice, type GoalView } from "./model";
+import type { Unarrived } from "./delivery";
 import { Presence, useOpenWhenBrought } from "./motion";
 import { REDIRECT, useAct, type Answer } from "./operator";
 import { Fold, LINK } from "./parts";
 import { useOperation } from "./pending";
 import { PhaseBadge, reportFor } from "./report";
 import { Reveal } from "./reveal";
+import { UnarrivedAnswer } from "./unarrived";
 
 // What the ask is about: its goal, with the package it names, or the card it came from.
 export type Subject = { title: string; goalId: string | null; view: GoalView | null; repo: string; summary: string; about: string | null };
@@ -27,18 +30,22 @@ export function subjectOf(ask: Ask, board: Board, views: GoalView[]): Subject {
 
 const repoName = (repo: string) => repo.split("/").pop() ?? "";
 
-// Every question waiting on the operator, oldest first, each with its answer form.
-// `onGoal` lifts the area filter before it goes to the ask's goal, which may be filtered out.
-export function NeedsYou({ asks, at, board, onGoal, views }: { asks: Ask[]; at: number; board: Board; onGoal: (goalId: string) => void; views: GoalView[] }) {
+// Every question waiting on the operator, oldest first, each with its answer form, then the answers that did not
+// reach the terminal that asked. `onGoal` lifts the area filter before it goes to the ask's goal, which may be filtered out.
+export function NeedsYou({ asks, at, board, onGoal, unarrived, views }: { asks: Ask[]; at: number; board: Board; onGoal: (goalId: string) => void; unarrived: Unarrived[]; views: GoalView[] }) {
   const sorted = [...asks].sort((left, right) => left.from - right.from);
+  const count = asks.length + unarrived.length;
 
   return (
-    <Reveal className="mb-8" holds={asks.map((ask) => ask.id)} show={asks.length > 0}>
+    <Reveal className="mb-8" holds={[...asks, ...unarrived.map((entry) => entry.ask)].map((ask) => ask.id)} show={count > 0}>
       <section id="needs-you">
-        <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-you">Needs you · {asks.length}</h2>
+        <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-you">Needs you · {count}</h2>
         <ul className="divide-y divide-line border-y border-line">
           <Presence items={sorted} keyOf={(ask) => ask.id}>
             {({ item, key, ref }) => <AskItem key={key} ref={ref} ask={item} at={at} subject={subjectOf(item, board, views)} onGoal={onGoal} />}
+          </Presence>
+          <Presence items={unarrived} keyOf={(entry) => `unarrived:${entry.ask.id}`}>
+            {({ item, key, ref }) => <UnarrivedAnswer key={key} ref={ref} board={board} className="py-4 pl-7 pr-2" entry={item} views={views} onGoal={onGoal} />}
           </Presence>
         </ul>
       </section>
@@ -157,6 +164,7 @@ export function AnswerForm({ ask, entered, onEnter, touch }: { ask: Ask; entered
 
   const submit = () => {
     if (!ready || busy) return;
+    track(ask, spoken(ask, answer));
     void answerAsk(ask.id, form.current?.closest<HTMLElement>("[data-ask]") ?? null, () => act({ kind: "answer", askId: ask.id, answer }));
   };
 
@@ -221,6 +229,15 @@ function placeholderFor(noting: boolean, redirecting: boolean) {
 function draft(chosen: boolean, choice: string | null, text: string): { answer: Answer; ready: boolean } {
   if (!chosen) return { answer: { text }, ready: text !== "" };
   return { answer: { choice: choice ?? "", note: text }, ready: choice !== null && (choice !== REDIRECT || text !== "") };
+}
+
+// The answer in words, for when it has to be given by hand: the factory's own wording replaces it once the board reads it.
+function spoken(ask: Ask, answer: Answer) {
+  if (!("choice" in answer)) return answer.text;
+  if (answer.choice === REDIRECT) return answer.note;
+  const label = ask.choices.find((choice) => choice.id === answer.choice)?.label ?? answer.choice;
+  return answer.note ? `${label}
+${answer.note}` : label;
 }
 
 // One choice as a row of the form: a radio, the label, and what speaks for and against it. Arrow keys move

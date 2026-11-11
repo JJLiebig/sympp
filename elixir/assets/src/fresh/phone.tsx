@@ -7,6 +7,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState, useSyncExternal
 import { areaLabel } from "./areas";
 import type { Lanes } from "./board";
 import type { visibleCards } from "./cards";
+import type { Unarrived } from "./delivery";
 import { needsReview, span, type Ask, type Board, type Decision, type GoalView, type Settings } from "./model";
 import { calm, Presence } from "./motion";
 import { useAct, type OperatorAction } from "./operator";
@@ -18,6 +19,7 @@ import { DotStrip, GoalTitle, PhaseBadge, reportFor } from "./report";
 import { BoardMenu } from "./settings";
 import { SinceChip, type Changes } from "./since";
 import { isBroken, TROUBLE_WORD, troublesOf, type Trouble } from "./trouble";
+import { UnarrivedAnswer } from "./unarrived";
 
 const PHONE = "(max-width: 640px)";
 
@@ -41,6 +43,8 @@ export type PhoneProps = {
   views: GoalView[];
   lanes: Lanes;
   asks: Ask[];
+  // Answers that did not reach the terminal that asked.
+  unarrived: Unarrived[];
   cards: Cards;
   shownCards: Cards;
   changes: Changes;
@@ -108,22 +112,23 @@ function usePlace(fallback: Tab) {
   };
 }
 
-// Everything in Needs you, in its four parts. The tab's count is their sum.
-type Inbox = { asks: Ask[]; broken: Trouble[]; stuck: Trouble[]; decisions: Decision[]; total: number };
+// Everything in Needs you, in its four parts. The tab's count is their sum. Undelivered answers count as questions.
+type Inbox = { asks: Ask[]; unarrived: Unarrived[]; broken: Trouble[]; stuck: Trouble[]; decisions: Decision[]; total: number };
 // What the operator can settle from here comes first.
 const STUCK_ORDER = ["unresolved", "release", "waits", "exited", "silent"];
 const stuckKind = (trouble: Trouble) => (trouble.kind === "silent" && trouble.pkg === null ? "release" : trouble.kind);
 
-function inboxOf({ asks, at, board, cards, views }: PhoneProps): Inbox {
+function inboxOf({ asks, at, board, cards, unarrived, views }: PhoneProps): Inbox {
   const troubles = troublesOf(views, cards, at);
   const decisions = board.decisions.filter((entry) => entry.at <= at && needsReview(entry));
   const parts = {
     asks: [...asks].sort((left, right) => left.from - right.from),
+    unarrived,
     broken: troubles.filter(isBroken),
     stuck: troubles.filter((trouble) => !isBroken(trouble)).sort((left, right) => STUCK_ORDER.indexOf(stuckKind(left)) - STUCK_ORDER.indexOf(stuckKind(right))),
     decisions: decisions.sort((left, right) => right.at - left.at),
   };
-  return { ...parts, total: parts.asks.length + parts.broken.length + parts.stuck.length + parts.decisions.length };
+  return { ...parts, total: parts.asks.length + parts.unarrived.length + parts.broken.length + parts.stuck.length + parts.decisions.length };
 }
 
 export function PhoneBoard(props: PhoneProps) {
@@ -219,7 +224,7 @@ function YouTab({ at, board, inbox, onGoals, onOpen, views }: PhoneProps & { inb
     <>
       <Glance
         counts={[
-          { id: "questions", label: "Questions", count: inbox.asks.length, tone: "text-you" },
+          { id: "questions", label: "Questions", count: inbox.asks.length + inbox.unarrived.length, tone: "text-you" },
           { id: "broken", label: "Broken", count: inbox.broken.length, tone: "text-fail" },
           { id: "stuck", label: "Stuck", count: inbox.stuck.length, tone: "text-checks" },
           { id: "decisions", label: "Decisions", count: inbox.decisions.length, tone: "text-ink" },
@@ -227,6 +232,9 @@ function YouTab({ at, board, inbox, onGoals, onOpen, views }: PhoneProps & { inb
       />
       <Group id="questions" items={inbox.asks} keyOf={(ask) => ask.id} label="Questions" tone="text-you">
         {(ask, ref) => <AskCard ref={ref} ask={ask} at={at} board={board} views={views} onOpen={onOpen} />}
+      </Group>
+      <Group id="undelivered" items={inbox.unarrived} keyOf={(entry) => entry.ask.id} label="Undelivered answers" tone="text-checks">
+        {(entry, ref) => <UnarrivedAnswer touch ref={ref} board={board} className={`${CARD} ${INSET} py-4`} entry={entry} views={views} onGoal={onOpen} />}
       </Group>
       <Group id="broken" items={inbox.broken} keyOf={(trouble) => trouble.key} label="Broken" tone="text-fail">
         {(trouble, ref) => <TroubleCard ref={ref} at={at} trouble={trouble} onOpen={onOpen} />}
