@@ -116,6 +116,14 @@ function ActionMenu<K extends string>({ className, items, label, onPick }: { cla
     setArmed(null);
   };
   const move = (event: KeyPress<HTMLElement>) => {
+    // Back out to the ⋯ button closes the menu like Escape; Tab onward closes it when focus leaves.
+    if (event.key === "Tab" && event.shiftKey) {
+      event.preventDefault();
+      trigger.current?.focus();
+      setOpen(false);
+      setArmed(null);
+      return;
+    }
     const step = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
     if (!step || !menu.current) return;
     event.preventDefault();
