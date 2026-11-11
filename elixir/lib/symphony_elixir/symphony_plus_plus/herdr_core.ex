@@ -252,7 +252,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   defp load_uncached_snapshot(command, now, fresh?, cached) do
     if not fresh? and Process.get(@cached_reads_key, false) do
       good = last_good(cached, command)
-      refresh_background(command)
+      refresh_background(command, good, now)
       {:unavailable, good}
     else
       result = load_command(command)
@@ -262,7 +262,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
     end
   end
 
-  defp refresh_background(command) do
+  defp refresh_background(command, previous_good, started_at) do
     pending? =
       case :persistent_term.get(@refresh_key, nil) do
         {^command, pid} -> Process.alive?(pid)
@@ -272,22 +272,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
     unless pending? do
       {:ok, pid} =
         Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-          refresh_and_notify(command)
+          refresh_and_notify(previous_good, started_at)
         end)
 
       :persistent_term.put(@refresh_key, {command, pid})
     end
   end
 
-  defp refresh_and_notify(command) do
-    previous =
-      case :persistent_term.get(@cache_key, nil) do
-        {^command, _at, result, _good} -> result
-        _missing -> :unavailable
-      end
+  defp refresh_and_notify(previous_good, started_at) do
+    result = refresh()
+    now = System.monotonic_time(:millisecond)
 
-    if refresh() != previous, do: DashboardPubSub.broadcast_changed()
+    # Compare against what the dashboard could use, not an expired snapshot
+    # that it had to present as unknown. Capture it when scheduling, before
+    # another caller can update the shared cache.
+    previous = usable_good(previous_good, started_at)
+    fallback = usable_good(previous_good, now)
+    current = if result == :unavailable, do: fallback, else: result
+
+    if current != previous or (fallback == :unavailable and result != :unavailable),
+      do: DashboardPubSub.broadcast_changed()
   end
+
+  defp usable_good({at, snapshot}, now) when now - at < @last_good_ms, do: snapshot
+  defp usable_good(_expired_or_missing, _now), do: :unavailable
 
   defp last_good({command, _at, _result, good}, command), do: good
   defp last_good(_cached, _command), do: nil
