@@ -215,6 +215,7 @@ export default class Lens extends View {
     if (this.reading || !this.endpoint) return;
     this.reading = true;
     const turn = ++this.turn;
+    const since = C.readStarts();
     this.net = M.fetchStarted(this.net, Date.now());
     cx.spawn(async (cx) => {
       let outcome;
@@ -242,7 +243,7 @@ export default class Lens extends View {
       this.reading = false;
       if (turn !== this.turn) return;
       const now = Date.now();
-      if (outcome.board) outcome.board = this.drawn(outcome.payload, outcome.board);
+      if (outcome.board) outcome.board = this.drawn(outcome.payload, outcome.board, since);
       this.net = outcome.board ? M.fetchSucceeded(this.net, outcome.board, now) : M.fetchFailed(this.net, outcome.error, now);
       if (outcome.unreachable) this.startServer(cx);
       if (outcome.board) {
@@ -942,10 +943,11 @@ export default class Lens extends View {
     cx.notify();
   }
 
-  // A read as drawn: the person's actions still on their way, or agreed and not read yet, shown done.
-  drawn(payload, board = null) {
+  // A read as drawn: the person's actions still on their way, or agreed and not read yet, shown done. Only a
+  // fresh read, begun at `since`, ends the actions it shows; redrawing the last one ends nothing.
+  drawn(payload, board = null, since = null) {
     this.payload = payload;
-    C.settle(this.taken, payload);
+    if (since !== null) C.settle(this.taken, payload, since);
     return this.taken.length || !board ? M.parseBoard(C.project(payload, this.taken)) : board;
   }
 
@@ -960,14 +962,16 @@ export default class Lens extends View {
     return C.take(this.taken, C.actionOf(path, body), () => C.postAction(this.endpoint, path, body, this.request), () => this.redraw(cx));
   }
 
-  // One operator action, then a fresh read. A refusal stays beside the control that sent it.
-  operate(key, path, body, cx) {
+  // One operator action, then a fresh read. A refusal stays beside the control that sent it; `refused`
+  // runs too, so a view that moved on can go back to it.
+  operate(key, path, body, cx, refused = null) {
     const op = this.ops[key] = { ...(this.ops[key] ?? {}), armed: false };
     if (op.pending) return;
     cx.spawn(async (cx) => {
       const submission = C.submitAction(op, async () => this.send(path, body, cx), () => { delete this.ops[key]; this.retry(cx); });
       cx.notify();
       await submission;
+      if (op.error) refused?.(cx);
       cx.notify();
     });
   }

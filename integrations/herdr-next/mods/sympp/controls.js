@@ -106,6 +106,10 @@ const HANDLED = {
   "work-requests/release": (error) => error.code === "not_owned",
 };
 
+// Reads and agreements in the order they happened: a read only settles what the factory agreed to before it began.
+let clock = 0;
+export const readStarts = () => ++clock;
+
 // Sends `act` after any earlier action on the same task still on its way. Taking the latest action on something
 // again, such as a second click, does not send it again. `changed` runs when what is drawn changes.
 // Resolves with the factory's reply (null when it was already done); rejects with the refusal.
@@ -117,9 +121,9 @@ export function take(list, act, send, changed = () => {}) {
   const earlier = list.filter((entry) => !entry.agreed && entry.subject === act.subject).map((entry) => entry.answer.catch(() => null));
   const entry = { act, key: act.key, subject: act.subject, agreed: false, answer: null };
   entry.answer = (earlier.length ? Promise.all(earlier).then(send) : send()).then(
-    (payload) => { entry.agreed = true; return payload; },
+    (payload) => { entry.agreed = true; entry.agreedAt = ++clock; return payload; },
     (error) => {
-      if (HANDLED[`${act.kind}/${act.step}`]?.(error)) { entry.agreed = true; return null; }
+      if (HANDLED[`${act.kind}/${act.step}`]?.(error)) { entry.agreed = true; entry.agreedAt = ++clock; return null; }
       list.splice(list.indexOf(entry), 1);
       throw error;
     },
@@ -129,13 +133,14 @@ export function take(list, act, send, changed = () => {}) {
   return entry.answer;
 }
 
-// A fresh read that shows an agreed action's outcome ends it, along with the agreed actions taken before it on the
-// same task: the factory took them first, so the read has them too, even where a later one undid them.
-export function settle(list, payload) {
+// A read begun at `since` (readStarts) that shows an agreed action's outcome ends it, along with the agreed actions
+// taken before it on the same task: the factory took them first, so the read has them too, even where a later one
+// undid them. A read begun before the factory agreed may predate the action, so it ends nothing.
+export function settle(list, payload, since) {
   if (!Array.isArray(payload?.work_request_details)) return;
   const ended = new Set();
   list.forEach((entry, index) => {
-    if (!entry.agreed || !holds(payload, entry.act)) return;
+    if (!entry.agreed || entry.agreedAt > since || !holds(payload, entry.act)) return;
     for (const before of list.slice(0, index + 1)) if (before.agreed && before.subject === entry.subject) ended.add(before);
   });
   for (const entry of ended) list.splice(list.indexOf(entry), 1);
@@ -158,6 +163,14 @@ const packageOf = (payload, id) => details(payload).flatMap((detail) => detail.w
 const cardOf = (payload, id) => (payload.cards ?? []).find((card) => card.id === id);
 const dropDecision = (payload, id) => details(payload).forEach((detail) => { detail.decisions_to_review = (detail.decisions_to_review ?? []).filter((d) => d.id !== id); });
 const phaseIs = (detail, value) => detail?.work_request?.phase === value;
+// Restoring only clears the archive; the factory then reads the phase off the task as it stands.
+function restoredPhase(detail) {
+  if (detail.work_request.completed_at) return "done";
+  const statuses = (detail.work_packages ?? []).map((pkg) => pkg.status);
+  if (!statuses.length) return "intake";
+  if (statuses.some((status) => status === "dispatched" || status === "ready")) return "active";
+  return statuses.some((status) => status !== "ended") ? "planned" : "unresolved";
+}
 // Closing a task withdraws its questions.
 const close = (detail, fields) => { Object.assign(detail.work_request, fields); detail.asks = []; };
 
@@ -202,7 +215,7 @@ const OUTCOMES = {
   },
   "work-requests/restore": {
     holds: (p, act) => !phaseIs(requestOf(p, act.id), "archived"),
-    apply: (p, act) => { const request = requestOf(p, act.id).work_request; Object.assign(request, { phase: request.completed_at ? "done" : "intake", archived_at: null }); },
+    apply: (p, act) => { const detail = requestOf(p, act.id); Object.assign(detail.work_request, { phase: restoredPhase(detail), archived_at: null }); },
   },
   "work-requests/delete": {
     holds: (p, act) => !requestOf(p, act.id),

@@ -264,17 +264,19 @@ test('a read taken before the factory caught up does not bring an answered quest
   const list = [];
   const factory = (path, body) => async () => { payload = structuredClone(payload); applyDemo(payload, path, body); return { ok: true }; };
   await C.take(list, C.actionOf(`${H}/asks/q1/answer`, { answer: 'Levels first.' }), factory(`${H}/asks/q1/answer`, { answer: 'Levels first.' }));
-  C.settle(list, stale);
+  C.settle(list, stale, C.readStarts());
   assert.equal(asks(drawn(stale, list)).includes('q1'), false);
-  C.settle(list, payload);
+  C.settle(list, payload, C.readStarts());
   assert.equal(list.length, 0, 'a read that shows it answered ends it');
 });
 
 test("a task's steps go to the factory in the order taken, and a step undone before the next read does not stick", async () => {
   let payload = variantPayload('busy');
+  const before = payload;
   const list = [];
   const sent = [];
   const completing = later();
+  const early = C.readStarts();
   const step = (name) => C.take(list, C.actionOf(`${H}/work-requests/wr-recap/${name}`), async () => {
     sent.push(name);
     if (name === 'complete') await completing.promise;
@@ -291,9 +293,20 @@ test("a task's steps go to the factory in the order taken, and a step undone bef
   await Promise.all([complete, archive]);
   await step('restore');
   assert.deepEqual(sent, ['complete', 'archive', 'restore']);
-  C.settle(list, payload);
+  // A read begun before the factory agreed predates the steps, though it is not archived either.
+  C.settle(list, before, early);
+  assert.equal(drawn(before, list).jobs.find((job) => job.id === 'wr-recap').phase, 'done');
+  C.settle(list, payload, C.readStarts());
   assert.equal(list.length, 0);
   assert.equal(drawn(payload, list).jobs.find((job) => job.id === 'wr-recap').phase, 'done');
   await step('archive');
   assert.deepEqual(sent.at(-1), 'archive', 'archiving again is a new step, not a second click');
+});
+
+test('a restored task shows the phase the factory reads off it', () => {
+  const payload = variantPayload('busy');
+  applyDemo(payload, `${H}/work-requests/wr-recap/archive`);
+  const list = [];
+  C.take(list, C.actionOf(`${H}/work-requests/wr-recap/restore`), () => new Promise(() => {}));
+  assert.equal(drawn(payload, list).jobs.find((job) => job.id === 'wr-recap').phase, 'unresolved');
 });

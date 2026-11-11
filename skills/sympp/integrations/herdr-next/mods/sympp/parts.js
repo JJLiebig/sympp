@@ -197,7 +197,12 @@ export function phaseActions(v, t, job) {
   const go = (step) => (cx) => v.operate(`${step}:${job.id}`, `${path}/${step}`, {}, cx);
   const error = ["complete", "archive", "restore", "delete"].map((step) => v.ops[`${step}:${job.id}`]?.error).find(Boolean);
   const remove = confirmButton(v, t, `delete-${job.id}`, "Delete", "Delete this task?", `delete:${job.id}`,
-    (cx) => { v.operate(`delete:${job.id}`, `${path}/delete`, {}, cx); if (v.level !== "factory" && !v.pinned) v.goUp(cx); });
+    (cx) => {
+      // The task leaves at once; a refusal brings the view back to it, with the reason beside Delete.
+      const from = v.path;
+      v.operate(`delete:${job.id}`, `${path}/delete`, {}, cx, (cx) => v.go(from, cx));
+      if (v.level !== "factory" && !v.pinned) v.goUp(cx);
+    });
   const list = job.phase === "archived" ? [ghost(t, `restore-${job.id}`, "Restore", go("restore"))]
     : job.phase === "done" ? [ghost(t, `archive-${job.id}`, "Archive", go("archive"))]
       : [confirmButton(v, t, `complete-${job.id}`, "Complete", "Complete this task?", `complete:${job.id}`, go("complete")),

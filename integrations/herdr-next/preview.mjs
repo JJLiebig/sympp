@@ -39,7 +39,7 @@ export default class Preview extends Lens {
     const now = Date.now();
     // Actions on their way to a factory that never answers, as drawn the moment they were taken.
     for (const [path, body] of CASE.taken ?? []) C.take(this.taken, C.actionOf(path, body), () => new Promise(() => {}));
-    this.net = M.fetchSucceeded(this.net, this.drawn(this.sample), now);
+    this.net = M.fetchSucceeded(this.net, this.drawn(this.sample, null, C.readStarts()), now);
     if (CASE.error) this.net = M.fetchFailed(this.net, CASE.error, now);
     if (CASE.path) this.path = { topic: null, space: null, job: null, ...CASE.path };
     if (CASE.pin) this.pin = true;
@@ -56,7 +56,7 @@ export default class Preview extends Lens {
   tick() {}
   // A read only redraws the sample; it shares nothing with other mods.
   read(cx) {
-    this.net = M.fetchSucceeded(this.net, this.drawn(this.sample), Date.now());
+    this.net = M.fetchSucceeded(this.net, this.drawn(this.sample, null, C.readStarts()), Date.now());
     cx.notify();
   }
   openInTab() {}
