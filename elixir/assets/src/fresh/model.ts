@@ -1,5 +1,5 @@
 // Clean-slate model. A Goal is a WorkRequest; a Pkg is a WorkPackage with the stages it has moved through.
-import { areaFor } from "./areas";
+import { areaFor, githubSlug, type Slug } from "./areas";
 
 // A package's progress is derived from what its worker terminal, its PR, CI and Review Suite show.
 export type Stage = "planned" | "launching" | "implementing" | "review_ci" | "ready" | "ended";
@@ -57,7 +57,7 @@ export type ArchitectReport = { brief: Note | null; eta: Note | null; parked: No
 export type DeployStep = { env: "Dev" | "Prod"; state: "ok" | "failed" | "pending" | "waiting"; at: number | null };
 export type Phase = "intake" | "planned" | "active" | "done" | "unresolved" | "archived";
 // `phase` is the backend's reading of the goal when it was read. `completedAt` and `archivedAt` place it in time for a replay.
-export type Goal = { id: string; title: string; area: string[]; repo: string; baseBranch: string | null; defaultBranch: string | null; createdAt: number; phase: Phase; completedAt: number | null; archivedAt: number | null; pkgs: Pkg[]; owner: Terminal | null; report?: ArchitectReport; deploy?: DeployStep[] };
+export type Goal = { id: string; title: string; area: string[]; org: string | null; repo: string; baseBranch: string | null; defaultBranch: string | null; createdAt: number; phase: Phase; completedAt: number | null; archivedAt: number | null; pkgs: Pkg[]; owner: Terminal | null; report?: ArchitectReport; deploy?: DeployStep[] };
 
 // A question for the operator. Its subject is a goal (optionally one of its packages) or a card.
 // With choices the answer is one of them; `redirect` names the extra choice of answering in free text instead.
@@ -171,12 +171,15 @@ function buildGoal(detail: Detail, history: Record<string, HistoryEvent[]>, now:
   const request = detail.work_request;
   const title = request.title || request.id;
   const repo = request.repo_display || request.repo || "";
-  const area = areaOf(request.area_path, repo);
+  // A display name can be a bare repository name; the remote keeps the owner.
+  const slug = githubSlug(request.repo_remote, repo, request.repo);
+  const area = areaOf(request.area_path, repo, slug);
 
   return {
     id: request.id,
     title,
     area,
+    org: slug?.owner ?? null,
     repo,
     baseBranch: request.base_branch ?? null,
     defaultBranch: request.default_branch ?? null,
@@ -294,8 +297,8 @@ function staleOf(values: string[] | null | undefined): Stale[] {
 }
 
 // The backend's operator-owned labels come first; the local mapping only files what they leave out.
-function areaOf(labelled: string[] | null | undefined, repo: string) {
-  return labelled?.length ? labelled : areaFor(repo);
+function areaOf(labelled: string[] | null | undefined, repo: string, slug: Slug | null) {
+  return labelled?.length ? labelled : areaFor(repo, slug);
 }
 
 const ENVS = [["dev", "Dev"], ["prod", "Prod"]] as const;

@@ -5,7 +5,7 @@ import { areaLabel } from "./areas";
 import { GoalOwner, lanesOf, UnresolvedLine } from "./board";
 import { deployAt, type Goal, type GoalView } from "./model";
 import { Presence } from "./motion";
-import { Deploy, deployLabel, Fold, Pip } from "./parts";
+import { Deploy, deployLabel, Fold, OrgIcon, Pip } from "./parts";
 import { Brief, DotStrip, GoalPackages, GoalTitle, NeedsYouFlag, PhaseBadge, phaseStates, reportFor, useGoalLevel, usePhaseControl, type PhaseState } from "./report";
 import { Reveal } from "./reveal";
 import { SinceChip } from "./since";
@@ -44,7 +44,8 @@ function GoalRoute({ at, ref, view }: { at: number; ref: (node: HTMLElement | nu
         <Fold className="-ml-1 mr-2" label={view.goal.title} open={level !== "closed"} onToggle={toggle} />
         {/* A click anywhere on the title line folds too; keyboards use the chevron. */}
         <span className="flex min-w-0 flex-1 cursor-pointer items-baseline gap-3" onClick={toggle}>
-          <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">{areaLabel(view.goal.area.slice(-1))}</span>
+          <OrgIcon org={view.goal.org} />
+          <span className="-ml-1 shrink-0 text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">{areaLabel(view.goal.area.slice(-1))}</span>
           <span className="min-w-0 flex-1 truncate font-semibold">
             <GoalTitle goal={view.goal} />
           </span>

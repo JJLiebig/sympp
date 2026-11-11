@@ -3,10 +3,11 @@ import { lanesOf, UnresolvedLine } from "./board";
 import { AreaTag, GoalHead } from "./goal-head";
 import type { GoalView } from "./model";
 import { Presence } from "./motion";
+import { OrgIcon } from "./parts";
 import { GoalPackages, reportFor, useGoalLevel, wantsAttention } from "./report";
 import { Reveal } from "./reveal";
 
-type BlockOf = { label: string; tagged?: boolean; tone: string; views: GoalView[] };
+type BlockOf = { label: string; org?: string | null; tagged?: boolean; tone: string; views: GoalView[] };
 
 // Direction 1: the old dropdown, alive. Goals that want attention come first; the rest are filed by area.
 export function Outline({ at, views }: { at: number; views: GoalView[] }) {
@@ -16,7 +17,12 @@ export function Outline({ at, views }: { at: number; views: GoalView[] }) {
   const areas = [...new Set(steady.map((view) => areaLabel(view.goal.area)))];
   const blocks: BlockOf[] = [
     ...(urgent.length > 0 ? [{ label: "Needs attention", tagged: true, tone: "text-ink", views: urgent }] : []),
-    ...areas.map((area) => ({ label: area, tone: "text-faint", views: steady.filter((view) => areaLabel(view.goal.area) === area) })),
+    ...areas.map((area) => {
+      const filed = steady.filter((view) => areaLabel(view.goal.area) === area);
+      // An area the board filed under a GitHub owner carries that owner's icon.
+      const org = filed[0].goal.org && filed[0].goal.area[0] === filed[0].goal.org ? filed[0].goal.org : null;
+      return { label: area, org, tone: "text-faint", views: filed };
+    }),
   ];
 
   return (
@@ -31,7 +37,10 @@ export function Outline({ at, views }: { at: number; views: GoalView[] }) {
 function Block({ at, block, ref }: { at: number; block: BlockOf; ref: (node: HTMLElement | null) => void }) {
   return (
     <section ref={ref}>
-      <h2 className={`mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${block.tone}`}>{block.label}</h2>
+      <h2 className={`mb-1 flex items-baseline gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] ${block.tone}`}>
+        <OrgIcon org={block.org ?? null} />
+        {block.label}
+      </h2>
       <div className="divide-y divide-line border-y border-line">
         <Presence items={block.views} keyOf={(view) => view.goal.id}>
           {({ item, key, ref: row }) => <GoalRow key={key} ref={row} at={at} tagged={block.tagged} view={item} />}

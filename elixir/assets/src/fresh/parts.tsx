@@ -1,5 +1,5 @@
 import { Check, ChevronRight, CircleDashed, ScanSearch, X } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { GoalActions, GoalRefusal, ShelfCleanup } from "./actions";
 import { areaLabel } from "./areas";
@@ -54,6 +54,25 @@ export const LINK = "rounded underline-offset-4 hover:text-ink hover:underline f
 // A glyph beside text, centred on that text's capitals (`.glyph` in fresh.css). It takes the type of the row it sits in.
 export function Glyph({ children }: { children: ReactNode }) {
   return <span className="glyph">{children}</span>;
+}
+
+// A GitHub owner's avatar, a rounded square the height of the text beside it. Until it loads, and if it can't,
+// the tile stays neutral and shows the owner's initial.
+export function OrgIcon({ org }: { org: string | null }) {
+  const [failed, setFailed] = useState<string | null>(null);
+  if (!org) return null;
+
+  return (
+    <Glyph>
+      <span aria-hidden className="size-[1em] items-center justify-center overflow-hidden rounded-[0.25em] bg-line text-dim" title={org}>
+        {failed === org ? (
+          <span className="text-[0.6em] font-semibold uppercase leading-none">{org[0]}</span>
+        ) : (
+          <img alt="" className="size-full" src={`https://github.com/${encodeURIComponent(org)}.png?size=64`} onError={() => setFailed(org)} />
+        )}
+      </span>
+    </Glyph>
+  );
 }
 
 // The chevron that opens and closes a goal or a question. Callers let its square overhang the row, so the text keeps its place,

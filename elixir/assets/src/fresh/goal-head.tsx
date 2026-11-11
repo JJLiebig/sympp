@@ -4,7 +4,7 @@ import { GoalActions, GoalRefusal } from "./actions";
 import { areaLabel } from "./areas";
 import { GoalOwner } from "./board";
 import type { GoalView } from "./model";
-import { Deploy, Fold } from "./parts";
+import { Deploy, Fold, OrgIcon } from "./parts";
 import { Brief, DotStrip, GoalTitle, NeedsYouFlag, PhaseBadge, type Report } from "./report";
 import { Reveal, Roll } from "./reveal";
 import { SinceChip } from "./since";
@@ -21,8 +21,11 @@ export function GoalHead({ at, area, big, open, report, toggle, view }: { at: nu
           <Fold className={`-mx-1 ${big ? "text-lg" : ""}`} label={view.goal.title} open={open} onToggle={toggle} />
           {/* A click anywhere on the title line folds too; keyboards use the chevron. */}
           <span className="flex min-w-0 flex-1 cursor-pointer flex-wrap items-baseline gap-x-3 gap-y-0.5" onClick={toggle}>
-            <span className={`min-w-0 max-w-full ${big ? "text-lg font-semibold leading-snug wrap-break-word" : "truncate font-medium"}`}>
-              <GoalTitle goal={view.goal} />
+            <span className={`flex min-w-0 max-w-full items-baseline gap-2 ${big ? "text-lg font-semibold leading-snug" : "font-medium"}`}>
+              <OrgIcon org={view.goal.org} />
+              <span className={`min-w-0 ${big ? "wrap-break-word" : "truncate"}`}>
+                <GoalTitle goal={view.goal} />
+              </span>
             </span>
             <PhaseBadge small={!big} view={view} />
             <NeedsYouFlag view={view} />

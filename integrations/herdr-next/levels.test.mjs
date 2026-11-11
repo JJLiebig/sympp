@@ -46,6 +46,17 @@ test('a labelled chief and Start chief share one entry without bypassing verifie
 const boardJobs = (requests) => M.parseBoard({ generated_at: new Date(NOW).toISOString(),
   work_request_details: requests.map((r) => ({ work_request: { phase: 'active', title: r.id, ...r }, work_packages: [] })) }).jobs;
 
+test("a task's area is the operator's when set, else its repository's GitHub owner, else Unfiled", () => {
+  const areas = Object.fromEntries(boardJobs([
+    { id: 'wr-org', repo: 'nextidemedia/live-chat' },
+    // A display name can be bare; the remote still names the owner.
+    { id: 'wr-bare', repo_display: 'sympp', repo_remote: 'JJLiebig/sympp' },
+    { id: 'wr-ruled', repo: 'nextidemedia/live-chat', area_path: ['Nextide', 'Live'] },
+    { id: 'wr-local', repo: 'notes' },
+  ]).map((job) => [job.id, job.area]));
+  assert.deepEqual(areas, { 'wr-org': ['nextidemedia', 'live-chat'], 'wr-bare': ['JJLiebig', 'sympp'], 'wr-ruled': ['Nextide', 'Live'], 'wr-local': ['Unfiled', 'notes'] });
+});
+
 test("a task sits under its owning chief's topic, even with no space for its repository here; else its repository's", () => {
   const { topics, spaces } = deskFixture();
   const desk = L.deskOf({ ...topics, groups: [...topics.groups, { id: 't-misc', name: 'Nextide-Misc', spaces: [] }] }, spaces);

@@ -24,8 +24,10 @@ Set these variables in the environment of the dashboard backend process.
 Use GitHub `owner/repository` as the repository key; casing is normalized.
 The dashboard resolves known remote and local checkout aliases through its
 existing repository identity catalog. An area has one to three nonblank text
-levels. Without a valid explicit mapping, `area_path` is `null`; the UI may
-display that request as Unfiled. Owner names never become area labels implicitly.
+levels. Without a valid explicit mapping, `area_path` is `null`. The board and
+the Herdr view then file the request under its GitHub owner and repository, for
+example `example-org › widget-service`, or under Unfiled when the repository has
+no owner. The board shows the owner's GitHub avatar beside each request.
 
 Machine keys must exactly match the `worker_host` already observed on an active
 worker agent run. Labels are free text; kind is `desktop`, `laptop`, or `server`.
