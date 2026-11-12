@@ -71,6 +71,8 @@ or architect; keep questions, blockers and the final handoff short.
 
 ## UI work
 
+Bind the dev server to `0.0.0.0` and publish a URL with this machine's reachable hostname, never `localhost`.
+
 Publish your dev server on your terminal with
 `hc label $HC_TERMINAL_ID sympp.preview_url=<url>`, and clear it with an empty
 value; in PowerShell, write `$env:HC_TERMINAL_ID`. Post screenshots at

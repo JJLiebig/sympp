@@ -1,3 +1,4 @@
+import { PreviewLink, WorkerTarget } from "./worker-links";
 import { ChevronRight, Hourglass } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
@@ -101,7 +102,8 @@ export function Who({ terminal }: { terminal: Terminal | null }) {
   return (
     <span className={`flex items-center gap-2 text-xs ${liveness === "unknown" ? "text-checks" : "text-dim"}`}>
       {liveness ? <span aria-hidden className={DOT[liveness]} /> : null}
-      {kind}
+      <WorkerTarget terminal={terminal}>{kind}</WorkerTarget>
+      <PreviewLink terminal={terminal} />
       {liveness && LIVENESS[liveness] ? ` · ${LIVENESS[liveness]}` : ""}
     </span>
   );
