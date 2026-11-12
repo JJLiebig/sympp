@@ -86,6 +86,24 @@ it("an undelivered answer is still there after the board reloads, and in the boa
   expect(tab.unarrivedAnswers()).toEqual([]);
 });
 
+it("an answer another tab was still sending when it closed is looked at from this one", async () => {
+  vi.useFakeTimers();
+  const storage = browser();
+  const open = async () => {
+    vi.resetModules();
+    return import("./delivery");
+  };
+  const tab = await open();
+  const sender = await open();
+  const ask = askOf("ask-slack");
+  sender.track(ask, "Added.");
+  storage.otherTab(storage.stored()!);
+  // The sending tab closes before the factory's answer comes back; the factory had saved it.
+  factory([{ state: "not_delivered", reason: "delivery_interrupted" }]);
+  await vi.advanceTimersByTimeAsync(60e3);
+  expect(tab.unarrivedAnswers()).toEqual([{ ask, answer: "Added.", reason: "delivery_interrupted" }]);
+});
+
 it("an answer whose response never came back is followed, and one the factory never saved is dropped", async () => {
   browser();
   vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {

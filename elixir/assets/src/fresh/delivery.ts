@@ -17,8 +17,14 @@ const KEY = "sympp.board.answers";
 // signal, and then every half minute while any answer is still being typed.
 const SETTLE_MS = 62e3;
 const AGAIN_MS = 30e3;
+// An answer still marked as being sent after this long had its send end without word, such as in a tab that closed
+// or reloaded: its delivery says whether the factory saved it.
+const SENT_MS = 30e3;
 
-type Entry = { ask: Ask; answer: string; route: string; state: "answering" | "pending" | "not_delivered"; reason: string | null };
+// `at` is when the answer was sent.
+type Entry = { ask: Ask; answer: string; route: string; at: number; state: "answering" | "pending" | "not_delivered"; reason: string | null };
+const followed = (entry: Entry) => entry.state === "pending" || (entry.state === "answering" && Date.now() - entry.at > SENT_MS);
+const unsettled = () => [...entries.values()].some((entry) => entry.state !== "not_delivered");
 
 const entries = new Map<string, Entry>();
 const listeners = new Set<() => void>();
@@ -51,11 +57,11 @@ function kept(value: string | null): Array<[string, Entry]> {
   }
 }
 
-// After a reload, an answer whose send never came back may or may not have been saved: its delivery says which.
-// Answers still being typed are looked at again on the board's first change signal, or shortly without one.
+// Answers still being typed, or sent without word back, are looked at again on the board's first change signal, or
+// shortly without one.
 function restore() {
   try {
-    kept(window.localStorage.getItem(KEY)).forEach(([askId, entry]) => entries.set(askId, entry.state === "answering" ? { ...entry, state: "pending" } : entry));
+    kept(window.localStorage.getItem(KEY)).forEach(([askId, entry]) => entries.set(askId, entry));
     // Another board tab answered, settled or dismissed something.
     window.addEventListener("storage", (event) => {
       if (event.key !== KEY) return;
@@ -63,13 +69,13 @@ function restore() {
       kept(event.newValue).forEach(([askId, entry]) => entries.set(askId, entry));
       shown();
       // This tab looks too, in case the tab that sent it closes.
-      if ([...entries.values()].some((entry) => entry.state === "pending")) lookAgain(AGAIN_MS);
+      if (unsettled()) lookAgain(AGAIN_MS);
     });
   } catch {
     // Storage is unavailable.
   }
   changed();
-  if ([...entries.values()].some((entry) => entry.state === "pending")) lookAgain(AGAIN_MS);
+  if (unsettled()) lookAgain(AGAIN_MS);
 }
 
 async function readRoute(route: string): Promise<Delivery | null> {
@@ -90,7 +96,7 @@ export function readDeliveriesWith(reader: (route: string) => Promise<Delivery |
 // The question and the answer as the operator gave it, kept from the moment they send, since a card's question
 // leaves the board once answered.
 export function track(ask: Ask, answer: string) {
-  entries.set(ask.id, { ask, answer, route: api(`/asks/${encodeURIComponent(ask.id)}/delivery`), state: "answering", reason: null });
+  entries.set(ask.id, { ask, answer, route: api(`/asks/${encodeURIComponent(ask.id)}/delivery`), at: Date.now(), state: "answering", reason: null });
   save();
 }
 
@@ -121,14 +127,14 @@ function apply(askId: string, entry: Entry, delivery: Delivery | null) {
 
 // Looks again at every answer still being typed. Called on each change signal and once the factory would have given up.
 export async function recheck() {
-  const waiting = [...entries].filter(([, entry]) => entry.state === "pending");
+  const waiting = [...entries].filter(([, entry]) => followed(entry));
   await Promise.all(
     waiting.map(async ([askId, entry]) => {
       const delivery = await read(entry.route).catch(() => ({ state: "pending" as const }));
       if (entries.get(askId) === entry) apply(askId, entry, delivery);
     }),
   );
-  if ([...entries.values()].some((entry) => entry.state === "pending")) lookAgain(AGAIN_MS);
+  if (unsettled()) lookAgain(AGAIN_MS);
 }
 
 function lookAgain(ms: number) {
