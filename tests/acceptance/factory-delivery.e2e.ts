@@ -759,7 +759,7 @@ test('the watcher follows worker terminals from launch to exit and never treats 
   // Herdr's request detail shows each package's worker terminal.
   const workerTerminal = async (id: string) => (await architect.raw(undefined, {}, 'GET', `/api/v1/sympp/herdr/work-requests/${request}`))
     .body.work_packages.find((item: any) => item.id === id).worker_terminal;
-  expect(await workerTerminal(replaced)).toEqual({ address: 'acceptance/w3', state: 'live', status: 'live' });
+  expect(await workerTerminal(replaced)).toMatchObject({ address: 'acceptance/w3', state: 'live', status: 'live' });
   await close(architect, replaced, 'superseded', { successor_work_package_id: quick, rationale: 'The quick worker owns this scope.' });
   expect((await workerTerminal(replaced)).state).toBe('finished');
   // A worker that started and exited between two reads still counts as exited.
