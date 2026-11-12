@@ -11,7 +11,8 @@ export type Delivery = { state: "pending" | "delivered" | "not_delivered"; reaso
 export type Unarrived = { ask: Ask; answer: string; reason: string | null };
 
 // Kept in this browser from the moment an answer is sent, so it survives a reload and every board tab shares it.
-const KEY = "sympp.board.answers";
+// Each answer has its own key, so tabs that write at once never overwrite each other's answers.
+const PREFIX = "sympp.board.answer:";
 
 // The factory gives up on a send cut short after a minute; the board looks again just after, even without a change
 // signal, and then every half minute while any answer is still being typed.
@@ -36,24 +37,30 @@ function shown() {
   listeners.forEach((listener) => listener());
 }
 
-function changed() {
-  save();
+function changed(askId: string) {
+  save(askId);
   shown();
 }
 
-function save() {
+function save(askId: string) {
   try {
-    window.localStorage.setItem(KEY, JSON.stringify([...entries]));
+    const entry = entries.get(askId);
+    if (entry) window.localStorage.setItem(PREFIX + askId, JSON.stringify(entry));
+    else window.localStorage.removeItem(PREFIX + askId);
   } catch {
     // Without storage the board still follows its answers; it only forgets them on reload.
   }
 }
 
-function kept(value: string | null): Array<[string, Entry]> {
+// Takes in one answer as stored; null when it is gone.
+function take(key: string | null, value: string | null) {
+  if (!key?.startsWith(PREFIX)) return;
+  const askId = key.slice(PREFIX.length);
   try {
-    return JSON.parse(value ?? "[]") as Array<[string, Entry]>;
+    if (value === null) entries.delete(askId);
+    else entries.set(askId, JSON.parse(value) as Entry);
   } catch {
-    return [];
+    // An unreadable record is skipped.
   }
 }
 
@@ -61,12 +68,14 @@ function kept(value: string | null): Array<[string, Entry]> {
 // shortly without one.
 function restore() {
   try {
-    kept(window.localStorage.getItem(KEY)).forEach(([askId, entry]) => entries.set(askId, entry));
+    const storage = window.localStorage;
+    for (let index = 0; index < storage.length; index++) {
+      const key = storage.key(index);
+      take(key, key && storage.getItem(key));
+    }
     // Another board tab answered, settled or dismissed something.
     window.addEventListener("storage", (event) => {
-      if (event.key !== KEY) return;
-      entries.clear();
-      kept(event.newValue).forEach(([askId, entry]) => entries.set(askId, entry));
+      take(event.key, event.newValue);
       shown();
       // This tab looks too, in case the tab that sent it closes.
       if (unsettled()) lookAgain(AGAIN_MS);
@@ -74,7 +83,7 @@ function restore() {
   } catch {
     // Storage is unavailable.
   }
-  changed();
+  shown();
   if (unsettled()) lookAgain(AGAIN_MS);
 }
 
@@ -98,7 +107,7 @@ export function readDeliveriesWith(reader: (route: string) => Promise<Delivery |
 export function track(ask: Ask, answer: string) {
   if (entries.has(ask.id) && entries.get(ask.id)!.state !== "answering") return;
   entries.set(ask.id, { ask, answer, route: api(`/asks/${encodeURIComponent(ask.id)}/delivery`), at: Date.now(), state: "answering", reason: null });
-  save();
+  save(ask.id);
 }
 
 // The factory saved the answer; `delivery` says whether it is being typed or could not be. An answer whose send
@@ -114,7 +123,7 @@ function apply(askId: string, entry: Entry, delivery: Delivery | null) {
   if (delivery?.state === "pending") {
     if (entry.state !== "pending") lookAgain(SETTLE_MS);
     entry.state = "pending";
-    save();
+    save(askId);
     return;
   }
   if (delivery?.state === "not_delivered") {
@@ -123,7 +132,7 @@ function apply(askId: string, entry: Entry, delivery: Delivery | null) {
     entries.delete(askId);
     if (delivery?.state === "delivered") say("Answer delivered");
   }
-  changed();
+  changed(askId);
 }
 
 // Looks again at every answer still being typed. Called on each change signal and once the factory would have given up.
@@ -152,7 +161,7 @@ export function refused(askId: string) {
 }
 
 export function dismiss(askId: string) {
-  if (entries.delete(askId)) changed();
+  if (entries.delete(askId)) changed(askId);
 }
 
 restore();

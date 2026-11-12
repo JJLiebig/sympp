@@ -18,15 +18,30 @@ function factory(outcomes: Array<Record<string, unknown> | null>) {
   return fetch;
 }
 
-// A browser's storage shared by board tabs, which hears what another tab stores.
+// A browser's storage shared by board tabs. Each tab hears what the others store only when `heard` is called.
 function browser() {
   const kept = new Map<string, string>();
-  const window = Object.assign(new EventTarget(), { localStorage: { getItem: (key: string) => kept.get(key) ?? null, setItem: (key: string, value: string) => kept.set(key, value) } });
+  const writes: Array<{ key: string; newValue: string | null }> = [];
+  const localStorage = {
+    get length() {
+      return kept.size;
+    },
+    key: (index: number) => [...kept.keys()][index] ?? null,
+    getItem: (key: string) => kept.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      kept.set(key, value);
+      writes.push({ key, newValue: value });
+    },
+    removeItem: (key: string) => {
+      kept.delete(key);
+      writes.push({ key, newValue: null });
+    },
+  };
+  const window = Object.assign(new EventTarget(), { localStorage });
   vi.stubGlobal("window", window);
   return {
-    // Another tab stores the board's answers as this one would.
-    otherTab: (value: string) => window.dispatchEvent(Object.assign(new Event("storage"), { key: "sympp.board.answers", newValue: value })),
-    stored: () => kept.get("sympp.board.answers") ?? null,
+    // What the other tabs stored since the last time reaches every tab, the way the browser tells them.
+    heard: () => writes.splice(0).forEach((write) => window.dispatchEvent(Object.assign(new Event("storage"), write))),
   };
 }
 
@@ -81,9 +96,28 @@ it("an undelivered answer is still there after the board reloads, and in the boa
   const reloaded = await open();
   expect(reloaded.unarrivedAnswers()).toEqual([{ ask, answer: "Yes, drop them.", reason: "send_failed" }]);
   // The reloaded tab dismisses it; the first one stops showing it too.
+  storage.heard();
   reloaded.dismiss(ask.id);
-  storage.otherTab(storage.stored()!);
+  storage.heard();
   expect(tab.unarrivedAnswers()).toEqual([]);
+});
+
+it("two tabs answering at once each keep their answer", async () => {
+  const storage = browser();
+  const open = async () => {
+    vi.resetModules();
+    return import("./delivery");
+  };
+  const [first, second] = [await open(), await open()];
+  const [slack, vod] = [askOf("ask-slack"), askOf("ask-vod")];
+  first.track(slack, "Added.");
+  second.track(vod, "Yes, drop them.");
+  storage.heard();
+  first.answered(slack.id, { state: "not_delivered", reason: "send_failed" }, null);
+  second.answered(vod.id, { state: "not_delivered", reason: "send_failed" }, null);
+  storage.heard();
+  const reloaded = await open();
+  expect(reloaded.unarrivedAnswers().map((entry) => entry.ask.id).sort()).toEqual(["ask-slack", "ask-vod"]);
 });
 
 it("an answer another tab was still sending when it closed is looked at from this one", async () => {
@@ -97,7 +131,7 @@ it("an answer another tab was still sending when it closed is looked at from thi
   const sender = await open();
   const ask = askOf("ask-slack");
   sender.track(ask, "Added.");
-  storage.otherTab(storage.stored()!);
+  storage.heard();
   // The sending tab closes before the factory's answer comes back; the factory had saved it.
   factory([{ state: "not_delivered", reason: "delivery_interrupted" }]);
   await vi.advanceTimersByTimeAsync(60e3);
