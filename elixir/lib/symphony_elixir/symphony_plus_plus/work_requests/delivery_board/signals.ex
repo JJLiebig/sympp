@@ -150,9 +150,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   def review(%WorkPackage{review_mode: mode, review_id: review_id}, _metadata, observation) when mode in ["fast", "normal", "deep"] do
     %{
       type: "review-suite",
-      mode: mode,
+      mode: map_value(observation, "mode") || mode,
       status: map_value(observation, "status") || "pending",
-      evidence_id: review_id,
+      evidence_id: map_value(observation, "evidence_id") || review_id,
       current: observation |> map_value("current") |> integer_value(),
       total: observation |> map_value("total") |> integer_value(),
       step: observation |> map_value("step") |> bounded_string(),

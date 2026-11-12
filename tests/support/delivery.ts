@@ -280,16 +280,22 @@ export async function installReviewSuite(home: string) {
   await mkdir(directory, { recursive: true });
   const answerPath = join(directory, 'answer.json');
   const receipt = join(directory, 'calls.jsonl');
-  await writeFile(join(directory, 'review.py'), `import json, sys
+  await writeFile(join(directory, 'review.py'), `import json, sys, time
 with open(${JSON.stringify(receipt)}, 'a', encoding='utf-8') as calls:
     calls.write(json.dumps(sys.argv[1:]) + '\\n')
 with open(${JSON.stringify(answerPath)}, encoding='utf-8') as source:
     answer = json.load(source)
+if 'reviews' in answer:
+    review_id = sys.argv[sys.argv.index('--id') + 1]
+    answer = answer['reviews'].get(review_id, {'stdout': {'error': 'unknown review cycle id: ' + review_id}, 'status': 2})
+time.sleep(answer.get('delay_ms', 0) / 1000)
 print(json.dumps(answer['stdout']))
 raise SystemExit(answer['status'])
 `);
   return {
     answer: (stdout: object, status = 0) => writeFile(answerPath, JSON.stringify({ stdout, status })),
+    cycles: (reviews: Record<string, object>, delayMs = 0) => writeFile(answerPath, JSON.stringify({ reviews:
+      Object.fromEntries(Object.entries(reviews).map(([id, stdout]) => [id, { stdout, status: 0, delay_ms: delayMs }])) })),
     calls: async () => (await readFile(receipt, 'utf8')).trim().split('\n').map((line) => JSON.parse(line)),
   };
 }

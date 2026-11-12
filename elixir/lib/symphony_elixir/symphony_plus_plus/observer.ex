@@ -53,7 +53,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   @terminal_interval_ms 15_000
   @sweep_interval_ms 60_000
   @review_concurrency 4
-  @review_timeout_ms 8_000
+  @review_timeout_ms ReviewStatus.timeout_ms() + 1_000
 
   # The PR fields whose change is recorded as a new snapshot.
   @snapshot_fields ~w(state draft merged merged_at merge_commit_sha head_sha branch base_branch ci github_review)

@@ -284,12 +284,18 @@ omitted when unavailable. Older Review Suite versions that omit `steps` or
 `round_history` leave those fields absent from the signal.
 
 Review observations come from the factory's Observer, which reads each
-package's Review Suite cycle by the `review_id` dispatch minted, on the worker's
+package's Review Suite cycle starting at the `review_id` dispatch minted, on the worker's
 machine (directly on the factory host, else through `hc exec --on`). It runs the
 portable skills bundle's `~/.agents/skills/review-suite/plugins/review-suite/scripts/review.py`,
 else the Codex marketplace plugin under `$CODEX_HOME/plugins/cache/review-suite`;
 it does not search PATH or a package's worktree for a provider script. A host
 that can't be read leaves the last observation and marks the package stale.
+
+Explicit `superseded_by.review` links in public status JSON are followed to the
+latest cycle on the same branch. The signal's `evidence_id` and `mode` identify
+that cycle; the dispatch `review_id` and each predecessor's verdict stay unchanged.
+An older provider without the link keeps the original single-cycle behavior.
+Missing or unusable links and cross-branch or cyclic chains never qualify work.
 
 A dispatched package is building from `dispatched_at`, without worker reports,
 runtime observations, or a reporting cadence. Native review observations augment
