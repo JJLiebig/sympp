@@ -48,6 +48,13 @@ to escalate.
 
 A ready contract is frozen; add a successor.
 
+## Test execution
+
+Workers run their own tests. Don't schedule or approve runs, and don't add
+"ask me first" steps to contracts. Each worker uses its own containers, ports
+and databases, so nothing is shared and nobody waits on a lock. Keep any rule
+the caller set about where tests run.
+
 ## Dispatch
 
 Call `dispatch_work_package(work_package_id, review_mode)`, then run the
@@ -135,11 +142,10 @@ material correction or a new caller-requested action.
 - Message the chief only for a product question you can't infer, something
   outside your WorkRequest's authority, or the final delivery. Never send
   status or progress: the board shows it.
-- Coordinate shared files, CI and migrations in one short line to only the
-  architects it affects: "t1yw: taking migration 0378." Find peers in the same
-  repo with `list_work_requests(repo: ...)`. No acknowledgements, no replies
-  unless there's a conflict. Settle technical conflicts in scope; escalate only
-  changes to product intent or authority to the chief.
+- Message affected architects in one line only when your edits would collide
+  (find them with `list_work_requests(repo: ...)`). No acknowledgements. Settle
+  technical conflicts between you; escalate only product or authority changes
+  to the chief.
 
 ## Report
 
