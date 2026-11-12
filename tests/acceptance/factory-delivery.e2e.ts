@@ -171,6 +171,49 @@ test('installed Review Suite state for the review id gates qualification', async
   for (const argv of await review.calls()) expect(argv).toEqual(['--id', reviewId, '--show-status', '--json']);
 });
 
+test('linked review successors gate sync and the board without rewriting dispatch or predecessor evidence', async ({ watched: { factory, provider } }) => {
+  const architect = await factory.client();
+  const request = await architect.request('Linked reviews');
+  const branch = 'feature/delivery-112';
+  const [wp] = await architect.addPackages([contract('Replanned change', { branch_pattern: branch })]);
+  const reviewId = (await architect.call('dispatch_work_package', { work_package_id: wp, review_mode: 'fast' })).work_package.review_id;
+  const review = await installReviewSuite(factory.home);
+  const successor = 'rvw_successor0001';
+  const latest = 'rvw_successor0002';
+  const predecessor = { review: reviewId, branch, done: false, status: 'replan',
+    round_history: [{ number: 1, outcome: 'findings' }], superseded_by: { review: successor } };
+  const intermediate = { review: successor, branch, done: true, status: 'done', accepted_head: head('a'),
+    superseded_by: { review: latest } };
+  const completed = { review: latest, branch, mode: 'deep', done: true, status: 'done',
+    reviewed_head: head('a'), accepted_head: head('a'), progress: '3/3' };
+  provider.set(112, pr(112, head('a')));
+
+  // An intermediate done cycle cannot hide an unfinished or stale latest cycle.
+  for (const patch of [{ done: false, status: 'created' }, { accepted_head: head('b') }, {}]) {
+    await review.cycles({ [reviewId]: predecessor, [successor]: intermediate, [latest]: { ...completed, ...patch } });
+    const result = await architect.call('sync_pr', { work_package_id: wp, url: prUrl(112) });
+    const ready = Object.keys(patch).length === 0;
+    expect(result.pr_sync.readiness_reasons).toEqual(ready ? [] : ['review_not_done']);
+    await factory.tick('sweep');
+    const current = await row(architect, request, wp);
+    expect(current.raw_status).toBe(ready ? 'ready' : 'dispatched');
+    expect(current.merge_eligibility.eligible).toBe(ready);
+    expect(current.work_package.review_signal).toMatchObject({ evidence_id: latest, mode: 'deep',
+      provider_status: ready ? 'done' : patch.status ?? 'done' });
+  }
+
+  // Bad links cannot authorize a merge or fall back to an accepted predecessor.
+  for (const patch of [{ branch: 'feature/another' }, { superseded_by: { review: reviewId } }]) {
+    await review.cycles({ [reviewId]: predecessor, [successor]: intermediate, [latest]: { ...completed, ...patch } });
+    const result = await architect.call('sync_pr', { work_package_id: wp, url: prUrl(112) });
+    expect(result.pr_sync.readiness_reasons).toContain('review_unknown');
+    await factory.tick('sweep');
+    expect((await row(architect, request, wp)).merge_eligibility.eligible).toBe(false);
+  }
+  // Every sync and watcher read still starts at the immutable dispatch id.
+  expect((await review.calls()).filter((argv: string[]) => argv[1] === reviewId).length).toBe(10);
+});
+
 test('ordinary PR handoff observes pending qualification then reconciles an exact external merge once', async ({ delivery: { factory, provider } }) => {
   const architect = await factory.client();
   const request = await architect.request('Qualified delivery');

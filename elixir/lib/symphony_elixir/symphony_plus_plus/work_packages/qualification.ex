@@ -46,7 +46,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
 
   @doc """
   The review predicate for a package and PR head: `:none` when the package
-  reviews in mode `none`, else the Review Suite state read by `review_id`.
+  reviews in mode `none`, else the latest linked Review Suite state starting
+  at the dispatch `review_id`.
   """
   @spec review(WorkPackage.t(), String.t() | nil) :: review()
   def review(%WorkPackage{review_mode: mode, review_id: review_id, launch_machine: machine}, head_sha)

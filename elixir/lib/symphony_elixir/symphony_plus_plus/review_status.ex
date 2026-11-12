@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
   @moduledoc """
-  Reads a package's Review Suite cycle by the `review_id` dispatch minted.
+  Reads a package's Review Suite cycle from the `review_id` dispatch minted,
+  following explicit public successor links on the same branch.
 
   Review Suite keeps its state on the machine that ran the review, so the read
   runs on the worker's machine: directly when that is the factory host, else
@@ -38,6 +39,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
   end
 
   defp read_with(runner, review_id, machine) do
+    resolve(runner, review_id, machine, nil, MapSet.new())
+  end
+
+  # Only the provider's explicit link can replace a cycle. Missing, unreadable,
+  # cyclic or cross-branch links must not revive a predecessor's acceptance.
+  defp resolve(runner, review_id, machine, branch, visited) do
+    if MapSet.member?(visited, review_id) do
+      :unknown
+    else
+      with {:ok, payload} <- fetch(runner, review_id, machine),
+           true <- payload["review"] == review_id,
+           true <- is_nil(branch) or payload["branch"] == branch do
+        follow(runner, payload, machine, MapSet.put(visited, review_id))
+      else
+        false -> :unknown
+        result -> result
+      end
+    end
+  end
+
+  defp follow(runner, %{"superseded_by" => %{"review" => successor}, "branch" => branch}, machine, visited)
+       when is_binary(successor) and successor != "" and is_binary(branch) and branch != "" do
+    resolve(runner, successor, machine, branch, visited)
+  end
+
+  defp follow(_runner, %{"superseded_by" => _invalid}, _machine, _visited), do: :unknown
+  defp follow(_runner, payload, _machine, _visited), do: {:ok, normalize(payload)}
+
+  defp fetch(runner, review_id, machine) do
     if local?(machine), do: read_local(runner, review_id), else: read_remote(runner, review_id, machine)
   end
 
@@ -78,7 +108,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
 
   defp parse(output, 0) do
     case Jason.decode(output) do
-      {:ok, %{"review" => review} = payload} when is_binary(review) -> {:ok, normalize(payload)}
+      {:ok, %{"review" => review} = payload} when is_binary(review) -> {:ok, payload}
       _unusable -> :unknown
     end
   end
