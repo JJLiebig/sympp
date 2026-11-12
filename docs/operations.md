@@ -48,8 +48,15 @@ The phone always shows the present, without a replay bar.
 
 A goal can be marked done, archived or deleted from its menu, and a shelf can
 be archived in one go. None of these stops a running worker or merges a pull
-request. The board rereads the ledger when it changes and once a minute; if a
-read fails it keeps what it last showed and says the connection is lost.
+request. The board rereads the ledger as soon as it changes, and checks every
+few minutes in case a change signal was missed; if a read fails it keeps what
+it last showed and says the connection is lost.
+
+An answered question leaves the board at once. The board says when the answer
+reached the terminal that asked. If it never arrives, for example because the
+factory restarted while typing it, the question comes back under Needs you
+marked Undelivered, with the answer to copy into that terminal by hand. The
+board never sends an answer again on its own.
 
 The `sympp` mark opens the settings: after how many days finished and
 never-started goals are archived, when archived goals are deleted for good, and

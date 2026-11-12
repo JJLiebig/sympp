@@ -61,9 +61,11 @@ export type Goal = { id: string; title: string; area: string[]; org: string | nu
 
 // A question for the operator. Its subject is a goal (optionally one of its packages) or a card.
 // With choices the answer is one of them; `redirect` names the extra choice of answering in free text instead.
-export type Choice = { recommended?: boolean; id: string; label: string; description: string | null; pros: string[]; cons: string[] };
+// `answer` is what the factory types into the asking terminal when the choice is picked.
+export type Choice = { recommended?: boolean; id: string; label: string; answer: string; description: string | null; pros: string[]; cons: string[] };
 // `until` is when it was answered or withdrawn; null while it is open. A replay shows it only in between.
-export type Ask = { id: string; question: string; details: string | null; from: number; until: number | null; by: Terminal | null; goalId: string | null; pkgId: string | null; cardId: string | null; choices: Choice[]; redirect: string | null };
+// `answer` is the answer as the factory saved it, once answered.
+export type Ask = { id: string; question: string; details: string | null; from: number; until: number | null; by: Terminal | null; goalId: string | null; pkgId: string | null; cardId: string | null; choices: Choice[]; redirect: string | null; answer: string | null };
 // Why feedback did not reach the terminal that recorded the decision. "delivering" means it is still being typed.
 export type Undelivered = "delivering" | "delivery_interrupted" | "terminal_finished" | "terminal_unreachable" | "send_failed" | "no_recording_terminal";
 // A product call a chief or architect flagged for review.
@@ -105,7 +107,7 @@ type Deployments = Record<string, { dev?: Observed | null; prod?: Observed | nul
 type Written = { text?: string | null; written_at?: string | null };
 export type OperatorReport = { brief?: Written | null; eta?: Written | null; parking?: { reason?: string | null; parked_at?: string | null; resumed_at?: string | null } | null };
 export type Prompt = { tl_dr?: string | null; details?: string | null; custom_redirect_label?: string | null; options?: Array<{ recommended?: boolean; id: string; label?: string | null; answer?: string | null; description?: string | null; pros?: string[] | null; cons?: string[] | null }> | null };
-export type AskEntry = { id: string; work_request_id?: string | null; work_package_id?: string | null; card_id?: string | null; question?: string | null; decision_prompt?: Prompt | null; state?: string | null; asked_by?: string | null; asked_at?: string | null; resolved_at?: string | null };
+export type AskEntry = { id: string; work_request_id?: string | null; work_package_id?: string | null; card_id?: string | null; question?: string | null; decision_prompt?: Prompt | null; state?: string | null; asked_by?: string | null; asked_at?: string | null; resolved_at?: string | null; answer?: string | null };
 export type DecisionEntry = { id: string; work_request_id: string; decision?: string | null; rationale?: string | null; recorded_by?: string | null; created_at?: string | null; review_state?: string | null; feedback?: string | null; undelivered_reason?: string | null };
 export type Request = { id: string; title?: string | null; phase?: string | null; repo?: string | null; repo_display?: string | null; repo_key?: string | null; repo_remote?: string | null; repo_aliases?: string[] | null; base_branch?: string | null; inserted_at?: string | null; completed_at?: string | null; operator_completed_at?: string | null; archived_at?: string | null; worked_on?: Owned | null; operator_report?: OperatorReport | null; area_path?: string[] | null; default_branch?: string | null; deployments?: Deployments | null };
 export type Detail = { work_request: Request; work_packages?: Slice[]; asks?: AskEntry[]; decisions_to_review?: DecisionEntry[] };
@@ -225,6 +227,7 @@ function askOf(entry: AskEntry, now: number): Ask {
     cardId: entry.card_id ?? null,
     choices,
     redirect: choices.length > 0 ? prompt?.custom_redirect_label || null : null,
+    answer: entry.answer || null,
   };
 }
 
@@ -235,7 +238,7 @@ function closedAt(entry: AskEntry, now: number) {
 }
 
 function choicesOf(prompt: Prompt | null | undefined): Choice[] {
-  return (prompt?.options ?? []).map((option) => ({ recommended: option.recommended, id: option.id, label: option.label || option.id, description: option.description || null, pros: option.pros ?? [], cons: option.cons ?? [] }));
+  return (prompt?.options ?? []).map((option) => ({ recommended: option.recommended, id: option.id, label: option.label || option.id, answer: option.answer || option.label || option.id, description: option.description || null, pros: option.pros ?? [], cons: option.cons ?? [] }));
 }
 
 function decisionOf(entry: DecisionEntry, now: number): Decision {

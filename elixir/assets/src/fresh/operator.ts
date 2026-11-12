@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react";
 
 import { api } from "./api";
+import { answered, refused, type Delivery } from "./delivery";
 
 // Everything the operator can do from the board. None of it stops a running worker or merges a PR.
 export type GoalStep = "complete" | "archive" | "restore" | "delete";
@@ -94,10 +95,22 @@ function refusalText(payload: Refusal | null) {
   return NEXT[next] ?? NEXT[next.split(":")[0]] ?? payload?.error?.message ?? "The backend refused this.";
 }
 
+// What became of an answer's request. Saved: its delivery is followed. A lost response or a server error may still
+// have saved it, so its delivery is followed too; if it was never saved, it reports none and is dropped. A refusal
+// means this attempt was not saved, though an earlier one may have been.
+async function follow(askId: string, response: Response | null) {
+  if (!response || response.status >= 500) return answered(askId, { state: "pending" }, null);
+  if (!response.ok) return refused(askId);
+  const saved = (await response.json().catch(() => null)) as { delivery?: Delivery; delivery_route?: string } | null;
+  answered(askId, saved ? (saved.delivery ?? null) : { state: "pending" }, saved?.delivery_route ?? null);
+}
+
 // Resolves once every request of the action went through, or was already done; rejects with a refusal in words.
+// A saved answer is then followed until the factory has typed it into the terminal that asked, or could not.
 export async function send(action: OperatorAction) {
   for (const [path, body] of requests(action)) {
     const response = await fetch(api(path), { method: "POST", headers: { accept: "application/json", "content-type": "application/json" }, body: JSON.stringify(body) }).catch(() => null);
+    if (action.kind === "answer") await follow(action.askId, response);
     if (response?.ok) continue;
     if (!response) throw new Error("Could not reach the backend.");
     const payload = (await response.json().catch(() => null)) as Refusal | null;
