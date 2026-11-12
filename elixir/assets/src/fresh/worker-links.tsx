@@ -15,5 +15,12 @@ export function WorkerTarget({ terminal, children }: { terminal: Terminal; child
 
 export function PreviewLink({ terminal }: { terminal: Terminal }) {
   if (terminal.liveness !== "live" || !terminal.previewUrl) return null;
-  return <a className="shrink-0 text-xs text-build underline underline-offset-2 hover:text-ink" href={terminal.previewUrl} target="_blank" rel="noopener noreferrer">Preview</a>;
+  return (
+    <a className="inline-flex shrink-0 items-center gap-1 rounded border border-build/40 px-1.5 py-0.5 text-[11px] font-medium leading-none text-build transition-colors hover:border-build hover:bg-build/10" href={terminal.previewUrl} target="_blank" rel="noopener noreferrer">
+      Preview
+      <svg aria-hidden className="size-2.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 12 12">
+        <path d="M4 2h6v6M10 2 3 9" />
+      </svg>
+    </a>
+  );
 }
