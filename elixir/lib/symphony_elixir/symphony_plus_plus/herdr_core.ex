@@ -2,7 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   @moduledoc """
   The factory host's own herdr-core view of terminals.
 
-  It reads `hc server status` and `hc ls --all` on the factory host and caches
+  It reads `hc server status` and `terminal.list` through `hc connect` on the factory host and caches
   the result briefly; the `Observer` refreshes it every 15 s. Worker terminals
   (label `sympp.role=worker`) carry their labels; chief terminals
   (`sympp.role=chief`) and terminals labelled `sympp.card=1` carry that label. A terminal on another core is
@@ -20,7 +20,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
 
   @cache_key {__MODULE__, :snapshot}
-  @labels_key {__MODULE__, :labels}
   @cached_reads_key {__MODULE__, :cached_reads}
   @refresh_key {__MODULE__, :refresh}
   @cache_ms 15_000
@@ -209,7 +208,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   ordinary reads for up to 2 minutes.
   """
   @spec refresh() :: {:ok, snapshot()} | :unavailable
-  def refresh, do: load(true, false)
+  def refresh do
+    command = Application.get_env(:symphony_elixir, :sympp_herdr_core, "hc")
+    previous_good = last_good(:persistent_term.get(@cache_key, nil), command)
+    refresh_and_notify(previous_good, System.monotonic_time(:millisecond))
+  end
 
   @doc "The configured `hc` executable on the factory host, if any."
   @spec command_path() :: String.t() | nil
@@ -280,7 +283,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   end
 
   defp refresh_and_notify(previous_good, started_at) do
-    result = refresh()
+    result = load(true, false)
     now = System.monotonic_time(:millisecond)
 
     # Compare against what the dashboard could use, not an expired snapshot
@@ -292,6 +295,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
 
     if current != previous or (fallback == :unavailable and result != :unavailable),
       do: DashboardPubSub.broadcast_changed()
+
+    result
   end
 
   defp usable_good({at, snapshot}, now) when now - at < @last_good_ms, do: snapshot
@@ -303,17 +308,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   defp load_command(command) do
     with path when is_binary(path) <- System.find_executable(command),
          {:ok, %{"core" => %{"id" => core_id} = core}} when is_binary(core_id) <- run(path, ["server", "status", "--json"]),
-         {:ok, %{"terminals" => terminals}} when is_list(terminals) <- run(path, ["ls", "--all", "--json"]),
-         {:ok, %{"terminals" => workers}} when is_list(workers) <- run(path, ["ls", "--all", "--json", "--label", "sympp.role=worker"]),
-         {:ok, %{"terminals" => chiefs}} when is_list(chiefs) <- run(path, ["ls", "--all", "--json", "--label", "sympp.role=chief"]),
-         {:ok, %{"terminals" => cards}} when is_list(cards) <- run(path, ["ls", "--all", "--json", "--label", "sympp.card=1"]) do
-      labels = worker_labels(path, workers)
-      marked = Map.merge(marker_labels(cards, "sympp.card", "1"), marker_labels(chiefs, "sympp.role", "chief"), fn _address, card, chief -> Map.merge(card, chief) end)
-
-      terminals =
-        Map.new(terminals, fn record ->
-          {record["address"], record |> put_labels(labels) |> merge_labels(Map.get(marked, record["address"]))}
-        end)
+         {:ok, %{"terminals" => records}} when is_list(records) <- list_terminals(path) do
+      terminals = Map.new(records, fn record -> {record["address"], Map.delete(record, "argv")} end)
 
       snapshot = %{core_id: core_id, terminals: terminals}
       {:ok, if(is_binary(core["name"]), do: Map.put(snapshot, :core_name, core["name"]), else: snapshot)}
@@ -322,45 +318,45 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
     end
   end
 
-  # `hc ls` lists worker terminals without their labels, so each new worker's
-  # labels are read once with `hc get` and kept; a terminal's labels are set
-  # when `hc run` starts it.
-  defp worker_labels(path, workers) do
-    known = :persistent_term.get(@labels_key, %{})
-    addresses = for %{"address" => address} <- workers, is_binary(address), do: address
+  # The CLI's compact `hc ls` output omits labels. The underlying list API
+  # carries current labels for every terminal in one request, including removals.
+  defp list_terminals(path) do
+    task =
+      Task.async(fn ->
+        port = Port.open({:spawn_executable, path}, [:binary, :exit_status, :hide, args: ["connect"]])
 
-    labels =
-      Map.new(addresses, fn address ->
-        case Map.fetch(known, address) do
-          {:ok, labels} -> {address, labels}
-          :error -> {address, read_labels(path, address)}
+        try do
+          Port.command(port, Jason.encode!(%{jsonrpc: "2.0", id: 1, method: "terminal.list", params: %{all: true}}) <> "\n")
+          list_response(port, "")
+        after
+          if Port.info(port), do: Port.close(port)
         end
       end)
 
-    stored = Map.reject(labels, fn {_address, value} -> is_nil(value) end)
-    if stored != known, do: :persistent_term.put(@labels_key, stored)
-    stored
-  end
-
-  defp read_labels(path, address) do
-    case run(path, ["get", address, "--json"]) do
-      {:ok, %{"labels" => %{} = labels}} -> labels
-      _unavailable -> nil
+    case Task.yield(task, @command_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> result
+      _failed -> :error
     end
+  rescue
+    _error -> :error
   end
 
-  # `hc ls --label` names the terminals that carry a label, without the rest of their labels.
-  defp marker_labels(records, key, value), do: Map.new(for(%{"address" => address} <- records, is_binary(address), do: {address, %{key => value}}))
+  defp list_response(port, buffer) do
+    receive do
+      {^port, {:data, data}} ->
+        case String.split(buffer <> data, "\n", parts: 2) do
+          [line, _rest] ->
+            case Jason.decode(line) do
+              {:ok, %{"id" => 1, "result" => result}} -> {:ok, result}
+              _invalid -> :error
+            end
 
-  defp merge_labels(record, nil), do: record
-  defp merge_labels(record, labels), do: Map.update(record, "labels", labels, &Map.merge(&1, labels))
+          [partial] ->
+            list_response(port, partial)
+        end
 
-  defp put_labels(%{"labels" => %{}} = record, _labels), do: record
-
-  defp put_labels(record, labels) do
-    case Map.get(labels, record["address"]) do
-      %{} = terminal_labels -> Map.put(record, "labels", terminal_labels)
-      nil -> record
+      {^port, {:exit_status, _status}} ->
+        :error
     end
   end
 

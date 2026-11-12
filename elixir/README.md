@@ -290,8 +290,9 @@ The regular local cockpit and Windows launcher retain their current behavior.
 
 The factory watches dispatched packages without agent calls:
 
-- every 15 seconds it reads `hc ls --all` on the factory host to see worker
-  terminals start and finish;
+- every 15 seconds it reads `terminal.list` through `hc connect` on the factory
+  host to see worker terminals start and finish and labels change; live workers
+  can publish an http(s) `sympp.preview_url` for the board's Preview link;
 - every 60 seconds it reads every watched PR, and finds PRs on packages'
   branches, in one batched GitHub GraphQL request per 25 PRs, and reads each
   package's Review Suite cycle on the worker's machine (3 second limit);

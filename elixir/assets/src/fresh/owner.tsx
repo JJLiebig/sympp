@@ -1,5 +1,6 @@
 import { ActButton } from "./actions";
 import type { Liveness, Role, Terminal } from "./model";
+import { PreviewLink, WorkerTarget } from "./worker-links";
 import { Glyph } from "./parts";
 
 const ROLE: Record<Role, string> = { chief: "chief", architect: "architect", worker: "worker", card: "agent" };
@@ -22,9 +23,10 @@ export function Owner({ className = "", goalId, owner }: { className?: string; g
             <span aria-hidden className={DOT[liveness]} />
           </Glyph>
         ) : null}
-        <span className="truncate">{owner.address}</span>
+        <WorkerTarget terminal={owner}><span className="truncate">{owner.address}</span></WorkerTarget>
         {liveness ? <span className="sr-only">, {LIVENESS[liveness]}</span> : null}
       </span>
+      <PreviewLink terminal={owner} />
       {goalId && liveness === "unknown" ? <ActButton action={{ kind: "release", goalId }} confirm="Release?" label="Release" tone="text-checks" /> : null}
     </span>
   );

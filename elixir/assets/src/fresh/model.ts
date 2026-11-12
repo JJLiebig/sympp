@@ -14,7 +14,7 @@ export type Liveness = "live" | "unknown" | "finished";
 export type Role = "chief" | "architect" | "worker" | "card";
 // The terminal working on something, by its Herdr address such as `jjdev/t1q1`. Askers and deciders are known
 // by address only, so their role and liveness are null.
-export type Terminal = { address: string; role: Role | null; liveness: Liveness | null; topic?: string | null };
+export type Terminal = { address: string; role: Role | null; liveness: Liveness | null; topic?: string | null; previewUrl?: string | null };
 // `open` is false once the PR is merged or closed. A PR to another repository waits on its maintainers.
 export type Pr = { number: number; url: string; repo: string; open: boolean };
 // `untimed` marks a stage whose start nobody observed: `from` is then only the closest known time.
@@ -95,7 +95,7 @@ export type Slice = {
   dispatched_at?: string | null;
   // Inside `dispatched`: launching, implementing, worker_exited or review_ci.
   progress?: string | null;
-  worker_terminal?: { address?: string | null; state?: string | null; status?: string | null } | null;
+  worker_terminal?: { address?: string | null; state?: string | null; status?: string | null; preview_url?: string | null } | null;
   observation_stale?: string[] | null;
   delivery?: { outcome?: string | null; legacy_status?: string | null; recorded_at?: string | null; pr_merged_at?: string | null; successor_work_package_id?: string | null } | null;
   board_state?: { stage?: string | null; entered_at?: string | null; outcome?: string | null } | null;
@@ -362,7 +362,7 @@ function signalsOf(slice: Slice, stale: Stale[]): Pick<Pkg, "pr" | "ci" | "revie
 function workerOf(terminal: Slice["worker_terminal"]): Terminal | null {
   if (!terminal?.address) return null;
   const liveness: Liveness = terminal.state === "finished" ? "finished" : terminal.status === "unknown" ? "unknown" : "live";
-  return { address: terminal.address, role: "worker", liveness };
+  return { address: terminal.address, role: "worker", liveness, previewUrl: liveness === "live" ? terminal.preview_url : null };
 }
 
 function prOf(signal: PrSignal | null | undefined, repo: string): Pr | null {

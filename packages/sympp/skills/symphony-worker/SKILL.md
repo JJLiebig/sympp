@@ -59,6 +59,10 @@ or architect; keep questions, blockers and the final handoff short.
 
 - Run the repository's required tests and static checks, and get CI green.
   Report exact failures and anything you didn't run.
+- Run checks yourself, with your own containers, ports and databases; never
+  share them or wait on a lock. Run locally while the workstation has headroom,
+  otherwise on CI (wait with `gh run watch`). Tell your parent only if neither
+  works.
 - When the assignment gives a Review Suite id and mode, run
   `review.py --id <id> --mode <mode> --cd <worktree>` once and wait for it.
   Rerunning the same command resumes it; never start a second run while one is
@@ -70,6 +74,8 @@ or architect; keep questions, blockers and the final handoff short.
   what changed. Never restart a whole review because `main` moved.
 
 ## UI work
+
+Bind the dev server to `0.0.0.0` and publish a URL with this machine's reachable hostname, never `localhost`.
 
 Publish your dev server on your terminal with
 `hc label $HC_TERMINAL_ID sympp.preview_url=<url>`, and clear it with an empty
