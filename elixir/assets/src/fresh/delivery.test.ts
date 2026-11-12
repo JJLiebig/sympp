@@ -18,6 +18,18 @@ function factory(outcomes: Array<Record<string, unknown> | null>) {
   return fetch;
 }
 
+// A browser's storage shared by board tabs, which hears what another tab stores.
+function browser() {
+  const kept = new Map<string, string>();
+  const window = Object.assign(new EventTarget(), { localStorage: { getItem: (key: string) => kept.get(key) ?? null, setItem: (key: string, value: string) => kept.set(key, value) } });
+  vi.stubGlobal("window", window);
+  return {
+    // Another tab stores the board's answers as this one would.
+    otherTab: (value: string) => window.dispatchEvent(Object.assign(new Event("storage"), { key: "sympp.board.answers", newValue: value })),
+    stored: () => kept.get("sympp.board.answers") ?? null,
+  };
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -55,18 +67,44 @@ it("an answer typed into its terminal leaves nothing behind", async () => {
   expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
 });
 
-it("an undelivered answer is still there after the board reloads", async () => {
-  const kept = new Map<string, string>();
-  vi.stubGlobal("window", { localStorage: { getItem: (key: string) => kept.get(key) ?? null, setItem: (key: string, value: string) => kept.set(key, value) } });
+it("an undelivered answer is still there after the board reloads, and in the board's other tabs", async () => {
+  const storage = browser();
+  const open = async () => {
+    vi.resetModules();
+    return import("./delivery");
+  };
+  const tab = await open();
   const ask = askOf("ask-vod");
-  track(ask, "Yes, drop them.");
-  answered(ask.id, { state: "not_delivered", reason: "send_failed" }, "/asks/ask-vod/delivery");
+  tab.track(ask, "Yes, drop them.");
+  tab.answered(ask.id, { state: "not_delivered", reason: "send_failed" }, "/asks/ask-vod/delivery");
 
-  vi.resetModules();
-  const reloaded = await import("./delivery");
+  const reloaded = await open();
   expect(reloaded.unarrivedAnswers()).toEqual([{ ask, answer: "Yes, drop them.", reason: "send_failed" }]);
+  // The reloaded tab dismisses it; the first one stops showing it too.
   reloaded.dismiss(ask.id);
+  storage.otherTab(storage.stored()!);
+  expect(tab.unarrivedAnswers()).toEqual([]);
+});
+
+it("an answer whose response never came back is followed, and one the factory refused is forgotten", async () => {
+  browser();
+  vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+    if (init?.method === "POST") throw new TypeError("network");
+    return Response.json({ delivery: { state: "not_delivered", reason: "terminal_finished" } });
+  }));
+  const ask = askOf("ask-slack");
+  track(ask, "Added.");
+  await expect(send({ kind: "answer", askId: ask.id, answer: { text: "Added." } })).rejects.toThrow();
+  await recheck();
+  expect(unarrivedAnswers()).toEqual([{ ask, answer: "Added.", reason: "terminal_finished" }]);
   dismiss(ask.id);
+
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: { code: "ask_not_open" } }, { status: 409 })));
+  track(ask, "Added.");
+  await expect(send({ kind: "answer", askId: ask.id, answer: { text: "Added." } })).rejects.toThrow();
+  await recheck();
+  expect(unarrivedAnswers()).toEqual([]);
+  expect(vi.mocked(fetch)).toHaveBeenCalledOnce();
 });
 
 it("an answer with no terminal to type into is undelivered at once", async () => {
