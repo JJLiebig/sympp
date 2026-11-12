@@ -104,7 +104,7 @@ it("an answer another tab was still sending when it closed is looked at from thi
   expect(tab.unarrivedAnswers()).toEqual([{ ask, answer: "Added.", reason: "delivery_interrupted" }]);
 });
 
-it("an answer whose response never came back is followed, and one the factory never saved is dropped", async () => {
+it("an answer whose response never came back is followed, and a refused retry neither replaces nor drops it", async () => {
   browser();
   vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
     if (init?.method === "POST") throw new TypeError("network");
@@ -113,18 +113,21 @@ it("an answer whose response never came back is followed, and one the factory ne
   const ask = askOf("ask-slack");
   track(ask, "Added.");
   await expect(send({ kind: "answer", askId: ask.id, answer: { text: "Added." } })).rejects.toThrow();
+  // The first answer went through after all, so a second one is refused.
+  const network = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => (init?.method === "POST" ? Response.json({ error: { code: "ask_not_open" } }, { status: 409 }) : network(url, init))));
+  track(ask, "Something else.");
+  await expect(send({ kind: "answer", askId: ask.id, answer: { text: "Something else." } })).rejects.toThrow();
   await recheck();
   expect(unarrivedAnswers()).toEqual([{ ask, answer: "Added.", reason: "terminal_finished" }]);
   dismiss(ask.id);
 
-  // Refused as incomplete, the question is still open: there is no delivery to follow.
-  vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => (init?.method === "POST" ? Response.json({ error: { code: "missing_answer" } }, { status: 422 }) : Response.json({ delivery: null }))));
+  // A refused first answer has nothing to follow.
   track(ask, "Added.");
   await expect(send({ kind: "answer", askId: ask.id, answer: { text: "Added." } })).rejects.toThrow();
   await recheck();
   expect(unarrivedAnswers()).toEqual([]);
-  await recheck();
-  expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
+  expect(vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method !== "POST")).toHaveLength(1);
 });
 
 it("an answer with no terminal to type into is undelivered at once", async () => {

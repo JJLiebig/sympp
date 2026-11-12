@@ -1,7 +1,7 @@
 import { createContext, useContext } from "react";
 
 import { api } from "./api";
-import { answered, type Delivery } from "./delivery";
+import { answered, refused, type Delivery } from "./delivery";
 
 // Everything the operator can do from the board. None of it stops a running worker or merges a PR.
 export type GoalStep = "complete" | "archive" | "restore" | "delete";
@@ -95,11 +95,12 @@ function refusalText(payload: Refusal | null) {
   return NEXT[next] ?? NEXT[next.split(":")[0]] ?? payload?.error?.message ?? "The backend refused this.";
 }
 
-// What became of an answer's request. Saved: its delivery is followed. Anything else may still have saved it, such
-// as a lost response, an error after the save, or a retry refused because the first one went through, so its
-// delivery is followed too; an answer that was never saved reports none and is dropped.
+// What became of an answer's request. Saved: its delivery is followed. A lost response or a server error may still
+// have saved it, so its delivery is followed too; if it was never saved, it reports none and is dropped. A refusal
+// means this attempt was not saved, though an earlier one may have been.
 async function follow(askId: string, response: Response | null) {
-  if (!response?.ok) return answered(askId, { state: "pending" }, null);
+  if (!response || response.status >= 500) return answered(askId, { state: "pending" }, null);
+  if (!response.ok) return refused(askId);
   const saved = (await response.json().catch(() => null)) as { delivery?: Delivery; delivery_route?: string } | null;
   answered(askId, saved ? (saved.delivery ?? null) : { state: "pending" }, saved?.delivery_route ?? null);
 }

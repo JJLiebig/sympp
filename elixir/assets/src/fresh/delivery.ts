@@ -94,8 +94,9 @@ export function readDeliveriesWith(reader: (route: string) => Promise<Delivery |
 }
 
 // The question and the answer as the operator gave it, kept from the moment they send, since a card's question
-// leaves the board once answered.
+// leaves the board once answered. An earlier answer the factory saved, or may have, stays: a retry is refused.
 export function track(ask: Ask, answer: string) {
+  if (entries.has(ask.id) && entries.get(ask.id)!.state !== "answering") return;
   entries.set(ask.id, { ask, answer, route: api(`/asks/${encodeURIComponent(ask.id)}/delivery`), at: Date.now(), state: "answering", reason: null });
   save();
 }
@@ -143,6 +144,11 @@ function lookAgain(ms: number) {
     timer = null;
     void recheck();
   }, ms);
+}
+
+// The factory refused this attempt, so it has nothing to deliver.
+export function refused(askId: string) {
+  if (entries.get(askId)?.state === "answering") dismiss(askId);
 }
 
 export function dismiss(askId: string) {
