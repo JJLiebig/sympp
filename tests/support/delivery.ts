@@ -35,10 +35,10 @@ export class Provider {
     let status = 200;
     let reply: unknown;
     if (request.url === '/cli') {
-      const { program, argv } = JSON.parse(body);
-      const answer = program === 'hc' ? this.herdr(argv) : this.gh(argv);
+      const { program, argv, rpc } = JSON.parse(body);
+      const answer = program === 'hc' ? this.herdr(argv, rpc) : this.gh(argv);
       if (program !== 'hc') this.calls.push({ argv, reply: answer });
-      await appendFile(this.receipt, `${JSON.stringify({ program, argv, reply: answer })}\n`);
+      await appendFile(this.receipt, `${JSON.stringify({ program, argv, rpc, reply: answer })}\n`);
       reply = answer;
     } else {
       [status, reply] = this.http(request.method ?? 'GET', request.url ?? '/', body);
@@ -75,11 +75,14 @@ export class Provider {
     return { stdout: 'Unexpected synthetic provider command', exitCode: 1 };
   }
 
-  private herdr(argv: string[]): Reply {
+  private herdr(argv: string[], rpc?: { id: number; method: string }): Reply {
     const json = (value: unknown) => ({ stdout: JSON.stringify(value), exitCode: 0 });
     if (!this.core) return { stdout: 'herdr-core unreachable', exitCode: 1 };
     const [command, ...rest] = argv;
     if (command === 'server' && rest.join(' ') === 'status --json') return json({ core: this.core });
+    if (command === 'connect' && rpc?.method === 'terminal.list') {
+      return { stdout: JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result: { terminals: [...this.terminals.values()] } }) + '\n', exitCode: 0 };
+    }
     if (command === 'ls' && rest[0] === '--all' && rest[1] === '--json') {
       const [key, value] = rest[2] === '--label' ? rest[3].split('=') : [];
       const listed = [...this.terminals.values()].filter((terminal) => !key || terminal.labels?.[key] === value);

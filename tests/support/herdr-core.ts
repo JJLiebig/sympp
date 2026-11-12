@@ -22,20 +22,24 @@ export class HerdrCore {
   readonly server = createServer(async (request, response) => {
     let body = '';
     for await (const chunk of request) body += chunk;
-    const { argv } = JSON.parse(body);
-    const reply = await this.reply(argv);
-    await appendFile(this.receipt, `${JSON.stringify({ argv, reply })}\n`);
+    const { argv, rpc } = JSON.parse(body);
+    const reply = await this.reply(argv, rpc);
+    await appendFile(this.receipt, `${JSON.stringify({ argv, rpc, reply })}\n`);
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify(reply));
   });
   constructor(private receipt: string) {}
 
-  private async reply(argv: string[]): Promise<Reply> {
+  private async reply(argv: string[], rpc?: { id: number; method: string }): Promise<Reply> {
     const json = (value: object) => ({ stdout: JSON.stringify(value), exitCode: 0 });
     const record = (address: string, terminal: Terminal) =>
       ({ address, state: terminal.state, ...(terminal.status ? { status: { state: terminal.status } } : {}) });
     const [command, ...rest] = argv;
     if (command === 'server' && rest.join(' ') === 'status --json') return json({ core: { id: this.id, name: 'acceptance' } });
+    if (command === 'connect' && rpc?.method === 'terminal.list') {
+      const terminals = [...this.terminals].map(([address, terminal]) => ({ ...record(address, terminal), labels: terminal.labels ?? {} }));
+      return { stdout: JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result: { terminals } }) + '\n', exitCode: 0 };
+    }
     if (command === 'ls' && rest[0] === '--all' && rest[1] === '--json') {
       const [key, value] = rest[2] === '--label' ? rest[3].split('=') : [];
       const listed = [...this.terminals].filter(([, terminal]) => !key || terminal.labels?.[key] === value);
