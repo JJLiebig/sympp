@@ -62,6 +62,8 @@ function restore() {
       entries.clear();
       kept(event.newValue).forEach(([askId, entry]) => entries.set(askId, entry));
       shown();
+      // This tab looks too, in case the tab that sent it closes.
+      if ([...entries.values()].some((entry) => entry.state === "pending")) lookAgain(AGAIN_MS);
     });
   } catch {
     // Storage is unavailable.
@@ -137,7 +139,6 @@ function lookAgain(ms: number) {
   }, ms);
 }
 
-// Also forgets an answer the factory refused: it was not saved, so there is nothing to deliver.
 export function dismiss(askId: string) {
   if (entries.delete(askId)) changed();
 }

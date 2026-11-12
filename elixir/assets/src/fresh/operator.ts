@@ -1,7 +1,7 @@
 import { createContext, useContext } from "react";
 
 import { api } from "./api";
-import { answered, dismiss, type Delivery } from "./delivery";
+import { answered, type Delivery } from "./delivery";
 
 // Everything the operator can do from the board. None of it stops a running worker or merges a PR.
 export type GoalStep = "complete" | "archive" | "restore" | "delete";
@@ -95,11 +95,11 @@ function refusalText(payload: Refusal | null) {
   return NEXT[next] ?? NEXT[next.split(":")[0]] ?? payload?.error?.message ?? "The backend refused this.";
 }
 
-// What became of an answer's request. Saved: its delivery is followed. No response: the factory may have saved it
-// before the connection broke, so its delivery is followed too. Refused: it was not saved, so there is nothing to follow.
+// What became of an answer's request. Saved: its delivery is followed. Anything else may still have saved it, such
+// as a lost response, an error after the save, or a retry refused because the first one went through, so its
+// delivery is followed too; an answer that was never saved reports none and is dropped.
 async function follow(askId: string, response: Response | null) {
-  if (!response) return answered(askId, { state: "pending" }, null);
-  if (!response.ok) return dismiss(askId);
+  if (!response?.ok) return answered(askId, { state: "pending" }, null);
   const saved = (await response.json().catch(() => null)) as { delivery?: Delivery; delivery_route?: string } | null;
   answered(askId, saved ? (saved.delivery ?? null) : { state: "pending" }, saved?.delivery_route ?? null);
 }

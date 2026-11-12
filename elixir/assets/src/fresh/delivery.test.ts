@@ -86,7 +86,7 @@ it("an undelivered answer is still there after the board reloads, and in the boa
   expect(tab.unarrivedAnswers()).toEqual([]);
 });
 
-it("an answer whose response never came back is followed, and one the factory refused is forgotten", async () => {
+it("an answer whose response never came back is followed, and one the factory never saved is dropped", async () => {
   browser();
   vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
     if (init?.method === "POST") throw new TypeError("network");
@@ -99,12 +99,14 @@ it("an answer whose response never came back is followed, and one the factory re
   expect(unarrivedAnswers()).toEqual([{ ask, answer: "Added.", reason: "terminal_finished" }]);
   dismiss(ask.id);
 
-  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: { code: "ask_not_open" } }, { status: 409 })));
+  // Refused as incomplete, the question is still open: there is no delivery to follow.
+  vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => (init?.method === "POST" ? Response.json({ error: { code: "missing_answer" } }, { status: 422 }) : Response.json({ delivery: null }))));
   track(ask, "Added.");
   await expect(send({ kind: "answer", askId: ask.id, answer: { text: "Added." } })).rejects.toThrow();
   await recheck();
   expect(unarrivedAnswers()).toEqual([]);
-  expect(vi.mocked(fetch)).toHaveBeenCalledOnce();
+  await recheck();
+  expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
 });
 
 it("an answer with no terminal to type into is undelivered at once", async () => {
