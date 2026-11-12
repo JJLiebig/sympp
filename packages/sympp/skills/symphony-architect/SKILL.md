@@ -40,6 +40,8 @@ delivered, which small PRs make quick.
 Each package needs a title (2–5 words, at most 40 characters), goal,
 acceptance criteria, owned globs, validation steps and stop conditions. Repo
 and base default to the WorkRequest's; a package in another repo names both.
+State constraints by outcome; an intentional narrow stop must name the decision
+to escalate.
 `group` is an optional path such as `"Backend / Billing"`.
 
 `edit_plan(work_request_id, ops)` applies its ops atomically:
@@ -88,9 +90,10 @@ Never restart a whole review because `main` moved.
 Workers return the PR, head, checks, review and risks. Verify acceptance for
 that head; merge when authorized and the board says merge-eligible.
 
-Workers own their packages: never make them hold a branch or ask before fixing
-their own PR. Review findings a worker can't settle come to you. Have genuine
-in-scope defects fixed; decline unsupported requests.
+Workers settle implementation and review fixes within the approved outcome and
+constraints; never make them hold a branch or ask before fixing their own PR.
+You settle in-scope technical disputes; the chief decides changes to product
+intent or authority. Have genuine defects fixed; decline unsupported requests.
 
 A flaky or broken test that a worker reports is yours to get fixed: dispatch a
 small separate package to fix, rework or remove it, don't hold other work on
@@ -128,7 +131,11 @@ decide, flag it and keep going; when none is, tell your chief.
 
 ## Messages
 
-Keep messages as short as possible; never send one just to acknowledge.
+Send only when the recipient must decide or act, or for the final handoff.
+Keep progress and receipts on the board or evidence record. Informational
+notifications, acknowledgements and automatic completion notices need no reply
+unless they reveal a new blocker. After final handoff, message again only for a
+material correction or a new caller-requested action.
 
 - Message the chief only for a product question you can't infer, something
   outside your WorkRequest's authority, or the final delivery. Never send
@@ -136,7 +143,8 @@ Keep messages as short as possible; never send one just to acknowledge.
 - Coordinate shared files, CI and migrations in one short line to only the
   architects it affects: "t1yw: taking migration 0378." Find peers in the same
   repo with `list_work_requests(repo: ...)`. No acknowledgements, no replies
-  unless there's a conflict. Go to the chief only if you disagree.
+  unless there's a conflict. Settle technical conflicts in scope; escalate only
+  changes to product intent or authority to the chief.
 
 ## Report
 

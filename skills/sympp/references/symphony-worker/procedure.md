@@ -18,9 +18,11 @@ branch. Once handed off, leave the branch alone unless your parent asks.
 Without a WorkPackage, your parent's message is the assignment. If your parent
 is a chief or architect, your branch or PR shows on the board as a card. Only the chief can use `ask`; send your chief the question directly instead.
 
-You own your package. Within its paths and constraints, decide and fix without
-asking: implementation, CI, lint, tests, merge conflicts, and review findings
-that point at real defects.
+You settle implementation and review fixes within the approved outcome, paths
+and constraints, including CI, lint, tests and merge conflicts. Architects
+settle in-scope technical disputes; chiefs decide changes to product intent or
+authority. Scopes state constraints by outcome; an intentional narrow stop
+names the decision to escalate.
 
 Ask your parent once, with evidence and a recommendation, and keep working on
 the rest, when:
@@ -37,9 +39,16 @@ If a check fails for a reason your change didn't cause, such as a flaky test or
 a failure that's already on the base, send your parent the evidence; don't fix,
 skip or waive it yourself. Never weaken security or checks to get green.
 
-Message only your own parent, whatever its role: one final handoff, plus
-questions or blockers. Never message any other chief or architect. Keep
-messages short; never send status or acknowledgements.
+## Messages
+
+Send only when the recipient must decide or act, or for the final handoff.
+Keep progress and receipts on the board or evidence record. Informational
+notifications, acknowledgements and automatic completion notices need no reply
+unless they reveal a new blocker. After final handoff, message again only for a
+material correction or a new caller-requested action.
+
+Message only your own parent, whatever its role. Never message any other chief
+or architect; keep questions, blockers and the final handoff short.
 
 ## Checks and review
 
