@@ -194,6 +194,8 @@ test('linked review successors gate sync and the board without rewriting dispatc
     const result = await architect.call('sync_pr', { work_package_id: wp, url: prUrl(112) });
     const ready = Object.keys(patch).length === 0;
     expect(result.pr_sync.readiness_reasons).toEqual(ready ? [] : ['review_not_done']);
+    // Three valid commands can exceed the old eight-second observer deadline.
+    if (ready) await review.cycles({ [reviewId]: predecessor, [successor]: intermediate, [latest]: completed }, 2_800);
     await factory.tick('sweep');
     const current = await row(architect, request, wp);
     expect(current.raw_status).toBe(ready ? 'ready' : 'dispatched');

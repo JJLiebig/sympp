@@ -42,7 +42,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
   @active ["working", "review_ci"]
   @ended ["merged", "done", "dismissed"]
   @review_concurrency 4
-  @review_timeout_ms 8_000
+  @review_timeout_ms ReviewStatus.timeout_ms() + 1_000
 
   @type repo :: module()
   @type entry :: SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot.entry()

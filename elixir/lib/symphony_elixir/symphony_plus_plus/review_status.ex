@@ -6,7 +6,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
   Review Suite keeps its state on the machine that ran the review, so the read
   runs on the worker's machine: directly when that is the factory host, else
   through `hc exec --on <machine>`. It runs `review.py --id <id> --show-status
-  --json` from the installed review-suite skill with a 3 s limit.
+  --json` from the installed review-suite skill with a 3 s command limit
+  and a 30 s budget for the whole successor chain.
 
   Results:
     * `{:ok, review}` - the cycle's public status;
@@ -22,6 +23,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
   alias SymphonyElixir.SymphonyPlusPlus.HerdrCore
 
   @timeout_ms 3_000
+  @read_timeout_ms 30_000
   @max_output_bytes 256_000
   @script_path ".agents/skills/review-suite/plugins/review-suite/scripts/review.py"
   @plugin_glob "plugins/cache/review-suite/review-suite/*/scripts/review.py"
@@ -29,6 +31,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
   @string_limit 240
 
   @type result :: {:ok, map()} | :not_started | :unknown
+
+  @doc "Maximum time for a complete status read, including linked cycles."
+  @spec timeout_ms() :: pos_integer()
+  def timeout_ms, do: @read_timeout_ms
 
   @spec read(String.t(), String.t() | nil) :: result()
   def read(review_id, machine) when is_binary(review_id) do
@@ -39,19 +45,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
   end
 
   defp read_with(runner, review_id, machine) do
-    resolve(runner, review_id, machine, nil, MapSet.new())
+    context = {runner, machine, System.monotonic_time(:millisecond) + @read_timeout_ms}
+    resolve(context, review_id, nil, [])
   end
 
   # Only the provider's explicit link can replace a cycle. Missing, unreadable,
   # cyclic or cross-branch links must not revive a predecessor's acceptance.
-  defp resolve(runner, review_id, machine, branch, visited) do
-    if MapSet.member?(visited, review_id) do
+  defp resolve(context, review_id, branch, visited) do
+    if review_id in visited do
       :unknown
     else
-      with {:ok, payload} <- fetch(runner, review_id, machine),
+      with {:ok, payload} <- fetch(context, review_id),
            true <- payload["review"] == review_id,
            true <- is_nil(branch) or payload["branch"] == branch do
-        follow(runner, payload, machine, MapSet.put(visited, review_id))
+        follow(context, payload, [review_id | visited])
       else
         false -> :unknown
         result -> result
@@ -59,22 +66,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
     end
   end
 
-  defp follow(runner, %{"superseded_by" => %{"review" => successor}, "branch" => branch}, machine, visited)
+  defp follow(context, %{"superseded_by" => %{"review" => successor}, "branch" => branch}, visited)
        when is_binary(successor) and successor != "" and is_binary(branch) and branch != "" do
-    resolve(runner, successor, machine, branch, visited)
+    resolve(context, successor, branch, visited)
   end
 
-  defp follow(_runner, %{"superseded_by" => _invalid}, _machine, _visited), do: :unknown
-  defp follow(_runner, payload, _machine, _visited), do: {:ok, normalize(payload)}
+  defp follow(_context, %{"superseded_by" => _invalid}, _visited), do: :unknown
+  defp follow(_context, payload, _visited), do: {:ok, normalize(payload)}
 
-  defp fetch(runner, review_id, machine) do
-    if local?(machine), do: read_local(runner, review_id), else: read_remote(runner, review_id, machine)
+  defp fetch({runner, machine, deadline}, review_id) do
+    remaining_ms = deadline - System.monotonic_time(:millisecond)
+
+    cond do
+      remaining_ms <= 0 -> :unknown
+      local?(machine) -> read_local(runner, review_id, min(@timeout_ms, remaining_ms))
+      true -> read_remote(runner, review_id, machine, min(@timeout_ms + 2_000, remaining_ms))
+    end
   end
 
   defp local?(machine), do: machine in [nil, ""] or machine == HerdrCore.machine_name()
 
-  defp read_local(runner, review_id) do
-    case runner.("python3", [local_script(), "--id", review_id, "--show-status", "--json"], @timeout_ms) do
+  defp read_local(runner, review_id, timeout_ms) do
+    case runner.("python3", [local_script(), "--id", review_id, "--show-status", "--json"], timeout_ms) do
       {:ok, {output, status}} -> parse(output, status)
       _unavailable -> :unknown
     end
@@ -90,14 +103,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
     Enum.find([Path.join(home, @script_path) | plugins], Path.join(home, @script_path), &File.regular?/1)
   end
 
-  defp read_remote(runner, review_id, machine) do
+  defp read_remote(runner, review_id, machine, timeout_ms) do
     command =
       ~s(for s in "$HOME/#{@script_path}" "${CODEX_HOME:-$HOME/.codex}"/#{@plugin_glob}; do ) <>
         ~s([ -f "$s" ] && exec python3 "$s" --id "$1" --show-status --json; done; exit 127)
 
     args = ["exec", "--json", "--on", machine, "--timeout", "3", "--", "sh", "-c", command, "sh", review_id]
 
-    with {:ok, {output, 0}} <- runner.("hc", args, @timeout_ms + 2_000),
+    with {:ok, {output, 0}} <- runner.("hc", args, timeout_ms),
          {:ok, %{"code" => status, "stdout" => stdout, "timed_out" => false}} when is_integer(status) <- Jason.decode(output),
          {:ok, decoded} <- Base.decode64(stdout) do
       parse(decoded, status)
