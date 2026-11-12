@@ -16,8 +16,9 @@ Call `create_work_request` with `title` (2–5 words, at most 40 characters),
 `repo` (remote URL or `owner/name`), `base_branch`, `description` and
 `work_type`; add `constraints` when they matter. Pass `own: false` when an
 architect will own it: the architect's first plan write takes it. Then start
-the architect with the WorkRequest id. Architects may change in-repo CI and
-tests without asking.
+the architect with the WorkRequest id. State constraints by outcome; an intentional
+narrow stop must name the decision to escalate. Architects may change in-repo
+CI and tests without asking.
 
 ## Settle product calls
 
@@ -38,12 +39,20 @@ read them with `read_work_request(detail: "full")`.
 
 ## Messages
 
+Send only when the recipient must decide or act, or for the final handoff.
+Keep progress and receipts on the board or evidence record. Informational
+notifications, acknowledgements and automatic completion notices need no reply
+unless they reveal a new blocker. After final handoff, message again only for a
+material correction or a new caller-requested action.
+
+Workers settle implementation and review fixes within the approved outcome and
+constraints; architects settle in-scope technical disputes. You decide changes
+to product intent or authority.
+
 - An architect's flagged decision reaches you as one line,
   `Product call on <title> by <terminal>: …`. It needs no reply; silence means
   fine. If one is wrong, send that architect one line with the correction.
 - Don't ask architects for status: read the board.
-- Keep messages to agents as short as possible, and never send one just to
-  acknowledge.
 
 ## Cards
 
