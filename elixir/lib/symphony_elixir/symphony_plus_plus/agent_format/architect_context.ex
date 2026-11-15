@@ -109,6 +109,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
 
   defp decision_row(%{} = decision) do
     %{
+      "flagged" => map_value(decision, "flagged") == true,
       "id" => text_value(map_value(decision, "id")),
       "sequence" => integer_value(map_value(decision, "sequence")),
       "source_type" => text_value(map_value(decision, "source_type")),
