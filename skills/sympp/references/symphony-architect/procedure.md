@@ -123,15 +123,19 @@ operator completes or archives it.
 ## Product calls
 
 Flag a decision (`record_decision(flag: true)`) only when it changes what a
-person sees, can do, or is charged or notified for: something the owner would
-notice using the product. Implementation choices (schema, queries, tests, file
-layout, tooling, CI) are never flagged. When one option is clearly best,
-decide, flag it and keep going; when none is, tell your chief.
+person sees, can do, or is charged or notified for, and the owner could
+reasonably have chosen differently.
+Record calls that follow from the request, existing behaviour or an obvious
+default without `flag`. Implementation choices (schema, queries, tests, file
+layout, tooling, CI) are never flagged. For calls that meet this bar, when one
+option is clearly best, decide, flag it and keep going; when none is, tell your chief.
 
 - Write the decision as one plain product sentence. Record it before
   dispatching work that depends on it.
-- The chief gets each flagged decision in one line and replies only to correct
-  it. Record a correction as a new decision without `flag`.
+- If any calls were flagged, include one line in the final handoff:
+  `N product calls flagged; read them with read_work_request(work_request_id: ..., detail: "full")`.
+  Count all flagged decisions, including acknowledged ones. Record a chief's
+  correction as a new decision without `flag`.
 - Declining a reviewer's request, such as over-engineering, is your job: never
   flag or message it.
 
