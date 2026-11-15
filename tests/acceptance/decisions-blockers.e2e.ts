@@ -295,48 +295,22 @@ coreTest('asks go open to answered or withdrawn, take no ownership, and an answe
   }
 });
 
-coreTest('a flagged decision notifies the live chief once, and its feedback is typed into the recorder, acknowledged or dismissed when undelivered', async ({ core }) => {
-  const chiefLabels = { 'sympp.role': 'chief', 'sympp.domain': 'Pricing' };
-  const create = async (client: Client, title: string) => (await client.call('create_work_request', {
-    repo: 'example/service', base_branch: 'beta', title, description, work_type: 'feature', own: false,
-  })).work_request.id as string;
-  const chief = await core.client(chiefLabels);
-  const byChief = await create(chief, 'Pricing\npage');
+coreTest('flagged decisions stay visible for review, with feedback typed into the recorder or dismissed when undelivered', async ({ core }) => {
   const architect = await core.client();
-  const byArchitect = await create(architect, 'Search');
-  const reviewed = await create(architect, 'Reviewed decisions');
-  const leavingChief = await core.client(chiefLabels);
-  const byLeavingChief = await create(leavingChief, 'Billing');
-  // A chief on another core with the same address is a different terminal.
-  const elsewhere = (await chief.rpc('tools/call', { name: 'create_work_request',
-    arguments: { repo: 'example/service', base_branch: 'beta', title: 'Elsewhere', description, work_type: 'feature', own: false },
-    _meta: { herdr: { ...herdr(chief.terminal!, chiefLabels), core_id: 'other-core', core_name: 'elsewhere' } } })).result.structuredContent.work_request.id;
+  const reviewed = (await architect.call('create_work_request', {
+    repo: 'example/service', base_branch: 'beta', title: 'Reviewed decisions', description, work_type: 'feature', own: false,
+  })).work_request.id as string;
   let recorder = await core.client();
   const leavingRecorder = await core.client();
   const record = async (client: Client, work_request_id: string, decision: string, flag: boolean) =>
     (await client.call('record_decision', { work_request_id, decision, rationale: 'Why', scope_impact: 'None', source_type: 'architect', flag })).decision_log_entry.id as string;
 
-  await record(recorder, byChief, `Use monthly prices\nfirst. ${'x'.repeat(200)}`, true);
-  expect(core.host.sends).toHaveLength(1);
-  const [notice] = core.host.sends;
-  const prefix = `Product call on Pricing page by ${recorder.address}: `;
-  expect(notice).toMatchObject({ target: chief.terminal, submit: true });
-  expect(notice.text.startsWith(`${prefix}Use monthly prices first. `)).toBe(true);
-  expect(notice.text).toHaveLength(prefix.length + 160);
-  expect(notice.text.endsWith('x…')).toBe(true);
-  await record(recorder, byChief, 'Unflagged', false);
-  await record(recorder, byArchitect, 'No chief', true);
-  await record(chief, byChief, "The chief's own call", true);
-  await record(recorder, elsewhere, "Another core's chief", true);
   const flagged = await Promise.all(['Keep the EU default.', 'Acknowledge me', 'Typed before a crash'].map((text) => record(recorder, reviewed, text, true)));
   const gone = await record(leavingRecorder, reviewed, 'Recorded before leaving', true);
   const plain = await record(recorder, reviewed, 'Plain note', false);
-  expect(core.host.sends).toHaveLength(1);
-  for (const leaving of [leavingChief, leavingRecorder]) core.host.terminals.get(leaving.terminal!)!.state = 'finished';
+  core.host.terminals.get(leavingRecorder.terminal!)!.state = 'finished';
   await core.restart();
   recorder = await core.factory.client(recorder.terminal);
-  await record(recorder, byLeavingChief, 'Chief finished', true);
-  expect(core.host.sends).toHaveLength(1);
 
   const toReview = async () => Object.fromEntries((await nativeBoard(recorder, reviewed)).decisions_to_review.map((entry: any) => [entry.id, entry]));
   const review = await toReview();
@@ -346,7 +320,7 @@ coreTest('a flagged decision notifies the live chief once, and its feedback is t
   expect((await recorder.raw({ text: '  ' }, {}, 'POST', route)).body.error.code).toBe('missing_feedback');
   const delivered = await recorder.raw({ text: 'Keep the EU default.' }, {}, 'POST', route);
   expect(delivered.body).toMatchObject({ review_state: 'feedback', delivery: { state: 'pending' } });
-  await expect.poll(() => core.host.sends.length).toBe(2);
+  await expect.poll(() => core.host.sends.length).toBe(1);
   await expect.poll(async () => (await toReview())[flagged[0]]).toBeUndefined();
   expect(core.host.sends.at(-1)).toEqual({ target: recorder.terminal, text: 'Decision feedback: Keep the EU default.', submit: false });
   const decision = (id: string, action: string, body: object = {}) => recorder.operator(`/api/v1/sympp/operator/decisions/${id}/${action}`, body);
@@ -354,7 +328,7 @@ coreTest('a flagged decision notifies the live chief once, and its feedback is t
   const undelivered = await decision(gone, 'feedback', { text: 'Use the cheaper plan.' });
   expect(undelivered.body.delivery).toEqual({ state: 'pending' });
   await expect.poll(async () => (await toReview())[gone]?.undelivered_reason).toBe('terminal_finished');
-  expect(core.host.sends).toHaveLength(2);
+  expect(core.host.sends).toHaveLength(1);
   const refused = async (id: string, action: string) => {
     const response = await decision(id, action, { text: 'Again' });
     expect(response.status).toBe(409);
@@ -374,7 +348,7 @@ coreTest('a flagged decision notifies the live chief once, and its feedback is t
   let release!: () => void;
   core.host.hold = new Promise((resolve) => { release = resolve; });
   const typing = recorder.raw({ text: 'Typed while the factory stops.' }, {}, 'POST', pending[flagged[2]].feedback_route).catch(() => null);
-  await expect.poll(() => core.host.sends.length).toBe(3);
+  await expect.poll(() => core.host.sends.length).toBe(2);
   const sending = (await toReview())[flagged[2]];
   expect(sending).toMatchObject({ undelivered_reason: 'delivering', next_action: 'wait: the feedback is being typed' });
   expect(sending.dismiss_route).toBeUndefined();

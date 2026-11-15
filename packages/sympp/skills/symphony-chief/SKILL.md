@@ -54,9 +54,10 @@ Workers settle implementation and review fixes within the approved outcome and
 constraints; architects settle in-scope technical disputes. You decide changes
 to product intent or authority.
 
-- An architect's flagged decision reaches you as one line,
-  `Product call on <title> by <terminal>: …`. It needs no reply; silence means
-  fine. If one is wrong, send that architect one line with the correction.
+- When a handoff names flagged calls, read them with
+  `read_work_request(work_request_id: ..., detail: "full")`. Message the architect
+  one line correcting any that conflict with the owner's intent or other
+  WorkRequests. Accept the handoff without waiting for owner acknowledgement.
 - Don't ask architects for status: read the board.
 
 ## Cards
