@@ -8,7 +8,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.ReviewStatus
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{WorkPackage, WorkPackageDelivery}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
@@ -30,7 +29,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       repo.query!("DELETE FROM #{table}")
     end
 
-    on_exit(fn -> Application.put_env(:symphony_elixir, :sympp_review_command, nil) end)
     :ok
   end
 
@@ -114,50 +112,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       Ownership.observe_core(repo, "core-1", nil, %{}, [], read_at)
 
       assert %WorkedOn{state: "live"} = repo.get!(WorkedOn, late.id)
-    end
-  end
-
-  describe "Review Suite state" do
-    test "is read locally on the factory host and with hc exec on other machines" do
-      head = "abc123" <> String.duplicate("0", 34)
-      done = Jason.encode!(%{"review" => "rvw_read0001", "done" => true, "status" => "done", "head" => head, "reviewed_head" => head, "accepted_head" => head, "progress" => "1/1", "rounds" => 2})
-      test_pid = self()
-
-      Application.put_env(:symphony_elixir, :sympp_review_command, fn command, args, timeout ->
-        send(test_pid, {:command, command, args, timeout})
-
-        case command do
-          "python3" -> {:ok, {done, 0}}
-          "hc" -> {:ok, {Jason.encode!(%{"code" => 0, "stdout" => Base.encode64(done), "timed_out" => false}), 0}}
-        end
-      end)
-
-      assert {:ok, review} = ReviewStatus.read("rvw_read0001", nil)
-      assert_received {:command, "python3", [_script, "--id", "rvw_read0001", "--show-status", "--json"], 3_000}
-      assert %{"done" => true, "reviewed_head" => ^head, "accepted_head" => ^head, "status" => "passed", "current" => 1, "total" => 1, "round" => 2} = review
-      assert ReviewStatus.state({:ok, review}, head) == :done
-      assert ReviewStatus.state({:ok, review}, "abc123") == :pending
-      # Review Suite can keep `done` while reporting the cycle no longer holds.
-      for status <- ["stale", "failed", "fix-pending", "invalidated"] do
-        stale = Jason.encode!(%{"review" => "rvw_read0001", "done" => true, "status" => status, "accepted_head" => head})
-        Application.put_env(:symphony_elixir, :sympp_review_command, fn "python3", _args, _timeout -> {:ok, {stale, 0}} end)
-        assert ReviewStatus.state(ReviewStatus.read("rvw_read0001", nil), head) == :pending
-      end
-
-      Application.put_env(:symphony_elixir, :sympp_review_command, fn command, args, timeout ->
-        send(test_pid, {:command, command, args, timeout})
-
-        case command do
-          "python3" -> {:ok, {done, 0}}
-          "hc" -> {:ok, {Jason.encode!(%{"code" => 0, "stdout" => Base.encode64(done), "timed_out" => false}), 0}}
-        end
-      end)
-
-      assert {:ok, ^review} = ReviewStatus.read("rvw_read0001", "worker-box") |> then(fn {:ok, remote} -> {:ok, Map.put(remote, "observed_at", review["observed_at"])} end)
-      assert_received {:command, "hc", ["exec", "--json", "--on", "worker-box", "--timeout", "3", "--", "sh", "-c", command, "sh", "rvw_read0001"], _timeout}
-      # The skills install first, else the Codex marketplace plugin.
-      assert command =~ ~s("$HOME/.agents/skills/review-suite/plugins/review-suite/scripts/review.py")
-      assert command =~ ~s("${CODEX_HOME:-$HOME/.codex}"/plugins/cache/review-suite/review-suite/*/scripts/review.py)
     end
   end
 

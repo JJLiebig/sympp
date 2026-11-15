@@ -6,8 +6,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
   Review Suite keeps its state on the machine that ran the review, so the read
   runs on the worker's machine: directly when that is the factory host, else
   through `hc exec --on <machine>`. It runs `review.py --id <id> --show-status
-  --json` from the installed review-suite skill with a 3 s command limit
-  and a 30 s budget for the whole successor chain.
+  --json` from the installed review-suite skill within a single 30 s budget
+  for the whole successor chain, including remote transport.
 
   Results:
     * `{:ok, review}` - the cycle's public status;
@@ -22,7 +22,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
 
   alias SymphonyElixir.SymphonyPlusPlus.HerdrCore
 
-  @timeout_ms 3_000
   @read_timeout_ms 30_000
   @max_output_bytes 256_000
   @script_path ".agents/skills/review-suite/plugins/review-suite/scripts/review.py"
@@ -36,16 +35,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
   @spec timeout_ms() :: pos_integer()
   def timeout_ms, do: @read_timeout_ms
 
-  @spec read(String.t(), String.t() | nil) :: result()
-  def read(review_id, machine) when is_binary(review_id) do
+  @spec read(String.t(), String.t() | nil, keyword()) :: result()
+  def read(review_id, machine, opts \\ []) when is_binary(review_id) do
     case Application.get_env(:symphony_elixir, :sympp_review_command, &run/3) do
       nil -> :unknown
-      runner when is_function(runner, 3) -> read_with(runner, review_id, machine)
+      runner when is_function(runner, 3) -> read_with(runner, review_id, machine, Keyword.get(opts, :clock, fn -> System.monotonic_time(:millisecond) end))
     end
   end
 
-  defp read_with(runner, review_id, machine) do
-    context = {runner, machine, System.monotonic_time(:millisecond) + @read_timeout_ms}
+  defp read_with(runner, review_id, machine, clock) do
+    context = {runner, machine, clock, clock.() + @read_timeout_ms}
     resolve(context, review_id, nil, [])
   end
 
@@ -74,14 +73,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
   defp follow(_context, %{"superseded_by" => _invalid}, _visited), do: :unknown
   defp follow(_context, payload, _visited), do: {:ok, normalize(payload)}
 
-  defp fetch({runner, machine, deadline}, review_id) do
-    remaining_ms = deadline - System.monotonic_time(:millisecond)
+  defp fetch({runner, machine, clock, deadline}, review_id) do
+    remaining_ms = deadline - clock.()
 
-    cond do
-      remaining_ms <= 0 -> :unknown
-      local?(machine) -> read_local(runner, review_id, min(@timeout_ms, remaining_ms))
-      true -> read_remote(runner, review_id, machine, min(@timeout_ms + 2_000, remaining_ms))
-    end
+    result =
+      cond do
+        remaining_ms <= 0 -> :unknown
+        local?(machine) -> read_local(runner, review_id, remaining_ms)
+        true -> read_remote(runner, review_id, machine, remaining_ms)
+      end
+
+    if clock.() < deadline, do: result, else: :unknown
   end
 
   defp local?(machine), do: machine in [nil, ""] or machine == HerdrCore.machine_name()
@@ -108,7 +110,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
       ~s(for s in "$HOME/#{@script_path}" "${CODEX_HOME:-$HOME/.codex}"/#{@plugin_glob}; do ) <>
         ~s([ -f "$s" ] && exec python3 "$s" --id "$1" --show-status --json; done; exit 127)
 
-    args = ["exec", "--json", "--on", machine, "--timeout", "3", "--", "sh", "-c", command, "sh", review_id]
+    # hc accepts fractional seconds; transport and command consume the same budget.
+    timeout_seconds = Float.to_string(timeout_ms / 1_000)
+    args = ["exec", "--json", "--on", machine, "--timeout", timeout_seconds, "--", "sh", "-c", command, "sh", review_id]
 
     with {:ok, {output, 0}} <- runner.("hc", args, timeout_ms),
          {:ok, %{"code" => status, "stdout" => stdout, "timed_out" => false}} when is_integer(status) <- Jason.decode(output),
