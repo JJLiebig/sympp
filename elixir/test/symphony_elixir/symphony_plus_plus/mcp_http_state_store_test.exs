@@ -180,6 +180,55 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPStateStoreTest do
     assert %Server{state_key: "fresh-put"} = HTTPStateStore.get(config, "client", "state")
   end
 
+  test "reordered queued updates each commit once against the latest state" do
+    config = config("queued-transform-order")
+    parent = self()
+
+    assert :ok = HTTPStateStore.put(config, "client", "state", initialized_server(config, "initial"))
+
+    holder =
+      Task.async(fn ->
+        HTTPStateStore.update_with_status(config, "client", "state", default_server_fun(config, "state"), fn server ->
+          send(parent, {:holding_transform, self()})
+
+          receive do
+            :release_transform -> :ok
+          after
+            1_000 -> raise "timed out waiting to release transform"
+          end
+
+          {:held, server}
+        end)
+      end)
+
+    assert_receive {:holding_transform, holder_pid}
+
+    update = fn label ->
+      Task.async(fn ->
+        HTTPStateStore.update_with_status(config, "client", "state", default_server_fun(config, "state"), fn server ->
+          send(parent, {:transformed, label, server.state_key})
+          {label, %{server | state_key: server.state_key <> ":" <> label}}
+        end)
+      end)
+    end
+
+    first = update.("first")
+    wait_for_queued_lock(config, "client", "state", 1)
+    second = update.("second")
+    wait_for_queued_lock(config, "client", "state", 2)
+    # begin_write and acquire_lock are separate calls: scheduling can invert their order.
+    reverse_queued_lock(config, "client", "state")
+    send(holder_pid, :release_transform)
+
+    assert Task.await(holder) == {:held, :stored}
+    assert Task.await(second) == {"second", :stored}
+    assert Task.await(first) == {"first", :stored}
+    assert_receive {:transformed, "second", "initial"}
+    assert_receive {:transformed, "first", "initial:second"}
+    refute_receive {:transformed, _, _}
+    assert %Server{state_key: "initial:second:first"} = HTTPStateStore.get(config, "client", "state")
+  end
+
   test "bypassed updates do not supersede queued writes" do
     config = config("bypassed-write-order")
     parent = self()
