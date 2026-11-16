@@ -64,9 +64,8 @@ billing, and `none` when the worker has no Review Suite. `agent` is `codex`
 (default) or `claude`.
 
 Dispatch again after a contract edit or when a ready package needs more work (same worktree and review id, fresh
-assignment file) and tell the worker to re-read it; keep or set a blocker
-(`set_blocker`) for outstanding work until it is completed. If the hand-off
-fails, fix the `error` and retry.
+assignment file) and tell the worker to re-read it. If the hand-off fails, fix
+the `error` and retry.
 
 ## Deliver
 
