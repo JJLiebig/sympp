@@ -2,7 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Redactor do
   @moduledoc false
 
   @redacted "[REDACTED]"
-  @sensitive_text_pattern ~r/(bearer\s+[A-Za-z0-9._~+\/=-]{8,}|wk_[A-Za-z0-9_-]{43,}|raw[_-]?secret[_-][A-Za-z0-9_-]+|(?<![\w\/\\.-])sk-[A-Za-z0-9_-]{20,}|github_pat_[A-Za-z0-9_]{8,}|gh[pousr]_[A-Za-z0-9_]{8,}|xox[baprs]-[A-Za-z0-9-]{8,})/i
+  @sensitive_text_pattern ~r/(bearer\s+[A-Za-z0-9._~+\/=-]{8,}|wk_[A-Za-z0-9_-]{43,}|raw[_-]?secret[_-][A-Za-z0-9_-]+|(?<=:\/\/)sk-[A-Za-z0-9_-]{20,}(?=[:@])|(?<![\w\/\\.-])sk-[A-Za-z0-9_-]{20,}|github_pat_[A-Za-z0-9_]{8,}|gh[pousr]_[A-Za-z0-9_]{8,}|xox[baprs]-[A-Za-z0-9-]{8,})/i
   @url_pattern ~r/https?:\/\/[^\s<>"']+/i
 
   @sensitive_keys MapSet.new([

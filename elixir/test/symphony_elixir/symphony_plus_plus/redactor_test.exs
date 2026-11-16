@@ -21,7 +21,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.RedactorTest do
           "sk-0123456789abcdefghijklmnopqrstuv",
           "sk-proj-0123456789_abcdefghijklmnop-qrstuv"
         ],
-        {prefix, suffix} <- [{"", ""}, {"token: ", "."}, {"\"", "\""}, {"key=", "&page=1"}] do
+        {prefix, suffix} <- [{"", ""}, {"token: ", "."}, {"\"", "\""}, {"key=", "&page=1"}, {"https://", "@example.test/path"}, {"https://", ":pw@example.test"}, {"https://user:", "@example.test"}] do
       assert Redactor.redact_text(prefix <> token <> suffix) == prefix <> "[REDACTED]" <> suffix
     end
   end
