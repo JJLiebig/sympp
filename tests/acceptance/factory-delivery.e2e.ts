@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { contract } from '../support/factory.js';
 import { close, head, installReviewSuite, pr, prUrl, progress, row, sync, test } from '../support/delivery.js';
-import { githubCheckout } from '../support/worktree-git.js';
+import { git, repository, githubCheckout } from '../support/worktree-git.js';
 
 test('deployment observations cover every delivered revision and preserve completion through rollback and unavailable history', async ({ delivery: { factory, provider } }) => {
   const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
@@ -169,6 +169,47 @@ test('installed Review Suite state for the review id gates qualification', async
   const done = await architect.call('sync_pr', { work_package_id: wp, url: prUrl(110) });
   expect(done.work_package.status).toBe('ready');
   for (const argv of await review.calls()) expect(argv).toEqual(['--id', reviewId, '--show-status', '--json']);
+});
+
+test('a ready package replays in its existing worktree and must requalify before merge', async ({ delivery: { factory, provider, root } }) => {
+  const local = await repository(root, 'ready-replay');
+  const architect = await factory.client();
+  const request = await architect.request('Continue ready work', 'beta', local.checkout);
+  const [wp] = await architect.addPackages([contract('Finish proof', { branch_pattern: 'feature/delivery-113' })]);
+  const args = { work_package_id: wp, review_mode: 'fast', target_repo_root: local.checkout };
+  const first = await architect.call('dispatch_work_package', args);
+  // Initial preparation fetches locally; replay reuses the prepared worktree.
+  await git(root, local.checkout, 'remote', 'set-url', 'origin', 'https://github.com/example/service.git');
+  const reviewId = first.work_package.review_id;
+  const review = await installReviewSuite(factory.home);
+  await review.answer({ review: reviewId, done: true, status: 'done', accepted_head: head('a') });
+  provider.set(113, pr(113, head('a')));
+  const qualified = await architect.call('sync_pr', { work_package_id: wp, url: prUrl(113) });
+  expect(qualified.work_package.status).toBe('ready');
+  expect((await row(architect, request, wp)).merge_eligibility.eligible).toBe(true);
+  await architect.reject('dispatch_work_package', { ...args, review_mode: 'deep' }, 'review_mode_conflict');
+  expect((await row(architect, request, wp)).raw_status).toBe('ready');
+  await architect.call('set_blocker', { work_package_id: wp, blocker_id: 'proof', active: true, summary: 'Required regression proof remains' });
+
+  const replay = await architect.call('dispatch_work_package', args);
+  expect(replay.replay).toBe(true);
+  expect(replay.work_package.status).toBe('dispatched');
+  expect([replay.worktree.path, replay.work_package.review_id, replay.launch_line])
+    .toEqual([first.worktree.path, reviewId, first.launch_line]);
+  expect(await git(root, replay.worktree.path, 'branch', '--show-current')).toBe('feature/delivery-113');
+  const assignment = await readFile(replay.assignment_file, 'utf8');
+  expect(assignment).toContain('Required regression proof remains');
+  expect(assignment).toContain(reviewId);
+  const resumed = await row(architect, request, wp);
+  expect(resumed.raw_status).toBe('dispatched');
+  expect(resumed.merge_eligibility.eligible).toBe(false);
+  expect(resumed.work_package.pr.url).toBe(prUrl(113));
+  expect(resumed.merge_eligibility.reason_codes).toContain('active_blocker');
+  // Clearing the blocker alone cannot restore the old ready status.
+  await architect.call('set_blocker', { work_package_id: wp, blocker_id: 'proof', active: false, summary: 'Regression proof accepted' });
+  expect((await row(architect, request, wp)).merge_eligibility.eligible).toBe(false);
+  await architect.call('sync_pr', { work_package_id: wp, url: prUrl(113) });
+  expect((await row(architect, request, wp)).merge_eligibility.eligible).toBe(true);
 });
 
 test('linked review successors gate sync and the board without rewriting dispatch or predecessor evidence', async ({ watched: { factory, provider } }) => {
