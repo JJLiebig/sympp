@@ -173,14 +173,13 @@ test('installed Review Suite state for the review id gates qualification', async
 
 test('a ready package replays in its existing worktree and must requalify before merge', async ({ delivery: { factory, provider, root } }) => {
   const local = await repository(root, 'ready-replay');
-  // Keep fetches local while exposing the same repository identity as the PR.
-  await git(root, local.checkout, 'config', `url.${local.origin}.insteadOf`, 'https://github.com/example/service.git');
-  await git(root, local.checkout, 'remote', 'set-url', 'origin', 'https://github.com/example/service.git');
   const architect = await factory.client();
   const request = await architect.request('Continue ready work', 'beta', local.checkout);
   const [wp] = await architect.addPackages([contract('Finish proof', { branch_pattern: 'feature/delivery-113' })]);
   const args = { work_package_id: wp, review_mode: 'fast', target_repo_root: local.checkout };
   const first = await architect.call('dispatch_work_package', args);
+  // Initial preparation fetches locally; replay reuses the prepared worktree.
+  await git(root, local.checkout, 'remote', 'set-url', 'origin', 'https://github.com/example/service.git');
   const reviewId = first.work_package.review_id;
   const review = await installReviewSuite(factory.home);
   await review.answer({ review: reviewId, done: true, status: 'done', accepted_head: head('a') });
