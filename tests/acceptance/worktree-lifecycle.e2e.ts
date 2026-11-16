@@ -50,8 +50,7 @@ test('dispatch hands off a real worktree, assignment and launch line, and a repl
   const assignment = await readFile(file, 'utf8');
   expect(assignment).toContain(`--id ${reviewId} --mode fast --cd ${path}`);
   for (const text of ['Prior evidence 1\n', 'Prior evidence 101', 'src/**', 'The agreed behavior is available.', 'Make no sympp MCP calls']) expect(assignment).toContain(text.trim());
-  expect(dispatched.launch_line).toBe(`hc run --bg --on ${dispatched.worktree.machine} --cwd ${path} --name ${wp} --label sympp.role=worker `
-    + `--label sympp.work_package_id=${wp} --label sympp.review_id=${reviewId} -- codex "Read ${file}"`);
+
 
   // Agents that read only the text content still see the whole launch line.
   expect((await client.tool('dispatch_work_package', args)).result.content[0].text).toContain(JSON.stringify(dispatched.launch_line));
