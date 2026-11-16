@@ -120,7 +120,17 @@ async function update() {
   if (failures.length) throw new Error(failures.join(' '));
 }
 if (require.main === module) {
-  Promise.resolve().then(() => process.argv[2] === "board" ? board() : process.argv[2] === "update" ? update() : process.argv[2] === "status" ? status() : require("./setup-sympp.js").main(process.argv.slice(2)))
+  Promise.resolve().then(() => {
+    const [command, ...args] = process.argv.slice(2);
+    const commands = { board, update, status };
+    if (!Object.hasOwn(commands, command)) return require("./setup-sympp.js").main(process.argv.slice(2));
+    const usage = `sympp ${command} [--help]`;
+    if (args.some(arg => arg !== "--help" && arg !== "-h")) {
+      throw new Error(`Unknown argument. ${usage}`);
+    }
+    if (args.length) { process.stdout.write(`usage: ${JSON.stringify(usage)}\n`); return; }
+    return commands[command]();
+  })
     .catch(error => { process.stderr.write(`error: ${JSON.stringify(error.message)}\n`); process.exitCode = 1; });
 }
 module.exports = { installCommand, saveConnection };
