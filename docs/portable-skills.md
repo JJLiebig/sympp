@@ -29,6 +29,8 @@ agent badges; other layouts keep their own files and can open the view with
 Run `sympp update` to update the skill, reconnect the selected hosts and panel,
 and rebuild/restart the remote factory over the saved SSH host. It stops at the
 first failed step. Open fresh agent sessions afterward.
+Use `sympp update --help` to inspect usage without updating. `board`, `status`
+and `update` accept only help options and reject other arguments before connecting.
 
 Repeated setup is a no-op and repairs owned registrations after relocation.
 Unrelated `sympp` entries in the selected host configuration are refused. Use a separate home/workspace,
