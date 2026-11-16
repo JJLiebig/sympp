@@ -4,8 +4,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
 
   A planned package moves to `dispatched` and records its review mode, a newly
   minted Review Suite id (none for mode `none`) and the Herdr machine its
-  worker launches on. Dispatching a package that is already `dispatched`
-  replays: it keeps the stored review mode and id, so the worker's worktree and
+  worker launches on. Dispatching a `dispatched` or `ready` package
+  replays (moving `ready` back to `dispatched`): it keeps the stored review mode and id, so the worker's worktree and
   review stay the same. Preparing the worktree and writing the worker's
   assignment happen after this commits (`MCP.WorkPackageLaunch`).
   """
@@ -19,6 +19,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
@@ -95,6 +96,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
     end
   end
 
+  defp dispatch_package(repo, work_request, %WorkPackage{status: "ready", review_mode: review_mode} = work_package, review_mode, opts) do
+    with {:ok, dispatched} <- Lifecycle.transition(repo, work_package, :unqualify) do
+      dispatch_package(repo, work_request, dispatched, review_mode, opts)
+    end
+  end
+
   defp dispatch_package(repo, _work_request, %WorkPackage{status: "dispatched", review_mode: review_mode} = work_package, review_mode, opts) do
     machine = Keyword.get(opts, :launch_machine)
 
@@ -106,7 +113,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
     end
   end
 
-  defp dispatch_package(_repo, _work_request, %WorkPackage{status: "dispatched"} = work_package, _review_mode, _opts),
+  defp dispatch_package(_repo, _work_request, %WorkPackage{status: status} = work_package, _review_mode, _opts) when status in ["dispatched", "ready"],
     do: {:error, {:review_mode_conflict, work_package.review_mode}}
 
   defp dispatch_package(_repo, _work_request, %WorkPackage{status: status}, _review_mode, _opts),
@@ -151,7 +158,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
   @spec error_message(term()) :: String.t()
   def error_message(:not_found), do: "WorkRequest or WorkPackage was not found"
   def error_message(:work_request_archived), do: "WorkRequest is archived; restore it before dispatch"
-  def error_message({:invalid_work_package_status, status}), do: "WorkPackage is #{status}; only a planned package dispatches, and a dispatched one replays"
+  def error_message({:invalid_work_package_status, status}), do: "WorkPackage is #{status}; only a planned package dispatches, and a dispatched or ready one replays"
   def error_message({:review_mode_conflict, stored}), do: "WorkPackage was dispatched with review_mode #{stored}; replay it with the same review_mode"
 
   def error_message({:execution_graph_cycle, cycles}),

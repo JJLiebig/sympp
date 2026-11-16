@@ -280,7 +280,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
 
   defp dispatch_work_package_error(reason), do: architect_error(reason, "dispatch_work_package")
 
-  defp dispatch_next_action("ready"), do: "The package is ready; merge or sync its PR."
   defp dispatch_next_action("ended"), do: "The package has ended; nothing to dispatch."
   defp dispatch_next_action(_status), do: "Read the WorkPackage before dispatching again."
 
