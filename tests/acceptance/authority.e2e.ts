@@ -522,7 +522,7 @@ test('any Herdr terminal flags a decision, redacted, and the operator reviews it
   expect(refused.status).toBe(409);
   expect(refused.body.error).toMatchObject({ state: 'not_flagged' });
   expect((await architect.operator(decisionPath(flagged.decision_log_entry.id, 'feedback'), { text: ' ' })).status).toBe(422);
-  const feedback = await architect.operator(decisionPath(flagged.decision_log_entry.id, 'feedback'), { text: 'Prefer sk-synthetic-feedback the bounded option.' });
+  const feedback = await architect.operator(decisionPath(flagged.decision_log_entry.id, 'feedback'), { text: 'Prefer sk-synthetic-feedback-0123456789abcdef the bounded option.' });
   expect(feedback.status).toBe(200);
   expect(feedback.body.review_state).toBe('feedback');
   // The synthetic recording terminal isn't on the factory's own herdr-core, so the feedback stays on the decision, marked undelivered.

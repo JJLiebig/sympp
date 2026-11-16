@@ -1054,7 +1054,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
   end
 
   defp fetch_remote_base(repo_root, base_branch, opts) do
-    git(repo_root, ["fetch", "origin", "+refs/heads/#{base_branch}:refs/remotes/origin/#{base_branch}"], opts)
+    args = ["fetch", "origin", "+refs/heads/#{base_branch}:refs/remotes/origin/#{base_branch}"]
+
+    case git(repo_root, args, opts) do
+      :ok ->
+        :ok
+
+      {:error, _reason} ->
+        # Another fetch can update the shared ref between Git's read and compare-and-swap.
+        git(repo_root, args, opts)
+    end
   end
 
   defp cleanup_repo_root(opts) do

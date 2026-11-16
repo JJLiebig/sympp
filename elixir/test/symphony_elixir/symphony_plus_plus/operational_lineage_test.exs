@@ -31,7 +31,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperationalLineageTest do
 
     assert {:ok, relationship} =
              OperationalLineage.record_recut_as(repo, source.id, target.id, %{
-               reason: "Recut after operator pasted sk-12345678 in context.",
+               reason: "Recut after operator pasted sk-0123456789abcdefghijklmnopqrstuv in context.",
                decision: %{work_request_id: "wr-redact", decision_id: "decision-redact"}
              })
 

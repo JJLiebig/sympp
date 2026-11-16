@@ -158,3 +158,34 @@ test('update streams factory phases, installs an exact CI runtime, and builds on
     t.diagnostic(`${mode}: ${Math.round(performance.now() - started)}ms (controlled runtime and build commands)`);
   }
 });
+
+
+test('subcommand help and invalid arguments never enter connection or update handling', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sympp-command-help-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const config = path.join(root, '.local/share/sympp/connection.json');
+  fs.mkdirSync(path.dirname(config), { recursive: true });
+  // Parsing this saved connection must fail if dispatch reaches any command body.
+  fs.writeFileSync(config, 'unreadable connection JSON');
+  const run = args => spawnSync(process.execPath, [path.resolve(__dirname, '../../packages/sympp/scripts/sympp-command.js'), ...args], {
+    env: { ...process.env, HOME: root, USERPROFILE: root }, encoding: 'utf8', timeout: 10000,
+  });
+  for (const command of ['update', 'board', 'status']) {
+    for (const help of ['--help', '-h']) {
+      const result = run([command, help]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, new RegExp(`sympp ${command} \\[--help\\]`));
+      assert.equal(result.stderr, '');
+    }
+    for (const args of [['--unknown'], ['extra'], ['--help', '--unknown']]) {
+      const result = run([command, ...args]);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /Unknown argument/);
+    }
+    const result = run([command]);
+    assert.equal(result.status, 1);
+    assert.doesNotMatch(result.stderr, /Unknown argument/);
+    assert.match(result.stderr, /JSON/);
+  }
+  assert.equal(fs.readFileSync(config, 'utf8'), 'unreadable connection JSON');
+});
