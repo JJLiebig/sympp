@@ -138,7 +138,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
     - `main` moving never blocks work. Leave a ready branch alone until merge; merge `main` in or rebase only to
       fix a conflict. If the PR's own diff is unchanged after that, its review still counts. If it changed, review
       only what changed. Never restart a whole review because `main` moved.
-    #{review_step(work_package, worktree.worktree_path)}
+    #{review_step(work_package, worktree.worktree_path, assignment)}
     - Make no sympp MCP calls. Message only your parent terminal: one final handoff with the PR URL, the
       exact head, check and review results, and remaining risks, plus questions or blockers. Never message
       any other chief or architect, and never send status or acknowledgements. Keep messages short.
@@ -177,17 +177,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
 
   defp opening(_text), do: ""
 
-  defp review_step(%WorkPackage{review_mode: "none"}, _worktree_path),
-    do: "- No Review Suite review is required for this WorkPackage."
+  defp review_step(%WorkPackage{review_mode: "none"}, _worktree_path, _assignment),
+    do: "- No new factory-assigned Review Suite review. Preserve review obligations in the current contract and any existing review cycle."
 
-  defp review_step(%WorkPackage{review_mode: review_mode, review_id: review_id}, worktree_path) do
+  defp review_step(%WorkPackage{review_mode: review_mode, review_id: review_id}, worktree_path, assignment) do
     mode = WorkPackage.review_suite_mode(review_mode)
 
     """
     - Review with Review Suite (`review.py` from the installed review-suite skill) under the id sympp
-      minted for this package: run `review.py --id #{review_id} --mode #{mode} --cd #{shell_arg(worktree_path)}`
-      once, then wait for it to finish. Repeating the same command resumes the same review, but two starts at once can both
-      launch reviewers, so never start it again while it runs.\
+      minted for this package. For initial creation, pass the current contract as the frozen review brief:
+
+      ```sh
+      review.py --id #{review_id} --mode #{mode} --cd #{shell_arg(worktree_path)} --review-brief=#{shell_arg(WorkerContext.encode_tool_payload(assignment))}
+      ```
+
+      Wait for it to finish; never start it again while it runs. Resume an existing cycle with
+      `review.py --id #{review_id} --cd #{shell_arg(worktree_path)}` without creation flags.
+      A refreshed assignment does not replace an existing frozen brief; follow the installed review
+      procedure for contract changes.\
     """
   end
 
@@ -196,7 +203,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
   def launch_line(%WorkPackage{} = work_package, worktree_path, assignment_file, agent) do
     review_label = if work_package.review_id, do: ["--label", "sympp.review_id=" <> work_package.review_id], else: []
 
-    (["hc", "run", "--bg", "--on", work_package.launch_machine, "--cwd", worktree_path, "--name", terminal_name(work_package.id)] ++
+    {:ok, host} = :inet.gethostname()
+    machine_args = if work_package.launch_machine == to_string(host), do: [], else: ["--on", work_package.launch_machine]
+
+    (["hc", "run", "--bg"] ++
+       machine_args ++
+       ["--cwd", worktree_path, "--name", terminal_name(work_package.id)] ++
        ["--label", "sympp.role=worker", "--label", "sympp.work_package_id=" <> work_package.id] ++ review_label ++ ["--", agent])
     |> Enum.map_join(" ", &shell_arg/1)
     |> Kernel.<>(" " <> prompt_arg(assignment_file))

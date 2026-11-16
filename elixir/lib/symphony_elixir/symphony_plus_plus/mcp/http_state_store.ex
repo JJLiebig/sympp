@@ -40,9 +40,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore do
       when is_binary(client_key) and is_binary(state_key) and is_function(default_fun, 0) and
              is_function(update_fun, 1) do
     key = store_key(config, client_key, state_key)
-    write_ref = begin_write(key)
+    {generation, _token} = begin_write(key)
 
     with_lock(key, fn ->
+      # Transforms read the latest state under the lock, so order their writes here.
+      # Keep the generation from before queuing so invalidation still cancels them.
+      {_current_generation, token} = begin_write(key)
+      write_ref = {generation, token}
       server = get_by_key(key) || default_fun.()
 
       case update_fun.(server) do
