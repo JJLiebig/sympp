@@ -126,7 +126,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
       },
       "assignment_file" => launch.assignment_file,
       "launch_line" => launch.launch_line,
-      "next_action" => launch_next_action(agent)
+      "next_action" => launch_next_action(agent, dispatch.replay?) <> " Run local launch lines on #{work_package.launch_machine}; --on requires a registered Herdr route from the command host."
     })
   end
 
@@ -158,10 +158,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     }
   end
 
-  defp launch_next_action("claude"),
+  defp launch_next_action(agent, true),
+    do: "If a worker already holds this package, message it to re-read assignment_file; do not launch another. Otherwise: " <> launch_next_action(agent, false)
+
+  defp launch_next_action("claude", false),
     do: "Run launch_line, then read the worker's screen: approve Claude's trust prompt for this worktree only."
 
-  defp launch_next_action(_agent), do: "Run launch_line."
+  defp launch_next_action(_agent, false), do: "Run launch_line."
 
   defp read_view("overview", repo, work_request, _arguments, detail) do
     with {:ok, payload} <- WorkRequestPayloads.work_request_read(repo, work_request, detail) do

@@ -1,4 +1,8 @@
 import { expect } from 'e2e';
+import { execFile } from 'node:child_process';
+import { hostname } from 'node:os';
+import { join, delimiter } from 'node:path';
+import { promisify } from 'node:util';
 import { writeFile } from 'node:fs/promises';
 import { readFile } from 'node:fs/promises';
 import { contract, test } from '../support/factory.js';
@@ -299,29 +303,50 @@ processTest('the launch assignment opens with what the request builds and where 
   });
   architect.workRequest = created.work_request.id;
   const [reviewed, unreviewed] = await architect.addPackages(['feat/reviewed', 'feat/unreviewed'].map((branch) =>
-    contract(`Hand off ${branch}`, { group: 'Backend / Intake ghp_assignmentgroupsecret12345', branch_pattern: branch })));
+    contract(`Hand off ${branch}`, { goal: "Preserve the operator's $draft and `quoted` input.\nKeep each field.", group: 'Backend / Intake ghp_assignmentgroupsecret12345', branch_pattern: branch })));
   const args = { work_package_id: reviewed, review_mode: 'fast', target_repo_root: repo.checkout, machine: 'factory' };
   const launched = await architect.call('dispatch_work_package', args);
   const assignment = await readFile(launched.assignment_file, 'utf8');
   const building = assignment.match(/^# WorkPackage [^\n]+\n\n(.+?)\n\nYou are the worker/s)![1];
   expect(building).toMatch(/^## What we're building\n\n\*\*Improve WorkRequest intake\.\*\* Operators file requests in one place\.\n\nThis package is in Backend \/ Intake \S+\.$/);
   expect(assignment).not.toContain('ghp_assignmentgroupsecret12345');
-  expect(assignment).toContain('start it again while it runs');
+  expect(assignment).toContain('never start it again while it runs');
   expect(assignment).toContain('Hand off feat/reviewed');
-  expect(launched.launch_line).toContain('--on factory ');
+  // Capture the real shell's argv without starting a worker or review provider.
+  for (const name of ['hc', 'review.py']) {
+    await writeFile(join(root, name), '#!/usr/bin/env node\nconsole.log(JSON.stringify(process.argv.slice(2)));\n', { mode: 0o755 });
+  }
+  const run = async (command: string) => JSON.parse((await promisify(execFile)('sh', ['-c', command], {
+    env: { PATH: `${root}${delimiter}${process.env.PATH}` },
+  })).stdout) as string[];
+  const remoteArgs = await run(launched.launch_line);
+  expect(remoteArgs.slice(0, 4)).toEqual(['run', '--bg', '--on', 'factory']);
+  expect(remoteArgs).toContain(`sympp.work_package_id=${reviewed}`);
+  const reviewCommand = assignment.match(/```sh\n([\s\S]*?)\n\s*```/)![1];
+  const reviewArgs = await run(reviewCommand);
+  const literalContract = assignment.match(/```toon\n([\s\S]*?)\n```/)![1];
+  expect(reviewArgs).toEqual(['--id', launched.work_package.review_id, '--mode', 'fast', '--cd', launched.worktree.path,
+    `--review-brief=${literalContract}`]);
+  expect(launched.replay).toBe(false);
+  expect(launched.next_action).not.toContain('re-read assignment_file');
   // A contract edit while dispatched does not move the recorded worktree off its branch.
   await architect.call('edit_plan', { ops: [{ op: 'update_package', work_package_id: reviewed, expected_revision: 1, patch: { branch_pattern: 'feat/renamed' } }] });
   const replay = await architect.call('dispatch_work_package', args);
   expect([replay.replay, replay.worktree.path, replay.worktree.branch, replay.launch_line]).toEqual([true, launched.worktree.path, 'feat/reviewed', launched.launch_line]);
   expect(await git(root, launched.worktree.path, 'branch', '--show-current')).toBe('feat/reviewed');
-  // Mode none mints no review id and gives the chosen agent no review step.
-  const none = await architect.call('dispatch_work_package', { work_package_id: unreviewed, review_mode: 'none', agent: 'claude', target_repo_root: repo.checkout });
+  expect(replay.next_action).toContain('message it to re-read assignment_file; do not launch another');
+  expect(replay.next_action).toContain('Otherwise: Run launch_line');
+  // A host-local command retains the selected agent and labels without a remote self-hop.
+  const none = await architect.call('dispatch_work_package', { work_package_id: unreviewed, review_mode: 'none', agent: 'claude', target_repo_root: repo.checkout, machine: hostname() });
   expect(none.work_package.review_id).toBeNull();
   expect(none.launch_line).not.toContain('sympp.review_id');
   expect(none.launch_line).toContain('-- claude "Read ');
   expect(none.next_action).toContain('trust prompt');
   const plain = await readFile(none.assignment_file, 'utf8');
-  expect(plain).toContain('No Review Suite review is required');
+  const localArgs = await run(none.launch_line);
+  expect(localArgs.slice(0, 3)).toEqual(['run', '--bg', '--cwd']);
+  expect(localArgs).not.toContain('--on');
+  expect(localArgs.slice(-3)).toEqual(['--', 'claude', `Read ${none.assignment_file}`]);
   expect(plain).not.toContain('review.py');
   const progress = (await architect.inspect(`/api/v1/sympp/operator/work-packages/${reviewed}`)).progress;
   expect(JSON.stringify(progress)).not.toContain(repo.checkout);
