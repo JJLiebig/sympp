@@ -125,7 +125,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   def resolve(_repo, %Terminal{}, _ask_id, _to, _answer, _decision), do: {:error, :invalid_to}
 
   defp resolve_in_transaction(repo, terminal, ask_id, to, answer, decision) do
-    with {:ok, ask} <- fetch_writable(repo, ask_id),
+    with {:ok, %Ask{} = ask} <- fetch(repo, Ask, ask_id),
          :ok <- require_asker_or_owner(repo, ask, terminal) do
       resolve_authorized(repo, ask, to, answer, decision, terminal.display_address)
     end
@@ -134,15 +134,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   defp resolve_authorized(_repo, %Ask{state: "answered"} = ask, "answered", _answer, _decision, _by),
     do: {:ok, {:already_answered, ask}}
 
-  defp resolve_authorized(repo, %Ask{state: "open"} = ask, to, answer, decision, by) do
-    with {:ok, answer} <- resolution_answer(to, answer),
+  defp resolve_authorized(repo, %Ask{} = ask, to, answer, decision, by) do
+    with :ok <- require_writable_subject(repo, ask),
+         :ok <- require_open(ask),
+         {:ok, answer} <- resolution_answer(to, answer),
          {:ok, ask} <- close(repo, ask, to, answer, by),
          {:ok, decision} <- record_decision(repo, ask, decision, by) do
       {:ok, {:resolved, ask, decision}}
     end
   end
-
-  defp resolve_authorized(_repo, %Ask{state: state}, _to, _answer, _decision, _by), do: {:error, {:ask_not_open, state}}
 
   defp resolution_answer("answered", answer), do: text(answer, :missing_answer)
   defp resolution_answer("withdrawn", nil), do: {:ok, nil}
@@ -362,17 +362,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   defp record_decision(_repo, _ask, _decision, _by), do: {:error, :invalid_decision}
 
   defp fetch_open(repo, ask_id) do
-    with {:ok, ask} <- fetch_writable(repo, ask_id) do
-      if ask.state == "open", do: {:ok, ask}, else: {:error, {:ask_not_open, ask.state}}
-    end
-  end
-
-  defp fetch_writable(repo, ask_id) do
     with {:ok, %Ask{} = ask} <- fetch(repo, Ask, ask_id),
-         :ok <- require_writable_subject(repo, ask) do
+         :ok <- require_writable_subject(repo, ask),
+         :ok <- require_open(ask) do
       {:ok, ask}
     end
   end
+
+  defp require_open(%Ask{state: "open"}), do: :ok
+  defp require_open(%Ask{state: state}), do: {:error, {:ask_not_open, state}}
 
   # A card's asks are withdrawn when it ends, so an open one is writable.
   defp require_writable_subject(_repo, %Ask{work_request_id: nil}), do: :ok

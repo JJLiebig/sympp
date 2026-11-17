@@ -305,6 +305,9 @@ coreTest('asks go open to answered or withdrawn, take no ownership, and an answe
   expect((await operator.operator(`/api/v1/sympp/operator/work-requests/${id}/complete`, {})).status).toBe(200);
   expect((await operator.call('read_work_request', { detail: 'full', work_request_id: id })).asks.find((entry: any) => entry.id === pending).state).toBe('withdrawn');
   expect((await operator.reject('ask', { work_request_id: id, question: 'After completion?' }, 'work_request_completed')).state).toBe('done');
+  expect((await operator.operator(`/api/v1/sympp/operator/work-requests/${id}/archive`, {})).status).toBe(200);
+  const originalAsker = await core.factory.client(asker.terminal, { 'sympp.role': 'chief' });
+  expect((await originalAsker.call('resolve_ask', repeated)).ask).toEqual(stored);
   const reopened = await operator.request('Archived asks');
   const open = (await operator.call('ask', { work_request_id: reopened, question: 'Before archive?' })).ask.id;
   expect((await operator.operator(`/api/v1/sympp/operator/work-requests/${reopened}/complete`, {})).status).toBe(200);

@@ -49,7 +49,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorDeliveryTest do
 
     :ok = DashboardPubSub.subscribe()
     assert {:ok, _ask, %{"state" => "pending"}} = Asks.answer_by_operator(Repo, ask.id, %{"answer" => "Yes"}, async: true)
-    assert_receive {:typed, sender, "t1", "Answer: Yes", :prefill}
+    assert_receive {:typed, sender, "t1", message, :prefill}
+    assert message =~ ~s(ask="#{ask.id}")
     monitor = Process.monitor(sender)
     assert_receive {:DOWN, ^monitor, :process, ^sender, reason}
     assert reason in [:normal, :noproc]

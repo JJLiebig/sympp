@@ -25,8 +25,9 @@ eligibility) or `package` (one contract; pass `work_package_id`). Use
 
 The factory types operator feedback into the recording terminal without
 submitting it. The `<sympp>` message includes the WorkRequest, decision ID,
-full decision and feedback. If delivery can't reach your terminal, read the
-WorkRequest with `detail: "full"`.
+full decision and feedback. Read XML entities as their original characters in
+URLs and commands. If delivery can't reach your terminal, read the WorkRequest
+with `detail: "full"`.
 
 Use `resolve_ask(to: "answered")` only for an answer the operator gave in your
 conversation. A board answer already resolves the ask.
