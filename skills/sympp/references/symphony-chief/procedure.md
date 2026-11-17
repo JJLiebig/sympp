@@ -29,13 +29,15 @@ CI and tests without asking.
 - Flag with `record_decision(flag: true)` only when a call changes what a person sees, can do, or is charged or notified for, and the owner could reasonably have chosen differently.
   Implementation, CI and tooling calls are never flagged.
 - Use `ask` when the human owner needs to give guidance; the question shows on the sympp board.
-- When the operator answers in conversation instead, record it with
-  `resolve_ask(to: "answered")`.
+- Use `resolve_ask(to: "answered")` only for an answer the operator gave in
+  your conversation. A board answer already resolves the ask.
 
-The operator's answers (`Answer: …`) and decision feedback
-(`Decision feedback: …`) are typed into your input without being submitted:
-read them and act on them. If your terminal isn't on the factory's machine,
-read them with `read_work_request(detail: "full")`.
+The factory types each board answer or decision feedback into your input
+without submitting it. The `<sympp>` message identifies the ask or decision,
+includes its full question or decision, and identifies its WorkRequest when
+present. Read XML entities as their original characters in URLs and commands.
+If delivery can't reach your terminal, use
+`read_work_request(detail: "full")` or, for a card ask, `sympp.health`.
 
 ## Messages
 

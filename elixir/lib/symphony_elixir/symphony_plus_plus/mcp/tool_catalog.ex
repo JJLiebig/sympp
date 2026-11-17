@@ -132,11 +132,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   defp description("ask"),
     do:
-      "Chief only. Asks the human owner; the question shows on the sympp board until it is answered or withdrawn. Without work_request_id it asks on your own card. Optionally name a package and give a decision_prompt with options. The operator's answer is typed into your terminal without being submitted when it runs on the factory's machine; otherwise read it from the ask with read_work_request detail: full."
+      "Chief only. Asks the human owner; the question shows on the sympp board until it is answered or withdrawn. Without work_request_id it asks on your own card. Optionally name a package and give a decision_prompt with options. On the factory's machine, the original question and the operator's answer arrive in a <sympp> message typed into your terminal without being submitted. Read stored answers with read_work_request detail: full, or under caller.card in sympp.health for card asks."
 
   defp description("resolve_ask"),
     do:
-      "Resolve an open ask you asked, or one on a WorkRequest you own: to: answered records an answer you got in conversation; to: withdrawn takes it back. decision records a decision in the same step."
+      "Use to: answered only for an answer the operator gave in your conversation. Board answers already resolve the ask. The asker or WorkRequest owner may record a conversational answer or use to: withdrawn. A repeat answer returns the stored answer. decision records a decision when the ask first closes."
 
   defp description("set_blocker"),
     do:

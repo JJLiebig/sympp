@@ -132,7 +132,13 @@ test('unknown inputs never end a card, a finished terminal without a PR does, an
   expect(answered.body.delivery.state).toBe('pending');
   await expect.poll(async () => (await architect.inspect(answered.body.delivery_route)).delivery)
     .toEqual({ state: 'delivered', to: early.address });
-  expect(provider.sent).toContain(['--no-submit', '--raw', 'a1', 'Answer: Yes, ship it.']);
+  expect(provider.sent).toContain(['--no-submit', '--raw', 'a1', [
+    `<sympp from="operator" ask="${ask.id}">`,
+    'Question: Ship the dark theme?',
+    'Answer: Yes, ship it.',
+    'Status: Already answered and resolved. No resolve_ask is needed.',
+    '</sympp>',
+  ].join('\n')]);
   // The agent can also read the answer from its card.
   const health = await early.call('sympp.health');
   expect(health.caller.card).toMatchObject({ state: 'working', asks: [{ id: ask.id, answer: 'Yes, ship it.', state: 'answered' }] });

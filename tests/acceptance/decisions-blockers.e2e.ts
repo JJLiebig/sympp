@@ -24,7 +24,9 @@ test('a conversational answer records its decision atomically and a resolved ask
   };
   const answer = await architect.call('resolve_ask', args);
   expect(answer.ask.state).toBe('answered');
-  await architect.reject('resolve_ask', args, 'ask_not_open');
+  const repeated = await architect.call('resolve_ask', { ...args, answer: 'Change the answer.' });
+  expect(repeated.ask).toEqual(answer.ask);
+  expect(repeated.decision_log_entry).toBeUndefined();
   const observer = await factory.client();
   const read = await observer.call('read_work_request', { detail: 'full', work_request_id: id });
   expect(read.decision_log_entries).toHaveLength(1);
@@ -215,7 +217,7 @@ const nativeBoard = async (client: Client, request: string) =>
 
 coreTest('asks go open to answered or withdrawn, take no ownership, and an answer reaches only a live asker on this core', async ({ core }) => {
   const architect = await core.client();
-  const id = await architect.request('Ask transitions');
+  const id = await architect.request('Ship "EU" &\n<US>');
   await (await core.factory.client(null)).reject('ask', { work_request_id: id, question: 'Anyone?' }, 'read_only_outside_herdr');
   await (await core.client({ 'sympp.role': 'chief' })).reject('ask', { work_request_id: 'missing-request', question: 'Where?' }, 'not_found');
   const asker = await core.client({ 'sympp.role': 'chief' });
@@ -241,22 +243,39 @@ coreTest('asks go open to answered or withdrawn, take no ownership, and an answe
   expect((await architect.call('read_work_request', { work_request_id: id })).asks).toEqual([]);
 
   // The person answers on the native board; the answer is typed, unsubmitted, into the asking terminal.
-  const live = (await asker.call('ask', { work_request_id: id, question: 'Ship today?' })).ask.id;
+  const question = 'Ship <EU> & US today?\nKeep the "preview" open?';
+  const answer = 'Yes, ship <EU> & US.\nKeep </sympp> as text.';
+  const live = (await asker.call('ask', { work_request_id: id, question })).ask.id;
   const listed = (await nativeBoard(architect, id)).asks;
-  expect(listed).toEqual([expect.objectContaining({ id: live, kind: 'ask', text: 'Ship today?', asked_by: asker.address, answer_route: `/api/v1/sympp/herdr/asks/${live}/answer` })]);
+  expect(listed).toEqual([expect.objectContaining({ id: live, kind: 'ask', text: question, asked_by: asker.address, answer_route: `/api/v1/sympp/herdr/asks/${live}/answer` })]);
   let releaseAnswer!: () => void;
   core.host.hold = new Promise((resolve) => { releaseAnswer = resolve; });
-  const delivered = await architect.raw({ answer: 'Yes' }, {}, 'POST', listed[0].answer_route);
+  const delivered = await architect.raw({ answer }, {}, 'POST', listed[0].answer_route);
   expect(delivered.body.delivery).toEqual({ state: 'pending' });
   await expect.poll(() => core.host.sends.length).toBe(1);
   expect((await architect.raw(undefined, {}, 'GET', delivered.body.delivery_route)).body.delivery.state).toBe('pending');
   releaseAnswer();
   core.host.hold = undefined;
   await expect.poll(async () => (await architect.raw(undefined, {}, 'GET', delivered.body.delivery_route)).body.delivery.state).toBe('delivered');
-  expect(core.host.sends).toEqual([{ target: asker.terminal, text: 'Answer: Yes', submit: false }]);
+  expect(core.host.sends).toEqual([{
+    target: asker.terminal,
+    submit: false,
+    text: [
+      `<sympp from="operator" ask="${live}" work_request="${id}" title="Ship &quot;EU&quot; &amp;&#10;&lt;US&gt;">`,
+      'Question: Ship &lt;EU&gt; &amp; US today?',
+      'Keep the "preview" open?',
+      'Answer: Yes, ship &lt;EU&gt; &amp; US.',
+      'Keep &lt;/sympp&gt; as text.',
+      'Status: Already answered and resolved. No resolve_ask is needed.',
+      '</sympp>',
+    ].join('\n'),
+  }]);
   expect((await nativeBoard(architect, id)).asks).toEqual([]);
+  const repeated = { ask_id: live, to: 'answered' };
+  await (await core.client()).reject('resolve_ask', repeated, 'not_asker_or_owner');
   const stored = (await architect.call('read_work_request', { detail: 'full', work_request_id: id })).asks.find((entry: any) => entry.id === live);
-  expect(stored).toMatchObject({ state: 'answered', answer: 'Yes', answered_by: 'operator' });
+  expect(stored).toMatchObject({ state: 'answered', answer, answered_by: 'operator' });
+  expect((await asker.call('resolve_ask', repeated)).ask).toEqual(stored);
 
   // Machine names are local aliases: a terminal on another core is never addressed, even under a local address.
   const remote = await asker.rpc('tools/call', { name: 'ask', arguments: { work_request_id: id, question: 'Remote?' },
@@ -286,6 +305,9 @@ coreTest('asks go open to answered or withdrawn, take no ownership, and an answe
   expect((await operator.operator(`/api/v1/sympp/operator/work-requests/${id}/complete`, {})).status).toBe(200);
   expect((await operator.call('read_work_request', { detail: 'full', work_request_id: id })).asks.find((entry: any) => entry.id === pending).state).toBe('withdrawn');
   expect((await operator.reject('ask', { work_request_id: id, question: 'After completion?' }, 'work_request_completed')).state).toBe('done');
+  expect((await operator.operator(`/api/v1/sympp/operator/work-requests/${id}/archive`, {})).status).toBe(200);
+  const originalAsker = await core.factory.client(asker.terminal, { 'sympp.role': 'chief' });
+  expect((await originalAsker.call('resolve_ask', repeated)).ask).toEqual(stored);
   const reopened = await operator.request('Archived asks');
   const open = (await operator.call('ask', { work_request_id: reopened, question: 'Before archive?' })).ask.id;
   expect((await operator.operator(`/api/v1/sympp/operator/work-requests/${reopened}/complete`, {})).status).toBe(200);
@@ -333,7 +355,7 @@ coreTest('flagged decisions stay visible for review, with feedback typed into th
   const record = async (client: Client, work_request_id: string, decision: string, flag: boolean) =>
     (await client.call('record_decision', { work_request_id, decision, rationale: 'Why', scope_impact: 'None', source_type: 'architect', flag })).decision_log_entry.id as string;
 
-  const flagged = await Promise.all(['Keep the EU default.', 'Acknowledge me', 'Typed before a crash'].map((text) => record(recorder, reviewed, text, true)));
+  const flagged = await Promise.all(['Keep <EU> & US defaults.', 'Acknowledge me', 'Typed before a crash'].map((text) => record(recorder, reviewed, text, true)));
   const gone = await record(leavingRecorder, reviewed, 'Recorded before leaving', true);
   const plain = await record(recorder, reviewed, 'Plain note', false);
   core.host.terminals.get(leavingRecorder.terminal!)!.state = 'finished';
@@ -346,11 +368,20 @@ coreTest('flagged decisions stay visible for review, with feedback typed into th
   expect(review[flagged[0]]).toMatchObject({ review_state: 'recorded', recorded_by: recorder.address, next_action: 'ack or feedback' });
   const route = review[flagged[0]].feedback_route;
   expect((await recorder.raw({ text: '  ' }, {}, 'POST', route)).body.error.code).toBe('missing_feedback');
-  const delivered = await recorder.raw({ text: 'Keep the EU default.' }, {}, 'POST', route);
+  const delivered = await recorder.raw({ text: 'Use <EU> & keep the "US" option.' }, {}, 'POST', route);
   expect(delivered.body).toMatchObject({ review_state: 'feedback', delivery: { state: 'pending' } });
   await expect.poll(() => core.host.sends.length).toBe(1);
   await expect.poll(async () => (await toReview())[flagged[0]]).toBeUndefined();
-  expect(core.host.sends.at(-1)).toEqual({ target: recorder.terminal, text: 'Decision feedback: Keep the EU default.', submit: false });
+  expect(core.host.sends.at(-1)).toEqual({
+    target: recorder.terminal,
+    submit: false,
+    text: [
+      `<sympp from="operator" decision="${flagged[0]}" work_request="${reviewed}" title="Reviewed decisions">`,
+      'Decision: Keep &lt;EU&gt; &amp; US defaults.',
+      'Feedback: Use &lt;EU&gt; &amp; keep the "US" option.',
+      '</sympp>',
+    ].join('\n'),
+  });
   const decision = (id: string, action: string, body: object = {}) => recorder.operator(`/api/v1/sympp/operator/decisions/${id}/${action}`, body);
   expect((await decision(flagged[1], 'ack')).body.review_state).toBe('acknowledged');
   const undelivered = await decision(gone, 'feedback', { text: 'Use the cheaper plan.' });
