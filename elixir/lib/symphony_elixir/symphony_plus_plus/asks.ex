@@ -7,6 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   | — | `open` | open | a chief Herdr terminal, attributed to it |
   | open | `answer` | answered | the operator over HTTP (the answer is delivered to the asking terminal), or the asker or WorkRequest owner recording a conversational answer |
   | open | `withdraw` | withdrawn | the asker or WorkRequest owner; also automatic when the package it names ends, the WorkRequest is archived or the card ends |
+  | answered | `resolve_ask(to: "answered")` | answered | the asker or WorkRequest owner; returns the stored answer |
 
   An ask's subject is a WorkRequest (optionally naming one of its packages)
   or, without a WorkRequest, the asking terminal's open card. An answer or
@@ -19,7 +20,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   alias SymphonyElixir.SymphonyPlusPlus.{
     Cards,
     DashboardPubSub,
-    HerdrCore,
     HumanDecisionPrompt,
     Id,
     OperatorDelivery,
@@ -103,30 +103,46 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   @doc """
   The asker or the WorkRequest owner records a conversational answer
   (`to: "answered"`) or withdraws the ask (`to: "withdrawn"`), optionally with
-  one decision recorded in the same transaction.
+  one decision recorded in the same transaction. Repeating an answer returns
+  the original answer without changing the ask or recording another decision.
   """
   @spec resolve(repo(), Terminal.t(), String.t(), String.t(), String.t() | nil, map() | nil) ::
           {:ok, Ask.t(), map() | nil} | {:error, term()}
   def resolve(repo, %Terminal{} = terminal, ask_id, to, answer, decision) when to in ["answered", "withdrawn"] do
-    with {:ok, answer} <- resolution_answer(to, answer),
-         {:ok, {ask, decision}} <-
-           repo
-           |> transact(fn -> resolve_in_transaction(repo, terminal, ask_id, to, answer, decision) end)
-           |> DashboardPubSub.broadcast_changed_on_success() do
-      {:ok, ask, decision}
+    case transact(repo, fn -> resolve_in_transaction(repo, terminal, ask_id, to, answer, decision) end) do
+      {:ok, {:resolved, ask, decision}} ->
+        DashboardPubSub.broadcast_changed()
+        {:ok, ask, decision}
+
+      {:ok, {:already_answered, ask}} ->
+        {:ok, ask, nil}
+
+      error ->
+        error
     end
   end
 
   def resolve(_repo, %Terminal{}, _ask_id, _to, _answer, _decision), do: {:error, :invalid_to}
 
   defp resolve_in_transaction(repo, terminal, ask_id, to, answer, decision) do
-    with {:ok, ask} <- fetch_open(repo, ask_id),
-         :ok <- require_asker_or_owner(repo, ask, terminal),
-         {:ok, ask} <- close(repo, ask, to, answer, terminal.display_address),
-         {:ok, decision} <- record_decision(repo, ask, decision, terminal.display_address) do
-      {:ok, {ask, decision}}
+    with {:ok, ask} <- fetch_writable(repo, ask_id),
+         :ok <- require_asker_or_owner(repo, ask, terminal) do
+      resolve_authorized(repo, ask, to, answer, decision, terminal.display_address)
     end
   end
+
+  defp resolve_authorized(_repo, %Ask{state: "answered"} = ask, "answered", _answer, _decision, _by),
+    do: {:ok, {:already_answered, ask}}
+
+  defp resolve_authorized(repo, %Ask{state: "open"} = ask, to, answer, decision, by) do
+    with {:ok, answer} <- resolution_answer(to, answer),
+         {:ok, ask} <- close(repo, ask, to, answer, by),
+         {:ok, decision} <- record_decision(repo, ask, decision, by) do
+      {:ok, {:resolved, ask, decision}}
+    end
+  end
+
+  defp resolve_authorized(_repo, %Ask{state: state}, _to, _answer, _decision, _by), do: {:error, {:ask_not_open, state}}
 
   defp resolution_answer("answered", answer), do: text(answer, :missing_answer)
   defp resolution_answer("withdrawn", nil), do: {:ok, nil}
@@ -175,13 +191,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
     end
   end
 
-  # The factory types `Answer: …` into the asking terminal's composer without
-  # pressing Enter, so the agent sees it on its next turn and a person can
-  # still edit it. A finished or unreachable terminal keeps the answer on the ask.
+  # The factory prefills the question and answer in the asking terminal.
+  # A finished or unreachable terminal keeps the answer on the ask.
   defp deliver(repo, %Ask{asked_by_terminal: nil} = ask), do: not_delivered(repo, ask, "no_asking_terminal")
 
   defp deliver(repo, %Ask{} = ask) do
-    case HerdrCore.deliver(ask.asked_by_terminal, "Answer: " <> ask.answer) do
+    case OperatorDelivery.deliver(repo, ask) do
       :ok ->
         now = DateTime.utc_now(:microsecond)
         repo.update_all(from(row in Ask, where: row.id == ^ask.id), set: [delivered_at: now, undelivered_reason: nil, updated_at: now])
@@ -347,9 +362,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   defp record_decision(_repo, _ask, _decision, _by), do: {:error, :invalid_decision}
 
   defp fetch_open(repo, ask_id) do
+    with {:ok, ask} <- fetch_writable(repo, ask_id) do
+      if ask.state == "open", do: {:ok, ask}, else: {:error, {:ask_not_open, ask.state}}
+    end
+  end
+
+  defp fetch_writable(repo, ask_id) do
     with {:ok, %Ask{} = ask} <- fetch(repo, Ask, ask_id),
          :ok <- require_writable_subject(repo, ask) do
-      if ask.state == "open", do: {:ok, ask}, else: {:error, {:ask_not_open, ask.state}}
+      {:ok, ask}
     end
   end
 

@@ -169,7 +169,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
       %{
         "ask_id" => string_schema(),
         "to" => string_enum_schema(["answered", "withdrawn"]),
-        "answer" => markdown_string_schema("The answer, in Markdown. Required for to: answered."),
+        "answer" => markdown_string_schema("The operator's answer from your conversation, in Markdown. Required to answer an open ask."),
         "decision" => %{
           "type" => "object",
           "additionalProperties" => false,
@@ -205,7 +205,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
           boolean_schema()
           |> Map.put(
             "description",
-            "Flag an in-scope product call for the operator to review (default false). Their feedback is typed into your terminal as \"Decision feedback: ...\" without being submitted."
+            "Flag an in-scope product call for the operator to review (default false). The original decision and their feedback arrive in a <sympp> message typed into your terminal without being submitted."
           )
       },
       ["work_request_id", "source_type", "decision", "rationale", "scope_impact"]

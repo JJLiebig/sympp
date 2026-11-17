@@ -202,9 +202,12 @@ A structured `decision_prompt` has `tl_dr`, `details`, 1–4 `options` with `id`
 `{"answer_choice":"<option id>","answer_note":"optional note"}`; a structured
 prompt does not accept `answer` alone. The custom choice `__custom_redirect__`
 requires a nonblank `answer_note`. Without a structured prompt, submit
-`{"answer":"the human's answer"}`. The backend records `operator` as the answer
-author, then types `Answer: <answer>` into the asking terminal's input without
-submitting it. `delivery` initially reports `{state: "pending"}` when a terminal is recorded.
+`{"answer":"the human's answer"}`. The backend resolves the ask with `operator`
+as the author, then types a `<sympp>` message into the asking terminal's input
+without submitting it. It contains the ask ID, full question and answer, and
+the WorkRequest ID and title when present. Use `resolve_ask(to: "answered")`
+for answers given in conversation. An authorized repeat returns the stored
+answer. `delivery` initially reports `{state: "pending"}` when a terminal is recorded.
 Without a target it reports
 `{state: "not_delivered", reason: "no_asking_terminal"}`. The answer stays on
 the ask either way; `delivered_at` records a later successful delivery.
@@ -212,11 +215,12 @@ An answer does not resume or unblock work by itself.
 
 Flagged decisions move `recorded → acknowledged` (ack) or `recorded → feedback`
 (feedback). Feedback is stored, then typed into the recording terminal's input
-as `Decision feedback: <text>` without submitting it, through the same delivery
-as answers, with the same `delivery` result (`no_recording_terminal` replaces
-`no_asking_terminal`). Feedback that wasn't delivered stays on the decision with
-its reason in `undelivered_reason`; dismiss clears that marker and keeps the
-text. While the factory is still typing it the reason is `delivering`, with
+without submitting it. The `<sympp>` message contains the WorkRequest ID and
+title, decision ID, full decision and feedback. The `delivery` result uses
+`no_recording_terminal` when there is no target. Feedback that wasn't delivered
+stays on the decision with its reason in `undelivered_reason`. Dismiss clears
+that marker and keeps the text. While the factory is still typing it the reason
+is `delivering`, with
 `next_action` `wait: the feedback is being typed` and no dismiss; a send that
 never finished reads as `delivery_interrupted` after a minute and can be
 dismissed. Any other transition returns HTTP 409
