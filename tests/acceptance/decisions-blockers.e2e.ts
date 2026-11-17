@@ -295,6 +295,34 @@ coreTest('asks go open to answered or withdrawn, take no ownership, and an answe
   }
 });
 
+test('flagged decisions reject long text while unflagged evidence stays unrestricted', async ({ factory }) => {
+  const recorder = await factory.client();
+  const work_request_id = await recorder.request('Readable product calls');
+  const args = { work_request_id, source_type: 'architect', scope_impact: 'None' };
+  const guidance = 'Flagged decisions are read by the owner: one short sentence each (decision up to 160 characters, rationale up to 240); put evidence in the report.';
+  const accepted: { id: string; decision: string; rationale: string }[] = [];
+
+  for (const text of [
+    { decision: 'é'.repeat(161), rationale: 'Why' },
+    { decision: 'Keep the default.', rationale: 'é'.repeat(241) },
+  ]) {
+    const refused = await recorder.tool('record_decision', { ...args, ...text, flag: true });
+    expect(refused.error).toMatchObject({ code: -32602, data: { code: 'flagged_decision_too_long', message: guidance } });
+    const plain = await recorder.call('record_decision', { ...args, ...text, flag: false });
+    accepted.push({ id: plain.decision_log_entry.id, ...text });
+  }
+
+  const limit = { decision: 'é'.repeat(160), rationale: 'é'.repeat(240) };
+  const flagged = await recorder.call('record_decision', { ...args, ...limit, flag: true });
+  expect(flagged.decision_log_entry).toMatchObject({ decision: limit.decision, flagged: true });
+  accepted.push({ id: flagged.decision_log_entry.id, ...limit });
+  const stored = await recorder.call('read_work_request', { work_request_id, detail: 'full' });
+  expect(stored.decision_log_entries).toHaveLength(accepted.length);
+  for (const entry of accepted) {
+    expect(stored.decision_log_entries.find((decision: any) => decision.id === entry.id)).toMatchObject(entry);
+  }
+});
+
 coreTest('flagged decisions stay visible for review, with feedback typed into the recorder or dismissed when undelivered', async ({ core }) => {
   const architect = await core.client();
   const reviewed = (await architect.call('create_work_request', {

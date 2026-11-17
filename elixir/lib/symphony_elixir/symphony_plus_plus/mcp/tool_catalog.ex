@@ -128,7 +128,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   defp description("record_decision"),
     do:
-      "Record a durable decision on a WorkRequest; any Herdr terminal may, without owning it. source_type must be one of: #{Enum.join(DecisionLogEntry.source_types(), ", ")}. flag: true asks the operator to review an in-scope product call (they acknowledge it or send feedback) and tells the WorkRequest's chief in one line; no other message is needed."
+      "Record a durable decision on a WorkRequest; any Herdr terminal may, without owning it. source_type must be one of: #{Enum.join(DecisionLogEntry.source_types(), ", ")}. flag: true asks the operator to review an in-scope product call (they acknowledge it or send feedback) with one plain sentence each: decision says what changes for the owner (up to 160 characters); rationale says why (up to 240), without IDs, SHAs or jargon. Put evidence in the report."
 
   defp description("ask"),
     do:
