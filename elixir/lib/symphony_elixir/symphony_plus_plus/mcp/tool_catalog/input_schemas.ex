@@ -192,8 +192,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
       %{
         "work_request_id" => string_schema(),
         "source_type" => string_enum_schema(DecisionLogEntry.source_types()),
-        "decision" => string_schema(),
-        "rationale" => markdown_string_schema("Human-facing decision rationale in Markdown."),
+        "decision" =>
+          string_schema()
+          |> Map.put("description", "One plain sentence saying what changes for the owner. When flagged, at most 160 characters."),
+        "rationale" =>
+          string_schema()
+          |> Map.put("description", "One plain sentence saying why, with no IDs, SHAs or jargon. Put evidence in the report. When flagged, at most 240 characters."),
         "scope_impact" => markdown_string_schema("Human-facing scope impact note in Markdown."),
         "created_by" => string_schema(),
         "source_id" => string_schema(),

@@ -31,8 +31,8 @@ CI and tests without asking.
   reviewer-driven expansion when an architect is genuinely unsure.
 - Never override explicit user constraints, bypass security or CI, or set new
   product policy silently.
-- When you settle an in-scope product call yourself, record it with
-  `record_decision(flag: true)` so the operator can review it.
+- Flag with `record_decision(flag: true)` only when a call changes what a person sees, can do, or is charged or notified for, and the owner could reasonably have chosen differently.
+  Implementation, CI and tooling calls are never flagged.
 - Use `ask` when the human owner needs to give guidance; the question shows on the sympp board.
 - When the operator answers in conversation instead, record it with
   `resolve_ask(to: "answered")`.

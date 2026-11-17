@@ -47,6 +47,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, created_by} <- optional_string_argument(arguments, "created_by", terminal_name(terminal)),
          {:ok, source_id} <- optional_string_argument(arguments, "source_id"),
          {:ok, flag} <- flag_argument(arguments),
+         :ok <- validate_flagged_decision(flag, decision, rationale),
          {:ok, _work_request, _filters, scope} <- scoped_work_request(config.repo, work_request_id),
          {:ok, decision_record} <-
            WorkRequestService.record_decision(
@@ -104,6 +105,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     case Map.get(arguments, "flag", false) do
       flag when is_boolean(flag) -> {:ok, flag}
       _flag -> {:tool_error, "invalid_flag"}
+    end
+  end
+
+  defp validate_flagged_decision(false, _decision, _rationale), do: :ok
+
+  defp validate_flagged_decision(true, decision, rationale) do
+    if String.length(decision) <= 160 and String.length(rationale) <= 240 do
+      :ok
+    else
+      {:tool_error, "Flagged decisions are read by the owner: one short sentence each (decision up to 160 characters, rationale up to 240); put evidence in the report."}
     end
   end
 
