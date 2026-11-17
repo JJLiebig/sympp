@@ -306,7 +306,7 @@ test('flagged decisions reject long text while unflagged evidence stays unrestri
     { decision: 'Keep the default.', rationale: 'é'.repeat(241) },
   ]) {
     const refused = await recorder.tool('record_decision', { ...args, ...text, flag: true });
-    expect(refused.error).toMatchObject({ code: -32602, data: { reason: guidance } });
+    expect(refused.error).toMatchObject({ code: -32602, data: { code: 'flagged_decision_too_long', message: guidance } });
     const plain = await recorder.call('record_decision', { ...args, ...text, flag: false });
     expect(plain.decision_log_entry).toMatchObject({ ...text, flagged: false });
   }

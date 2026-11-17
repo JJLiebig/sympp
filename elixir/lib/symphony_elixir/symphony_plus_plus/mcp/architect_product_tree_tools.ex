@@ -114,7 +114,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     if String.length(decision) <= 160 and String.length(rationale) <= 240 do
       :ok
     else
-      {:tool_error, "Flagged decisions are read by the owner: one short sentence each (decision up to 160 characters, rationale up to 240); put evidence in the report."}
+      {:tool_error, "flagged_decision_too_long"}
     end
   end
 
@@ -334,6 +334,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     do: ErrorDetails.lifecycle_error(tool, :work_request_archived, %{"state" => "archived"})
 
   defp architect_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
+
+  defp invalid_params_error(tool, "flagged_decision_too_long") do
+    {:error, -32_602, "Invalid params",
+     %{
+       "tool" => tool,
+       "reason" => "flagged_decision_too_long",
+       "message" => "Flagged decisions are read by the owner: one short sentence each (decision up to 160 characters, rationale up to 240); put evidence in the report.",
+       "next_action" => "Shorten decision and rationale; put evidence in the report."
+     }}
+  end
 
   defp invalid_params_error(tool, reason) do
     {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
