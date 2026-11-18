@@ -142,22 +142,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   end
 
   @doc """
-  Types text into a recorded terminal's input. `terminal_key` is the
-  terminal's key (core id plus address). By default the text is left in the
-  input without submitting it, for operator answers and decision feedback;
-  with `submit: true` it is sent like an ordinary message.
+  Submits a message to the recorded terminal using Herdr's configured submit
+  keys. `terminal_key` is the terminal's key (core id plus address).
 
-  Text is typed only into a terminal the factory's own core sees live. Herdr
+  Messages go only to a terminal the factory's own core sees live. Herdr
   machine names are local aliases, so a terminal on another core can't be
   addressed safely from here. Otherwise the reason is `terminal_finished`,
   `terminal_unreachable` or `send_failed`.
   """
-  @spec deliver(String.t(), String.t(), keyword()) :: :ok | {:error, String.t()}
-  def deliver(terminal_key, text, opts \\ []) when is_binary(terminal_key) and is_binary(text) do
-    mode = if Keyword.get(opts, :submit, false), do: :submit, else: :prefill
-
+  @spec deliver(String.t(), String.t()) :: :ok | {:error, String.t()}
+  def deliver(terminal_key, text) when is_binary(terminal_key) and is_binary(text) do
     with {:ok, address} <- delivery_target(terminal_key) do
-      if type(address, text, mode) == :ok, do: :ok, else: {:error, "send_failed"}
+      args = ["send", "--raw", address, text]
+      if send_message(args) == :ok, do: :ok, else: {:error, "send_failed"}
     end
   end
 
@@ -175,23 +172,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
     end
   end
 
-  # `hc send --raw`: `:prefill` adds `--no-submit`, so the agent reads the text
-  # on its next turn and a person can still edit it; `:submit` presses Enter.
   # The command is the `:sympp_herdr_send` application setting: `"hc"`
-  # (default), another command path, `nil` to disable, or a three-arity
-  # function `(target, text, mode)` (tests).
-  defp type(target, text, mode) do
+  # (default), another command path, `nil` to disable, or a function that
+  # receives the command arguments (tests).
+  defp send_message(args) do
     case Application.get_env(:symphony_elixir, :sympp_herdr_send, "hc") do
       nil -> :error
-      fun when is_function(fun, 3) -> if fun.(target, text, mode) == :ok, do: :ok, else: :error
-      command when is_binary(command) -> type_with(System.find_executable(command), target, text, mode)
+      fun when is_function(fun, 1) -> if fun.(args) == :ok, do: :ok, else: :error
+      command when is_binary(command) -> send_with(System.find_executable(command), args)
     end
   end
 
-  defp type_with(nil, _target, _text, _mode), do: :error
+  defp send_with(nil, _args), do: :error
 
-  defp type_with(path, target, text, mode) do
-    args = if mode == :prefill, do: ["send", "--no-submit", "--raw", target, text], else: ["send", "--raw", target, text]
+  defp send_with(path, args) do
     task = Task.async(fn -> System.cmd(path, args, stderr_to_stdout: true) end)
 
     case Task.yield(task, @send_timeout_ms) || Task.shutdown(task, :brutal_kill) do

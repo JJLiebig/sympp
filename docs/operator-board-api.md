@@ -203,9 +203,9 @@ A structured `decision_prompt` has `tl_dr`, `details`, 1–4 `options` with `id`
 prompt does not accept `answer` alone. The custom choice `__custom_redirect__`
 requires a nonblank `answer_note`. Without a structured prompt, submit
 `{"answer":"the human's answer"}`. The backend resolves the ask with `operator`
-as the author, then types a `<sympp>` message into the asking terminal's input
-without submitting it. It contains the ask ID, full question and answer, and
-the WorkRequest ID and title when present. Use `resolve_ask(to: "answered")`
+as the author, then submits a `<sympp>` message to the asking terminal. The
+message contains the ask ID, full question and answer, and the WorkRequest ID and
+title when present. Use `resolve_ask(to: "answered")`
 for answers given in conversation. An authorized repeat returns the stored
 answer. `delivery` initially reports `{state: "pending"}` when a terminal is recorded.
 Without a target it reports
@@ -214,9 +214,9 @@ the ask either way; `delivered_at` records a later successful delivery.
 An answer does not resume or unblock work by itself.
 
 Flagged decisions move `recorded → acknowledged` (ack) or `recorded → feedback`
-(feedback). Feedback is stored, then typed into the recording terminal's input
-without submitting it. The `<sympp>` message contains the WorkRequest ID and
-title, decision ID, full decision and feedback. The `delivery` result uses
+(feedback). The backend stores feedback, then submits it to the recording
+terminal. The `<sympp>` message contains the WorkRequest ID and title, decision
+ID, full decision and feedback. The `delivery` result uses
 `no_recording_terminal` when there is no target. Feedback that wasn't delivered
 stays on the decision with its reason in `undelivered_reason`. Dismiss clears
 that marker and keeps the text. While the factory is still typing it the reason
@@ -492,9 +492,9 @@ then the most recently changed.
 | `asks` | The card's open asks, in the ask shape above with `card_id` instead of `work_request_id`. |
 | `since`, `ended_at`, `updated_at` | Timestamps. |
 
-A chief opens an ask on its card with `ask` and no `work_request_id`; the operator
-answers it through the same answer routes, and the answer is typed into the
-card's terminal. The answer result names `card_id` instead of
+A chief opens an ask on its card with `ask` and no `work_request_id`. The operator
+answers it through the same answer routes, and the factory submits the answer to
+the card's terminal. The answer result names `card_id` instead of
 `work_request_id`. Ending a card withdraws its open asks. A dismissed, merged or
 done card opens again as `working` or `review_ci` when its live terminal starts
 work on another branch. `merged`, `done` and `dismissed` cards leave the list

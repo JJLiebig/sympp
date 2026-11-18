@@ -42,14 +42,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorDeliveryTest do
       {:ok, %{core_id: "memory", terminals: %{"t1" => %{"state" => "live"}}}}
     end)
 
-    Application.put_env(:symphony_elixir, :sympp_herdr_send, fn target, text, mode ->
-      send(caller, {:typed, self(), target, text, mode})
+    Application.put_env(:symphony_elixir, :sympp_herdr_send, fn args ->
+      send(caller, {:herdr_command, self(), args})
       :ok
     end)
 
     :ok = DashboardPubSub.subscribe()
     assert {:ok, _ask, %{"state" => "pending"}} = Asks.answer_by_operator(Repo, ask.id, %{"answer" => "Yes"}, async: true)
-    assert_receive {:typed, sender, "t1", message, :prefill}
+    assert_receive {:herdr_command, sender, ["send", "--raw", "t1", message]}
     assert message =~ ~s(ask="#{ask.id}")
     monitor = Process.monitor(sender)
     assert_receive {:DOWN, ^monitor, :process, ^sender, reason}

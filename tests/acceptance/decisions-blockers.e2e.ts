@@ -259,7 +259,7 @@ coreTest('asks go open to answered or withdrawn, take no ownership, and an answe
   await expect.poll(async () => (await architect.raw(undefined, {}, 'GET', delivered.body.delivery_route)).body.delivery.state).toBe('delivered');
   expect(core.host.sends).toEqual([{
     target: asker.terminal,
-    submit: false,
+    submit: true,
     text: [
       `<sympp from="operator" ask="${live}" work_request="${id}" title="Ship &quot;EU&quot; &amp;&#10;&lt;US&gt;">`,
       'Question: Ship &lt;EU&gt; &amp; US today?',
@@ -345,7 +345,7 @@ test('flagged decisions reject long text while unflagged evidence stays unrestri
   }
 });
 
-coreTest('flagged decisions stay visible for review, with feedback typed into the recorder or dismissed when undelivered', async ({ core }) => {
+coreTest('flagged decisions stay visible for review, with feedback submitted to the recorder or dismissed when undelivered', async ({ core }) => {
   const architect = await core.client();
   const reviewed = (await architect.call('create_work_request', {
     repo: 'example/service', base_branch: 'beta', title: 'Reviewed decisions', description, work_type: 'feature', own: false,
@@ -374,7 +374,7 @@ coreTest('flagged decisions stay visible for review, with feedback typed into th
   await expect.poll(async () => (await toReview())[flagged[0]]).toBeUndefined();
   expect(core.host.sends.at(-1)).toEqual({
     target: recorder.terminal,
-    submit: false,
+    submit: true,
     text: [
       `<sympp from="operator" decision="${flagged[0]}" work_request="${reviewed}" title="Reviewed decisions">`,
       'Decision: Keep &lt;EU&gt; &amp; US defaults.',

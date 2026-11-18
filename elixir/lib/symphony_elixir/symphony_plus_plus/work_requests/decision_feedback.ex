@@ -7,7 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
   | — | `record_decision(flag: false)` | (not flagged) | any Herdr terminal |
   | — | `record_decision(flag: true)` | `recorded` | any Herdr terminal, attributed to it |
   | recorded | `ack` | `acknowledged` | operator (HTTP) |
-  | recorded | `feedback(text)` | `feedback` | operator (HTTP); the factory types the decision and feedback into the recording terminal |
+  | recorded | `feedback(text)` | `feedback` | operator (HTTP). The factory submits the decision and feedback to the recording terminal |
 
   While the factory types the feedback, `undelivered_reason` is `delivering`;
   a send that succeeds clears it. Feedback that can't be typed stays on the
@@ -42,8 +42,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
   def ack(repo, decision_id), do: review_recorded(repo, decision_id, review_state: "acknowledged")
 
   @doc """
-  Records the operator's feedback, then types the decision and feedback into
-  the recording terminal as a `<sympp>` message without submitting it.
+  Records the operator's feedback, then submits the decision and feedback to
+  the recording terminal as a `<sympp>` message.
   `delivery` says whether that reached the terminal.
   """
   @spec feedback(repo(), String.t(), term(), keyword()) ::
