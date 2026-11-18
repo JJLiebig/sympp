@@ -329,7 +329,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   def delivery_status(%Ask{delivered_at: %DateTime{}, asked_by_address: to}), do: %{"state" => "delivered", "to" => to}
 
   def delivery_status(%Ask{undelivered_reason: "delivering", resolved_at: %DateTime{} = at}) do
-    if DateTime.diff(DateTime.utc_now(), at, :millisecond) > 60_000,
+    if OperatorDelivery.interrupted?(at),
       do: %{"state" => "not_delivered", "reason" => "delivery_interrupted"},
       else: %{"state" => "pending"}
   end

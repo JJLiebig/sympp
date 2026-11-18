@@ -412,9 +412,13 @@ coreTest('flagged decisions stay visible for review, with feedback submitted to 
   expect(sending).toMatchObject({ undelivered_reason: 'delivering', next_action: 'wait: the feedback is being typed' });
   expect(sending.dismiss_route).toBeUndefined();
   expect((await refused(flagged[2], 'dismiss')).next_action).toBe('wait: the feedback is being typed');
-  await core.restart({ crash: true, stopped: (database) => age(database, 'sympp_work_request_decision_logs', flagged[2], 'reviewed_at', 120) });
+  await core.restart({ crash: true, stopped: (database) => age(database, 'sympp_work_request_decision_logs', flagged[2], 'reviewed_at', 75) });
   release();
   await typing;
+  recorder = await core.factory.client(recorder.terminal);
+  expect((await toReview())[flagged[2]].undelivered_reason).toBe('delivering');
+
+  await core.restart({ stopped: (database) => age(database, 'sympp_work_request_decision_logs', flagged[2], 'reviewed_at', 120) });
   recorder = await core.factory.client(recorder.terminal);
   const interrupted = (await toReview())[flagged[2]];
   expect(interrupted.undelivered_reason).toBe('delivery_interrupted');

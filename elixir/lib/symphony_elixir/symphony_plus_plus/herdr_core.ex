@@ -25,7 +25,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   @cache_ms 15_000
   @last_good_ms 120_000
   @command_timeout_ms 2_000
-  @send_timeout_ms 10_000
+  # Herdr holds a submitted send for 60 seconds after the last key in an unfinished draft by default.
+  @send_timeout_ms 75_000
 
   @type view :: {:live, map()} | :finished | :unseen | :unknown
   @type snapshot :: %{

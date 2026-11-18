@@ -58,7 +58,7 @@ it("an answer cut short shows as undelivered with what was answered, and is neve
   await send({ kind: "answer", askId: ask.id, answer: { text: "Added." } });
   expect(unarrivedAnswers()).toEqual([]);
 
-  // The stream says nothing; the board looks again once the factory would have given up on the send.
+  // With a silent stream, the board polls until the factory reports the interruption.
   await vi.advanceTimersByTimeAsync(62e3);
   expect(unarrivedAnswers()).toEqual([]);
   await vi.advanceTimersByTimeAsync(30e3);

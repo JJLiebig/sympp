@@ -9,6 +9,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorDelivery do
 
   @text_escapes %{"&" => "&amp;", "<" => "&lt;", ">" => "&gt;"}
   @attribute_escapes Map.merge(@text_escapes, %{"\"" => "&quot;", "\t" => "&#9;", "\n" => "&#10;", "\r" => "&#13;"})
+  # Includes time for the terminal lookup and HerdrCore's send deadline.
+  @delivery_window_ms 90_000
 
   @spec deliver(module(), Ask.t() | DecisionLogEntry.t()) :: :ok | {:error, String.t()}
   def deliver(repo, %Ask{} = ask) do
@@ -30,6 +32,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorDelivery do
       ])
 
     HerdrCore.deliver(decision.recorded_by_terminal, message)
+  end
+
+  @spec interrupted?(DateTime.t()) :: boolean()
+  def interrupted?(started_at) do
+    DateTime.diff(DateTime.utc_now(), started_at, :millisecond) > @delivery_window_ms
   end
 
   defp envelope(repo, work_request_id, subject, fields) do

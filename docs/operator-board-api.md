@@ -139,12 +139,11 @@ HTTP 200 confirms the saved answer or feedback,
 not that a terminal received it. Delivery completes asynchronously and sends
 another invalidation. Inspect an ask's `delivery` (`pending`, `delivered` with `to`, or `not_delivered`
 with `reason`) or a decision's `undelivered_reason` on a subsequent detail read; `delivering` means wait, a
-settled reason means undelivered, and null means delivered. Feedback interrupted
-by a factory restart becomes `delivery_interrupted` under the existing timeout.
-Interrupted ask delivery likewise settles as `not_delivered` with
-`reason: "delivery_interrupted"` after a minute. Answers remain readable on their
-ask. While delivery is pending, refetch its status after invalidation and after
-the interruption window even if the stream is silent. Sends are not retried
+settled reason means undelivered, and null means delivered. A send still pending
+after 90 seconds reports `delivery_interrupted`. An answer reports
+`{state: "not_delivered", reason: "delivery_interrupted"}` and remains readable
+on its ask. While delivery is pending, refetch its status after invalidation and
+after the interruption window even if the stream is silent. Sends are not retried
 automatically because typing twice is not idempotent. A client that focuses the
 recording terminal must wait for confirmed delivery rather than treating
 `pending` as delivered.
@@ -219,11 +218,10 @@ terminal. The `<sympp>` message contains the WorkRequest ID and title, decision
 ID, full decision and feedback. The `delivery` result uses
 `no_recording_terminal` when there is no target. Feedback that wasn't delivered
 stays on the decision with its reason in `undelivered_reason`. Dismiss clears
-that marker and keeps the text. While the factory is still typing it the reason
-is `delivering`, with
-`next_action` `wait: the feedback is being typed` and no dismiss; a send that
-never finished reads as `delivery_interrupted` after a minute and can be
-dismissed. Any other transition returns HTTP 409
+that marker and keeps the text. During delivery the reason is `delivering` and
+`next_action` is `wait: the feedback is being typed`. A pending send reads as
+`delivery_interrupted` after 90 seconds, when it can be dismissed. Any other
+transition returns HTTP 409
 `{error:{code:"decision_transition_refused",message,state,next_action}}`, where
 `state` is the decision's review state (or `not_flagged`). Blank feedback returns
 HTTP 422 `missing_feedback`. Hydrated and detail reads also carry `flagged`,
