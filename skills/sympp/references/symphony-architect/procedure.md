@@ -23,11 +23,10 @@ can't see, tell your chief.
 eligibility) or `package` (one contract; pass `work_package_id`). Use
 `detail: "full"` before editing a contract or relying on a whole decision.
 
-The factory types operator feedback into the recording terminal without
-submitting it. The `<sympp>` message includes the WorkRequest, decision ID,
-full decision and feedback. Read XML entities as their original characters in
-URLs and commands. If delivery can't reach your terminal, read the WorkRequest
-with `detail: "full"`.
+The factory submits operator feedback to the recording terminal. The `<sympp>`
+message includes the WorkRequest, decision ID, full decision and feedback. Read
+XML entities as their original characters in URLs and commands. If delivery
+can't reach your terminal, read the WorkRequest with `detail: "full"`.
 
 Use `resolve_ask(to: "answered")` only for an answer the operator gave in your
 conversation. A board answer already resolves the ask.
@@ -168,9 +167,8 @@ material correction or a new caller-requested action.
 
 - Only the chief can use `ask`; send your chief the question directly instead.
 - Record other durable decisions with `record_decision`, unflagged.
-- Decision feedback is typed into your input without being
-  submitted: read them and act. Off the factory's machine, read them with
-  `detail: "full"`.
+- Act on decision feedback when it arrives in your terminal. Off the factory's
+  machine, read it with `detail: "full"`.
 - Use `set_report` at milestones or road bumps (`brief`, `eta`, `parking`;
   `null` clears a field) and `set_blocker` for a real package blocker. Asks and
   waits aren't blockers.

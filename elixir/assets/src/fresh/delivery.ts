@@ -14,8 +14,8 @@ export type Unarrived = { ask: Ask; answer: string; reason: string | null };
 // Each answer has its own key, so tabs that write at once never overwrite each other's answers.
 const PREFIX = "sympp.board.answer:";
 
-// The factory gives up on a send cut short after a minute; the board looks again just after, even without a change
-// signal, and then every half minute while any answer is still being typed.
+// Recheck after about a minute and then every half minute while an answer is pending. The follow-up also
+// catches sends the factory marks interrupted after 90 seconds when the stream is silent.
 const SETTLE_MS = 62e3;
 const AGAIN_MS = 30e3;
 // An answer still marked as being sent after this long had its send end without word, such as in a tab that closed

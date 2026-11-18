@@ -7,15 +7,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
   | — | `record_decision(flag: false)` | (not flagged) | any Herdr terminal |
   | — | `record_decision(flag: true)` | `recorded` | any Herdr terminal, attributed to it |
   | recorded | `ack` | `acknowledged` | operator (HTTP) |
-  | recorded | `feedback(text)` | `feedback` | operator (HTTP); the factory types the decision and feedback into the recording terminal |
+  | recorded | `feedback(text)` | `feedback` | operator (HTTP). The factory submits the decision and feedback to the recording terminal |
 
-  While the factory types the feedback, `undelivered_reason` is `delivering`;
-  a send that succeeds clears it. Feedback that can't be typed stays on the
-  decision with the reason. A `delivering` marker older than any send can take
-  means the factory stopped mid-send and reads as `delivery_interrupted`. The
-  operator's `dismiss` clears a settled marker (never `delivering`); the
-  feedback text stays. Every other event is refused with the current state and
-  the next action.
+  While the factory sends feedback, `undelivered_reason` is `delivering`.
+  A successful send clears it. Undelivered feedback stays on the decision with
+  the reason. A `delivering` marker reads as `delivery_interrupted` after
+  90 seconds. The operator's `dismiss` clears a settled marker and keeps the
+  feedback text. Every other event is refused with the current state and the
+  next action.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -29,8 +28,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
   @type refusal :: {:decision_transition_refused, String.t(), String.t()}
 
   @delivering "delivering"
-  # Longer than a delivery can take: a confirmed herdr-core snapshot plus the send timeout.
-  @delivery_window_ms 60_000
 
   @doc "The review fields `record_decision` stores: a flagged decision starts `recorded`."
   @spec record_attrs(boolean()) :: map()
@@ -42,8 +39,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
   def ack(repo, decision_id), do: review_recorded(repo, decision_id, review_state: "acknowledged")
 
   @doc """
-  Records the operator's feedback, then types the decision and feedback into
-  the recording terminal as a `<sympp>` message without submitting it.
+  Records the operator's feedback, then submits the decision and feedback to
+  the recording terminal as a `<sympp>` message.
   `delivery` says whether that reached the terminal.
   """
   @spec feedback(repo(), String.t(), term(), keyword()) ::
@@ -75,13 +72,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
   def state(%DecisionLogEntry{}), do: "not_flagged"
 
   @doc """
-  Why the feedback isn't delivered: `delivering` while the factory types it,
-  `delivery_interrupted` once that took longer than any send can, otherwise
-  the stored reason; `nil` when delivered or dismissed.
+  Returns `delivering` while the send is pending, `delivery_interrupted` when
+  the pending delivery window has elapsed, or the stored reason. Delivered or
+  dismissed feedback returns `nil`.
   """
   @spec undelivered_reason(DecisionLogEntry.t()) :: String.t() | nil
   def undelivered_reason(%DecisionLogEntry{undelivered_reason: @delivering, reviewed_at: %DateTime{} = at}) do
-    if DateTime.diff(DateTime.utc_now(), at, :millisecond) > @delivery_window_ms, do: "delivery_interrupted", else: @delivering
+    if OperatorDelivery.interrupted?(at), do: "delivery_interrupted", else: @delivering
   end
 
   def undelivered_reason(%DecisionLogEntry{undelivered_reason: reason}), do: reason

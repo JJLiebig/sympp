@@ -205,7 +205,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
           boolean_schema()
           |> Map.put(
             "description",
-            "Flag an in-scope product call for the operator to review (default false). The original decision and their feedback arrive in a <sympp> message typed into your terminal without being submitted."
+            "Flag an in-scope product call for the operator to review (default false). The original decision and their feedback arrive in a <sympp> message submitted to your terminal."
           )
       },
       ["work_request_id", "source_type", "decision", "rationale", "scope_impact"]

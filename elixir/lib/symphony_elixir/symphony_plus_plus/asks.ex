@@ -158,8 +158,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
 
   @doc """
   The operator answers an open ask. With a decision prompt the answer is the
-  chosen option (and note); otherwise free text. The answer is then delivered
-  to the asking terminal's input without submitting it.
+  chosen option and any note. Otherwise it is free text. The factory submits the
+  question and answer to the asking terminal.
   """
   @spec answer_by_operator(repo(), String.t(), map(), keyword()) :: {:ok, Ask.t(), delivery()} | {:error, term()}
   def answer_by_operator(repo, ask_id, params, opts \\ []) when is_map(params) do
@@ -191,8 +191,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
     end
   end
 
-  # The factory prefills the question and answer in the asking terminal.
-  # A finished or unreachable terminal keeps the answer on the ask.
+  # The answer stays on the ask if delivery fails.
   defp deliver(repo, %Ask{asked_by_terminal: nil} = ask), do: not_delivered(repo, ask, "no_asking_terminal")
 
   defp deliver(repo, %Ask{} = ask) do
@@ -330,7 +329,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   def delivery_status(%Ask{delivered_at: %DateTime{}, asked_by_address: to}), do: %{"state" => "delivered", "to" => to}
 
   def delivery_status(%Ask{undelivered_reason: "delivering", resolved_at: %DateTime{} = at}) do
-    if DateTime.diff(DateTime.utc_now(), at, :millisecond) > 60_000,
+    if OperatorDelivery.interrupted?(at),
       do: %{"state" => "not_delivered", "reason" => "delivery_interrupted"},
       else: %{"state" => "pending"}
   end

@@ -132,7 +132,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   defp description("ask"),
     do:
-      "Chief only. Asks the human owner; the question shows on the sympp board until it is answered or withdrawn. Without work_request_id it asks on your own card. Optionally name a package and give a decision_prompt with options. On the factory's machine, the original question and the operator's answer arrive in a <sympp> message typed into your terminal without being submitted. Read stored answers with read_work_request detail: full, or under caller.card in sympp.health for card asks."
+      "Chief only. Asks the human owner; the question shows on the sympp board until it is answered or withdrawn. Without work_request_id it asks on your own card. Optionally name a package and give a decision_prompt with options. On the factory's machine, the original question and the operator's answer arrive in a <sympp> message submitted to your terminal. Read stored answers with read_work_request detail: full, or under caller.card in sympp.health for card asks."
 
   defp description("resolve_ask"),
     do:

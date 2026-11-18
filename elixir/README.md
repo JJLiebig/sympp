@@ -106,9 +106,8 @@ terminal its owner, and writes from other terminals are refused
 
 Any Herdr terminal may `record_decision` on a WorkRequest without owning it.
 With `flag: true` the decision waits for the operator's review on the board.
-The operator acknowledges it or sends feedback over HTTP. The full decision
-and feedback are typed into the recording terminal as a `<sympp>` message
-without being submitted.
+The operator acknowledges it or sends feedback over HTTP. The factory submits
+the full decision and feedback to the recording terminal as a `<sympp>` message.
 See the [operator board API](../docs/operator-board-api.md).
 
 ## Configuration

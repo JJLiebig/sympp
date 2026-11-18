@@ -71,21 +71,21 @@ Asks are the only "Needs you". Only a chief opens one with `ask` on a
 WorkRequest, optionally naming a package and a decision prompt. An ask is
 `open` until it is `answered` or `withdrawn`. Both boards show open asks as
 Needs you. The operator answers in the Herdr panel or through the operator HTTP
-route. The board answer resolves the ask, then the factory types a `<sympp>`
-message with the full question and answer into the asking terminal's input
-without submitting it. Only terminals the factory's own herdr-core sees live
-receive it. The answer stays on the ask. The asker or WorkRequest owner uses
-`resolve_ask` to record an answer given in their conversation or withdraw an
-ask, with an optional decision. An ask on a package is withdrawn when the
-package ends. Archiving or completing a WorkRequest withdraws its open asks.
+route. The board answer resolves the ask, then the factory submits a `<sympp>`
+message with the full question and answer to the asking terminal. Only terminals
+the factory's own herdr-core sees live receive it. The answer stays on the ask.
+The asker or WorkRequest owner uses `resolve_ask` to record an answer given in
+their conversation or to withdraw an ask, with an optional decision. An ask on a
+package is withdrawn when the package ends. Archiving or completing a WorkRequest
+withdraws its open asks.
 Asks never block planning, dispatch or a phase.
 
 A chief or architect that makes an in-scope product call itself records it with
 `record_decision(flag: true)`; any Herdr terminal may. The decision starts
 `recorded` and waits on the board. The operator acknowledges it or sends
-feedback over HTTP. The factory types the full decision and feedback as a
-`<sympp>` message into the recording terminal through the same delivery as
-answers. Feedback that can't be typed stays on the decision, marked
+feedback over HTTP. The factory submits the full decision and feedback as a
+`<sympp>` message to the recording terminal through the same delivery as
+answers. Feedback that can't be delivered stays on the decision, marked
 undelivered with its reason, until the operator dismisses the marker.
 
 A declared review requirement identifies a provider and optional arguments,

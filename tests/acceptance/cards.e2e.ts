@@ -120,7 +120,7 @@ test('unknown inputs never end a card, a finished terminal without a PR does, an
   expect(board['Finishing'].state).toBe('done');
   expect(board['Asking'].state).toBe('working');
 
-  // A card's ask is answered by the operator and typed into the asking terminal.
+  // The operator's answer is submitted to the asking terminal.
   const ask = (await early.call('ask', { question: 'Ship the dark theme?' })).ask;
   expect(ask.card_id).toBe(board['Asking'].id);
   expect((await cards(architect))['Asking'].asks.map((item: any) => item.id)).toEqual([ask.id]);
@@ -132,7 +132,7 @@ test('unknown inputs never end a card, a finished terminal without a PR does, an
   expect(answered.body.delivery.state).toBe('pending');
   await expect.poll(async () => (await architect.inspect(answered.body.delivery_route)).delivery)
     .toEqual({ state: 'delivered', to: early.address });
-  expect(provider.sent).toContain(['--no-submit', '--raw', 'a1', [
+  expect(provider.sent).toContain(['--raw', 'a1', [
     `<sympp from="operator" ask="${ask.id}">`,
     'Question: Ship the dark theme?',
     'Answer: Yes, ship it.',

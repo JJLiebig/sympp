@@ -139,12 +139,11 @@ HTTP 200 confirms the saved answer or feedback,
 not that a terminal received it. Delivery completes asynchronously and sends
 another invalidation. Inspect an ask's `delivery` (`pending`, `delivered` with `to`, or `not_delivered`
 with `reason`) or a decision's `undelivered_reason` on a subsequent detail read; `delivering` means wait, a
-settled reason means undelivered, and null means delivered. Feedback interrupted
-by a factory restart becomes `delivery_interrupted` under the existing timeout.
-Interrupted ask delivery likewise settles as `not_delivered` with
-`reason: "delivery_interrupted"` after a minute. Answers remain readable on their
-ask. While delivery is pending, refetch its status after invalidation and after
-the interruption window even if the stream is silent. Sends are not retried
+settled reason means undelivered, and null means delivered. A send still pending
+after 90 seconds reports `delivery_interrupted`. An answer reports
+`{state: "not_delivered", reason: "delivery_interrupted"}` and remains readable
+on its ask. While delivery is pending, refetch its status after invalidation and
+after the interruption window even if the stream is silent. Sends are not retried
 automatically because typing twice is not idempotent. A client that focuses the
 recording terminal must wait for confirmed delivery rather than treating
 `pending` as delivered.
@@ -203,9 +202,9 @@ A structured `decision_prompt` has `tl_dr`, `details`, 1–4 `options` with `id`
 prompt does not accept `answer` alone. The custom choice `__custom_redirect__`
 requires a nonblank `answer_note`. Without a structured prompt, submit
 `{"answer":"the human's answer"}`. The backend resolves the ask with `operator`
-as the author, then types a `<sympp>` message into the asking terminal's input
-without submitting it. It contains the ask ID, full question and answer, and
-the WorkRequest ID and title when present. Use `resolve_ask(to: "answered")`
+as the author, then submits a `<sympp>` message to the asking terminal. The
+message contains the ask ID, full question and answer, and the WorkRequest ID and
+title when present. Use `resolve_ask(to: "answered")`
 for answers given in conversation. An authorized repeat returns the stored
 answer. `delivery` initially reports `{state: "pending"}` when a terminal is recorded.
 Without a target it reports
@@ -214,16 +213,15 @@ the ask either way; `delivered_at` records a later successful delivery.
 An answer does not resume or unblock work by itself.
 
 Flagged decisions move `recorded → acknowledged` (ack) or `recorded → feedback`
-(feedback). Feedback is stored, then typed into the recording terminal's input
-without submitting it. The `<sympp>` message contains the WorkRequest ID and
-title, decision ID, full decision and feedback. The `delivery` result uses
+(feedback). The backend stores feedback, then submits it to the recording
+terminal. The `<sympp>` message contains the WorkRequest ID and title, decision
+ID, full decision and feedback. The `delivery` result uses
 `no_recording_terminal` when there is no target. Feedback that wasn't delivered
 stays on the decision with its reason in `undelivered_reason`. Dismiss clears
-that marker and keeps the text. While the factory is still typing it the reason
-is `delivering`, with
-`next_action` `wait: the feedback is being typed` and no dismiss; a send that
-never finished reads as `delivery_interrupted` after a minute and can be
-dismissed. Any other transition returns HTTP 409
+that marker and keeps the text. During delivery the reason is `delivering` and
+`next_action` is `wait: the feedback is being typed`. A pending send reads as
+`delivery_interrupted` after 90 seconds, when it can be dismissed. Any other
+transition returns HTTP 409
 `{error:{code:"decision_transition_refused",message,state,next_action}}`, where
 `state` is the decision's review state (or `not_flagged`). Blank feedback returns
 HTTP 422 `missing_feedback`. Hydrated and detail reads also carry `flagged`,
@@ -492,9 +490,9 @@ then the most recently changed.
 | `asks` | The card's open asks, in the ask shape above with `card_id` instead of `work_request_id`. |
 | `since`, `ended_at`, `updated_at` | Timestamps. |
 
-A chief opens an ask on its card with `ask` and no `work_request_id`; the operator
-answers it through the same answer routes, and the answer is typed into the
-card's terminal. The answer result names `card_id` instead of
+A chief opens an ask on its card with `ask` and no `work_request_id`. The operator
+answers it through the same answer routes, and the factory submits the answer to
+the card's terminal. The answer result names `card_id` instead of
 `work_request_id`. Ending a card withdraws its open asks. A dismissed, merged or
 done card opens again as `working` or `review_ci` when its live terminal starts
 work on another branch. `merged`, `done` and `dismissed` cards leave the list

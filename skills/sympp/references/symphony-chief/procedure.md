@@ -32,10 +32,10 @@ CI and tests without asking.
 - Use `resolve_ask(to: "answered")` only for an answer the operator gave in
   your conversation. A board answer already resolves the ask.
 
-The factory types each board answer or decision feedback into your input
-without submitting it. The `<sympp>` message identifies the ask or decision,
-includes its full question or decision, and identifies its WorkRequest when
-present. Read XML entities as their original characters in URLs and commands.
+The factory submits board answers and decision feedback to your terminal.
+The `<sympp>` message identifies the ask or decision, includes its full question
+or decision, and identifies its WorkRequest when present. Read XML entities as
+their original characters in URLs and commands.
 If delivery can't reach your terminal, use
 `read_work_request(detail: "full")` or, for a card ask, `sympp.health`.
 
