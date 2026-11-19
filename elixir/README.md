@@ -12,9 +12,10 @@ and HTTP. `create_work_request` takes `title`, `repo`, `base_branch`, `descripti
 `work_type`, with optional `constraints`, `desired_dispatch_shape` and `own`.
 
 Dispatch refreshes preserve an existing worker: message it to re-read the assignment.
-Launch lines omit `--on` for the factory hostname; run that local form on the assigned
-host. Initial Review Suite commands include the current contract as the frozen brief;
-resuming a cycle preserves its existing brief and review obligations.
+Launch lines omit `--on` for the factory's Herdr machine name, which is also the
+dispatch default. Run that local form on the factory host. Initial Review Suite
+commands include the current contract as the frozen brief. Resuming a cycle
+preserves its existing brief and review obligations.
 
 Finished goals archive by default after 3 days (72 hours), on the next retention pass.
 The existing integer-day setting remains configurable; normal ledger migrations

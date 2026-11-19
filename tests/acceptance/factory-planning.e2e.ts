@@ -1,13 +1,11 @@
 import { expect } from 'e2e';
 import { execFile } from 'node:child_process';
-import { hostname } from 'node:os';
 import { join, delimiter } from 'node:path';
 import { promisify } from 'node:util';
 import { writeFile } from 'node:fs/promises';
 import { readFile } from 'node:fs/promises';
 import { contract, test } from '../support/factory.js';
 import { head, pr, prUrl, test as deliveryTest } from '../support/delivery.js';
-import { test as processTest } from '../support/authority.js';
 import { git, repository } from '../support/worktree-git.js';
 
 test('dispatch and delivery board payload measurements for a 25-package request', async ({ factory }) => {
@@ -293,10 +291,9 @@ deliveryTest('a ready package\'s contract is frozen', async ({ delivery: { facto
   expect(frozen.next_action).toContain('superseded');
 });
 
-processTest('the launch assignment opens with what the request builds and where the package sits, and replays unchanged', async ({ processes }) => {
-  const { root } = processes;
+deliveryTest('the launch assignment opens with what the request builds and where the package sits, and replays unchanged', async ({ watched: { root, factory, provider } }) => {
   const repo = await repository(root, 'assignment');
-  const architect = await processes.factory().client();
+  const architect = await factory.client();
   const created = await architect.call('create_work_request', {
     repo: repo.origin, base_branch: 'beta', title: 'Improve WorkRequest intake', work_type: 'feature',
     description: 'Operators file requests in one place.\n\nThe intake form keeps drafts.',
@@ -337,7 +334,8 @@ processTest('the launch assignment opens with what the request builds and where 
   expect(replay.next_action).toContain('message it to re-read assignment_file; do not launch another');
   expect(replay.next_action).toContain('Otherwise: Run launch_line');
   // A host-local command retains the selected agent and labels without a remote self-hop.
-  const none = await architect.call('dispatch_work_package', { work_package_id: unreviewed, review_mode: 'none', agent: 'claude', target_repo_root: repo.checkout, machine: hostname() });
+  const none = await architect.call('dispatch_work_package', { work_package_id: unreviewed, review_mode: 'none', agent: 'claude', target_repo_root: repo.checkout });
+  expect(none.worktree.machine).toBe(provider.core!.name);
   expect(none.work_package.review_id).toBeNull();
   expect(none.launch_line).not.toContain('sympp.review_id');
   expect(none.launch_line).toContain('-- claude "Read ');
