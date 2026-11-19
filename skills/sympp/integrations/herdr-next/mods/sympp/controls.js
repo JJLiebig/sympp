@@ -119,7 +119,7 @@ export function take(list, act, send, changed = () => {}) {
   for (const entry of list) if (entry.subject === act.subject) latest = entry;
   if (latest?.key === act.key) return latest.answer;
   const earlier = list.filter((entry) => !entry.agreed && entry.subject === act.subject).map((entry) => entry.answer.catch(() => null));
-  const entry = { act, key: act.key, subject: act.subject, agreed: false, answer: null, startedAt: ++clock };
+  const entry = { act, key: act.key, subject: act.subject, agreed: false, answer: null };
   entry.answer = (earlier.length ? Promise.all(earlier).then(send) : send()).then(
     (payload) => { entry.agreed = true; entry.agreedAt = ++clock; return payload; },
     (error) => {

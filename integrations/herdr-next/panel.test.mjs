@@ -157,14 +157,21 @@ test('a failed refresh retains the board in the current view and the next one', 
   const path = '/api/v1/sympp/herdr/asks/q1/answer';
   const answer = { answer: 'Ready' };
   await assert.rejects(first.view.send(path, answer, first.cx));
-  assert.equal(open(props).view.net.data, board, 'a failed write preserves the shared read');
+  const afterFailure = open(props);
+  await afterFailure.finish();
+  assert.equal(afterFailure.view.net.data, board, 'a failed write and refresh preserve the shared read');
+  await assert.rejects(afterFailure.view.send(path, answer, afterFailure.cx), /Refresh the board/);
 
   available = true;
   const write = first.view.send(path, answer, first.cx);
   const whilePending = open(props);
+  assert.equal(whilePending.view.net.data, board);
   assert.equal(whilePending.view.reading, false);
-  assert.equal(whilePending.view.net.data.jobs.find((j) => j.id === 'wr-pr').asks.length, 0);
+  await assert.rejects(whilePending.view.send(path, answer, whilePending.cx), /Refresh the board/);
   await write;
   await first.view.close();
-  assert.equal(open(props).view.net.data.jobs.find((j) => j.id === 'wr-pr').asks.length, 0);
+  whilePending.view.tick(whilePending.cx);
+  assert.equal(whilePending.view.reading, true);
+  await whilePending.finish();
+  assert.equal(whilePending.view.needsControlRead(), false);
 });

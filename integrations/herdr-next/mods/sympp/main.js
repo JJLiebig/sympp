@@ -83,7 +83,7 @@ const STRIP = 88;
 function factoryReads(endpoint) {
   let factory = boardReads.get(endpoint);
   if (!factory) {
-    factory = { latest: null, actions: new Set() };
+    factory = { latest: null, writes: 0, lastWrite: 0 };
     boardReads.set(endpoint, factory);
   }
   return factory;
@@ -164,6 +164,7 @@ export default class Lens extends View {
     this.request = given.remote ? remoteRequest(this.endpoint, async () => JSON.parse(await fs.readFile(`${appHome()}/sympp-remote.json`, "utf8"))) : request;
     this.net = M.initialFetch();
     this.payload = null;
+    this.cachedSince = null;
     this.reading = false;
     this.turn = 0;
     this.companion = false;
@@ -195,7 +196,7 @@ export default class Lens extends View {
     this.ops = {};
     // Operator actions drawn ahead of the factory (controls.js), and the last read they are drawn on.
     this.taken = [];
-    this.actionLists = new Map();
+    this.writeFinishes = new Set();
     // This machine's core name, so the factory's "<core>/t8" addresses find their local terminals.
     this.coreName = null;
     hc(["server", "status", "--json"]).then((result) => {
@@ -223,6 +224,7 @@ export default class Lens extends View {
       this.dashboard = M.dashboardUrl(endpoint, this.given.dashboardUrl);
       this.net = M.initialFetch();
       this.payload = null;
+      this.cachedSince = null;
       this.taken = [];
       this.seenNeeds = null;
       this.leasedAt = 0;
@@ -230,9 +232,10 @@ export default class Lens extends View {
     }
     const cached = restore ? boardReads.get(endpoint)?.latest : null;
     if (!cached) return null;
-    const board = this.drawn(cached.payload, cached.board);
-    this.net = M.fetchSucceeded(this.net, board, cached.receivedAt);
-    this.seenNeeds = L.newNeeds(null, board).seen;
+    this.cachedSince = cached.since;
+    this.payload = cached.payload;
+    this.net = M.fetchSucceeded(this.net, cached.board, cached.receivedAt);
+    this.seenNeeds = L.newNeeds(null, cached.board).seen;
     return cached;
   }
 
@@ -259,6 +262,15 @@ export default class Lens extends View {
     if (job) this.openJob(job, {}, cx);
   }
 
+  waitingForWrite() {
+    return this.cachedSince !== null && (boardReads.get(this.endpoint)?.writes ?? 0) > 0;
+  }
+
+  needsControlRead() {
+    const factory = boardReads.get(this.endpoint);
+    return this.cachedSince !== null && (factory?.writes > 0 || this.cachedSince < (factory?.lastWrite ?? 0));
+  }
+
   // Data timer: the board when due, and agent checks for whichever view has agents to reach.
   // Otherwise it repaints now and then so ages move.
   tick(cx) {
@@ -268,7 +280,8 @@ export default class Lens extends View {
     const active = appWindow()?.active !== false;
     const cadence = M.nextDelay(this.net, active);
     let busy = false;
-    if (!this.reading && M.fetchDue(this.net, now, active)) { this.read(cx); busy = true; }
+    const due = (!this.net.error && this.needsControlRead()) || M.fetchDue(this.net, now, active);
+    if (!this.reading && due && !this.waitingForWrite()) { this.read(cx); busy = true; }
     this.shareChiefs(now);
     const watch = this.withChiefs(this.agentWatch);
     if (watch && !this.checking && (this.checkedFor !== watch.key || now - this.checkedAt >= cadence)) this.checkAgents(watch, cx);
@@ -281,7 +294,7 @@ export default class Lens extends View {
 
   // One read at a time; a reply from an older read never replaces a newer one.
   read(cx) {
-    if (this.resolving || this.reading || !this.endpoint) return;
+    if (this.resolving || this.reading || !this.endpoint || this.waitingForWrite()) return;
     this.reading = true;
     const turn = ++this.turn;
     const since = C.readStarts();
@@ -319,6 +332,7 @@ export default class Lens extends View {
         if (since > (factory.latest?.since ?? 0)) {
           factory.latest = { board: outcome.board, payload: outcome.payload, receivedAt: now, since };
         }
+        if (!factory.writes && since > factory.lastWrite) this.cachedSince = null;
         outcome.board = this.drawn(outcome.payload, outcome.board, since);
       }
       this.net = outcome.board ? M.fetchSucceeded(this.net, outcome.board, now) : M.fetchFailed(this.net, outcome.error, now);
@@ -396,13 +410,9 @@ export default class Lens extends View {
   }
 
   async close() {
-    // The host may abandon a closed view's unsettled promises. Keep acknowledged writes for the
-    // next board read and release unresolved projections owned by the closing copy.
-    for (const [list, actions] of this.actionLists ?? []) {
-      actions.delete(list);
-      const agreed = list.filter((entry) => entry.agreed);
-      if (agreed.length) actions.add(agreed);
-    }
+    // A fetch owned by this view may never settle after closing. A new view can verify its result
+    // with a board read without waiting on that promise.
+    for (const finish of this.writeFinishes ?? []) finish();
     if (this.leasedAt) await this.lease("detach").catch(() => null);
   }
 
@@ -1005,7 +1015,7 @@ export default class Lens extends View {
     cx.spawn(async (cx) => {
       const submission = C.submitAction(this.creation, async () => {
         const fields = Object.fromEntries(Object.entries(this.draft).map(([key, input]) => [key, input.value()]));
-        const payload = await C.postAction(this.endpoint, "/api/v1/sympp/herdr/work-requests", C.requestBody(fields), this.request);
+        const payload = await this.operatorPost(this.endpoint, "/api/v1/sympp/herdr/work-requests", C.requestBody(fields));
         const id = payload.work_request?.work_request?.id;
         if (!id) throw new Error("The job was submitted but its ID is missing. Refresh before submitting again.");
         return id;
@@ -1063,20 +1073,8 @@ export default class Lens extends View {
   // fresh read, begun at `since`, ends the actions it shows; redrawing the last one ends nothing.
   drawn(payload, board = null, since = null) {
     this.payload = payload;
-    const actions = boardReads.get(this.endpoint)?.actions;
-    const lists = new Set([this.taken, ...(actions ?? [])]);
-    const pending = [...lists].flat().sort((a, b) => a.startedAt - b.startedAt);
-    if (since !== null && pending.length) {
-      C.settle(pending, payload, since);
-      const remaining = new Set(pending);
-      for (const list of lists) {
-        for (let i = list.length - 1; i >= 0; i--) {
-          if (!remaining.has(list[i])) list.splice(i, 1);
-        }
-      }
-    }
-    for (const list of lists) if (!list.length) actions?.delete(list);
-    return pending.length || !board ? M.parseBoard(C.project(payload, pending)) : board;
+    if (since !== null) C.settle(this.taken, payload, since);
+    return this.taken.length || !board ? M.parseBoard(C.project(payload, this.taken)) : board;
   }
 
   redraw(cx) {
@@ -1091,14 +1089,24 @@ export default class Lens extends View {
   // its answer draws the factory's own word.
   send(path, body, cx) {
     const endpoint = this.endpoint;
-    const act = C.actionOf(path, body);
-    if (act) {
-      const actions = factoryReads(endpoint).actions;
-      actions.add(this.taken);
-      this.actionLists.set(this.taken, actions);
-    }
-    return C.take(this.taken, act, () => C.postAction(endpoint, path, body, this.request),
+    if (this.needsControlRead()) return Promise.reject(new Error("Refresh the board before trying again."));
+    return C.take(this.taken, C.actionOf(path, body), () => this.operatorPost(endpoint, path, body),
       () => { if (this.endpoint === endpoint) this.redraw(cx); });
+  }
+
+  async operatorPost(endpoint, path, body) {
+    if (this.endpoint !== endpoint || this.needsControlRead()) throw new Error("Refresh the board before trying again.");
+    this.cachedSince = null;
+    const factory = factoryReads(endpoint);
+    factory.writes += 1;
+    const finish = () => {
+      if (!this.writeFinishes.delete(finish)) return;
+      factory.writes -= 1;
+      factory.lastWrite = C.readStarts();
+    };
+    this.writeFinishes.add(finish);
+    try { return await C.postAction(endpoint, path, body, this.request); }
+    finally { finish(); }
   }
 
   // One operator action, then a fresh read. A refusal stays beside the control that sent it; `refused`
