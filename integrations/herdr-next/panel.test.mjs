@@ -47,14 +47,22 @@ function open(props) {
   };
   const view = new BoardView();
   view.init(props, cx);
-  return { view, cx, finish: () => Promise.all(tasks.splice(0)) };
+  return { view, cx, async finish() {
+    while (tasks.length) await Promise.all(tasks.splice(0));
+  } };
 }
 
 Object.defineProperty(globalThis, 'localStorage', { value: { getItem: () => null }, configurable: true });
 const response = (url) => ({ ok: true, status: 200, url, json: async () => boardPayload() });
 
 test('recreated panels and new tabs show the last successful board before a GET is due', async (t) => {
-  const get = t.mock.method(globalThis, 'fetch', async (url) => response(url));
+  let refreshed = false;
+  const get = t.mock.method(globalThis, 'fetch', async (url) => {
+    const result = response(url);
+    const payload = await result.json();
+    if (refreshed) payload.work_request_details[0].work_request.title = 'Renamed on the factory';
+    return { ...result, json: async () => payload };
+  });
   const endpoint = 'http://127.0.0.1:4001';
   const activeEndpoint = 'http://127.0.0.1:4011';
   const dir = await mkdtemp(join(tmpdir(), 'sympp-panel-runtime-'));
@@ -74,8 +82,21 @@ test('recreated panels and new tabs show the last successful board before a GET 
     assert.equal(next.view.endpoint, activeEndpoint);
     assert.ok(next.view.net.data.jobs.some((job) => job.id === 'wr-pr'));
     assert.equal(next.view.reading, false);
+    await next.finish();
   }
   assert.equal(get.mock.callCount(), 1);
+
+  refreshed = true;
+  const tab = open({ endpoint: activeEndpoint });
+  tab.view.retry(tab.cx);
+  await tab.finish();
+  for (const runtimeFile of [runtime, join(dir, 'other-runtime.json')]) {
+    await writeFile(runtimeFile, JSON.stringify({ backend: { url: activeEndpoint } }));
+    const next = open({ endpoint, role: 'panel', hosts: { local: { runtime: runtimeFile } } });
+    await next.finish();
+    assert.equal(next.view.net.data.jobs.find((job) => job.id === 'wr-pr').title, 'Renamed on the factory');
+  }
+  assert.equal(get.mock.callCount(), 2, 'an endpoint read warms both an established runtime and one opened for the first time');
 
   const otherEndpoint = 'http://127.0.0.1:4002';
   const other = open({ endpoint: otherEndpoint });

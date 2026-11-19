@@ -192,7 +192,7 @@ export class ChiefStart {
           exec("git", ["rev-parse", "--show-toplevel"], { cwd, on, timeout }).then((r) => r.code === 0 ? r.stdout.trim() : null, () => null),
         () => cx.sleep(timeout * 1000));
         const topicCheckouts = checkouts.filter((s) => topicIds.has(s.id));
-        const factory = this.finding ? null : { machine: this.factory, root: this.factoryRoot() ?? null };
+        const factory = this.finding ? null : { machine: this.factory, root: await this.factoryRoot() };
         let folder = "";
         for (const candidate of chiefFolders(topicCheckouts, checkouts, machine, factory)) {
           // The folder is there when a program can start in it.

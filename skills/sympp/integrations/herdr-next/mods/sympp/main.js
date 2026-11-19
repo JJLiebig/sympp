@@ -62,6 +62,7 @@ const OPEN = "sympp.open";
 // Herdr keeps this module loaded when copies close. Each factory's last good read can seed
 // the next view without writing its full board to disk or waking other mods.
 const boardReads = new Map();
+const runtimeEndpoints = new Map();
 // For desk-tabs' link beside the sympp panel button: the board's address, null when there is none.
 const DASHBOARD = "sympp.dashboard_url";
 // For the spaces sidebar's chief button: each Herdr topic's chiefs, { [topic id]: [{ domain,
@@ -79,6 +80,15 @@ const LEASE = 60e3;
 // The studio's own pane shrinks to its header, under Herdr's pane header, while a native preview
 // shows below it.
 const STRIP = 88;
+
+async function runtimeEndpoint(path) {
+  try {
+    const runtime = JSON.parse(await fs.readFile(path, "utf8"));
+    return M.normalizeEndpoint(runtime.backend?.url);
+  } catch {
+    return null;
+  }
+}
 
 // Removes a preview copy: a flat mods/sympp-dev-* folder, never another mod.
 async function removeCopy(name) {
@@ -116,13 +126,13 @@ export default class Lens extends View {
     const given = stored && typeof stored === "object" ? { ...stored, ...own } : own;
     const runtime = given.remote ? null : given.hosts?.local?.runtime;
     const configured = M.normalizeEndpoint(given.endpoint);
-    // A local runtime can choose a different listening port. Copies opened with its configuration
-    // can find the last read under the same runtime file, as well as under the actual endpoint.
-    const readKey = runtime ? `runtime:${runtime}` : configured;
-    const cached = boardReads.get(readKey);
-    const endpoint = cached?.endpoint ?? configured;
+    const known = runtimeEndpoints.get(runtime);
+    const endpoint = known ?? configured;
     if (own.role === "chief" || own.role === "chief-menu") {
-      const factoryRoot = () => boardReads.get(readKey)?.board.reposRoot ?? null;
+      const factoryRoot = async () => {
+        const current = runtime ? (await runtimeEndpoint(runtime)) ?? runtimeEndpoints.get(runtime) : endpoint;
+        return boardReads.get(current)?.board.reposRoot ?? null;
+      };
       this.chief = own.role === "chief" ? new ChiefStart(own, endpoint, factoryRoot, cx) : new ChiefMenu(own, cx);
       return;
     }
@@ -144,10 +154,10 @@ export default class Lens extends View {
     this.dashboard = M.dashboardUrl(this.endpoint, given.dashboardUrl);
     this.repoTopics = given.repoTopics && typeof given.repoTopics === "object" ? given.repoTopics : null;
     this.hosts = given.hosts ?? null;
-    this.readKey = readKey;
+    this.runtime = runtime;
     this.request = given.remote ? remoteRequest(this.endpoint, async () => JSON.parse(await fs.readFile(`${appHome()}/sympp-remote.json`, "utf8"))) : request;
-    this.net = cached ? M.fetchSucceeded(M.initialFetch(), cached.board, cached.receivedAt) : M.initialFetch();
-    this.payload = cached?.payload ?? null;
+    this.net = M.initialFetch();
+    this.payload = null;
     this.reading = false;
     this.turn = 0;
     this.companion = false;
@@ -168,7 +178,7 @@ export default class Lens extends View {
     this.rows = [];
     this.expanded = new Set();
     this.awaiting = null;
-    this.seenNeeds = cached ? L.newNeeds(null, cached.board).seen : null;
+    this.seenNeeds = null;
     this.painted = Date.now();
     this.keys = cx.focus_handle();
     this.intake = false;
@@ -187,7 +197,43 @@ export default class Lens extends View {
     }).catch(() => {});
     this.leaseId = `herdr-app-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     this.leasedAt = 0;
-    if (cached) this.holdLease(cached.board, Date.now(), cx);
+    if (runtime) {
+      // Use a known runtime's board immediately. Resolve its current URL before the first poll or
+      // lease, including when an endpoint-only view was the first to read this factory.
+      this.resolving = true;
+      this.restoreRead(known);
+      this.updatePlacement();
+      cx.spawn(async (cx) => {
+        this.begin((await runtimeEndpoint(runtime)) ?? endpoint, cx);
+        cx.notify();
+      });
+    } else {
+      this.begin(endpoint, cx);
+    }
+  }
+
+  restoreRead(endpoint) {
+    const cached = boardReads.get(endpoint);
+    if (cached && cached.payload !== this.payload) {
+      const board = this.drawn(cached.payload, cached.board);
+      this.net = M.fetchSucceeded(this.net, board, cached.receivedAt);
+      this.seenNeeds = L.newNeeds(null, board).seen;
+    }
+    return cached;
+  }
+
+  begin(endpoint, cx) {
+    this.resolving = false;
+    if (this.endpoint !== endpoint) {
+      this.endpoint = endpoint;
+      this.dashboard = M.dashboardUrl(endpoint, this.given.dashboardUrl);
+      this.net = { ...this.net, attemptAt: null };
+    }
+    const cached = this.restoreRead(endpoint);
+    if (cached) {
+      if (this.runtime) runtimeEndpoints.set(this.runtime, endpoint);
+      this.holdLease(cached.board, Date.now(), cx);
+    }
     this.updatePlacement();
     cx.timer.every(TICK, (cx) => this.tick(cx));
     this.tick(cx);
@@ -226,7 +272,7 @@ export default class Lens extends View {
 
   // One read at a time; a reply from an older read never replaces a newer one.
   read(cx) {
-    if (this.reading || !this.endpoint) return;
+    if (this.resolving || this.reading || !this.endpoint) return;
     this.reading = true;
     const turn = ++this.turn;
     const since = C.readStarts();
@@ -234,12 +280,9 @@ export default class Lens extends View {
     cx.spawn(async (cx) => {
       let outcome;
       try {
-        if (!this.given.remote && this.hosts?.local?.runtime) {
-          try {
-            const runtime = JSON.parse(await fs.readFile(this.hosts.local.runtime, 'utf8'));
-            const endpoint = M.normalizeEndpoint(runtime.backend?.url);
-            if (endpoint) { this.endpoint = endpoint; this.dashboard = M.dashboardUrl(endpoint, this.given.dashboardUrl); }
-          } catch { /* The factory may not have published its runtime yet. */ }
+        if (this.runtime) {
+          const endpoint = await runtimeEndpoint(this.runtime);
+          if (endpoint) { this.endpoint = endpoint; this.dashboard = M.dashboardUrl(endpoint, this.given.dashboardUrl); }
         }
         const response = await this.request(M.boardUrl(this.endpoint));
         if (!response.ok) outcome = { error: M.httpError(response.status) };
@@ -258,11 +301,11 @@ export default class Lens extends View {
       if (turn !== this.turn) return;
       const now = Date.now();
       if (outcome.board) {
-        const snapshot = { board: outcome.board, payload: outcome.payload, receivedAt: now, since, endpoint: this.endpoint };
-        for (const key of new Set([this.endpoint, this.readKey])) {
-          // Another copy may already have finished a read that started after this one.
-          if (since > (boardReads.get(key)?.since ?? 0)) boardReads.set(key, snapshot);
+        // Another copy may already have finished a read that started after this one.
+        if (since > (boardReads.get(this.endpoint)?.since ?? 0)) {
+          boardReads.set(this.endpoint, { board: outcome.board, payload: outcome.payload, receivedAt: now, since });
         }
+        if (this.runtime) runtimeEndpoints.set(this.runtime, this.endpoint);
         outcome.board = this.drawn(outcome.payload, outcome.board, since);
       }
       this.net = outcome.board ? M.fetchSucceeded(this.net, outcome.board, now) : M.fetchFailed(this.net, outcome.error, now);
@@ -432,6 +475,7 @@ export default class Lens extends View {
   // Moving to a level. Following focus never takes the keyboard; the person's own moves do.
   go(path, cx, { pkg = null, follow = false } = {}) {
     this.path = { topic: path.topic ?? null, space: path.space ?? null, job: path.job ?? null };
+    this.following = follow;
     this.cursor = null;
     this.pkgSel = pkg;
     this.review = null;
@@ -502,6 +546,7 @@ export default class Lens extends View {
     if (seen === this.lastFocus) return;
     this.lastFocus = seen;
     const next = L.followPath(L.focusTarget(f, terminals(), tabs, panes(), chiefs), board.jobs, desk, this.place);
+    this.following = Boolean(next);
     if (next && JSON.stringify(next) !== JSON.stringify(this.path)) this.go(next, cx, { follow: true });
   }
 
@@ -561,6 +606,7 @@ export default class Lens extends View {
     if (this.placement?.board === board && this.placement.key === key) return false;
     this.place = L.placeJobs([...board.jobs, ...board.cards], desk, this.repoTopics, { terminals: owners, chiefs });
     this.placement = { board, key, desk };
+    if (this.following) this.lastFocus = null;
     return true;
   }
 
@@ -1200,6 +1246,7 @@ export default class Lens extends View {
     this.currentJob = null;
     this.rows = [];
     this.level = this.pinned ? "job" : "factory";
+    if (this.resolving && !this.net.data) return this.root(t, []);
     if (!this.endpoint) {
       return this.root(t, [message(t, "sympp isn't connected", "Give this block an endpoint prop with the local sympp address, for example http://127.0.0.1:4000.")]);
     }
