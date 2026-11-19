@@ -47,7 +47,7 @@ import * as O from "./overview.js";
 import * as Lv from "./scopeview.js";
 import { studioView } from "./studioview.js";
 import { ChiefStart, ChiefMenu } from "./chiefview.js";
-import { CHIEF_SESSIONS, CHIEF_SPACES, FACTORY_ROOT, chiefSession, chiefRunning } from "./chief.js";
+import { CHIEF_SESSIONS, CHIEF_SPACES, chiefSession, chiefRunning } from "./chief.js";
 
 const TICK = 5000;
 const REPAINT = 30000;
@@ -114,9 +114,15 @@ export default class Lens extends View {
     const own = p ?? props() ?? {};
     const stored = own.endpoint ? null : shared(CONNECTION);
     const given = stored && typeof stored === "object" ? { ...stored, ...own } : own;
-    const endpoint = M.normalizeEndpoint(given.endpoint);
+    const runtime = given.remote ? null : given.hosts?.local?.runtime;
+    const configured = M.normalizeEndpoint(given.endpoint);
+    // A local runtime can choose a different listening port. Copies opened with its configuration
+    // can find the last read under the same runtime file, as well as under the actual endpoint.
+    const readKey = runtime ? `runtime:${runtime}` : configured;
+    const cached = boardReads.get(readKey);
+    const endpoint = cached?.endpoint ?? configured;
     if (own.role === "chief" || own.role === "chief-menu") {
-      const factoryRoot = () => boardReads.has(endpoint) ? boardReads.get(endpoint).board.reposRoot : shared(FACTORY_ROOT);
+      const factoryRoot = () => boardReads.get(readKey)?.board.reposRoot ?? null;
       this.chief = own.role === "chief" ? new ChiefStart(own, endpoint, factoryRoot, cx) : new ChiefMenu(own, cx);
       return;
     }
@@ -138,8 +144,8 @@ export default class Lens extends View {
     this.dashboard = M.dashboardUrl(this.endpoint, given.dashboardUrl);
     this.repoTopics = given.repoTopics && typeof given.repoTopics === "object" ? given.repoTopics : null;
     this.hosts = given.hosts ?? null;
+    this.readKey = readKey;
     this.request = given.remote ? remoteRequest(this.endpoint, async () => JSON.parse(await fs.readFile(`${appHome()}/sympp-remote.json`, "utf8"))) : request;
-    const cached = boardReads.get(endpoint);
     this.net = cached ? M.fetchSucceeded(M.initialFetch(), cached.board, cached.receivedAt) : M.initialFetch();
     this.payload = cached?.payload ?? null;
     this.reading = false;
@@ -162,7 +168,7 @@ export default class Lens extends View {
     this.rows = [];
     this.expanded = new Set();
     this.awaiting = null;
-    this.seenNeeds = null;
+    this.seenNeeds = cached ? L.newNeeds(null, cached.board).seen : null;
     this.painted = Date.now();
     this.keys = cx.focus_handle();
     this.intake = false;
@@ -252,9 +258,10 @@ export default class Lens extends View {
       if (turn !== this.turn) return;
       const now = Date.now();
       if (outcome.board) {
-        // Another copy may already have finished a read that started after this one.
-        if (since > (boardReads.get(this.endpoint)?.since ?? 0)) {
-          boardReads.set(this.endpoint, { board: outcome.board, payload: outcome.payload, receivedAt: now, since });
+        const snapshot = { board: outcome.board, payload: outcome.payload, receivedAt: now, since, endpoint: this.endpoint };
+        for (const key of new Set([this.endpoint, this.readKey])) {
+          // Another copy may already have finished a read that started after this one.
+          if (since > (boardReads.get(key)?.since ?? 0)) boardReads.set(key, snapshot);
         }
         outcome.board = this.drawn(outcome.payload, outcome.board, since);
       }
@@ -595,7 +602,6 @@ export default class Lens extends View {
     // A chief space that fell out of its topic goes back, where the desk keeps it unlisted.
     const home = L.homeChiefSpaces(this.deskTopics(), shared(CHIEF_SPACES), this.spaceList().map((s) => s.id));
     if (home) setShared("desk.topics", home);
-    if ((shared(FACTORY_ROOT) ?? null) !== board.reposRoot) setShared(FACTORY_ROOT, board.reposRoot);
   }
 
   // A running chief's session as Herdr saved it, kept once it stops so its mark can resume it. Only

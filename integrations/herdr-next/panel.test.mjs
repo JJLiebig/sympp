@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { registerHooks } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { boardPayload } from './fixture.mjs';
 
 // Run the view's real init, timer and read paths without the native renderer.
@@ -53,14 +56,22 @@ const response = (url) => ({ ok: true, status: 200, url, json: async () => board
 test('recreated panels and new tabs show the last successful board before a GET is due', async (t) => {
   const get = t.mock.method(globalThis, 'fetch', async (url) => response(url));
   const endpoint = 'http://127.0.0.1:4001';
-  const first = open({ endpoint, role: 'panel' });
+  const activeEndpoint = 'http://127.0.0.1:4011';
+  const dir = await mkdtemp(join(tmpdir(), 'sympp-panel-runtime-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const runtime = join(dir, 'runtime.json');
+  await writeFile(runtime, JSON.stringify({ backend: { url: activeEndpoint } }));
+  const first = open({ endpoint, role: 'panel', hosts: { local: { runtime } } });
   assert.equal(first.view.net.data, null);
   await first.finish();
   await first.view.close();
 
-  for (const props of [{ role: 'panel' }, { scope: { topic: 't-herdr' } }, { job: 'wr-pr' }, { studio: { job: 'wr-pr', pkg: 'wp-review' } }]) {
-    // No explicit endpoint: these views use the connection published after the first read.
+  for (const props of [
+    { role: 'panel' }, { scope: { topic: 't-herdr' } }, { job: 'wr-pr' },
+    { studio: { job: 'wr-pr', pkg: 'wp-review' } }, { endpoint: activeEndpoint },
+  ]) {
     const next = open(props);
+    assert.equal(next.view.endpoint, activeEndpoint);
     assert.ok(next.view.net.data.jobs.some((job) => job.id === 'wr-pr'));
     assert.equal(next.view.reading, false);
   }
