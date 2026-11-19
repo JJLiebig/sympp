@@ -57,7 +57,9 @@ const response = (url) => ({ ok: true, status: 200, url, json: async () => board
 
 test('recreated panels and new tabs show the last successful board before a GET is due', async (t) => {
   let refreshed = false;
+  const unreachable = 'http://127.0.0.1:4012';
   const get = t.mock.method(globalThis, 'fetch', async (url) => {
+    if (new URL(url).origin === unreachable) return { ok: false, status: 503, url };
     const result = response(url);
     const payload = await result.json();
     if (refreshed) payload.work_request_details[0].work_request.title = 'Renamed on the factory';
@@ -69,7 +71,8 @@ test('recreated panels and new tabs show the last successful board before a GET 
   t.after(() => rm(dir, { recursive: true, force: true }));
   const runtime = join(dir, 'runtime.json');
   await writeFile(runtime, JSON.stringify({ backend: { url: activeEndpoint } }));
-  const first = open({ endpoint, role: 'panel', hosts: { local: { runtime } } });
+  const localPanel = { endpoint, role: 'panel', hosts: { local: { runtime } } };
+  const first = open(localPanel);
   assert.equal(first.view.net.data, null);
   await first.finish();
   await first.view.close();
@@ -103,6 +106,17 @@ test('recreated panels and new tabs show the last successful board before a GET 
   assert.equal(other.view.net.data, null, 'another factory has its own board');
   await other.finish();
   assert.ok(open({ endpoint: otherEndpoint, role: 'panel' }).view.net.data, 'a tab can warm the panel too');
+
+  await open(localPanel).finish();
+  const inherited = open({ job: 'wr-pr' });
+  await inherited.finish();
+  assert.equal(inherited.view.endpoint, activeEndpoint, 'a warm configured panel publishes its own connection');
+
+  await writeFile(runtime, JSON.stringify({ backend: { url: unreachable } }));
+  const moved = open(localPanel);
+  await moved.finish();
+  assert.equal(moved.view.endpoint, unreachable);
+  assert.equal(moved.view.net.data, null, 'a changed origin cannot keep the previous endpoint’s board');
 });
 
 test('a failed refresh retains the board in the current view and the next one', async (t) => {

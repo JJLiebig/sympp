@@ -84,7 +84,9 @@ const STRIP = 88;
 async function runtimeEndpoint(path) {
   try {
     const runtime = JSON.parse(await fs.readFile(path, "utf8"));
-    return M.normalizeEndpoint(runtime.backend?.url);
+    const endpoint = M.normalizeEndpoint(runtime.backend?.url);
+    if (endpoint) runtimeEndpoints.set(path, endpoint);
+    return endpoint;
   } catch {
     return null;
   }
@@ -222,16 +224,25 @@ export default class Lens extends View {
     return cached;
   }
 
-  begin(endpoint, cx) {
-    this.resolving = false;
+  useEndpoint(endpoint) {
     if (this.endpoint !== endpoint) {
       this.endpoint = endpoint;
       this.dashboard = M.dashboardUrl(endpoint, this.given.dashboardUrl);
-      this.net = { ...this.net, attemptAt: null };
+      this.net = M.initialFetch();
+      this.payload = null;
+      this.taken = [];
+      this.seenNeeds = null;
+      this.leasedAt = 0;
+      this.lastFocus = null;
     }
-    const cached = this.restoreRead(endpoint);
+    return this.restoreRead(endpoint);
+  }
+
+  begin(endpoint, cx) {
+    this.resolving = false;
+    const cached = this.useEndpoint(endpoint);
     if (cached) {
-      if (this.runtime) runtimeEndpoints.set(this.runtime, endpoint);
+      if (this.ownConnection) this.shareConnection();
       this.holdLease(cached.board, Date.now(), cx);
     }
     this.updatePlacement();
@@ -279,12 +290,10 @@ export default class Lens extends View {
     this.net = M.fetchStarted(this.net, Date.now());
     cx.spawn(async (cx) => {
       let outcome;
+      let endpoint = this.endpoint;
       try {
-        if (this.runtime) {
-          const endpoint = await runtimeEndpoint(this.runtime);
-          if (endpoint) { this.endpoint = endpoint; this.dashboard = M.dashboardUrl(endpoint, this.given.dashboardUrl); }
-        }
-        const response = await this.request(M.boardUrl(this.endpoint));
+        if (this.runtime) endpoint = (await runtimeEndpoint(this.runtime)) ?? endpoint;
+        const response = await this.request(M.boardUrl(endpoint));
         if (!response.ok) outcome = { error: M.httpError(response.status) };
         else {
           const payload = await response.json().catch(() => null);
@@ -295,23 +304,24 @@ export default class Lens extends View {
           }
         }
       } catch (caught) {
-        outcome = { error: caught.userMessage || M.networkError(this.endpoint, caught), unreachable: caught.status === undefined };
+        outcome = { error: caught.userMessage || M.networkError(endpoint, caught), unreachable: caught.status === undefined };
       }
       this.reading = false;
       if (turn !== this.turn) return;
       const now = Date.now();
+      const moved = endpoint !== this.endpoint;
+      if (moved) this.useEndpoint(endpoint);
       if (outcome.board) {
         // Another copy may already have finished a read that started after this one.
         if (since > (boardReads.get(this.endpoint)?.since ?? 0)) {
           boardReads.set(this.endpoint, { board: outcome.board, payload: outcome.payload, receivedAt: now, since });
         }
-        if (this.runtime) runtimeEndpoints.set(this.runtime, this.endpoint);
         outcome.board = this.drawn(outcome.payload, outcome.board, since);
       }
       this.net = outcome.board ? M.fetchSucceeded(this.net, outcome.board, now) : M.fetchFailed(this.net, outcome.error, now);
+      if (moved || outcome.board) this.updatePlacement();
       if (outcome.unreachable) this.startServer(cx);
       if (outcome.board) {
-        this.updatePlacement();
         this.outage = false;
         this.startFailed = false;
         this.holdLease(outcome.board, now, cx);
@@ -371,7 +381,8 @@ export default class Lens extends View {
     const action = this.leasedAt ? "heartbeat" : "attach";
     this.leasedAt = now;
     cx.spawn(async () => {
-      try { if (!(await this.lease(action)).ok) this.leasedAt = 0; } catch { this.leasedAt = 0; }
+      const attached = await this.lease(action).then((response) => response.ok, () => false);
+      if (!attached && this.leasedAt === now) this.leasedAt = 0;
     });
   }
 
