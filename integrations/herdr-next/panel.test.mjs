@@ -57,9 +57,14 @@ const response = (url) => ({ ok: true, status: 200, url, json: async () => board
 
 test('recreated panels and new tabs show the last successful board before a GET is due', async (t) => {
   let refreshed = false;
+  let switching;
+  let switchedBeforeRead = false;
   const unreachable = 'http://127.0.0.1:4012';
   const get = t.mock.method(globalThis, 'fetch', async (url) => {
-    if (new URL(url).origin === unreachable) return { ok: false, status: 503, url };
+    if (new URL(url).origin === unreachable) {
+      if (switching) switchedBeforeRead = switching.endpoint === unreachable && switching.net.data === null;
+      return { ok: false, status: 503, url };
+    }
     const result = response(url);
     const payload = await result.json();
     if (refreshed) payload.work_request_details[0].work_request.title = 'Renamed on the factory';
@@ -112,7 +117,18 @@ test('recreated panels and new tabs show the last successful board before a GET 
   await inherited.finish();
   assert.equal(inherited.view.endpoint, activeEndpoint, 'a warm configured panel publishes its own connection');
 
+  const callsBeforeFallback = get.mock.callCount();
+  const fallback = open({ endpoint: activeEndpoint, hosts: { local: { runtime: join(dir, 'missing.json') } } });
+  await fallback.finish();
+  assert.ok(fallback.view.net.data);
+  assert.equal(get.mock.callCount(), callsBeforeFallback + 1, 'an unreadable runtime verifies its fallback with a GET');
+
   await writeFile(runtime, JSON.stringify({ backend: { url: unreachable } }));
+  switching = inherited.view;
+  inherited.view.retry(inherited.cx);
+  await inherited.finish();
+  assert.ok(switchedBeforeRead, 'the previous board is cleared before a GET at a different origin');
+  switching = null;
   const moved = open(localPanel);
   assert.equal(moved.view.net.data, null, 'the previous origin’s controls wait for runtime resolution');
   await moved.finish();
@@ -137,4 +153,10 @@ test('a failed refresh retains the board in the current view and the next one', 
   assert.ok(first.view.net.error);
   assert.equal(first.view.net.data, board);
   assert.equal(open(props).view.net.data, board);
+
+  available = true;
+  await first.view.send('/api/v1/sympp/herdr/asks/q1/answer', { answer: 'Ready' }, first.cx);
+  const afterWrite = open(props);
+  assert.equal(afterWrite.view.net.data, null, 'the pre-write read cannot restore old controls');
+  await afterWrite.finish();
 });
