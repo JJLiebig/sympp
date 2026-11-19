@@ -59,6 +59,9 @@ const CONNECTION = "sympp.connection";
 // furthest a live package reached; and their ask to show one in the panel, { job, at }.
 const BOARD = "sympp.board";
 const OPEN = "sympp.open";
+// Herdr keeps this module loaded when copies close. Each factory's last good read can seed
+// the next view without writing its full board to disk or waking other mods.
+const boardReads = new Map();
 // For desk-tabs' link beside the sympp panel button: the board's address, null when there is none.
 const DASHBOARD = "sympp.dashboard_url";
 // For the spaces sidebar's chief button: each Herdr topic's chiefs, { [topic id]: [{ domain,
@@ -111,8 +114,10 @@ export default class Lens extends View {
     const own = p ?? props() ?? {};
     const stored = own.endpoint ? null : shared(CONNECTION);
     const given = stored && typeof stored === "object" ? { ...stored, ...own } : own;
+    const endpoint = M.normalizeEndpoint(given.endpoint);
     if (own.role === "chief" || own.role === "chief-menu") {
-      this.chief = own.role === "chief" ? new ChiefStart(own, given.endpoint, cx) : new ChiefMenu(own, cx);
+      const factoryRoot = () => boardReads.has(endpoint) ? boardReads.get(endpoint).board.reposRoot : shared(FACTORY_ROOT);
+      this.chief = own.role === "chief" ? new ChiefStart(own, endpoint, factoryRoot, cx) : new ChiefMenu(own, cx);
       return;
     }
     this.given = given;
@@ -129,12 +134,14 @@ export default class Lens extends View {
     const scope = own.scope && typeof own.scope === "object" ? own.scope : null;
     this.scoped = Boolean(scope);
     this.pinned = typeof given.job === "string" && given.job ? given.job : null;
-    this.endpoint = M.normalizeEndpoint(given.endpoint);
+    this.endpoint = endpoint;
     this.dashboard = M.dashboardUrl(this.endpoint, given.dashboardUrl);
     this.repoTopics = given.repoTopics && typeof given.repoTopics === "object" ? given.repoTopics : null;
     this.hosts = given.hosts ?? null;
     this.request = given.remote ? remoteRequest(this.endpoint, async () => JSON.parse(await fs.readFile(`${appHome()}/sympp-remote.json`, "utf8"))) : request;
-    this.net = M.initialFetch();
+    const cached = boardReads.get(endpoint);
+    this.net = cached ? M.fetchSucceeded(M.initialFetch(), cached.board, cached.receivedAt) : M.initialFetch();
+    this.payload = cached?.payload ?? null;
     this.reading = false;
     this.turn = 0;
     this.companion = false;
@@ -166,7 +173,6 @@ export default class Lens extends View {
     this.ops = {};
     // Operator actions drawn ahead of the factory (controls.js), and the last read they are drawn on.
     this.taken = [];
-    this.payload = null;
     // This machine's core name, so the factory's "<core>/t8" addresses find their local terminals.
     this.coreName = null;
     hc(["server", "status", "--json"]).then((result) => {
@@ -175,6 +181,8 @@ export default class Lens extends View {
     }).catch(() => {});
     this.leaseId = `herdr-app-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     this.leasedAt = 0;
+    if (cached) this.holdLease(cached.board, Date.now(), cx);
+    this.updatePlacement();
     cx.timer.every(TICK, (cx) => this.tick(cx));
     this.tick(cx);
     this.started = Date.now();
@@ -243,10 +251,17 @@ export default class Lens extends View {
       this.reading = false;
       if (turn !== this.turn) return;
       const now = Date.now();
-      if (outcome.board) outcome.board = this.drawn(outcome.payload, outcome.board, since);
+      if (outcome.board) {
+        // Another copy may already have finished a read that started after this one.
+        if (since > (boardReads.get(this.endpoint)?.since ?? 0)) {
+          boardReads.set(this.endpoint, { board: outcome.board, payload: outcome.payload, receivedAt: now, since });
+        }
+        outcome.board = this.drawn(outcome.payload, outcome.board, since);
+      }
       this.net = outcome.board ? M.fetchSucceeded(this.net, outcome.board, now) : M.fetchFailed(this.net, outcome.error, now);
       if (outcome.unreachable) this.startServer(cx);
       if (outcome.board) {
+        this.updatePlacement();
         this.outage = false;
         this.startFailed = false;
         this.holdLease(outcome.board, now, cx);
@@ -467,6 +482,8 @@ export default class Lens extends View {
   // The panel follows Herdr's focus when it changes; the person's own moves stand until it does.
   follow(board, desk, cx) {
     const f = focused();
+    // A newly added space can take focus before the next placement snapshot.
+    if (f?.space && !L.spaceById(desk, f.space)) return;
     const stored = shared("sympp.jobTabs") ?? {};
     const chiefs = this.chiefTerminals(desk);
     const tabs = L.liveTabs(stored, board.jobs, panes(), chiefs, this.endpoint);
@@ -521,6 +538,32 @@ export default class Lens extends View {
 
   spaceList() {
     return spaces();
+  }
+
+  // Repository and chief placement is independent of the focused space. Prepare it outside
+  // render and keep it until the board or one of its placement inputs changes.
+  updatePlacement() {
+    const board = this.net.data;
+    if (!board || this.studio || this.pinned) return false;
+    const desk = L.deskOf(this.deskTopics(), this.spaceList().map(({ id, name, folder, machine }) => ({ id, name, folder, machine })));
+    const chiefs = shared(CHIEFS);
+    const owners = terminals().filter((t) => t.labels?.["sympp.work_request_id"] || t.labels?.["sympp.session_work_request_id"]);
+    const key = JSON.stringify([desk, chiefs, owners.map(({ address, labels }) => [
+      address, labels["sympp.work_request_id"], labels["sympp.session_work_request_id"], labels["sympp.domain"],
+    ])]);
+    if (this.placement?.board === board && this.placement.key === key) return false;
+    this.place = L.placeJobs([...board.jobs, ...board.cards], desk, this.repoTopics, { terminals: owners, chiefs });
+    this.placement = { board, key, desk };
+    return true;
+  }
+
+  schedulePlacement(cx) {
+    if (this.placementPending) return;
+    this.placementPending = true;
+    cx.timer.after(1, (cx) => {
+      this.placementPending = false;
+      if (this.updatePlacement()) cx.notify();
+    });
   }
 
   watch(key, list) {
@@ -952,7 +995,10 @@ export default class Lens extends View {
   }
 
   redraw(cx) {
-    if (this.payload && this.net.data) this.net = { ...this.net, data: this.drawn(this.payload) };
+    if (this.payload && this.net.data) {
+      this.net = { ...this.net, data: this.drawn(this.payload) };
+      this.updatePlacement();
+    }
     try { cx.notify(); } catch { /* closed meanwhile */ }
   }
 
@@ -1176,8 +1222,8 @@ export default class Lens extends View {
       return this.root(t, Lv.taskLevel(this, t, job, { board, bindings, terminals: terminals(), now, tab: true, topic: null }));
     }
 
-    const desk = L.deskOf(this.deskTopics(), this.spaceList());
-    this.place = L.placeJobs([...board.jobs, ...board.cards], desk, this.repoTopics, { terminals: terminals(), chiefs: shared(CHIEFS) });
+    this.schedulePlacement(cx);
+    const { desk } = this.placement;
     if (this.role === "panel" && !this.pin) this.follow(board, desk, cx);
     if (this.awaiting && board.jobs.some((job) => job.id === this.awaiting)) this.awaiting = null;
     const path = this.path = L.resolvePath(this.path, desk, board.jobs, this.awaiting);
