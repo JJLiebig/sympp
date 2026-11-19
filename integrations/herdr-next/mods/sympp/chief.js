@@ -90,10 +90,21 @@ export function chiefTerminal(chief, terminalList) {
 }
 
 const trimmed = (path) => path.replace(/[\\/]+$/, "");
-const parent = (path) => (/[\\/]/.test(trimmed(path)) ? trimmed(path).replace(/[\\/][^\\/]*$/, "") : "");
+const drive = (part) => /^[a-z]:$/i.test(part);
+function parent(path) {
+  const clean = trimmed(path);
+  const split = clean.search(/[\\/][^\\/]*$/);
+  if (split < 0) return "";
+  const folder = clean.slice(0, split);
+  return !folder || drive(folder) ? clean.slice(0, split + 1) : folder;
+}
 const worktree = (path) => /[\\/]\.worktrees([\\/]|$)/.test(path);
 const parts = (path) => trimmed(path).split(/[\\/]/);
-const joined = (list, like) => list.join(like.includes("\\") && !like.includes("/") ? "\\" : "/");
+function joined(list, like) {
+  const sep = like.includes("\\") && !like.includes("/") ? "\\" : "/";
+  const folder = list.join(sep);
+  return list.length === 1 && (!folder || drive(folder)) ? folder + sep : folder;
+}
 const common = (lists) => {
   let n = 0;
   while (lists.every((l) => n < l.length && l[n] === lists[0][n])) n++;
@@ -102,17 +113,17 @@ const common = (lists) => {
 
 // A space's saved folder is where its new terminals start. Its panes can be somewhere else.
 // Resolve their live folders to Git checkout roots, including when a pane is in a subdirectory.
-export async function chiefCheckouts(spaceList, paneList, gitRoot) {
+export async function chiefCheckouts(spaceList, paneList, gitRoot, batchDeadline) {
   const byTab = new Map(spaceList.flatMap((space) => space.tabs.map((tab) => [tab.id, space])));
   const showing = new Set();
   const lookups = new Map();
   function add(space, cwd) {
     if (!cwd || worktree(cwd)) return;
     const machine = space.machine ?? null;
-    const key = JSON.stringify([machine, cwd]);
-    const lookup = lookups.get(key) ?? { cwd, machine, spaces: new Set() };
-    lookup.spaces.add(space.id);
-    lookups.set(key, lookup);
+    if (!lookups.has(machine)) lookups.set(machine, new Map());
+    const folders = lookups.get(machine);
+    if (!folders.has(cwd)) folders.set(cwd, new Set());
+    folders.get(cwd).add(space.id);
   }
   for (const pane of paneList) {
     const space = byTab.get(pane.tab);
@@ -122,26 +133,34 @@ export async function chiefCheckouts(spaceList, paneList, gitRoot) {
   }
   for (const space of spaceList) if (!showing.has(space.id)) add(space, space.folder);
 
-  const pending = [...lookups.values()];
-  const checkouts = [];
-  // Herdr Core allows 16 concurrent execs per machine. Leave room for its other clients.
-  const batchSize = 8;
-  for (let i = 0; i < pending.length; i += batchSize) {
-    const batch = await Promise.all(pending.slice(i, i + batchSize).map(async ({ cwd, machine, spaces }) => {
-      const folder = await gitRoot(cwd, machine);
-      if (!folder || worktree(folder)) return [];
-      return [...spaces].map((id) => ({ id, machine, folder }));
-    }));
-    checkouts.push(...batch.flat());
-  }
-  return checkouts;
+  const byMachine = await Promise.all([...lookups].map(async ([machine, folders]) => {
+    const pending = [...folders];
+    const checkouts = [];
+    // Herdr Core allows 16 concurrent execs per machine. Leave room for its other clients.
+    const batchSize = 8;
+    for (let i = 0; i < pending.length; i += batchSize) {
+      let expired = false;
+      const batch = Promise.all(pending.slice(i, i + batchSize).map(async ([cwd, spaces]) => {
+        const folder = await gitRoot(cwd, machine);
+        if (!expired && folder && !worktree(folder)) {
+          for (const id of spaces) checkouts.push({ id, machine, folder });
+        }
+      }));
+      const deadline = batchDeadline?.(machine);
+      await (deadline ? Promise.race([batch, deadline.then(() => { expired = true; })]) : batch);
+      // Keep the results that arrived and put no more work on a stalled machine.
+      if (expired) break;
+    }
+    return checkouts;
+  }));
+  return byMachine.flat();
 }
 
 const contains = (root, folder) => root.every((part, i) => part === folder[i]);
 
-function commonFolder(folders) {
+function commonFolder(folders, includeFilesystemRoot = false) {
   const path = folders.length ? common(folders.map(parts)) : [];
-  return path.length > 1 ? joined(path, folders[0]) : null;
+  return path.length >= (includeFilesystemRoot ? 1 : 2) ? joined(path, folders[0]) : null;
 }
 
 function checkoutHolders(checkouts, machine) {
@@ -182,9 +201,9 @@ export function chiefFolders(topicCheckouts, allCheckouts, machine, factory = nu
       const source = s.machine ?? null;
       return folder && mapHolder(folder, reportedRoot(source), observedRoot(source), root, root === factoryTarget);
     }).filter(Boolean);
-    return commonFolder([...local, ...mapped]);
+    return commonFolder([...local, ...mapped], true);
   });
-  return [...new Set([...candidates, commonFolder(local), ...targets].filter(Boolean))];
+  return [...new Set([...candidates, commonFolder(local, true), ...targets].filter(Boolean))];
 }
 
 // Herdr's topics with the space added to the end of the topic and the topic unfolded; null when the
