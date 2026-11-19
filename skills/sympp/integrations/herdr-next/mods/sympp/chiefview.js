@@ -10,7 +10,7 @@
 import { div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input, Button } from "gpui-base";
 import { theme, props, closeOverlay, openOverlay, knownAgents, machines, spaces, terminals, panes, shared, setShared, exec, hc, home, layout, run, settings } from "herdr";
-import { chiefBrief, chiefArgv, chiefLabelArgs, chiefSpaceName, factoryMachine, chiefFolders, intoTopic, isChiefSpace, CHIEF_SPACES, chiefMenu,
+import { chiefBrief, chiefArgv, chiefLabelArgs, chiefSpaceName, factoryMachine, chiefCheckouts, chiefFolders, intoTopic, isChiefSpace, CHIEF_SPACES, chiefMenu,
   CHIEF_SESSIONS, FACTORY_ROOT, canResume, chiefRunning, machineOf, resumeArgv } from "./chief.js";
 
 const W = 560;
@@ -183,9 +183,17 @@ export class ChiefStart {
     cx.spawn(async (cx) => {
       try {
         const { all, topicSpaces } = this.where(machine);
+        const topicIds = new Set(topicSpaces.map((s) => s.id));
+        const relevantMachines = new Set([machine, ...topicSpaces.map((s) => s.machine ?? null)]);
+        const checkoutSpaces = all.filter((s) => relevantMachines.has(s.machine ?? null));
+        const timeout = 4;
+        const checkouts = await chiefCheckouts(checkoutSpaces, panes(), (cwd, on) =>
+          exec("git", ["rev-parse", "--show-toplevel"], { cwd, on, timeout }).then((r) => r.code === 0 ? r.stdout.trim() : null, () => null),
+        () => cx.sleep(timeout * 1000));
+        const topicCheckouts = checkouts.filter((s) => topicIds.has(s.id));
         const factory = this.finding ? null : { machine: this.factory, root: shared(FACTORY_ROOT) ?? null };
         let folder = "";
-        for (const candidate of chiefFolders(topicSpaces, all, machine, factory)) {
+        for (const candidate of chiefFolders(topicCheckouts, checkouts, machine, factory)) {
           // The folder is there when a program can start in it.
           if (await exec("git", ["--version"], { cwd: candidate, on: machine }).then((r) => r.code === 0, () => false)) { folder = candidate; break; }
         }

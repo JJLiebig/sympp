@@ -90,46 +90,120 @@ export function chiefTerminal(chief, terminalList) {
 }
 
 const trimmed = (path) => path.replace(/[\\/]+$/, "");
-const parent = (path) => (/[\\/]/.test(trimmed(path)) ? trimmed(path).replace(/[\\/][^\\/]*$/, "") : "");
+const drive = (part) => /^[a-z]:$/i.test(part);
+function parent(path) {
+  const clean = trimmed(path);
+  const split = clean.search(/[\\/][^\\/]*$/);
+  if (split < 0) return "";
+  const folder = clean.slice(0, split);
+  return !folder || drive(folder) ? clean.slice(0, split + 1) : folder;
+}
 const worktree = (path) => /[\\/]\.worktrees([\\/]|$)/.test(path);
 const parts = (path) => trimmed(path).split(/[\\/]/);
-const joined = (list, like) => list.join(like.includes("\\") && !like.includes("/") ? "\\" : "/");
+function joined(list, like) {
+  const sep = like.includes("\\") && !like.includes("/") ? "\\" : "/";
+  const folder = list.join(sep);
+  return list.length === 1 && (!folder || drive(folder)) ? folder + sep : folder;
+}
 const common = (lists) => {
   let n = 0;
   while (lists.every((l) => n < l.length && l[n] === lists[0][n])) n++;
   return lists[0].slice(0, n);
 };
-// A space showing a git checkout; worktrees don't count.
-const checkout = (s) => typeof s.folder === "string" && Boolean(s.folder) && Boolean(s.branch) && !worktree(s.folder);
 
-// A machine's repos root, from its own spaces: where the folders holding its checkouts meet. Null
-// when it shows no checkout, or they only meet at the top of the file system.
-export function reposRoot(spaceList, machine) {
-  const holders = spaceList.filter((s) => checkout(s) && (s.machine ?? null) === machine).map((s) => parent(s.folder)).filter(Boolean);
-  const root = holders.length ? common(holders.map(parts)) : [];
-  return root.length > 1 ? joined(root, holders[0]) : null;
+// A space's saved folder is where its new terminals start. Its panes can be somewhere else.
+// Resolve their live folders to Git checkout roots, including when a pane is in a subdirectory.
+export async function chiefCheckouts(spaceList, paneList, gitRoot, batchDeadline) {
+  const byTab = new Map(spaceList.flatMap((space) => space.tabs.map((tab) => [tab.id, space])));
+  const showing = new Set();
+  const lookups = new Map();
+  function add(space, cwd) {
+    if (!cwd || worktree(cwd)) return;
+    const machine = space.machine ?? null;
+    if (!lookups.has(machine)) lookups.set(machine, new Map());
+    const folders = lookups.get(machine);
+    if (!folders.has(cwd)) folders.set(cwd, new Set());
+    folders.get(cwd).add(space.id);
+  }
+  for (const pane of paneList) {
+    const space = byTab.get(pane.tab);
+    if (!space || !pane.cwd) continue;
+    showing.add(space.id);
+    add(space, pane.cwd);
+  }
+  for (const space of spaceList) if (!showing.has(space.id)) add(space, space.folder);
+
+  const byMachine = await Promise.all([...lookups].map(async ([machine, folders]) => {
+    const pending = [...folders];
+    const checkouts = [];
+    // Herdr Core allows 16 concurrent execs per machine. Leave room for its other clients.
+    const batchSize = 8;
+    for (let i = 0; i < pending.length; i += batchSize) {
+      let expired = false;
+      const batch = Promise.all(pending.slice(i, i + batchSize).map(async ([cwd, spaces]) => {
+        const folder = await gitRoot(cwd, machine);
+        if (!expired && folder && !worktree(folder)) {
+          for (const id of spaces) checkouts.push({ id, machine, folder });
+        }
+      }));
+      const deadline = batchDeadline?.(machine);
+      await (deadline ? Promise.race([batch, deadline.then(() => { expired = true; })]) : batch);
+      // Keep the results that arrived and put no more work on a stalled machine.
+      if (expired) break;
+    }
+    return checkouts;
+  }));
+  return byMachine.flat();
 }
 
-// Where the chief starts on its machine, best first: the folder holding the topic's checkouts (where
-// those folders meet, on whichever machines they are), at the same place under the chief machine's
-// repos root as under their own; else that repos root. Empty: the machine's home. A machine's repos
-// roots, best first: the factory's own (factory: { machine, root }) on the factory's machine when it
-// reports one, then the one its spaces show; a checkout counts under the first that holds it.
-// topicSpaces leaves out the topic's chief spaces.
-export function chiefFolders(topicSpaces, allSpaces, machine, factory = null) {
-  const own = (m) => (factory?.root && factory.machine !== undefined && (factory.machine ?? null) === m ? [factory.root] : []);
-  const roots = (m) => [...own(m), reposRoot(allSpaces, m)].filter(Boolean);
-  const targets = roots(machine);
-  if (!targets.length) return [];
-  const places = [];
-  for (const s of topicSpaces.filter(checkout)) {
-    const holder = parts(parent(s.folder));
-    const base = roots(s.machine ?? null).map(parts).find((b) => holder.length >= b.length && b.every((p, i) => p === holder[i]));
-    if (base) places.push(holder.slice(base.length));
+const contains = (root, folder) => root.every((part, i) => part === folder[i]);
+
+function commonFolder(folders, includeFilesystemRoot = false) {
+  const path = folders.length ? common(folders.map(parts)) : [];
+  return path.length >= (includeFilesystemRoot ? 1 : 2) ? joined(path, folders[0]) : null;
+}
+
+function checkoutHolders(checkouts, machine) {
+  return checkouts.filter((s) => (s.machine ?? null) === machine).map((s) => parent(s.folder)).filter(Boolean);
+}
+
+function mapHolder(folder, reportedRoot, observedRoot, root, reportedTarget) {
+  const holder = parts(folder);
+  const reported = reportedRoot && parts(reportedRoot);
+  const known = reported && contains(reported, holder) ? reported : null;
+  const observed = observedRoot && parts(observedRoot);
+  const source = known ?? observed;
+  const target = parts(root);
+  // Inferred roots can end inside a team folder. Align them at the nearest shared ancestor name.
+  // A reported factory root fixes that machine's side of the mapping.
+  const first = reportedTarget ? target.length - 1 : 1;
+  for (let i = target.length - 1; i >= first; i--) {
+    const anchor = known ? (known.at(-1) === target[i] ? known.length - 1 : -1)
+      : (observed || holder).lastIndexOf(target[i]);
+    if (anchor > 0) return joined([...target.slice(0, i + 1), ...holder.slice(anchor + 1)], root);
   }
-  const place = places.length ? common(places) : [];
-  const folders = targets.flatMap((root) => (place.length ? [joined([...parts(root), ...place], root), root] : [root]));
-  return folders.filter((f, i) => folders.indexOf(f) === i);
+  return source && contains(source, holder) ? joined([...target, ...holder.slice(source.length)], root) : null;
+}
+
+// Try the topic's common holder on the chief's machine, translating checkout holders from other
+// machines relative to their repos roots. The factory's reported root precedes the root inferred
+// from other checkouts. With no topic holder, try the machine's repos roots before home.
+export function chiefFolders(topicCheckouts, allCheckouts, machine, factory = null) {
+  const reportedRoot = (m) => factory?.root && factory.machine === m ? factory.root : null;
+  const observedRoot = (m) => commonFolder(checkoutHolders(allCheckouts, m));
+  const factoryTarget = reportedRoot(machine);
+  const targets = [factoryTarget, observedRoot(machine)].filter(Boolean);
+  const local = checkoutHolders(topicCheckouts, machine);
+  const remote = topicCheckouts.filter((s) => (s.machine ?? null) !== machine);
+  const candidates = targets.map((root) => {
+    const mapped = remote.map((s) => {
+      const folder = parent(s.folder);
+      const source = s.machine ?? null;
+      return folder && mapHolder(folder, reportedRoot(source), observedRoot(source), root, root === factoryTarget);
+    }).filter(Boolean);
+    return commonFolder([...local, ...mapped], true);
+  });
+  return [...new Set([...candidates, commonFolder(local, true), ...targets].filter(Boolean))];
 }
 
 // Herdr's topics with the space added to the end of the topic and the topic unfolded; null when the
