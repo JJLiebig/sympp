@@ -204,7 +204,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
   def launch_line(%WorkPackage{} = work_package, worktree_path, assignment_file, agent) do
     review_label = if work_package.review_id, do: ["--label", "sympp.review_id=" <> work_package.review_id], else: []
 
-    machine_args = if work_package.launch_machine == HerdrCore.machine_name(), do: [], else: ["--on", work_package.launch_machine]
+    machine = work_package.launch_machine
+    machine_args = if machine == HerdrCore.machine_name(), do: [], else: ["--on", machine]
 
     (["hc", "run", "--bg"] ++
        machine_args ++
