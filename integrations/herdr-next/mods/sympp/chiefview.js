@@ -11,7 +11,7 @@ import { div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input, Button } from "gpui-base";
 import { theme, props, closeOverlay, openOverlay, knownAgents, machines, spaces, terminals, panes, shared, setShared, exec, hc, home, layout, run, settings } from "herdr";
 import { chiefBrief, chiefArgv, chiefLabelArgs, chiefSpaceName, factoryMachine, chiefCheckouts, chiefFolders, intoTopic, isChiefSpace, CHIEF_SPACES, chiefMenu,
-  CHIEF_SESSIONS, FACTORY_ROOT, canResume, chiefRunning, machineOf, resumeArgv } from "./chief.js";
+  CHIEF_SESSIONS, canResume, chiefRunning, machineOf, resumeArgv } from "./chief.js";
 
 const W = 560;
 const H = 46;
@@ -54,7 +54,7 @@ function find(node, id) {
 }
 
 export class ChiefStart {
-  constructor(own, endpoint, cx) {
+  constructor(own, endpoint, factoryRoot, cx) {
     this.topic = own.topic;
     this.name = typeof own.name === "string" && own.name ? own.name : "Topic";
     this.phase = "ask";
@@ -67,6 +67,7 @@ export class ChiefStart {
     this.machine = null;
     // The factory's machine is still being looked up; until then, or a pick, nothing starts.
     this.finding = true;
+    this.factoryRoot = factoryRoot;
     this.input = InputState.new({ placeholder: `Start ${this.name} chief…` });
     this.input.on("submit", (_e, cx) => this.start(cx));
     this.handle = cx.focus_handle();
@@ -191,7 +192,7 @@ export class ChiefStart {
           exec("git", ["rev-parse", "--show-toplevel"], { cwd, on, timeout }).then((r) => r.code === 0 ? r.stdout.trim() : null, () => null),
         () => cx.sleep(timeout * 1000));
         const topicCheckouts = checkouts.filter((s) => topicIds.has(s.id));
-        const factory = this.finding ? null : { machine: this.factory, root: shared(FACTORY_ROOT) ?? null };
+        const factory = this.finding ? null : { machine: this.factory, root: await this.factoryRoot() };
         let folder = "";
         for (const candidate of chiefFolders(topicCheckouts, checkouts, machine, factory)) {
           // The folder is there when a program can start in it.

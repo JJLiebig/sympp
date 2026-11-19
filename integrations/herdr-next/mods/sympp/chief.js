@@ -33,10 +33,6 @@ export const CHIEF_SESSIONS = "sympp.chief.sessions";
 // How long a chief Start chief just started counts as running before its agent shows in its terminal.
 const STARTING = 30e3;
 
-// The factory's repos root as it reports it (its SYMPP_REPOS_ROOT), shared by the sympp panel; null
-// when it has none.
-export const FACTORY_ROOT = "sympp.factory.root";
-
 // A running chief's terminal as a CHIEF_SESSIONS entry, when its agent saved a session it can resume.
 export function chiefSession(term) {
   const agent = term?.program?.key, session = term?.resume_session;

@@ -47,7 +47,7 @@ import * as O from "./overview.js";
 import * as Lv from "./scopeview.js";
 import { studioView } from "./studioview.js";
 import { ChiefStart, ChiefMenu } from "./chiefview.js";
-import { CHIEF_SESSIONS, CHIEF_SPACES, FACTORY_ROOT, chiefSession, chiefRunning } from "./chief.js";
+import { CHIEF_SESSIONS, CHIEF_SPACES, chiefSession, chiefRunning } from "./chief.js";
 
 const TICK = 5000;
 const REPAINT = 30000;
@@ -59,6 +59,9 @@ const CONNECTION = "sympp.connection";
 // furthest a live package reached; and their ask to show one in the panel, { job, at }.
 const BOARD = "sympp.board";
 const OPEN = "sympp.open";
+// Herdr keeps this module loaded when copies close. Each factory's last good read can seed
+// the next view without writing its full board to disk or waking other mods.
+const boardReads = new Map();
 // For desk-tabs' link beside the sympp panel button: the board's address, null when there is none.
 const DASHBOARD = "sympp.dashboard_url";
 // For the spaces sidebar's chief button: each Herdr topic's chiefs, { [topic id]: [{ domain,
@@ -76,6 +79,24 @@ const LEASE = 60e3;
 // The studio's own pane shrinks to its header, under Herdr's pane header, while a native preview
 // shows below it.
 const STRIP = 88;
+
+function factoryReads(endpoint) {
+  let factory = boardReads.get(endpoint);
+  if (!factory) {
+    factory = { latest: null, writes: 0, lastWrite: 0 };
+    boardReads.set(endpoint, factory);
+  }
+  return factory;
+}
+
+async function runtimeEndpoint(path) {
+  try {
+    const runtime = JSON.parse(await fs.readFile(path, "utf8"));
+    return M.normalizeEndpoint(runtime.backend?.url);
+  } catch {
+    return null;
+  }
+}
 
 // Removes a preview copy: a flat mods/sympp-dev-* folder, never another mod.
 async function removeCopy(name) {
@@ -111,8 +132,14 @@ export default class Lens extends View {
     const own = p ?? props() ?? {};
     const stored = own.endpoint ? null : shared(CONNECTION);
     const given = stored && typeof stored === "object" ? { ...stored, ...own } : own;
+    const runtime = given.remote ? null : given.hosts?.local?.runtime;
+    const endpoint = M.normalizeEndpoint(given.endpoint);
     if (own.role === "chief" || own.role === "chief-menu") {
-      this.chief = own.role === "chief" ? new ChiefStart(own, given.endpoint, cx) : new ChiefMenu(own, cx);
+      const factoryRoot = async () => {
+        const current = runtime ? await runtimeEndpoint(runtime) : endpoint;
+        return boardReads.get(current)?.latest?.board.reposRoot ?? null;
+      };
+      this.chief = own.role === "chief" ? new ChiefStart(own, endpoint, factoryRoot, cx) : new ChiefMenu(own, cx);
       return;
     }
     this.given = given;
@@ -129,12 +156,15 @@ export default class Lens extends View {
     const scope = own.scope && typeof own.scope === "object" ? own.scope : null;
     this.scoped = Boolean(scope);
     this.pinned = typeof given.job === "string" && given.job ? given.job : null;
-    this.endpoint = M.normalizeEndpoint(given.endpoint);
+    this.endpoint = endpoint;
     this.dashboard = M.dashboardUrl(this.endpoint, given.dashboardUrl);
     this.repoTopics = given.repoTopics && typeof given.repoTopics === "object" ? given.repoTopics : null;
     this.hosts = given.hosts ?? null;
+    this.runtime = runtime;
     this.request = given.remote ? remoteRequest(this.endpoint, async () => JSON.parse(await fs.readFile(`${appHome()}/sympp-remote.json`, "utf8"))) : request;
     this.net = M.initialFetch();
+    this.payload = null;
+    this.cachedSince = null;
     this.reading = false;
     this.turn = 0;
     this.companion = false;
@@ -166,7 +196,7 @@ export default class Lens extends View {
     this.ops = {};
     // Operator actions drawn ahead of the factory (controls.js), and the last read they are drawn on.
     this.taken = [];
-    this.payload = null;
+    this.writeFinishes = new Set();
     // This machine's core name, so the factory's "<core>/t8" addresses find their local terminals.
     this.coreName = null;
     hc(["server", "status", "--json"]).then((result) => {
@@ -175,6 +205,48 @@ export default class Lens extends View {
     }).catch(() => {});
     this.leaseId = `herdr-app-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     this.leasedAt = 0;
+    if (runtime) {
+      // Resolve the current origin before displaying its controls or starting a read or lease.
+      this.resolving = true;
+      cx.spawn(async (cx) => {
+        const current = await runtimeEndpoint(runtime);
+        this.begin(current ?? endpoint, cx, current !== null);
+        cx.notify();
+      });
+    } else {
+      this.begin(endpoint, cx);
+    }
+  }
+
+  useEndpoint(endpoint, restore = true) {
+    if (this.endpoint !== endpoint) {
+      this.endpoint = endpoint;
+      this.dashboard = M.dashboardUrl(endpoint, this.given.dashboardUrl);
+      this.net = M.initialFetch();
+      this.payload = null;
+      this.cachedSince = null;
+      this.taken = [];
+      this.seenNeeds = null;
+      this.leasedAt = 0;
+      this.lastFocus = null;
+    }
+    const cached = restore ? boardReads.get(endpoint)?.latest : null;
+    if (!cached) return null;
+    this.cachedSince = cached.since;
+    this.payload = cached.payload;
+    this.net = M.fetchSucceeded(this.net, cached.board, cached.receivedAt);
+    this.seenNeeds = L.newNeeds(null, cached.board).seen;
+    return cached;
+  }
+
+  begin(endpoint, cx, restore = true) {
+    this.resolving = false;
+    const cached = this.useEndpoint(endpoint, restore);
+    if (cached) {
+      if (this.ownConnection) this.shareConnection();
+      this.holdLease(cached.board, Date.now(), cx);
+    }
+    this.updatePlacement();
     cx.timer.every(TICK, (cx) => this.tick(cx));
     this.tick(cx);
     this.started = Date.now();
@@ -190,6 +262,15 @@ export default class Lens extends View {
     if (job) this.openJob(job, {}, cx);
   }
 
+  waitingForWrite() {
+    return this.cachedSince !== null && (boardReads.get(this.endpoint)?.writes ?? 0) > 0;
+  }
+
+  needsControlRead() {
+    const factory = boardReads.get(this.endpoint);
+    return this.cachedSince !== null && (factory?.writes > 0 || this.cachedSince < (factory?.lastWrite ?? 0));
+  }
+
   // Data timer: the board when due, and agent checks for whichever view has agents to reach.
   // Otherwise it repaints now and then so ages move.
   tick(cx) {
@@ -199,7 +280,8 @@ export default class Lens extends View {
     const active = appWindow()?.active !== false;
     const cadence = M.nextDelay(this.net, active);
     let busy = false;
-    if (!this.reading && M.fetchDue(this.net, now, active)) { this.read(cx); busy = true; }
+    const due = (!this.net.error && this.needsControlRead()) || M.fetchDue(this.net, now, active);
+    if (!this.reading && due && !this.waitingForWrite()) { this.read(cx); busy = true; }
     this.shareChiefs(now);
     const watch = this.withChiefs(this.agentWatch);
     if (watch && !this.checking && (this.checkedFor !== watch.key || now - this.checkedAt >= cadence)) this.checkAgents(watch, cx);
@@ -212,7 +294,7 @@ export default class Lens extends View {
 
   // One read at a time; a reply from an older read never replaces a newer one.
   read(cx) {
-    if (this.reading || !this.endpoint) return;
+    if (this.resolving || this.reading || !this.endpoint || this.waitingForWrite()) return;
     this.reading = true;
     const turn = ++this.turn;
     const since = C.readStarts();
@@ -220,12 +302,13 @@ export default class Lens extends View {
     cx.spawn(async (cx) => {
       let outcome;
       try {
-        if (!this.given.remote && this.hosts?.local?.runtime) {
-          try {
-            const runtime = JSON.parse(await fs.readFile(this.hosts.local.runtime, 'utf8'));
-            const endpoint = M.normalizeEndpoint(runtime.backend?.url);
-            if (endpoint) { this.endpoint = endpoint; this.dashboard = M.dashboardUrl(endpoint, this.given.dashboardUrl); }
-          } catch { /* The factory may not have published its runtime yet. */ }
+        if (this.runtime) {
+          const endpoint = await runtimeEndpoint(this.runtime);
+          if (endpoint && endpoint !== this.endpoint) {
+            this.useEndpoint(endpoint);
+            this.updatePlacement();
+            cx.notify();
+          }
         }
         const response = await this.request(M.boardUrl(this.endpoint));
         if (!response.ok) outcome = { error: M.httpError(response.status) };
@@ -243,10 +326,19 @@ export default class Lens extends View {
       this.reading = false;
       if (turn !== this.turn) return;
       const now = Date.now();
-      if (outcome.board) outcome.board = this.drawn(outcome.payload, outcome.board, since);
+      if (outcome.board) {
+        // Another copy may already have finished a read that started after this one.
+        const factory = factoryReads(this.endpoint);
+        if (since > (factory.latest?.since ?? 0)) {
+          factory.latest = { board: outcome.board, payload: outcome.payload, receivedAt: now, since };
+        }
+        if (!factory.writes && since > factory.lastWrite) this.cachedSince = null;
+        outcome.board = this.drawn(outcome.payload, outcome.board, since);
+      }
       this.net = outcome.board ? M.fetchSucceeded(this.net, outcome.board, now) : M.fetchFailed(this.net, outcome.error, now);
       if (outcome.unreachable) this.startServer(cx);
       if (outcome.board) {
+        this.updatePlacement();
         this.outage = false;
         this.startFailed = false;
         this.holdLease(outcome.board, now, cx);
@@ -306,7 +398,8 @@ export default class Lens extends View {
     const action = this.leasedAt ? "heartbeat" : "attach";
     this.leasedAt = now;
     cx.spawn(async () => {
-      try { if (!(await this.lease(action)).ok) this.leasedAt = 0; } catch { this.leasedAt = 0; }
+      const attached = await this.lease(action).then((response) => response.ok, () => false);
+      if (!attached && this.leasedAt === now) this.leasedAt = 0;
     });
   }
 
@@ -317,6 +410,9 @@ export default class Lens extends View {
   }
 
   async close() {
+    // A fetch owned by this view may never settle after closing. A new view can verify its result
+    // with a board read without waiting on that promise.
+    for (const finish of this.writeFinishes ?? []) finish();
     if (this.leasedAt) await this.lease("detach").catch(() => null);
   }
 
@@ -410,6 +506,7 @@ export default class Lens extends View {
   // Moving to a level. Following focus never takes the keyboard; the person's own moves do.
   go(path, cx, { pkg = null, follow = false } = {}) {
     this.path = { topic: path.topic ?? null, space: path.space ?? null, job: path.job ?? null };
+    this.following = follow;
     this.cursor = null;
     this.pkgSel = pkg;
     this.review = null;
@@ -467,6 +564,8 @@ export default class Lens extends View {
   // The panel follows Herdr's focus when it changes; the person's own moves stand until it does.
   follow(board, desk, cx) {
     const f = focused();
+    // A newly added space can take focus before the next placement snapshot.
+    if (f?.space && !L.spaceById(desk, f.space)) return;
     const stored = shared("sympp.jobTabs") ?? {};
     const chiefs = this.chiefTerminals(desk);
     const tabs = L.liveTabs(stored, board.jobs, panes(), chiefs, this.endpoint);
@@ -478,6 +577,7 @@ export default class Lens extends View {
     if (seen === this.lastFocus) return;
     this.lastFocus = seen;
     const next = L.followPath(L.focusTarget(f, terminals(), tabs, panes(), chiefs), board.jobs, desk, this.place);
+    this.following = Boolean(next);
     if (next && JSON.stringify(next) !== JSON.stringify(this.path)) this.go(next, cx, { follow: true });
   }
 
@@ -523,6 +623,33 @@ export default class Lens extends View {
     return spaces();
   }
 
+  // Repository and chief placement is independent of the focused space. Prepare it outside
+  // render and keep it until the board or one of its placement inputs changes.
+  updatePlacement() {
+    const board = this.net.data;
+    if (!board || this.studio || this.pinned) return false;
+    const desk = L.deskOf(this.deskTopics(), this.spaceList().map(({ id, name, folder, machine }) => ({ id, name, folder, machine })));
+    const chiefs = shared(CHIEFS);
+    const owners = terminals().filter((t) => t.labels?.["sympp.work_request_id"] || t.labels?.["sympp.session_work_request_id"]);
+    const key = JSON.stringify([desk, chiefs, owners.map(({ address, labels }) => [
+      address, labels["sympp.work_request_id"], labels["sympp.session_work_request_id"], labels["sympp.domain"],
+    ])]);
+    if (this.placement?.board === board && this.placement.key === key) return false;
+    this.place = L.placeJobs([...board.jobs, ...board.cards], desk, this.repoTopics, { terminals: owners, chiefs });
+    this.placement = { board, key, desk };
+    if (this.following) this.lastFocus = null;
+    return true;
+  }
+
+  schedulePlacement(cx) {
+    if (this.placementPending) return;
+    this.placementPending = true;
+    cx.timer.after(1, (cx) => {
+      this.placementPending = false;
+      if (this.updatePlacement()) cx.notify();
+    });
+  }
+
   watch(key, list) {
     this.agentWatch = { key, bindings: list.filter((b, i) => list.findIndex((o) => o.address === b.address) === i) };
   }
@@ -552,7 +679,6 @@ export default class Lens extends View {
     // A chief space that fell out of its topic goes back, where the desk keeps it unlisted.
     const home = L.homeChiefSpaces(this.deskTopics(), shared(CHIEF_SPACES), this.spaceList().map((s) => s.id));
     if (home) setShared("desk.topics", home);
-    if ((shared(FACTORY_ROOT) ?? null) !== board.reposRoot) setShared(FACTORY_ROOT, board.reposRoot);
   }
 
   // A running chief's session as Herdr saved it, kept once it stops so its mark can resume it. Only
@@ -889,7 +1015,7 @@ export default class Lens extends View {
     cx.spawn(async (cx) => {
       const submission = C.submitAction(this.creation, async () => {
         const fields = Object.fromEntries(Object.entries(this.draft).map(([key, input]) => [key, input.value()]));
-        const payload = await C.postAction(this.endpoint, "/api/v1/sympp/herdr/work-requests", C.requestBody(fields), this.request);
+        const payload = await this.operatorPost(this.endpoint, "/api/v1/sympp/herdr/work-requests", C.requestBody(fields));
         const id = payload.work_request?.work_request?.id;
         if (!id) throw new Error("The job was submitted but its ID is missing. Refresh before submitting again.");
         return id;
@@ -952,14 +1078,35 @@ export default class Lens extends View {
   }
 
   redraw(cx) {
-    if (this.payload && this.net.data) this.net = { ...this.net, data: this.drawn(this.payload) };
+    if (this.payload && this.net.data) {
+      this.net = { ...this.net, data: this.drawn(this.payload) };
+      this.updatePlacement();
+    }
     try { cx.notify(); } catch { /* closed meanwhile */ }
   }
 
   // One operator POST on this factory's native routes. Its outcome shows at once; the read that follows
   // its answer draws the factory's own word.
   send(path, body, cx) {
-    return C.take(this.taken, C.actionOf(path, body), () => C.postAction(this.endpoint, path, body, this.request), () => this.redraw(cx));
+    const endpoint = this.endpoint;
+    if (this.needsControlRead()) return Promise.reject(new Error("Refresh the board before trying again."));
+    return C.take(this.taken, C.actionOf(path, body), () => this.operatorPost(endpoint, path, body),
+      () => { if (this.endpoint === endpoint) this.redraw(cx); });
+  }
+
+  async operatorPost(endpoint, path, body) {
+    if (this.endpoint !== endpoint || this.needsControlRead()) throw new Error("Refresh the board before trying again.");
+    this.cachedSince = null;
+    const factory = factoryReads(endpoint);
+    factory.writes += 1;
+    const finish = () => {
+      if (!this.writeFinishes.delete(finish)) return;
+      factory.writes -= 1;
+      factory.lastWrite = C.readStarts();
+    };
+    this.writeFinishes.add(finish);
+    try { return await C.postAction(endpoint, path, body, this.request); }
+    finally { finish(); }
   }
 
   // One operator action, then a fresh read. A refusal stays beside the control that sent it; `refused`
@@ -1148,6 +1295,7 @@ export default class Lens extends View {
     this.currentJob = null;
     this.rows = [];
     this.level = this.pinned ? "job" : "factory";
+    if (this.resolving && !this.net.data) return this.root(t, []);
     if (!this.endpoint) {
       return this.root(t, [message(t, "sympp isn't connected", "Give this block an endpoint prop with the local sympp address, for example http://127.0.0.1:4000.")]);
     }
@@ -1176,8 +1324,8 @@ export default class Lens extends View {
       return this.root(t, Lv.taskLevel(this, t, job, { board, bindings, terminals: terminals(), now, tab: true, topic: null }));
     }
 
-    const desk = L.deskOf(this.deskTopics(), this.spaceList());
-    this.place = L.placeJobs([...board.jobs, ...board.cards], desk, this.repoTopics, { terminals: terminals(), chiefs: shared(CHIEFS) });
+    this.schedulePlacement(cx);
+    const { desk } = this.placement;
     if (this.role === "panel" && !this.pin) this.follow(board, desk, cx);
     if (this.awaiting && board.jobs.some((job) => job.id === this.awaiting)) this.awaiting = null;
     const path = this.path = L.resolvePath(this.path, desk, board.jobs, this.awaiting);

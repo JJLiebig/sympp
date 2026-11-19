@@ -46,10 +46,11 @@ export function spaceById(desk, id) {
 }
 
 // Explicit repository mappings first, then every topic with a space on that repository.
-function topicsOfRepo(repo, desk, repoTopics) {
+function topicsOfRepo(repo, desk, repoTopics, byRepo) {
   const explicit = repoTopics && typeof repoTopics === "object" ? repoTopics[repo] ?? repoTopics[shortRepo(repo)] : undefined;
   if (typeof explicit === "string") return desk.filter((t) => t.kind === "topic" && (t.id === explicit || t.name === explicit));
   const key = keyOf(repo);
+  if (byRepo) return byRepo.get(key) ?? [];
   return key ? desk.filter((t) => t.spaces.some((s) => spaceRepo(s) === key)) : [];
 }
 
@@ -86,12 +87,22 @@ export function domainTopic(domain, desk, registered) {
 export function placeJobs(jobs, desk, repoTopics, owners = {}) {
   const home = new Map();
   const repos = new Map();
+  const byRepo = new Map();
+  for (const topic of desk) {
+    for (const key of new Set(topic.spaces.map(spaceRepo).filter(Boolean))) {
+      if (!byRepo.has(key)) byRepo.set(key, []);
+      byRepo.get(key).push(topic);
+    }
+  }
+  const byDomain = new Map();
   for (const job of jobs) {
     const within = new Map();
-    const chief = domainTopic(ownerDomain(job, owners.terminals), desk, owners.chiefs);
+    const domain = ownerDomain(job, owners.terminals);
+    if (domain && !byDomain.has(domain)) byDomain.set(domain, domainTopic(domain, desk, owners.chiefs));
+    const chief = byDomain.get(domain);
     if (chief) within.set(chief, [...job.repos]);
     for (const repo of job.repos) {
-      for (const topic of topicsOfRepo(repo, desk, repoTopics)) {
+      for (const topic of topicsOfRepo(repo, desk, repoTopics, byRepo)) {
         if (!within.has(topic.id)) within.set(topic.id, []);
         if (!within.get(topic.id).includes(repo)) within.get(topic.id).push(repo);
       }
