@@ -25,11 +25,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{PullRequestArtifact, PullRequestProgress}
+  alias SymphonyElixir.SymphonyPlusPlus.HerdrCore
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
-  alias SymphonyElixir.SymphonyPlusPlus.{HerdrCore, Ownership, ReviewStatus}
+  alias SymphonyElixir.SymphonyPlusPlus.ReviewStatus
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, WorkPackage}
 
   @type review :: :done | :none | :pending | :unknown
