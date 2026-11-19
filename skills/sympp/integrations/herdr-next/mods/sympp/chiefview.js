@@ -184,7 +184,9 @@ export class ChiefStart {
       try {
         const { all, topicSpaces } = this.where(machine);
         const topicIds = new Set(topicSpaces.map((s) => s.id));
-        const checkouts = await chiefCheckouts(all, panes(), (cwd, on) =>
+        const relevantMachines = new Set([machine, ...topicSpaces.map((s) => s.machine ?? null)]);
+        const checkoutSpaces = all.filter((s) => relevantMachines.has(s.machine ?? null));
+        const checkouts = await chiefCheckouts(checkoutSpaces, panes(), (cwd, on) =>
           exec("git", ["rev-parse", "--show-toplevel"], { cwd, on }).then((r) => r.code === 0 ? r.stdout.trim() : null, () => null));
         const topicCheckouts = checkouts.filter((s) => topicIds.has(s.id));
         const factory = this.finding ? null : { machine: this.factory, root: shared(FACTORY_ROOT) ?? null };
