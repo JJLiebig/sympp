@@ -127,6 +127,19 @@ function storedTopics() {
   }
 }
 
+// Which tasks' packages at work are folded: every task or none, apart from the ones the person
+// flipped since. Collapse all and Expand all set the rule and clear the exceptions, so tasks that
+// arrive later and other spaces follow it. Kept across restarts.
+function storedFolds() {
+  try {
+    const folds = JSON.parse(localStorage.getItem("tasks.folded") ?? "null");
+    const flipped = Array.isArray(folds?.flipped) ? folds.flipped.filter((id) => typeof id === "string") : [];
+    return { all: folds?.all === true, flipped: new Set(flipped) };
+  } catch {
+    return { all: false, flipped: new Set() };
+  }
+}
+
 export default class Lens extends View {
   init(p, cx) {
     const own = p ?? props() ?? {};
@@ -180,6 +193,7 @@ export default class Lens extends View {
     this.path = scope ? { ...TOP, topic: scope.topic ?? null, space: scope.space ?? null } : storedPath();
     this.pin = localStorage.getItem("pin") === "1";
     this.openTopics = storedTopics();
+    this.folds = storedFolds();
     this.lastFocus = null;
     this.cursor = null;
     this.rows = [];
@@ -546,6 +560,29 @@ export default class Lens extends View {
     if (this.openTopics.has(id)) this.openTopics.delete(id);
     else this.openTopics.add(id);
     try { localStorage.setItem("topics.open", JSON.stringify([...this.openTopics])); } catch { /* storage is a convenience */ }
+    cx.notify();
+  }
+
+  folded(id) {
+    return this.folds.all !== this.folds.flipped.has(id);
+  }
+
+  // Folds or opens one task's rows. Exceptions for tasks no longer on the board go.
+  toggleFold(id, cx) {
+    const jobs = new Set(this.net.data?.jobs.map((job) => job.id) ?? []);
+    const flipped = new Set([...this.folds.flipped].filter((other) => jobs.has(other)));
+    if (flipped.has(id)) flipped.delete(id);
+    else flipped.add(id);
+    this.saveFolds({ all: this.folds.all, flipped }, cx);
+  }
+
+  foldAll(all, cx) {
+    this.saveFolds({ all, flipped: new Set() }, cx);
+  }
+
+  saveFolds(folds, cx) {
+    this.folds = folds;
+    try { localStorage.setItem("tasks.folded", JSON.stringify({ all: folds.all, flipped: [...folds.flipped] })); } catch { /* storage is a convenience */ }
     cx.notify();
   }
 

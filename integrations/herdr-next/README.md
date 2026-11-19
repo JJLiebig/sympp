@@ -21,7 +21,10 @@ The view opens at the Factory: what needs you, ranked by how many packages
 wait on each answer, the decisions agents flagged for review, then one row per
 Herdr topic, whose chevron lists its open tasks in place. A topic shows each
 task touching it as its name and a strip of its packages, coloured by progress,
-and the small work (cards) on its repositories; a space shows the same for the
+with a low line under it for each package at work naming its step and what it
+waits on (you, its worker, checks, review or merge), and the small work (cards)
+on its repositories. A task's chevron folds its lines and the bar's fold button
+folds or opens every task's; each copy remembers which are folded; a space shows the same for the
 tasks on its repository. Only asks show **Needs you**: answer them in place,
 with the decision prompt's choices when there is one. A flagged decision takes
 **Ack** or **Feedback**; the factory types the feedback into the terminal that

@@ -178,6 +178,7 @@ function buildJob(detail, now) {
     lastMoveAt: Math.max(createdAt, ...packages.map((pkg) => pkg.since ?? 0)),
     deployFailed: deployFailed(request.deployments),
     phases,
+    moving: movingOf(packages, asks),
   };
   job.verdict = verdictOf(job);
   job.lane = laneOf(job, now);
@@ -353,6 +354,62 @@ function buildPackage(slice, jobRepo) {
     unmet: slice.dependency_signal?.unmet_work_package_ids ?? [],
     after: [],
   };
+}
+
+// ---------- Package progress ----------
+
+// The PR's checks as one live signal, apart from the step line: "waiting" before they start, then
+// "running", "passed" or "failed"; "unknown" when the PR's checks can't be read. Checks the PR
+// reports always show. `has_ci` comes from the local checkout's workflows, so it only decides whether
+// a repository keeps an empty slot before then. Works for packages and cards alike.
+const CHECKS = { pending: "running", passing: "passed", failing: "failed", unavailable: "unknown" };
+const REPORTED = new Set(["running", "passed", "failed"]);
+export function ciOf(item) {
+  if (item.stage === "ended" || item.state === "merged" || item.state === "done") return null;
+  const state = CHECKS[item.pr.checks] ?? "waiting";
+  return REPORTED.has(state) || item.ci === true ? state : null;
+}
+
+// A live package's way from build to merge, as the web board draws it: Build until a PR opens;
+// Review/CI is Review once a review runs and Checks before it; Ready is Merge.
+export const LIFECYCLE = ["Build", "PR", "Checks", "Review", "Merge"];
+export const REVIEW_SLOT = 3;
+export function lifecycleSlot(pkg) {
+  if (pkg.stage === "ready") return 4;
+  if (pkg.stage === "review_ci") return pkg.review.mode && pkg.review.mode !== "none" && pkg.review.state ? REVIEW_SLOT : 2;
+  return pkg.pr.number ? 1 : 0;
+}
+
+// A package at work: live, or not yet ended with an ask on it.
+export const isActive = (pkg, needsYou) => LIVE_STAGES.includes(pkg.stage) || (pkg.stage !== "ended" && needsYou);
+
+// Who or what a package at work waits on, in a word: the person while an ask names it; the worker
+// while it builds, fixes failing checks or answers review findings; else the step itself. A PR into
+// another repository waits on that repository. tone: "you", "warn" (its worker is gone or silent)
+// or "dim".
+const wait = (text, tip, tone = "dim") => ({ text, tip, tone });
+const WORKER = { live: wait("worker", "Waits on its worker"), unknown: wait("no answer", "Its worker isn't answering", "warn"),
+  finished: wait("exited", "Its worker exited", "warn") };
+export function waitsOn(pkg, needsYou) {
+  if (needsYou) return wait("you", "Waits on you", "you");
+  if (pkg.stage === "launching") return wait("starting", "Its worker is starting");
+  if (pkg.finishable) return wait(shortRepo(pkg.pr.repo), `Waiting for ${pkg.pr.repo} to merge this`);
+  if (pkg.stage === "ready") return wait("merge", "Ready to merge");
+  if (pkg.stage === "review_ci" && !pkg.failed && pkg.review.state !== "findings") {
+    if (pkg.review.state === "running") return wait("review", "Waits on its review");
+    const ci = ciOf(pkg);
+    if (ci === "running" || ci === "waiting") return wait("checks", "Waits on its checks");
+    return pkg.review.state === "done" ? wait("merge", "Reviewed, ready to merge") : wait("review", "Waits on a review");
+  }
+  return WORKER[pkg.owner?.liveness ?? "live"];
+}
+
+// A task's packages at work, in planned order, each with its lifecycle slot (null while planned)
+// and what it waits on. Worked out once per read so a scope draws them without deriving anything.
+function movingOf(packages, asks) {
+  return packages.map((pkg) => ({ pkg, needsYou: asks.some((ask) => ask.pkgId === pkg.id) }))
+    .filter(({ pkg, needsYou }) => isActive(pkg, needsYou))
+    .map(({ pkg, needsYou }) => ({ pkg, slot: pkg.stage === "planned" ? null : lifecycleSlot(pkg), waits: waitsOn(pkg, needsYou) }));
 }
 
 function reportOf(report, now) {

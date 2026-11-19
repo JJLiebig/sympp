@@ -2,27 +2,15 @@
 // narrows the tasks to its repository. Health comes from one place, each package's own evidence, so a
 // task and its drill-in can never disagree. No GPUI or Herdr imports.
 
-import { shortRepo, span, LIVE_STAGES } from "./model.js";
+import { shortRepo, span, isActive, ciOf, lifecycleSlot, REVIEW_SLOT } from "./model.js";
+export { ciOf, LIFECYCLE, REVIEW_SLOT, lifecycleSlot } from "./model.js";
 import { NOWHERE, spaceRepo, spaceById } from "./levels.js";
 
 const keyOf = (value) => shortRepo(value ?? "").toLowerCase();
 
 // Package progress carries no inferred human attention.
 export function packageEvidence(pkg, now, needsYou = false) {
-  const live = LIVE_STAGES.includes(pkg.stage);
-  return { pkg, needsYou, active: live || (pkg.stage !== "ended" && needsYou) };
-}
-
-// The PR's checks as one live signal, apart from the step line: "waiting" before they start, then
-// "running", "passed" or "failed"; "unknown" when the PR's checks can't be read. Checks the PR
-// reports always show. `has_ci` comes from the local checkout's workflows, so it only decides whether
-// a repository keeps an empty slot before then. Works for packages and cards alike.
-const CHECKS = { pending: "running", passing: "passed", failing: "failed", unavailable: "unknown" };
-const REPORTED = new Set(["running", "passed", "failed"]);
-export function ciOf(item) {
-  if (item.stage === "ended" || item.state === "merged" || item.state === "done") return null;
-  const state = CHECKS[item.pr.checks] ?? "waiting";
-  return REPORTED.has(state) || item.ci === true ? state : null;
+  return { pkg, needsYou, active: isActive(pkg, needsYou) };
 }
 
 // A task's checks at a glance: any failing, else any running, else passed once any passed. A task
@@ -40,16 +28,6 @@ export function reviewText(review) {
   const round = review.round > 1 ? `round ${review.round}` : null;
   const state = review.state === "running" ? round ?? "running" : review.state === "findings" ? "findings" : review.state;
   return [review.mode, state].filter(Boolean).join(" · ");
-}
-
-// A live package's way from build to merge, as the web board draws it: Build until a PR opens;
-// Review/CI is Review once a review runs and Checks before it; Ready is Merge.
-export const LIFECYCLE = ["Build", "PR", "Checks", "Review", "Merge"];
-export const REVIEW_SLOT = 3;
-export function lifecycleSlot(pkg) {
-  if (pkg.stage === "ready") return 4;
-  if (pkg.stage === "review_ci") return pkg.review.mode && pkg.review.mode !== "none" && pkg.review.state ? REVIEW_SLOT : 2;
-  return pkg.pr.number ? 1 : 0;
 }
 
 // Normal is the default review mode, so only the others are named.

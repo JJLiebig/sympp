@@ -43,13 +43,17 @@ function reach(v, t, el, key, open, label) {
     .on_click((_e, cx) => open(cx));
 }
 
-// A task's own tab has no level above it, so no way back.
-function bar(v, t, title, now, { create = true, back = true } = {}) {
+// A task's own tab has no level above it, so no way back. A scope with packages at work can fold
+// or open every task's rows at once (`fold`: whether all are folded, and the action).
+const FOLD = "mods/sympp/fold.svg";
+const UNFOLD = "mods/sympp/unfold.svg";
+function bar(v, t, title, now, { create = true, back = true, fold = null } = {}) {
   return h_flex().id("lens-bar").flex_none().h(44).px(v.compact ? 8 : 16).gap(4).items_center()
     .bg(tint(t.foreground, "05")).border_b(1).border_color(tint(t.foreground, "12"))
     .when(back, (el) => el.child(glyphButton(t, "lens-back", "chevron-left", "Back (Esc)", (cx) => v.goUp(cx))))
     .child(div().flex_1().min_w(0).pl(back ? 2 : 6).truncate().font_family(SANS).text_size(13.5).font_semibold().text_color(t.foreground).child(title))
     .child(O.status(v, t, now))
+    .when(Boolean(fold), (el) => el.child(glyphButton(t, "fold-all", fold.folded ? UNFOLD : FOLD, fold.folded ? "Expand all" : "Collapse all", fold.act)))
     .when(create, (el) => el.child(glyphButton(t, "new-job", "plus", "New task", (cx) => v.openIntake(cx))))
     .when(v.role === "panel", (el) => el.child(glyphButton(t, "open-big", EXPAND, "Open as a tab", (cx) => v.openBig(cx))))
     .when(v.role === "panel", (el) => el.child(glyphButton(t, "pin", v.pin ? "pin-off" : "pin",
@@ -197,6 +201,23 @@ function strip(v, t, runs, id, size = 10) {
 
 // ---------- Topic and Space ----------
 
+// Every task row keeps a slot before its name, so names line up; a task with packages at work has
+// its fold chevron there. The chevron folds the rows, the rest of the row opens the task.
+const FOLD_SLOT = 14;
+const INDENT = FOLD_SLOT + 6;
+function foldToggle(v, t, task) {
+  const { job } = task;
+  if (task.later || !job.moving.length) return div().w(FOLD_SLOT).flex_none();
+  const folded = v.folded(job.id);
+  const tip = folded ? "Show packages at work" : "Hide packages at work";
+  return Button.new(`fold-${job.id}`).flex().flex_none().items_center().justify_center().size(FOLD_SLOT + 4).m(-2).rounded(4).cursor_pointer()
+    .text_color(t.dim).hover((s) => s.bg(tint(t.foreground, "14")).text_color(t.foreground))
+    .focus((s) => s.border(1).border_color(t.accent))
+    .accessibility_label(tip).tooltip(tip)
+    .on_click((_e, cx) => { cx.stop_propagation(); v.toggleFold(job.id, cx); })
+    .child(svg(icon(folded ? "chevron-right" : "chevron-down")).size(11).flex_none());
+}
+
 function taskRow(v, t, task, wide) {
   const { job } = task;
   const quiet = task.later;
@@ -205,15 +226,33 @@ function taskRow(v, t, task, wide) {
   const runs = task.total > 0 && !quiet ? strip(v, t, task.strip, `strip-${job.id}`) : null;
   // The task's checks sit at the row's right edge, wide or narrow, in a slot kept from the start.
   const ci = quiet ? null : ciDot(v, t, job.id, task.ci, `ci-${job.id}`);
-  const head = h_flex().flex_1().min_w(0).gap(10).items_center().child(title).when(Boolean(phase), (x) => x.child(phase));
+  const head = h_flex().flex_1().min_w(0).gap(6).items_center().child(foldToggle(v, t, task))
+    .child(h_flex().flex_1().min_w(0).gap(10).items_center().child(title).when(Boolean(phase), (x) => x.child(phase)));
   const el = wide
     ? h_flex().id(`task-${job.id}`).flex_none().px(10).py(quiet ? 6 : 11).gap(24).items_center()
       .child(head).when(Boolean(runs), (x) => x.child(h_flex().w(380).flex_none().justify_end().child(runs)))
       .when(Boolean(ci), (x) => x.child(div().ml(-12).flex_none().child(ci)))
     : v_flex().id(`task-${job.id}`).flex_none().px(10).py(quiet ? 6 : 10).gap(8)
       .child(h_flex().gap(10).items_center().child(head).when(Boolean(ci), (x) => x.child(ci)))
-      .when(Boolean(runs), (x) => x.child(runs));
+      .when(Boolean(runs), (x) => x.child(div().pl(INDENT).child(runs)));
   return reach(v, t, el, `task:${job.id}`, (cx) => v.openJob(job, { pkg: task.asks.find((a) => a.pkgId)?.pkgId ?? null }, cx), job.title);
+}
+
+// A package at work, one low line under its task: its box, its name, its step and who or what it
+// waits on; in a very narrow panel the name keeps a few letters and the last column gives way. The model works the line out on each read (model.js movingOf). A click opens the task at
+// the package.
+function movingRow(v, t, job, { pkg, slot, waits }) {
+  const step = slot === null ? "Planned" : S.LIFECYCLE[slot];
+  const stepTone = slot === null ? t.dim : pkg.failed ? signal().fail : signal()[SLOT_TONE[slot]];
+  const waitTone = waits.tone === "you" ? signal().you : waits.tone === "warn" ? signal().checks : t.dim;
+  const el = h_flex().id(`moving-${pkg.id}`).flex_none().h(22).pl(10 + INDENT).pr(10).gap(8).items_center()
+    .child(box(v, t, pkg, 7, `moving-box-${pkg.id}`))
+    .child(div().flex_1().min_w(48).truncate().text_size(12.5).text_color(t.muted).child(pkg.title))
+    .child(mono(11, stepTone).w(SLOT_WIDTH).child(step))
+    .child(h_flex().id(`moving-waits-${pkg.id}`).w(64).min_w(0).flex_shrink(1).justify_end().tooltip(waits.tip)
+      .child(div().min_w(0).flex_shrink(1).truncate().font_family(MONO).text_size(11).text_color(waitTone).child(waits.text)));
+  return arriving(v, `moving:${job.id}`, pkg.id,
+    reach(v, t, el, `moving:${pkg.id}`, (cx) => v.openJob(job, { pkg: pkg.id }, cx), `${pkg.title}, ${step}. ${waits.tip}`));
 }
 
 // A task as one compact line under its topic on the Factory: its name, its phase when it isn't
@@ -262,6 +301,7 @@ function scopeRows(v, t, tasks, cards, key) {
   const rest = current.filter((task) => !task.asks.length);
   const group = (task) => arriving(v, `scope:${key}`, task.job.id, v_flex().id(`group-${task.job.id}`).flex_none()
     .child(taskRow(v, t, task, wide))
+    .children(v.folded(task.job.id) ? [] : task.job.moving.map((m) => movingRow(v, t, task.job, m)))
     .children(task.asks.map((ask) => div().pl(10).child(P.askBlock(v, t, ask.question))))
     .children(task.decisions.map((d) => div().pl(10).child(P.decisionBlock(v, t, d)))));
   return [
@@ -493,5 +533,8 @@ export function scopeLevel(v, t, ctx) {
   if (v.intake) return [bar(v, t, title, now), O.intakeForm(v, t)];
   const tasks = S.scopeTasks(path, desk, board.jobs, v.place, now);
   const cards = S.scopeCards(path, desk, board.cards, v.place);
-  return [bar(v, t, title, now), filters(v, t, path, desk), body(v, "lens-scope", scopeRows(v, t, tasks, cards, `${path.topic}:${path.space ?? ""}`), 820)];
+  const moving = tasks.filter((task) => !task.later && task.job.moving.length);
+  const folded = moving.length > 0 && moving.every((task) => v.folded(task.job.id));
+  const fold = moving.length ? { folded, act: (cx) => v.foldAll(!folded, cx) } : null;
+  return [bar(v, t, title, now, { fold }), filters(v, t, path, desk), body(v, "lens-scope", scopeRows(v, t, tasks, cards, `${path.topic}:${path.space ?? ""}`), 820)];
 }
