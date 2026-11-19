@@ -104,9 +104,11 @@ test("a topic lists each task's packages at work under it, its step and what it 
   const one = await render(t, { props: { role: 'panel' }, width: 360, board: 'busy', path, folds: { flipped: ['wr-restore'] } });
   assert.ok(one.has('task-wr-restore') && !one.has('moving-r-4') && one.has('moving-wp-build'), 'folding one task leaves the others open');
 
-  for (const width of [360, 1400]) {
-    const all = await render(t, { props: { role: 'panel' }, width, board: 'busy', path, folds: { all: true } });
-    assert.equal(all.out.includes(':id[Str("moving-'), false, `every task folds at ${width}`);
+  const wide = await render(t, { props: { scope: path }, width: 1400, board: 'busy' });
+  assert.ok(wide.has('moving-r-4') && wide.has('fold-wr-restore') && wide.has('fold-all'), 'a scope tab draws the rows too');
+  for (const props of [{ role: 'panel' }, { scope: path }]) {
+    const all = await render(t, { props, width: props.scope ? 1400 : 360, board: 'busy', path, folds: { all: true } });
+    assert.equal(all.out.includes(':id[Str("moving-'), false, `every task folds in ${JSON.stringify(props)}`);
     assert.ok(all.out.includes('tooltip[Str("Expand all")]') && all.has('task-wr-restore') && all.has('later-t-herdr:'), 'tasks and shelves stay');
   }
 });

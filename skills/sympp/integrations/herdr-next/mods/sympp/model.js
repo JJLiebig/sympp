@@ -397,9 +397,9 @@ export function waitsOn(pkg, needsYou) {
   if (pkg.stage === "ready") return wait("merge", "Ready to merge");
   if (pkg.stage === "review_ci" && !pkg.failed && pkg.review.state !== "findings") {
     if (pkg.review.state === "running") return wait("review", "Waits on its review");
+    if (pkg.pr.checks === "unavailable") return wait("checks", "Its checks can't be read", "warn");
     const ci = ciOf(pkg);
     if (ci === "running" || ci === "waiting") return wait("checks", "Waits on its checks");
-    if (ci === "unknown") return wait("checks", "Its checks can't be read", "warn");
     return pkg.review.state === "done" ? wait("merge", "Reviewed, ready to merge") : wait("review", "Waits on a review");
   }
   return WORKER[pkg.owner?.liveness ?? "live"];

@@ -104,7 +104,9 @@ The levels above a job:
   Other topics it touches name it as shared.
 - **Topic and Space:** one view. A topic shows every task touching it, once; a
   space only the tasks on its repository. Each task is its name, its strip and
-  any word for what went wrong, with its asks under it. What asks the person
+  any word for what went wrong, then a low line per package at work naming its
+  step and what it waits on, with its asks under it. Those lines fold per task or
+  all at once, and each copy remembers which are folded. What asks the person
   comes first, then what went wrong, then the rest, each by when it opened, so a
   task never moves just because it advanced. Planned and landed work folds into
   one shelf, and settled work stays in the dashboard. A chief space that fell out
