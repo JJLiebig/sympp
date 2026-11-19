@@ -153,7 +153,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
   defp pr_facts(repo, work_package, metadata, payload) do
     merged? = PullRequestProgress.merged?(payload)
     pr_state = metadata |> Map.get("state") |> normalize_state()
-    review = if merged?, do: :none, else: Qualification.review(work_package, payload["head_sha"])
+    review = if merged?, do: :none, else: Qualification.review(repo, work_package, payload["head_sha"])
 
     %{
       pr_state: pr_state,

@@ -1,5 +1,6 @@
 import { expect } from 'e2e';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { contract } from '../support/factory.js';
 import { close, head, installReviewSuite, pr, prUrl, progress, row, sync, test } from '../support/delivery.js';
@@ -715,6 +716,67 @@ test('the watcher holds work on unknown GitHub or Review Suite input and follows
   provider.set(910, pr(910, head('g')));
   await factory.tick('sweep');
   expect(await status(wp)).toBe('ready');
+});
+
+test('the watcher and manual sync read reviews locally for workers on the factory core', async ({ watched: { factory, provider } }) => {
+  const architect = await factory.client();
+  const request = await architect.request('Review routes');
+  const factoryCore = provider.core!;
+  const desktopRoute = 'operator-desktop-route';
+  const localBranch = 'feature/delivery-913';
+  const remoteBranch = 'feature/delivery-914';
+  const noCiPr = pr(915, head('c'), {
+    url: 'https://github.com/example/client/pull/915', baseRefName: 'integration', statusCheckRollup: [],
+  });
+  const [local, remote, manual] = await architect.addPackages([
+    contract('Local worker', { branch_pattern: localBranch }), contract('Remote worker', { branch_pattern: remoteBranch }),
+    contract('Local worker without CI', { repo: 'example/client', base_branch: 'integration', branch_pattern: noCiPr.headRefName }),
+  ]);
+  const dispatch = (id: string) => architect.call('dispatch_work_package', { work_package_id: id, review_mode: 'fast', machine: desktopRoute });
+  const localReview = (await dispatch(local)).work_package.review_id;
+  const remoteReview = (await dispatch(remote)).work_package.review_id;
+  const manualReview = (await dispatch(manual)).work_package.review_id;
+
+  // Bind each worker through the real terminal pass. Their addresses match,
+  // but the remote worker was bound from a different core on the same ledger.
+  const worker = (address: string, id: string) => provider.terminal({ address, state: 'live', labels: { 'sympp.role': 'worker', 'sympp.work_package_id': id } });
+  provider.core = { id: 'remote-core-id', name: 'remote-core' };
+  worker('w1', remote);
+  await factory.tick('terminals');
+  provider.core = factoryCore;
+  worker('w1', local);
+  worker('w2', manual);
+  await factory.tick('terminals');
+
+  const successor = 'rvw_local_successor';
+  const review = await installReviewSuite(factory.home);
+  await review.cycles({
+    [localReview]: { review: localReview, branch: localBranch, done: false, status: 'replan', superseded_by: { review: successor } },
+    [successor]: { review: successor, branch: localBranch, done: true, status: 'done', accepted_head: head('a') },
+    [remoteReview]: { review: remoteReview, branch: remoteBranch, done: true, status: 'done', accepted_head: head('b') },
+    [manualReview]: { review: manualReview, branch: noCiPr.headRefName, done: true, status: 'done', accepted_head: noCiPr.headRefOid },
+  });
+  provider.set(913, pr(913, head('a')));
+  provider.set(914, pr(914, head('b')));
+  provider.set(915, noCiPr);
+
+  await factory.tick('sweep');
+  const manualBeforeSync = await row(architect, request, manual);
+  const synced = await architect.call('sync_pr', { work_package_id: manual, url: noCiPr.url });
+
+  expect(new Set([factoryCore.name, hostname(), desktopRoute]).size).toBe(3);
+  expect(await row(architect, request, local)).toMatchObject({
+    raw_status: 'ready',
+    work_package: { observation_stale: [], review_signal: { evidence_id: successor, accepted_head: head('a'), status: 'passed' } },
+  });
+  expect(await row(architect, request, remote)).toMatchObject({
+    raw_status: 'dispatched',
+    work_package: { observation_stale: ['review'], review_signal: { observation_state: 'unknown' } },
+    merge_eligibility: { eligible: false, reason_codes: expect.arrayContaining(['observation_stale']) },
+  });
+  expect(manualBeforeSync.raw_status).toBe('dispatched');
+  expect(synced.work_package.status).toBe('ready');
+  expect(provider.execRoutes).toEqual([desktopRoute]);
 });
 
 test('a manual sync needs known CI once the repository has CI, unless the architect records an override for that head', async ({ watched: { factory, provider } }) => {

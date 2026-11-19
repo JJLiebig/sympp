@@ -29,6 +29,7 @@ export class Provider {
   core: { id: string; name: string } | null = { id: 'acceptance-core', name: 'acceptance' };
   readonly terminals = new Map<string, Terminal>();
   readonly sent: string[][] = [];
+  readonly execRoutes: string[] = [];
   readonly server = createServer(async (request, response) => {
     let body = '';
     for await (const chunk of request) body += chunk;
@@ -93,6 +94,10 @@ export class Provider {
     if (command === 'send') {
       this.sent.push(rest);
       return json({ ok: true });
+    }
+    if (command === 'exec' && rest[0] === '--json' && rest[1] === '--on') {
+      this.execRoutes.push(rest[2]);
+      return { stdout: '{"error":"machine_unknown"}', exitCode: 1 };
     }
     return { stdout: 'Unexpected synthetic herdr command', exitCode: 1 };
   }

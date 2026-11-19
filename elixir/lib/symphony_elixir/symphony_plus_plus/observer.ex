@@ -130,8 +130,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   One sweep of every dispatched and ready package, and of cards. Options
   (tests): `:snapshot` replaces `GitHub.Snapshot.fetch/2`, `:failing_checks`
   replaces `GitHub.Snapshot.failing_checks/3`, `:commits` replaces
-  `GitHub.Snapshot.commits/2`, `:review` replaces `ReviewStatus.read/2`;
-  `Cards.watch/2` takes its own.
+  `GitHub.Snapshot.commits/2`, `:review` replaces `ReviewStatus.read/2`.
+  `:core` replaces `HerdrCore.current/0` for reviews and cards.
   """
   @spec sweep(module(), keyword()) :: :ok
   def sweep(repo, opts \\ []) do
@@ -143,7 +143,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     watched = Enum.map(watched, &Map.put(&1, :entry, github_entry(&1)))
     {github, results} = github_results(watched, Enum.map(cards, & &1.entry), opts)
     github = with_commits(watched, github, opts)
-    reviews = review_results(Enum.map(watched, & &1.package), opts)
+    reviews = review_results(repo, Enum.map(watched, & &1.package), opts)
 
     watched =
       Enum.map(watched, fn item ->
@@ -244,13 +244,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   # Each package's review read, by id: `:none` for packages that review in mode
   # `none`; a read that times out is `:unknown`.
-  defp review_results(packages, opts) do
+  defp review_results(repo, packages, opts) do
     read = Keyword.get(opts, :review, &ReviewStatus.read/2)
     {reviewed, unreviewed} = Enum.split_with(packages, &reviewed?/1)
+    workers = Ownership.workers(repo, Enum.map(reviewed, & &1.id))
+    core = Keyword.get_lazy(opts, :core, &HerdrCore.current/0)
 
     results =
       reviewed
-      |> Task.async_stream(fn package -> {package.id, read.(package.review_id, package.launch_machine)} end,
+      |> Stream.map(fn package ->
+        route = Qualification.review_route(package.launch_machine, workers[package.id], core)
+        {package.id, package.review_id, route}
+      end)
+      |> Task.async_stream(fn {id, review_id, route} -> {id, read.(review_id, route)} end,
         max_concurrency: @review_concurrency,
         ordered: false,
         timeout: @review_timeout_ms,
