@@ -82,10 +82,10 @@ test('recreated panels and new tabs show the last successful board before a GET 
     { studio: { job: 'wr-pr', pkg: 'wp-review' } }, { endpoint: activeEndpoint },
   ]) {
     const next = open(props);
+    await next.finish();
     assert.equal(next.view.endpoint, activeEndpoint);
     assert.ok(next.view.net.data.jobs.some((job) => job.id === 'wr-pr'));
     assert.equal(next.view.reading, false);
-    await next.finish();
   }
   assert.equal(get.mock.callCount(), 1);
 
@@ -114,6 +114,7 @@ test('recreated panels and new tabs show the last successful board before a GET 
 
   await writeFile(runtime, JSON.stringify({ backend: { url: unreachable } }));
   const moved = open(localPanel);
+  assert.equal(moved.view.net.data, null, 'the previous origin’s controls wait for runtime resolution');
   await moved.finish();
   assert.equal(moved.view.endpoint, unreachable);
   assert.equal(moved.view.net.data, null, 'a changed origin cannot keep the previous endpoint’s board');

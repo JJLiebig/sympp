@@ -81,15 +81,16 @@ const LEASE = 60e3;
 // shows below it.
 const STRIP = 88;
 
-async function runtimeEndpoint(path) {
+async function runtimeEndpoint(path, fallback) {
   try {
     const runtime = JSON.parse(await fs.readFile(path, "utf8"));
     const endpoint = M.normalizeEndpoint(runtime.backend?.url);
-    if (endpoint) runtimeEndpoints.set(path, endpoint);
-    return endpoint;
-  } catch {
-    return null;
-  }
+    if (endpoint) {
+      runtimeEndpoints.set(path, endpoint);
+      return endpoint;
+    }
+  } catch { /* The runtime file can be absent while the factory starts. */ }
+  return runtimeEndpoints.get(path) ?? fallback;
 }
 
 // Removes a preview copy: a flat mods/sympp-dev-* folder, never another mod.
@@ -132,7 +133,7 @@ export default class Lens extends View {
     const endpoint = known ?? configured;
     if (own.role === "chief" || own.role === "chief-menu") {
       const factoryRoot = async () => {
-        const current = runtime ? (await runtimeEndpoint(runtime)) ?? runtimeEndpoints.get(runtime) : endpoint;
+        const current = runtime ? await runtimeEndpoint(runtime, configured) : endpoint;
         return boardReads.get(current)?.board.reposRoot ?? null;
       };
       this.chief = own.role === "chief" ? new ChiefStart(own, endpoint, factoryRoot, cx) : new ChiefMenu(own, cx);
@@ -200,28 +201,15 @@ export default class Lens extends View {
     this.leaseId = `herdr-app-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     this.leasedAt = 0;
     if (runtime) {
-      // Use a known runtime's board immediately. Resolve its current URL before the first poll or
-      // lease, including when an endpoint-only view was the first to read this factory.
+      // Resolve the current origin before displaying its controls or starting a read or lease.
       this.resolving = true;
-      this.restoreRead(known);
-      this.updatePlacement();
       cx.spawn(async (cx) => {
-        this.begin((await runtimeEndpoint(runtime)) ?? endpoint, cx);
+        this.begin(await runtimeEndpoint(runtime, configured), cx);
         cx.notify();
       });
     } else {
       this.begin(endpoint, cx);
     }
-  }
-
-  restoreRead(endpoint) {
-    const cached = boardReads.get(endpoint);
-    if (cached && cached.payload !== this.payload) {
-      const board = this.drawn(cached.payload, cached.board);
-      this.net = M.fetchSucceeded(this.net, board, cached.receivedAt);
-      this.seenNeeds = L.newNeeds(null, board).seen;
-    }
-    return cached;
   }
 
   useEndpoint(endpoint) {
@@ -235,7 +223,13 @@ export default class Lens extends View {
       this.leasedAt = 0;
       this.lastFocus = null;
     }
-    return this.restoreRead(endpoint);
+    const cached = boardReads.get(endpoint);
+    if (cached) {
+      this.payload = cached.payload;
+      this.net = M.fetchSucceeded(this.net, cached.board, cached.receivedAt);
+      this.seenNeeds = L.newNeeds(null, cached.board).seen;
+    }
+    return cached;
   }
 
   begin(endpoint, cx) {
@@ -292,7 +286,7 @@ export default class Lens extends View {
       let outcome;
       let endpoint = this.endpoint;
       try {
-        if (this.runtime) endpoint = (await runtimeEndpoint(this.runtime)) ?? endpoint;
+        if (this.runtime) endpoint = await runtimeEndpoint(this.runtime, endpoint);
         const response = await this.request(M.boardUrl(endpoint));
         if (!response.ok) outcome = { error: M.httpError(response.status) };
         else {
