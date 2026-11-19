@@ -175,3 +175,21 @@ test('a failed refresh retains the board in the current view and the next one', 
   await whilePending.finish();
   assert.equal(whilePending.view.needsControlRead(), false);
 });
+
+test('folded tasks stay folded in the next view, and Collapse all covers tasks folded by neither', async (t) => {
+  const stored = new Map();
+  const before = globalThis.localStorage;
+  Object.defineProperty(globalThis, 'localStorage', { value: { getItem: (key) => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value) }, configurable: true });
+  t.after(() => Object.defineProperty(globalThis, 'localStorage', { value: before, configurable: true }));
+  t.mock.method(globalThis, 'fetch', async (url) => response(url));
+  const props = { role: 'panel', endpoint: 'http://127.0.0.1:4005' };
+  const first = open(props);
+  await first.finish();
+  first.view.foldAll(true, first.cx);
+  first.view.toggleFold('wr-pr', first.cx);
+  const next = open(props);
+  assert.equal(next.view.folded('wr-pr'), false);
+  assert.equal(next.view.folded('wr-cross'), true);
+  next.view.foldAll(false, next.cx);
+  assert.equal(open(props).view.folded('wr-cross'), false);
+});

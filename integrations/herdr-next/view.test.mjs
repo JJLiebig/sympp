@@ -89,6 +89,30 @@ test('a topic puts each ask first; tasks carry their name, phase and strip, with
   assert.doesNotMatch(quiet.out, /text "\d+\/\d+/, 'no counts');
 });
 
+test("a topic lists each task's packages at work under it, its step and what it waits on; one task or all fold away", skip, async (t) => {
+  const path = { topic: 't-herdr' };
+  const open = await render(t, { props: { role: 'panel' }, width: 360, board: 'busy', path });
+  const at = (view, id) => view.out.indexOf(`:id[Str("${id}")]`);
+  for (const id of ['moving-r-4', 'moving-r-5', 'moving-r-6', 'moving-r-7', 'moving-wp-build', 'moving-wp-review', 'moving-t-1'])
+    assert.ok(open.has(id), id);
+  assert.ok(at(open, 'task-wr-restore') < at(open, 'moving-r-4') && at(open, 'moving-r-7') < at(open, 'group-wr-recap'), 'the rows sit under their task');
+  assert.equal(open.has('moving-wp-done') || open.has('moving-wp-queued'), false, 'landed and planned packages stay in the strip');
+  assert.ok(open.text('Merge') && open.text('merge') && open.text('no answer') && open.text('starting'), 'each row names its step and what it waits on');
+  assert.ok(open.has('fold-wr-restore') && !open.has('fold-wr-docs'), 'only a task with packages at work folds');
+  assert.ok(open.out.includes('tooltip[Str("Collapse all")]'));
+
+  const one = await render(t, { props: { role: 'panel' }, width: 360, board: 'busy', path, folds: { flipped: ['wr-restore'] } });
+  assert.ok(one.has('task-wr-restore') && !one.has('moving-r-4') && one.has('moving-wp-build'), 'folding one task leaves the others open');
+
+  const wide = await render(t, { props: { scope: path }, width: 1400, board: 'busy' });
+  assert.ok(wide.has('moving-r-4') && wide.has('fold-wr-restore') && wide.has('fold-all'), 'a scope tab draws the rows too');
+  for (const props of [{ role: 'panel' }, { scope: path }]) {
+    const all = await render(t, { props, width: props.scope ? 1400 : 360, board: 'busy', path, folds: { all: true } });
+    assert.equal(all.out.includes(':id[Str("moving-'), false, `every task folds in ${JSON.stringify(props)}`);
+    assert.ok(all.out.includes('tooltip[Str("Expand all")]') && all.has('task-wr-restore') && all.has('later-t-herdr:'), 'tasks and shelves stay');
+  }
+});
+
 // The printed spec as a tree: each element's line and its direct children, by indentation.
 function specTree(out) {
   const root = { line: '', children: [] }, stack = [{ depth: -1, node: root }];
