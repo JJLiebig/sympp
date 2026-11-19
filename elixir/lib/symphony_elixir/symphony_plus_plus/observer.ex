@@ -44,7 +44,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{RateGovernor, Snapshot}
   alias SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope
   alias SymphonyElixir.SymphonyPlusPlus.Observer.Observation
-  alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.{RepoIdentity, ReviewStatus}
@@ -254,7 +253,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     results =
       reviewed
       |> Stream.map(fn package ->
-        route = review_route(package.launch_machine, workers[package.id], core)
+        route = Qualification.review_route(package.launch_machine, workers[package.id], core)
         {package.id, package.review_id, route}
       end)
       |> Task.async_stream(fn {id, review_id, route} -> {id, read.(review_id, route)} end,
@@ -274,14 +273,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   end
 
   defp reviewed?(%WorkPackage{review_mode: mode, review_id: id}), do: mode in ["fast", "normal", "deep"] and is_binary(id)
-
-  # The stored name is a route from the dispatcher. A worker bound to this
-  # core can use the factory's local Review Suite state directly.
-  defp review_route(route, %WorkedOn{terminal_key: key}, {:ok, %{core_id: core_id}}) do
-    if match?({^core_id, _address}, Terminal.split_key(key)), do: nil, else: route
-  end
-
-  defp review_route(route, _worker, _core), do: route
 
   defp observe_package(repo, %{package: package, observation: observation, github: github, pr: pr} = item, review, views) do
     previous_pr = observation && observation.pr

@@ -25,10 +25,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{PullRequestArtifact, PullRequestProgress}
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
-  alias SymphonyElixir.SymphonyPlusPlus.ReviewStatus
+  alias SymphonyElixir.SymphonyPlusPlus.{HerdrCore, Ownership, ReviewStatus}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, WorkPackage}
 
   @type review :: :done | :none | :pending | :unknown
@@ -49,13 +50,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
   reviews in mode `none`, else the latest linked Review Suite state starting
   at the dispatch `review_id`.
   """
-  @spec review(WorkPackage.t(), String.t() | nil) :: review()
-  def review(%WorkPackage{review_mode: mode, review_id: review_id, launch_machine: machine}, head_sha)
+  @spec review(module(), WorkPackage.t(), String.t() | nil) :: review()
+  def review(repo, %WorkPackage{id: id, review_mode: mode, review_id: review_id, launch_machine: route}, head_sha)
       when mode in ["fast", "normal", "deep"] and is_binary(review_id) do
+    worker = repo |> Ownership.workers([id]) |> Map.get(id)
+    machine = review_route(route, worker, HerdrCore.current())
     review_id |> ReviewStatus.read(machine) |> ReviewStatus.state(head_sha)
   end
 
-  def review(%WorkPackage{}, _head_sha), do: :none
+  def review(_repo, %WorkPackage{}, _head_sha), do: :none
+
+  @doc "Uses a local review read for a worker bound to the factory core, or returns the stored route."
+  @spec review_route(String.t() | nil, WorkedOn.t() | nil, {:ok, HerdrCore.snapshot()} | :unavailable) ::
+          String.t() | nil
+  def review_route(route, %WorkedOn{terminal_key: key}, {:ok, %{core_id: core_id}}) do
+    if match?({^core_id, _address}, Terminal.split_key(key)), do: nil, else: route
+  end
+
+  def review_route(route, _worker, _core), do: route
 
   @doc """
   The head a ready package was qualified on (its recorded PR head); a
