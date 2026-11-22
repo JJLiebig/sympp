@@ -239,39 +239,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       Enum.each([path, path <> "-wal", path <> "-shm"], &File.rm/1)
     end)
 
-    caller = self()
+    {request, result} =
+      MigrationFileLock.run(path, fn ->
+        request =
+          Task.async(fn ->
+            post(local_operator_conn(), "/api/v1/sympp/operator/work-requests", %{
+              "title" => "Ready ledger write",
+              "human_description" => "Record an operator request on the already current ledger.",
+              "repo" => "example/ready",
+              "base_branch" => "main"
+            })
+          end)
 
-    lock =
-      Task.async(fn ->
-        MigrationFileLock.run(path, fn ->
-          send(caller, :migration_locked)
-          receive do: (:release -> :ok)
-        end)
+        {request, Task.yield(request, 1_000)}
       end)
 
-    assert_receive :migration_locked
-
-    request =
-      Task.async(fn ->
-        post(local_operator_conn(), "/api/v1/sympp/operator/work-requests", %{
-          "title" => "Ready ledger write",
-          "human_description" => "Record an operator request on the already current ledger.",
-          "repo" => "example/ready",
-          "base_branch" => "main"
-        })
-      end)
-
-    result = Task.yield(request, 1_000)
-
-    response =
-      try do
-        assert {:ok, response} = result
-        json_response(response, 201)
-      after
-        send(lock.pid, :release)
-        Task.await(lock)
-        if is_nil(result), do: Task.await(request)
-      end
+    if is_nil(result), do: Task.await(request)
+    assert {:ok, response} = result
+    response = json_response(response, 201)
 
     {:ok, reader} = Repo.start_link(database: path, name: nil, log: false)
     previous_repo = Repo.put_dynamic_repo(reader)

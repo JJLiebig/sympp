@@ -322,29 +322,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   def worker_terminal(nil), do: nil
 
   def worker_terminal(%WorkedOn{} = row) do
-    status =
+    {status, preview} =
       case {row.state, Terminal.split_key(row.terminal_key)} do
-        {"live", {core_id, address}} -> HerdrCore.status_state(core_id, address)
-        {"live", :error} -> "unknown"
-        {state, _key} -> state
+        {"live", {core_id, address}} -> HerdrCore.board_worker(core_id, address)
+        {"live", :error} -> {"unknown", nil}
+        {state, _key} -> {state, nil}
       end
 
-    %{address: row.display_address, state: row.state, status: status, preview_url: worker_preview(row)}
+    %{address: row.display_address, state: row.state, status: status, preview_url: preview}
   end
-
-  defp worker_preview(%WorkedOn{state: "live", terminal_key: key}) do
-    with {core_id, address} <- Terminal.split_key(key),
-         {:live, record} <- HerdrCore.view(core_id, address),
-         url when is_binary(url) <- get_in(record, ["labels", "sympp.preview_url"]),
-         value = String.trim(url),
-         true <- String.length(value) <= 2048 and Regex.match?(~r/^https?:\/\/[^\s\/?#]+(?:[\/?#]\S*)?$/i, value) do
-      value
-    else
-      _absent_or_invalid -> nil
-    end
-  end
-
-  defp worker_preview(_finished), do: nil
 
   @spec activity(WorkPackage.t(), map(), map(), [map()]) :: map()
   def activity(work_package, summary, operational_state, events) do

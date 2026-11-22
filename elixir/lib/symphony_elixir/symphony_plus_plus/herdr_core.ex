@@ -16,11 +16,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   `{:ok, %{core_id: id, terminals: %{address => record}}}` (tests).
   """
 
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.Inputs
   alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub, Observer}
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
 
   @cache_key {__MODULE__, :snapshot}
-  @cached_reads_key {__MODULE__, :cached_reads}
   @refresh_key {__MODULE__, :refresh}
   @cache_ms 15_000
   @last_good_ms 120_000
@@ -66,6 +66,42 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
     end
   end
 
+  @doc false
+  @spec board_view(String.t(), String.t()) :: view()
+  def board_view(core_id, address) do
+    if Inputs.active?() do
+      view_in(Inputs.memo(:herdr_snapshot, &board_snapshot/0), core_id, address)
+    else
+      view(core_id, address)
+    end
+  end
+
+  defp board_snapshot do
+    case Application.get_env(:symphony_elixir, :sympp_herdr_core, "hc") do
+      nil ->
+        :unavailable
+
+      fun when is_function(fun, 0) ->
+        normalize(fun.())
+
+      command when is_binary(command) ->
+        refresh_on_demand()
+
+        @cache_key
+        |> :persistent_term.get(nil)
+        |> last_good(command)
+        |> usable_good(System.monotonic_time(:millisecond))
+        |> track_board_expiry()
+    end
+  end
+
+  defp track_board_expiry({:ok, _snapshot} = result) do
+    DashboardCache.track_core_expiry()
+    result
+  end
+
+  defp track_board_expiry(:unavailable), do: :unavailable
+
   @doc "The factory core's current snapshot: cached, or the last good one for up to 2 minutes."
   @spec current() :: {:ok, snapshot()} | :unavailable
   def current, do: snapshot(false)
@@ -98,29 +134,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
     :ok
   end
 
-  @doc false
-  @spec with_cached_reads((-> result)) :: result when result: var
-  def with_cached_reads(fun) do
-    previous = Process.put(@cached_reads_key, true)
-
-    try do
-      fun.()
-    after
-      if is_nil(previous), do: Process.delete(@cached_reads_key), else: Process.put(@cached_reads_key, previous)
-    end
-  end
-
   @doc "One terminal's record from the factory's core, for its live working/idle state."
   @spec status_state(String.t(), String.t()) :: String.t()
-  def status_state(core_id, address) do
-    case view(core_id, address) do
-      {:live, %{"status" => %{"state" => state}}} when is_binary(state) -> state
-      {:live, %{"status" => state}} when is_binary(state) -> state
-      {:live, _record} -> "live"
-      :finished -> "finished"
-      _unseen_or_unknown -> "unknown"
+  def status_state(core_id, address), do: status(view(core_id, address))
+
+  @doc false
+  @spec board_worker(String.t(), String.t()) :: {String.t(), String.t() | nil}
+  def board_worker(core_id, address) do
+    Inputs.observe({:worker_display, core_id, address}, fn -> worker_display(board_view(core_id, address)) end)
+  end
+
+  defp worker_display(view), do: {status(view), preview_url(view)}
+
+  defp status({:live, %{"status" => %{"state" => state}}}) when is_binary(state), do: state
+  defp status({:live, %{"status" => state}}) when is_binary(state), do: state
+  defp status({:live, _record}), do: "live"
+  defp status(:finished), do: "finished"
+  defp status(_unseen_or_unknown), do: "unknown"
+
+  defp preview_url({:live, record}) do
+    with url when is_binary(url) <- get_in(record, ["labels", "sympp.preview_url"]),
+         value = String.trim(url),
+         true <- String.length(value) <= 2048 and Regex.match?(~r/^https?:\/\/[^\s\/?#]+(?:[\/?#]\S*)?$/i, value) do
+      value
+    else
+      _absent_or_invalid -> nil
     end
   end
+
+  defp preview_url(_other), do: nil
 
   @doc """
   The factory host's Herdr machine name: its core's name, or the host name when
@@ -229,61 +271,51 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   defp cached_command_snapshot(command, fresh?, last_good?) do
     now = System.monotonic_time(:millisecond)
 
-    {result, good, checked_at} =
+    {result, good} =
       case :persistent_term.get(@cache_key, nil) do
         {^command, at, result, good} when not fresh? and now - at < @cache_ms ->
-          {result, good, at}
+          {result, good}
 
         cached ->
-          {result, good} = load_uncached_snapshot(command, now, fresh?, cached)
-          {result, good, now}
+          result = load_command(command)
+          good = if result == :unavailable, do: last_good(cached, command), else: {now, result}
+          :persistent_term.put(@cache_key, {command, now, result, good})
+          {result, good}
       end
 
     case {result, good} do
       {:unavailable, {at, good_result}} when last_good? and now - at < @last_good_ms ->
-        DashboardCache.track_core_expiry()
         good_result
-
-      {{:ok, _snapshot}, _good} when last_good? ->
-        DashboardCache.track_core_expiry()
-        result
-
-      {:unavailable, _good} when last_good? ->
-        DashboardCache.expire_at(checked_at + @cache_ms)
-        result
 
       _current ->
         result
     end
   end
 
-  defp load_uncached_snapshot(command, now, fresh?, cached) do
-    if not fresh? and Process.get(@cached_reads_key, false) do
-      good = last_good(cached, command)
-      refresh_background(command, good, now)
-      {:unavailable, good}
-    else
-      result = load_command(command)
-      good = if result == :unavailable, do: last_good(cached, command), else: {now, result}
-      :persistent_term.put(@cache_key, {command, now, result, good})
-      {result, good}
-    end
+  defp refresh_background(command, previous_good, started_at) do
+    :global.trans(
+      {{__MODULE__, :refresh}, self()},
+      fn -> start_background_refresh(command, previous_good, started_at) end,
+      [node()],
+      0
+    )
   end
 
-  defp refresh_background(command, previous_good, started_at) do
-    pending? =
-      case :persistent_term.get(@refresh_key, nil) do
-        {^command, pid} -> Process.alive?(pid)
-        _other -> false
-      end
-
-    unless pending? do
+  defp start_background_refresh(command, previous_good, started_at) do
+    unless pending_refresh?(command) do
       {:ok, pid} =
         Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
           refresh_and_notify(previous_good, started_at)
         end)
 
       :persistent_term.put(@refresh_key, {command, pid})
+    end
+  end
+
+  defp pending_refresh?(command) do
+    case :persistent_term.get(@refresh_key, nil) do
+      {^command, pid} -> Process.alive?(pid)
+      _other -> false
     end
   end
 
@@ -298,13 +330,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
     fallback = usable_good(previous_good, now)
     current = if result == :unavailable, do: fallback, else: result
 
-    if current != previous or (fallback == :unavailable and result != :unavailable) do
-      DashboardCache.invalidate([:archived, :deferred, :hydrated, :herdr])
+    recovered? = fallback == :unavailable and result != :unavailable
+
+    if display_snapshot(current) != display_snapshot(previous) or recovered? do
       DashboardPubSub.broadcast_changed()
     end
 
     result
   end
+
+  defp display_snapshot({:ok, %{core_id: core_id, terminals: terminals}}) do
+    live = for {address, %{"state" => "live"} = record} <- terminals, into: %{}, do: {address, worker_display({:live, record})}
+    {core_id, live}
+  end
+
+  defp display_snapshot(:unavailable), do: :unavailable
 
   defp usable_good({at, snapshot}, now) when now - at < @last_good_ms, do: snapshot
   defp usable_good(_expired_or_missing, _now), do: :unavailable
