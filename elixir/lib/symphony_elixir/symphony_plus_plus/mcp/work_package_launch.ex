@@ -102,16 +102,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
   end
 
   defp write_assignment(repo, worktree, assignment) do
-    with {:ok, git_dir} <- git_dir(worktree.worktree_path) do
-      file = Path.join(git_dir, @assignment_file)
-      package = worktree.work_package
-      contents = render_assignment(package, worktree, assignment)
+    case git_dir(worktree.worktree_path) do
+      {:ok, git_dir} ->
+        file = Path.join(git_dir, @assignment_file)
+        package = worktree.work_package
+        contents = render_assignment(package, worktree, assignment)
 
-      # A move can commit while an existing worktree is being checked.
-      # Publish only while the revision used for the assignment is current.
-      repo.transact(fn -> publish_assignment(repo, package, file, contents) end, mode: :immediate)
-    else
-      {:error, reason} -> {:error, {:assignment_write_failed, reason}}
+        # A move can commit while an existing worktree is being checked.
+        # Publish only while the revision used for the assignment is current.
+        repo.transact(fn -> publish_assignment(repo, package, file, contents) end, mode: :immediate)
+
+      {:error, reason} ->
+        {:error, {:assignment_write_failed, reason}}
     end
   rescue
     error in Exqlite.Error ->

@@ -87,7 +87,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
          worktree_parent = factory_worktree_parent(worktree_parent, target_repo_root),
          {:ok, worktree_path} <- worktree_path(work_package, target_repo_root, branch, worktree_parent, opts),
          {:ok, worktree_path} <-
-           validate_recorded_prepare_path(work_package, worktree_path, target_repo_root, branch, worktree_parent, opts) do
+           validate_recorded_prepare_path(
+             work_package,
+             worktree_path,
+             target_repo_root,
+             branch,
+             worktree_parent,
+             opts
+           ) do
       maybe_replay_prepared(repo, work_package, target_repo_root, base_branch, branch, worktree_path, opts)
     end
   end
@@ -322,8 +329,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
   # checkout has moved to a new directory under the factory repos root.
   defp owned_factory_worktree?(recorded_path, repo_root, opts) do
     with root when is_binary(root) <- Config.factory_repos_root(),
-         {:ok, managed_root} <- canonicalize(Path.join(root, ".worktrees")) do
-      inside_root?(recorded_path, managed_root) and require_recorded_worktree_owner(repo_root, recorded_path, opts) == :ok
+         {:ok, managed_root} <- canonicalize(Path.join(root, ".worktrees")),
+         true <- inside_root?(recorded_path, managed_root),
+         :ok <- require_recorded_worktree_owner(repo_root, recorded_path, opts) do
+      true
     else
       _no_factory_root -> false
     end
@@ -391,7 +400,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
 
   defp ensure_recorded_target_repo_root(repo, %WorkPackage{worktree_target_repo_root: recorded_root} = work_package, repo_root)
        when recorded_root != repo_root do
-    Repository.record_prepared_worktree(repo, work_package, %{worktree_target_repo_root: repo_root, worktree_cleanup_proof: nil})
+    Repository.record_prepared_worktree(repo, work_package, %{
+      worktree_target_repo_root: repo_root,
+      worktree_cleanup_proof: nil
+    })
   end
 
   defp ensure_recorded_target_repo_root(_repo, %WorkPackage{} = work_package, _repo_root), do: {:ok, work_package}
