@@ -1,7 +1,11 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
   use ExUnit.Case, async: false
 
-  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub, Repo}
+  import ExUnit.CaptureLog
+
+  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub, HerdrCore, Repo}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{DecisionFeedback, DecisionLogEntry}
 
   setup do
     path = Path.join(System.tmp_dir!(), "dashboard-cache-#{System.os_time(:nanosecond)}-#{System.unique_integer([:positive])}.sqlite3")
@@ -73,15 +77,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
 
     assert_receive {:captured, builder}
     release = release_on_exit(builder)
-    :ok = DashboardPubSub.subscribe()
     {:ok, connection} = Exqlite.Sqlite3.open(path)
     :ok = Exqlite.Sqlite3.execute(connection, "UPDATE probe SET value = 'acknowledged'")
     :ok = Exqlite.Sqlite3.close(connection)
-    release.()
-    assert {:ok, _old, _etag} = Task.await(read)
-    assert_receive :operator_dashboard_changed, 2_000
-    assert {:ok, fresh, _etag} = DashboardCache.json(Repo, :racing, &payload/0)
+    assert {:ok, fresh, etag} = DashboardCache.json(Repo, :racing, &payload/0)
     assert Jason.decode!(fresh)["decision"] == "acknowledged"
+    release.()
+    assert {:ok, old, _etag} = Task.await(read)
+    assert Jason.decode!(old)["decision"] == "recorded"
+    assert {:ok, ^fresh, ^etag} = DashboardCache.json(Repo, :racing, &payload/0)
   end
 
   test "an uninitialized schema returns a storage error without taking other reads down" do
@@ -103,105 +107,75 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     clock
   end
 
-  test "quiet reads return immediately during timed refresh and a racing write stays fresh", %{path: path} do
-    clock = controlled_clock()
-    assert {:ok, old, etag} = DashboardCache.json(Repo, :expiry, &payload/0)
-    caller = self()
-
-    builder = fn ->
-      captured = payload()
-      send(caller, {:refreshing, self()})
-      receive do: (:continue -> captured)
-    end
-
-    DashboardCache.json(Repo, :expiry, builder)
-    :atomics.add(clock, 1, 15_001)
-    assert {:ok, ^old, ^etag} = DashboardCache.json(Repo, :expiry, builder)
-
-    assert_receive {:refreshing, worker}
-    ref = Process.monitor(worker)
-    {:ok, connection} = Exqlite.Sqlite3.open(path)
-    :ok = Exqlite.Sqlite3.execute(connection, "UPDATE probe SET value = 'acknowledged'")
-    :ok = Exqlite.Sqlite3.close(connection)
-    assert {:ok, fresh, fresh_etag} = DashboardCache.json(Repo, :expiry, &payload/0)
-    assert Jason.decode!(fresh)["decision"] == "acknowledged"
-    send(worker, :continue)
-    assert_receive {:DOWN, ^ref, :process, ^worker, :normal}
-    assert {:ok, ^fresh, ^fresh_etag} = DashboardCache.json(Repo, :expiry, &payload/0)
+  defp watch(surface, builder) do
+    {:ok, cache, ref} = DashboardCache.watch(Repo, [{surface, builder}])
+    on_exit(fn -> DashboardCache.unwatch(cache, ref) end)
+    {cache, ref}
   end
 
-  test "time-derived changes notify clients and keep all prepared surfaces ready to read" do
-    clock = controlled_clock()
-    assert {:ok, old, _etag} = DashboardCache.json(Repo, :time, &payload/0)
-    :ok = DashboardPubSub.subscribe()
-    caller = self()
-
-    builder = fn ->
-      send(caller, {:time_refresh, self()})
-      receive do: (:continue -> {:ok, %{decision: "elapsed"}})
-    end
-
-    DashboardCache.json(Repo, :time, builder)
-    :atomics.add(clock, 1, 15_001)
-    assert {:ok, other, other_etag} = DashboardCache.json(Repo, :other, &payload/0)
-    assert_receive :operator_dashboard_changed
-    assert {:ok, ^old, _etag} = DashboardCache.json(Repo, :time, builder)
-    assert_receive {:time_refresh, worker}
-    send(worker, :continue)
-    assert_receive :operator_dashboard_changed
-    assert {:ok, ^other, ^other_etag} = DashboardCache.json(Repo, :other, fn -> {:ok, %{decision: "recomputed"}} end)
-    assert {:ok, fresh, _etag} = DashboardCache.json(Repo, :time, &payload/0)
-    assert Jason.decode!(fresh)["decision"] == "elapsed"
-  end
-
-  test "a timed input check only rebuilds the projection when its input changes" do
-    clock = controlled_clock()
-    values = :atomics.new(2, [])
-    caller = self()
-
-    inputs = fn ->
-      value = :atomics.get(values, 1)
-      send(caller, {:inputs_read, self(), value})
-      {:ok, value}
-    end
-
-    project = fn input ->
-      :atomics.add(values, 2, 1)
-      {:ok, %{decision: input}}
-    end
-
-    read = fn -> DashboardCache.json(Repo, :timed_inputs, {inputs, project}) end
-    assert {:ok, body, etag} = read.()
-    assert Jason.decode!(body)["decision"] == 0
-    assert_receive {:inputs_read, _initial, 0}
-
-    :atomics.add(clock, 1, 15_001)
-    assert {:ok, ^body, ^etag} = read.()
-    assert_receive {:inputs_read, worker, 0}
-    ref = Process.monitor(worker)
-    assert_receive {:DOWN, ^ref, :process, ^worker, _reason}
+  defp refresh_watches do
+    send(DashboardCache, :refresh_watched)
     :sys.get_state(DashboardCache)
-    assert :atomics.get(values, 2) == 1
-
-    :ok = DashboardPubSub.subscribe()
-    :atomics.put(values, 1, 1)
-    :atomics.add(clock, 1, 15_001)
-    send(DashboardCache, :refresh_tick)
-    assert_receive :operator_dashboard_changed
-    assert {:ok, fresh, fresh_etag} = read.()
-    assert Jason.decode!(fresh)["decision"] == 1
-    assert fresh_etag != etag
   end
 
-  test "external commits notify subscribers without a client read", %{path: path} do
-    assert {:ok, _body, _etag} = DashboardCache.json(Repo, :external, &payload/0)
-    :ok = DashboardPubSub.subscribe()
-    {:ok, connection} = Exqlite.Sqlite3.open(path)
-    :ok = Exqlite.Sqlite3.execute(connection, "UPDATE probe SET value = 'acknowledged'")
-    :ok = Exqlite.Sqlite3.close(connection)
-    assert_receive :operator_dashboard_changed, 2_000
-    assert {:ok, body, _etag} = DashboardCache.json(Repo, :external, &payload/0)
-    assert Jason.decode!(body)["decision"] == "acknowledged"
+  test "pending feedback reaches its interruption deadline without writes or reads" do
+    clock = controlled_clock()
+    initial = :atomics.get(clock, 1)
+    reviewed_at = DateTime.add(DateTime.utc_now(), -30_000, :millisecond)
+    builds = :atomics.new(1, [])
+
+    builder = fn ->
+      :atomics.add(builds, 1, 1)
+      shifted = DateTime.add(reviewed_at, initial - :atomics.get(clock, 1), :millisecond)
+      entry = %DecisionLogEntry{reviewed_at: shifted, undelivered_reason: "delivering"}
+      {:ok, %{delivery: DecisionFeedback.undelivered_reason(entry)}}
+    end
+
+    {_cache, ref} = watch(:time, builder)
+    assert_receive {:dashboard_changed, ^ref, _version}
+    assert {:ok, old, etag} = DashboardCache.json(Repo, :time, builder)
+    assert Jason.decode!(old)["delivery"] == "delivering"
+
+    :atomics.put(clock, 1, initial + 15_001)
+    refresh_watches()
+    assert {:ok, ^old, ^etag} = DashboardCache.json(Repo, :time, builder)
+    assert :atomics.get(builds, 1) == 1
+
+    :atomics.put(clock, 1, initial + 61_000)
+    refresh_watches()
+    assert_receive {:dashboard_changed, ^ref, _version}
+    assert {:ok, fresh, fresh_etag} = DashboardCache.json(Repo, :time, builder)
+    assert Jason.decode!(fresh)["delivery"] == "delivery_interrupted"
+    refute fresh_etag == etag
+    assert :atomics.get(builds, 1) == 2
+  end
+
+  test "a remote owner becomes unknown when its lease expires and live after a fresh heartbeat" do
+    clock = controlled_clock()
+    ttl = 60_000
+    terminal = "remote-core/t1"
+    leases = start_supervised!({ClientLeases, name: :dashboard_test_leases, ttl_ms: ttl, sweep_ms: 120_000})
+    assert {:ok, _} = ClientLeases.attach("bridge", leases, terminal)
+    builder = fn -> {:ok, %{live: ClientLeases.terminal_live?(terminal, leases)}} end
+
+    {_cache, ref} = watch(:hydrated, builder)
+    assert_receive {:dashboard_changed, ^ref, _version}
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :hydrated, builder)
+    assert Jason.decode!(body)["live"]
+
+    now = System.monotonic_time(:millisecond)
+    :sys.replace_state(leases, &put_in(&1.leases["bridge"].last_seen_ms, now - ttl - 1))
+    :atomics.put(clock, 1, now + ttl + 1)
+    refresh_watches()
+    assert_receive {:dashboard_changed, ^ref, _version}
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :hydrated, builder)
+    refute Jason.decode!(body)["live"]
+
+    :atomics.put(clock, 1, System.monotonic_time(:millisecond))
+    assert {:ok, _} = ClientLeases.heartbeat("bridge", leases, terminal)
+    assert_receive {:dashboard_changed, ^ref, _version}
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :hydrated, builder)
+    assert Jason.decode!(body)["live"]
   end
 
   test "a read that discovers an external commit also notifies other subscribers", %{path: path} do
@@ -213,6 +187,55 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert {:ok, body, _etag} = DashboardCache.json(Repo, :discovered, &payload/0)
     assert Jason.decode!(body)["decision"] == "acknowledged"
     assert_receive :operator_dashboard_changed
+  end
+
+  test "an inspector watches other writers without constructing a board", %{path: path} do
+    {_cache, ref} = watch(:herdr, :revision)
+    assert_receive {:dashboard_changed, ^ref, _initial}
+
+    log =
+      capture_log(fn ->
+        {:ok, writer} = Exqlite.Sqlite3.open(path)
+        :ok = Exqlite.Sqlite3.execute(writer, "UPDATE probe SET value = 'acknowledged'")
+        :ok = Exqlite.Sqlite3.close(writer)
+        refresh_watches()
+        assert_receive {:dashboard_changed, ^ref, _updated}
+      end)
+
+    assert log =~ "board_revision_probe surface=herdr"
+    refute log =~ "board_build"
+  end
+
+  test "a watched board rechecks unavailable Herdr evidence at the provider deadline" do
+    clock = controlled_clock()
+    now = :atomics.get(clock, 1)
+    command = "test-hc"
+    cache_key = {HerdrCore, :snapshot}
+    previous_snapshot = :persistent_term.get(cache_key, nil)
+    previous_command = Application.get_env(:symphony_elixir, :sympp_herdr_core)
+
+    on_exit(fn ->
+      Application.put_env(:symphony_elixir, :sympp_herdr_core, previous_command)
+      if previous_snapshot, do: :persistent_term.put(cache_key, previous_snapshot), else: :persistent_term.erase(cache_key)
+    end)
+
+    Application.put_env(:symphony_elixir, :sympp_herdr_core, command)
+    :persistent_term.put(cache_key, {command, now, :unavailable, nil})
+    builder = fn -> {:ok, %{worker: HerdrCore.status_state("test-core", "t1")}} end
+    {_cache, ref} = watch(:hydrated, builder)
+    assert_receive {:dashboard_changed, ^ref, _initial}
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :hydrated, builder)
+    assert Jason.decode!(body)["worker"] == "unknown"
+
+    snapshot = {:ok, %{core_id: "test-core", terminals: %{"t1" => %{"state" => "live"}}}}
+    at = System.monotonic_time(:millisecond)
+    :persistent_term.put(cache_key, {command, at, snapshot, {at, snapshot}})
+
+    :atomics.put(clock, 1, now + 15_000)
+    refresh_watches()
+    assert_receive {:dashboard_changed, ^ref, _updated}
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :hydrated, builder)
+    assert Jason.decode!(body)["worker"] == "live"
   end
 
   test "an unprimed slow view leaves quiet cached reads available", %{pid: pid} do
@@ -238,9 +261,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
         DashboardCache.json(Repo, :quiet, &payload/0)
       end)
 
-    result = Task.yield(read, 100)
+    assert {:ok, ^quiet, ^etag} = Task.await(read)
     release.()
-    assert {:ok, {:ok, ^quiet, ^etag}} = result
     assert {:ok, _body, _etag} = Task.await(slow)
   end
 
@@ -272,14 +294,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
         Repo.query!("UPDATE probe SET value = 'acknowledged'")
       end)
 
-    result = Task.yield(write, 100)
+    assert %{num_rows: 1} = Task.await(write)
     release_first.()
     release_second.()
-    assert {:ok, %{num_rows: 1}} = result
     Enum.each(builds, &Task.await/1)
   end
 
-  test "external input invalidations keep reads available and overlapping signals catch up" do
+  test "provider-only invalidations catch up to the latest input before waking the stream" do
     value = :atomics.new(1, [])
     caller = self()
 
@@ -294,19 +315,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
       {:ok, %{observation: captured}}
     end
 
-    assert {:ok, old, etag} = DashboardCache.json(Repo, :observation, builder)
-    :ok = DashboardPubSub.subscribe()
+    assert {:ok, _, _} = DashboardCache.json(Repo, :observation, builder)
+    {_cache, ref} = watch(:observation, builder)
     :atomics.put(value, 1, 1)
     DashboardCache.invalidate([:observation])
     assert_receive {:observation_refresh, worker}
-    assert {:ok, ^old, ^etag} = DashboardCache.json(Repo, :observation, builder)
+    release = release_on_exit(worker)
     :atomics.put(value, 1, 2)
     DashboardCache.invalidate([:observation])
-    send(worker, :continue)
-    assert_receive :operator_dashboard_changed
-    assert_receive :operator_dashboard_changed
+    :sys.get_state(DashboardCache)
+    release.()
+    assert_receive {:dashboard_changed, ^ref, _version}
     assert {:ok, body, _etag} = DashboardCache.json(Repo, :observation, builder)
     assert Jason.decode!(body)["observation"] == 2
+    refute_received {:dashboard_changed, ^ref, _version}
   end
 
   test "external writes coalesce behind one background build and catch up to the latest commit", %{path: path} do
@@ -326,26 +348,71 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     end
 
     assert {:ok, _old, _etag} = DashboardCache.json(Repo, :coalesced, builder)
-    :ok = DashboardPubSub.subscribe()
+    {_cache, ref} = watch(:coalesced, builder)
     {:ok, writer} = Exqlite.Sqlite3.open(path)
     on_exit(fn -> Exqlite.Sqlite3.close(writer) end)
     :ok = Exqlite.Sqlite3.execute(writer, "UPDATE probe SET value = 'building'")
-    send(DashboardCache, :refresh_tick)
+    refresh_watches()
     assert_receive {:background_projection, worker}
     release = release_on_exit(worker)
 
     for value <- ["intermediate", "latest"] do
       :ok = Exqlite.Sqlite3.execute(writer, "UPDATE probe SET value = '#{value}'")
-      send(DashboardCache, :refresh_tick)
-      :sys.get_state(DashboardCache)
+      refresh_watches()
     end
 
     assert :atomics.get(builds, 1) == 2
     release.()
-    assert_receive :operator_dashboard_changed, 2_000
+    assert_receive {:dashboard_changed, ^ref, _version}
     assert {:ok, body, _etag} = DashboardCache.json(Repo, :coalesced, builder)
     assert Jason.decode!(body)["decision"] == "latest"
     assert :atomics.get(builds, 1) == 3
+  end
+
+  test "the last disconnect stops probes and catch-up even during a build", %{path: path} do
+    caller = self()
+
+    builder = fn ->
+      result = payload()
+      send(caller, {:build, elem(result, 1).decision, self()})
+
+      if elem(result, 1).decision == "building" do
+        receive do: (:continue -> :ok)
+      end
+
+      result
+    end
+
+    {cache, ref} = watch(:disconnected, builder)
+    assert_receive {:dashboard_changed, ^ref, _version}
+    assert_receive {:build, "recorded", _worker}
+    assert {:ok, _, _} = DashboardCache.json(Repo, :one_off, &payload/0)
+
+    {:ok, writer} = Exqlite.Sqlite3.open(path)
+    on_exit(fn -> Exqlite.Sqlite3.close(writer) end)
+    :ok = Exqlite.Sqlite3.execute(writer, "UPDATE probe SET value = 'building'")
+    refresh_watches()
+    assert_receive {:build, "building", worker}
+    release = release_on_exit(worker)
+    finished = Process.monitor(worker)
+
+    :ok = DashboardCache.unwatch(cache, ref)
+    :sys.get_state(cache)
+
+    log =
+      capture_log(fn ->
+        :ok = Exqlite.Sqlite3.execute(writer, "UPDATE probe SET value = 'latest'")
+        DashboardPubSub.broadcast_changed()
+        release.()
+        assert_receive {:DOWN, ^finished, :process, ^worker, :normal}
+        refresh_watches()
+      end)
+
+    refute log =~ "board_revision_probe"
+    refute log =~ "board_build"
+    refute_received {:build, "latest", _worker}
+    assert {:ok, fresh, _etag} = DashboardCache.json(Repo, :disconnected, builder)
+    assert Jason.decode!(fresh)["decision"] == "latest"
   end
 
   test "a fresh read joins the current projection without blocking other surfaces", %{pid: pid, path: path} do
@@ -363,58 +430,37 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     end
 
     DashboardCache.json(Repo, :joined, builder)
+    watch(:joined, builder)
     {:ok, connection} = Exqlite.Sqlite3.open(path)
     :ok = Exqlite.Sqlite3.execute(connection, "UPDATE probe SET value = 'acknowledged'")
     :ok = Exqlite.Sqlite3.close(connection)
-    DashboardPubSub.broadcast_changed()
+    refresh_watches()
     assert_receive {:current_projection, worker}
-    on_exit(fn -> send(worker, :continue) end)
+    release = release_on_exit(worker)
+    read = :gen_server.send_request(DashboardCache, {:json, pid, :joined, fn -> {:ok, %{decision: "duplicated"}} end})
 
-    read =
-      Task.async(fn ->
-        Repo.put_dynamic_repo(pid)
-        DashboardCache.json(Repo, :joined, fn -> {:ok, %{decision: "duplicated"}} end)
-      end)
-
-    assert Task.yield(read, 100) == nil
     assert {:ok, _, _} = DashboardCache.json(Repo, :independent, &payload/0)
-    send(worker, :continue)
-    assert {:ok, body, _etag} = Task.await(read)
+    release.()
+    assert {:reply, {:ok, body, _etag}} = :gen_server.wait_response(read, 1_000)
     assert Jason.decode!(body)["decision"] == "acknowledged"
   end
 
-  test "a failed projection releases waiting readers and later reads recover", %{pid: pid, path: path} do
+  test "a failed projection releases waiting readers and later reads recover", %{pid: pid} do
     caller = self()
 
     builder = fn ->
-      result = payload()
-
-      if elem(result, 1).decision == "acknowledged" do
-        send(caller, {:current_projection, self()})
-        receive do: (:continue -> :ok)
-      end
-
-      result
+      send(caller, {:current_projection, self()})
+      receive do: (:continue -> payload())
     end
 
-    DashboardCache.json(Repo, :failed, builder)
-    {:ok, connection} = Exqlite.Sqlite3.open(path)
-    :ok = Exqlite.Sqlite3.execute(connection, "UPDATE probe SET value = 'acknowledged'")
-    :ok = Exqlite.Sqlite3.close(connection)
-    DashboardPubSub.broadcast_changed()
+    read = :gen_server.send_request(DashboardCache, {:json, pid, :failed, builder})
     assert_receive {:current_projection, worker}
+    on_exit(fn -> send(worker, :continue) end)
 
-    read =
-      Task.async(fn ->
-        Repo.put_dynamic_repo(pid)
-        DashboardCache.json(Repo, :failed, &payload/0)
-      end)
-
-    assert Task.yield(read, 100) == nil
     Process.exit(worker, :kill)
-    assert {:error, {:storage_failed, _reason}} = Task.await(read)
+    assert {:reply, {:error, {:storage_failed, _reason}}} = :gen_server.wait_response(read, 1_000)
     assert {:ok, body, _etag} = DashboardCache.json(Repo, :failed, &payload/0)
-    assert Jason.decode!(body)["decision"] == "acknowledged"
+    assert Jason.decode!(body)["decision"] == "recorded"
   end
 
   test "memory-ledger reads after a write do not join an older unversioned snapshot" do
@@ -452,9 +498,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
         DashboardCache.json(Repo, :memory, &payload/0)
       end)
 
-    result = Task.yield(new_read, 100)
+    assert {:ok, fresh, _etag} = Task.await(new_read)
     release.()
-    assert {:ok, {:ok, fresh, _etag}} = result
     assert Jason.decode!(fresh)["decision"] == "acknowledged"
     assert {:ok, _old, _etag} = Task.await(old_read)
   end

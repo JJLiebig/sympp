@@ -37,6 +37,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
 
   alias SymphonyElixir.SymphonyPlusPlus.{Asks, BaseBranch, DashboardPubSub, HerdrCore, Id, Ownership, ReviewStatus}
   alias SymphonyElixir.SymphonyPlusPlus.Cards.{Card, Git}
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardCache
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
 
   @active ["working", "review_ci"]
@@ -453,7 +454,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
 
     cards
     |> Enum.sort_by(&(&1.state not in @active))
-    |> Enum.map(&public(&1, Map.get(rows, &1.id), Map.get(asks, &1.id, [])))
+    |> Enum.map(fn card ->
+      if card.state not in @active and card.ended_at do
+        DashboardCache.expire_at(DateTime.add(card.ended_at, retention_days * 86_400, :second))
+      end
+
+      public(card, Map.get(rows, card.id), Map.get(asks, card.id, []))
+    end)
   end
 
   # The latest worked-on row of each card: live first, else the latest.

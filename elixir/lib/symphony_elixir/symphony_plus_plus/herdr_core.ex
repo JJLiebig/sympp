@@ -16,7 +16,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   `{:ok, %{core_id: id, terminals: %{address => record}}}` (tests).
   """
 
-  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub}
+  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub, Observer}
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
 
   @cache_key {__MODULE__, :snapshot}
@@ -69,6 +69,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   @doc "The factory core's current snapshot: cached, or the last good one for up to 2 minutes."
   @spec current() :: {:ok, snapshot()} | :unavailable
   def current, do: snapshot(false)
+
+  @doc false
+  @spec last_good_deadline() :: integer() | nil
+  def last_good_deadline do
+    command = Application.get_env(:symphony_elixir, :sympp_herdr_core, "hc")
+
+    case last_good(:persistent_term.get(@cache_key, nil), command) do
+      {at, _snapshot} -> at + @last_good_ms
+      nil -> nil
+    end
+  end
+
+  @doc false
+  @spec refresh_on_demand() :: :ok
+  def refresh_on_demand do
+    # The installed factory already checks Herdr through its Observer.
+    with nil <- Process.whereis(Observer),
+         command when is_binary(command) <- Application.get_env(:symphony_elixir, :sympp_herdr_core, "hc") do
+      now = System.monotonic_time(:millisecond)
+
+      case :persistent_term.get(@cache_key, nil) do
+        {^command, at, _result, _good} when now - at < @cache_ms -> :ok
+        cached -> refresh_background(command, last_good(cached, command), now)
+      end
+    end
+
+    :ok
+  end
 
   @doc false
   @spec with_cached_reads((-> result)) :: result when result: var
@@ -201,18 +229,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   defp cached_command_snapshot(command, fresh?, last_good?) do
     now = System.monotonic_time(:millisecond)
 
-    {result, good} =
+    {result, good, checked_at} =
       case :persistent_term.get(@cache_key, nil) do
         {^command, at, result, good} when not fresh? and now - at < @cache_ms ->
-          {result, good}
+          {result, good, at}
 
         cached ->
-          load_uncached_snapshot(command, now, fresh?, cached)
+          {result, good} = load_uncached_snapshot(command, now, fresh?, cached)
+          {result, good, now}
       end
 
     case {result, good} do
-      {:unavailable, {at, good_result}} when last_good? and now - at < @last_good_ms -> good_result
-      _current -> result
+      {:unavailable, {at, good_result}} when last_good? and now - at < @last_good_ms ->
+        DashboardCache.track_core_expiry()
+        good_result
+
+      {{:ok, _snapshot}, _good} when last_good? ->
+        DashboardCache.track_core_expiry()
+        result
+
+      {:unavailable, _good} when last_good? ->
+        DashboardCache.expire_at(checked_at + @cache_ms)
+        result
+
+      _current ->
+        result
     end
   end
 

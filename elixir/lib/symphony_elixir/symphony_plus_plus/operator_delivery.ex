@@ -2,6 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorDelivery do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.Asks.Ask
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardCache
   alias SymphonyElixir.SymphonyPlusPlus.HerdrCore
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Repo
@@ -36,7 +37,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorDelivery do
 
   @spec interrupted?(DateTime.t()) :: boolean()
   def interrupted?(started_at) do
-    DateTime.diff(DateTime.utc_now(), started_at, :millisecond) > @delivery_window_ms
+    deadline = DateTime.add(started_at, @delivery_window_ms + 1, :millisecond)
+    interrupted? = DateTime.compare(DateTime.utc_now(), deadline) != :lt
+    unless interrupted?, do: DashboardCache.expire_at(deadline)
+    interrupted?
   end
 
   defp envelope(repo, work_request_id, subject, fields) do

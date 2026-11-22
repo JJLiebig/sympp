@@ -211,11 +211,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
     previous_trap_exit = Process.flag(:trap_exit, true)
 
     try do
-      case HttpServer.start_link(
-             host: server_host(Keyword.fetch!(opts, :host)),
-             port: Keyword.fetch!(opts, :port),
-             prime_dashboard: not OfflineSandbox.enabled?()
-           ) do
+      case HttpServer.start_link(host: server_host(Keyword.fetch!(opts, :host)), port: Keyword.fetch!(opts, :port)) do
         {:ok, pid} ->
           Process.put(:sympp_cockpit_endpoint_pid, pid)
           :ok

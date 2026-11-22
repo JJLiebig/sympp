@@ -57,5 +57,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCoreTest do
       assert_receive :operator_dashboard_changed
       assert Signals.worker_terminal(worker).preview_url == expected
     end
+
+    # The standalone cockpit has no observer. Age the healthy snapshot and
+    # let a reader trigger the provider refresh without another ledger write.
+    {^command, _checked_at, result, good} = :persistent_term.get(cache_key)
+    :persistent_term.put(cache_key, {command, System.monotonic_time(:millisecond) - 15_001, result, good})
+    File.write!(data, Jason.encode!(%{terminals: [%{address: "t1", state: "live", labels: %{"sympp.role" => "worker"}}]}))
+    :ok = HerdrCore.refresh_on_demand()
+    assert_receive :operator_dashboard_changed, 2_000
+    assert {:live, _} = HerdrCore.view("test-core", "t1")
   end
 end
