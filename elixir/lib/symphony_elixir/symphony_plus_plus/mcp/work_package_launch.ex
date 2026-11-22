@@ -15,6 +15,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Service, as: WorkPackageService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
@@ -44,7 +45,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
   def hand_off(%Config{} = config, %Terminal{} = terminal, %WorkPackage{} = work_package, agent, target_repo_root \\ nil) when agent in @agents do
     with {:ok, worktree} <- prepare_worktree(config, terminal, work_package, target_repo_root),
          {:ok, assignment} <- WorkPackageDispatch.assignment(config.repo, worktree.work_package),
-         {:ok, file} <- write_assignment(worktree, work_package, assignment) do
+         {:ok, file} <- write_assignment(config.repo, worktree, assignment) do
       line = launch_line(work_package, worktree.worktree_path, file, agent)
       {:ok, %{worktree: worktree, assignment_file: file, launch_line: line}}
     end
@@ -100,13 +101,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
     })
   end
 
-  defp write_assignment(worktree, %WorkPackage{} = work_package, assignment) do
-    with {:ok, git_dir} <- git_dir(worktree.worktree_path),
-         file = Path.join(git_dir, @assignment_file),
-         :ok <- File.write(file, render_assignment(work_package, worktree, assignment)) do
-      {:ok, file}
+  defp write_assignment(repo, worktree, assignment) do
+    with {:ok, git_dir} <- git_dir(worktree.worktree_path) do
+      file = Path.join(git_dir, @assignment_file)
+      package = worktree.work_package
+      contents = render_assignment(package, worktree, assignment)
+
+      # A move can commit while an existing worktree is being checked.
+      # Publish only while the revision used for the assignment is current.
+      repo.transact(fn -> publish_assignment(repo, package, file, contents) end, mode: :immediate)
     else
       {:error, reason} -> {:error, {:assignment_write_failed, reason}}
+    end
+  rescue
+    error in Exqlite.Error ->
+      message = Exception.message(error)
+
+      if String.contains?(String.downcase(message), ["busy", "locked"]),
+        do: {:error, :database_busy},
+        else: {:error, {:storage_failed, message}}
+  end
+
+  defp publish_assignment(repo, %WorkPackage{id: id, contract_revision: revision}, file, contents) do
+    case WorkPackageRepository.get(repo, id) do
+      {:ok, %WorkPackage{contract_revision: ^revision}} ->
+        case File.write(file, contents) do
+          :ok -> {:ok, file}
+          {:error, reason} -> {:error, {:assignment_write_failed, reason}}
+        end
+
+      {:ok, %WorkPackage{}} ->
+        {:error, :stale_contract_revision}
+
+      error ->
+        error
     end
   end
 

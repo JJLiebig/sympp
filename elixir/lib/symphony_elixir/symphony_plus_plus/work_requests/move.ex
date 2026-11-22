@@ -2,7 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
   @moduledoc false
 
   alias Ecto.Changeset
-  alias SymphonyElixir.SymphonyPlusPlus.{BaseBranch, DashboardPubSub, FactoryRepos}
+  alias SymphonyElixir.SymphonyPlusPlus.{BaseBranch, DashboardPubSub, FactoryRepos, RepoIdentity}
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{DefaultClient, PullRequest, PullRequestProgress}
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
   alias SymphonyElixir.SymphonyPlusPlus.Planning.{Actor, ProgressEvent}
@@ -15,12 +15,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
     with {:ok, destination, destination_key} <- FactoryRepos.repository_scope(destination),
          {:ok, request} <- Repository.get(repo, id),
          :ok <- Phase.require_writable(request) do
-      source_key = scope_key(request.repo)
-
-      if source_key == destination_key do
+      if stored_key(request.repo) == destination_key do
         {:ok, result("unchanged", request, [])}
       else
-        move(repo, request, source_key, destination_key, %{attrs | repo: destination}, terminal)
+        target = %{attrs | repo: destination, base_branch: BaseBranch.canonicalize(attrs.base_branch)}
+        move(repo, request, Map.put(target, :key, destination_key), terminal)
       end
     end
   rescue
@@ -32,15 +31,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
         else: {:error, {:storage_failed, message}}
   end
 
-  defp move(repo, request, source_key, destination_key, attrs, terminal) do
-    with {:ok, {_packages, attachments}} <- moving_packages(repo, request, source_key) do
-      # Provider I/O stays outside the write transaction. The proof is about
-      # the repository pair, so it covers any newer attachment from that source.
-      rename? = confirmed_rename?(repo, source_key, destination_key, attachments)
+  defp move(repo, request, target, terminal) do
+    with :ok <- validate_base_branch(target.base_branch),
+         {:ok, packages} <- Repository.list_work_packages(repo, request.id),
+         source = move_source(request, packages),
+         {:ok, {_packages, attachments}} <- moving_packages(repo, packages, source) do
+      # Resolve checkout origins and GitHub's canonical name before the write.
+      # The proof covers any newer attachment from the same source repository.
+      renamed_to = confirmed_rename(repo, source.key, target.key, attachments)
+      target = Map.put(target, :renamed_to, renamed_to)
 
       result =
         repo.transact(
-          fn -> apply_move(repo, request.id, source_key, destination_key, rename?, attrs, terminal) end,
+          fn -> apply_move(repo, request.id, source, target, terminal) end,
           mode: :immediate
         )
 
@@ -51,41 +54,66 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
     end
   end
 
-  defp apply_move(repo, id, source_key, destination_key, rename?, attrs, terminal) do
+  defp apply_move(repo, id, source, target, terminal) do
     with {:ok, current} <- Repository.get(repo, id),
          :ok <- Phase.require_writable(current) do
-      case scope_key(current.repo) do
-        ^destination_key -> {:ok, result("unchanged", current, [])}
-        ^source_key -> persist_move(repo, current, source_key, destination_key, rename?, attrs, terminal)
-        _new_source -> {:error, :work_request_scope_changed}
+      cond do
+        stored_key(current.repo) == target.key -> {:ok, result("unchanged", current, [])}
+        current.repo == source.repo -> persist_move(repo, current, source, target, terminal)
+        true -> {:error, :work_request_scope_changed}
       end
     end
   end
 
-  defp persist_move(repo, request, source_key, destination_key, rename?, attrs, terminal) do
-    base = BaseBranch.canonicalize(attrs.base_branch) || request.base_branch
-    allowed_source = if rename?, do: source_key
+  defp persist_move(repo, request, source, target, terminal) do
+    base = target.base_branch || request.base_branch
+    allowed_source = if target.renamed_to, do: source.key
 
-    with {:ok, {packages, attachments}} <- moving_packages(repo, request, source_key),
-         :ok <- require_portable_attachments(attachments, allowed_source, destination_key),
-         {:ok, updated} <- repo.update(Changeset.change(request, repo: attrs.repo, base_branch: base)),
-         {:ok, decision} <- record_decision(repo, request, updated, attrs.rationale, terminal),
-         :ok <- move_packages(repo, packages, request, updated),
-         :ok <- move_attachments(repo, attachments, allowed_source, destination_key, decision.id, terminal) do
-      if rename?, do: carry_ci(repo, source_key, destination_key)
+    with {:ok, current_packages} <- Repository.list_work_packages(repo, request.id),
+         {:ok, {packages, attachments}} <- moving_packages(repo, current_packages, source),
+         :ok <- require_portable_attachments(attachments, allowed_source, target.key),
+         {:ok, updated} <- repo.update(Changeset.change(request, repo: target.repo, base_branch: base)),
+         {:ok, decision} <- record_decision(repo, request, updated, target.rationale, terminal),
+         :ok <- move_packages(repo, packages, attachments, request, updated),
+         :ok <- move_attachments(repo, attachments, source.key, target.renamed_to, decision.id, terminal) do
+      if target.renamed_to, do: carry_ci(repo, source.key, target.key)
       {:ok, result("moved", updated, packages)}
     end
   end
 
-  defp moving_packages(repo, request, source_key) do
-    with {:ok, packages} <- Repository.list_work_packages(repo, request.id),
-         packages = Enum.filter(packages, &(not Lifecycle.ended?(&1) and scope_key(&1.repo) == source_key)),
+  defp move_source(request, packages) do
+    repos = [request.repo | for(package <- packages, not Lifecycle.ended?(package), do: package.repo)]
+    keys = repos |> Enum.uniq() |> Map.new(&{&1, scope_key(&1)})
+    %{repo: request.repo, key: Map.fetch!(keys, request.repo), keys: keys}
+  end
+
+  defp moving_packages(repo, packages, source) do
+    open = Enum.reject(packages, &Lifecycle.ended?/1)
+
+    with true <- Enum.all?(open, &Map.has_key?(source.keys, &1.repo)),
+         packages = Enum.filter(open, &(Map.fetch!(source.keys, &1.repo) == source.key)),
          {:ok, attachments} <- PlanningRepository.pr_attachments(repo, Enum.map(packages, & &1.id)) do
       {:ok, {packages, attachments}}
+    else
+      false -> {:error, :work_request_scope_changed}
+      {:error, _reason} = error -> error
     end
   end
 
   defp scope_key(value) do
+    case stored_key(value) do
+      {:stored, _} = key ->
+        case RepoIdentity.local_git_origin_remote(value) do
+          nil -> key
+          origin -> stored_key(origin)
+        end
+
+      key ->
+        key
+    end
+  end
+
+  defp stored_key(value) do
     case FactoryRepos.repository_scope(value) do
       {:ok, _scope, key} -> key
       {:error, :invalid_repo_remote} -> {:stored, value}
@@ -94,19 +122,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
 
   # GitHub's old repository endpoint follows the rename and returns the
   # canonical full name. A matching PR number or head alone cannot prove this.
-  defp confirmed_rename?(repo, {:github, source}, {:github, destination}, attachments) do
+  defp confirmed_rename(repo, {:github, source}, {:github, destination}, attachments) when source != destination do
     needs_proof? = map_size(attachments) > 0 or Qualification.repository_has_ci?(repo, source)
 
     with true <- needs_proof?,
          {:ok, %{"id" => id, "full_name" => canonical}} <- DefaultClient.get_json("repos/#{source}", []),
-         true <- is_integer(id) and id > 0 and is_binary(canonical) do
-      String.downcase(canonical) == destination
+         true <- is_integer(id) and id > 0 and is_binary(canonical),
+         true <- String.downcase(canonical) == destination do
+      canonical
     else
-      _unverified -> false
+      _unverified -> nil
     end
   end
 
-  defp confirmed_rename?(_repo, _source, _destination, _attachments), do: false
+  defp confirmed_rename(_repo, _source, _destination, _attachments), do: nil
 
   defp require_portable_attachments(attachments, allowed_source, destination) do
     blockers =
@@ -125,16 +154,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
   end
 
   defp portable_attachment?({:ok, %{ref: ref}}, allowed_source, destination),
-    do: scope_key(ref.repository) in [allowed_source, destination]
+    do: stored_key(ref.repository) in [allowed_source, destination]
 
   defp portable_attachment?({:error, _reason}, _allowed_source, _destination), do: false
 
-  defp move_packages(repo, packages, request, destination) do
-    base_changed? = destination.base_branch != request.base_branch
-
+  defp move_packages(repo, packages, attachments, request, destination) do
     Enum.reduce_while(packages, :ok, fn package, :ok ->
       base =
-        if base_changed? and BaseBranch.equivalent?(package.base_branch, request.base_branch),
+        if inherits_base?(package, request, destination, attachments),
           do: destination.base_branch,
           else: package.base_branch
 
@@ -152,13 +179,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
     end)
   end
 
-  defp move_attachments(_repo, _attachments, nil, _destination, _decision_id, _terminal), do: :ok
+  defp inherits_base?(package, request, destination, attachments) do
+    destination.base_branch != request.base_branch and
+      not Map.has_key?(attachments, package.id) and BaseBranch.equivalent?(package.base_branch, request.base_branch)
+  end
 
-  defp move_attachments(repo, attachments, source, {:github, destination}, decision_id, terminal) do
+  defp move_attachments(_repo, _attachments, _source, nil, _decision_id, _terminal), do: :ok
+
+  defp move_attachments(repo, attachments, source, destination, decision_id, terminal) do
     actor = Actor.from_terminal(terminal)
 
     Enum.reduce_while(attachments, :ok, fn {id, {:ok, attachment}}, :ok ->
-      with true <- scope_key(attachment.ref.repository) == source,
+      with true <- stored_key(attachment.ref.repository) == source,
            {:ok, ref} <- PullRequest.parse_number(attachment.ref.number, destination),
            {:ok, _event} <- append_attachment(repo, actor, id, attachment, ref, decision_id) do
         {:cont, :ok}
@@ -198,6 +230,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
       "recorded_by_terminal" => terminal.key,
       "recorded_by_address" => terminal.display_address
     })
+  end
+
+  defp validate_base_branch(nil), do: :ok
+
+  defp validate_base_branch(branch) do
+    with false <- String.contains?(branch, <<0>>),
+         git when is_binary(git) <- System.find_executable("git") || System.find_executable("git.exe"),
+         {output, 0} <- System.cmd(git, ["check-ref-format", "--branch", branch], stderr_to_stdout: true),
+         true <- String.trim(output) == branch do
+      :ok
+    else
+      nil -> {:error, :git_not_found}
+      _invalid -> {:error, :invalid_base_branch}
+    end
   end
 
   defp result(status, request, packages) do

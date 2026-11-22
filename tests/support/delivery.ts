@@ -80,7 +80,7 @@ export class Provider {
       JSON.stringify(['api', '--hostname', 'github.com', '--method', 'GET'])) {
       return this.apiReplies.get(argv[5]) ?? { stdout: 'HTTP 404 synthetic API not found', exitCode: 1 };
     } else if (argv.length === 7 && argv[0] === 'pr' && argv[1] === 'view' &&
-      /^\d+$/.test(argv[2]) && argv[3] === '--repo' && ['example/service', 'example/client'].includes(argv[4]) && argv[5] === '--json') {
+      /^\d+$/.test(argv[2]) && argv[3] === '--repo' && ['example/service', 'example/client'].includes(argv[4].toLowerCase()) && argv[5] === '--json') {
       return this.replies.get(Number(argv[2])) ?? { stdout: 'HTTP 404 synthetic PR not found', exitCode: 1 };
     }
     return { stdout: 'Unexpected synthetic provider command', exitCode: 1 };

@@ -19,6 +19,10 @@ merges or close the source PR and end or supersede its package first. Existing
 checkouts keep their paths and must point to the destination before you can dispatch
 them again.
 
+When the owner or a chief sets `base_branch` in `move_work_request`, the WorkRequest
+moves to that base, and only moved WorkPackages that used the previous base and
+have no attached PR adopt the new base.
+
 Dispatch refreshes preserve an existing worker: message it to re-read the assignment.
 Launch lines omit `--on` for the factory's Herdr machine name, which is also the
 dispatch default. Run that local form on the factory host. Initial Review Suite

@@ -113,7 +113,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
          %{
            "tool" => tool,
            "reason" => "work_request_scope_changed",
-           "message" => "The WorkRequest moved while this call was running.",
+           "message" => "Repository scope changed while this call was running.",
            "next_action" => "Read the WorkRequest and retry if needed."
          }}
 

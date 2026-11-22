@@ -51,7 +51,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
       %{
         "work_request_id" => string_schema(),
         "repo" => described_string_schema("Destination Git remote URL or owner/name."),
-        "base_branch" => described_string_schema("Destination base branch. Defaults to the current base branch."),
+        "base_branch" => described_string_schema("Destination base for the request and open packages on its old base without an attached PR. Defaults to the current base."),
         "rationale" => described_string_schema("Why the WorkRequest is moving. Recorded in its decisions.")
       },
       ["work_request_id", "repo", "rationale"]

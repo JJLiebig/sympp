@@ -1,9 +1,9 @@
 import { expect } from 'e2e';
-import { access, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { test, snapshot } from '../support/authority.js';
-import { Client } from '../support/factory.js';
-import { git, repository, workPackage } from '../support/worktree-git.js';
+import { Client, contract } from '../support/factory.js';
+import { git, githubOrigin, repository, workPackage } from '../support/worktree-git.js';
 import { requestPath } from '../support/retention-history.js';
 
 const exists = async (path: string) => access(path).then(() => true, () => false);
@@ -101,4 +101,28 @@ test('offline snapshot lifecycle changes leave copied live worktree paths and so
   const original = await restarted.client();
   expect((await original.call('list_work_requests')).work_requests.map((row: any) => row.id)).toContain(request);
   expect(await readFile(join(path, 'keep.txt'), 'utf8')).toBe('Source worktree content\n');
+});
+
+test('dispatch reuses a managed worktree after its repository checkout moves', async ({ processes }) => {
+  const { root } = processes;
+  const reposRoot = join(root, 'repos');
+  await mkdir(reposRoot);
+  const old = await repository(reposRoot, 'original');
+  await githubOrigin(root, old, 'example/service');
+  const factory = processes.factory('worktree-move', { env: { SYMPP_REPOS_ROOT: reposRoot } });
+  const architect = await factory.client();
+  const request = await architect.request('Move factory checkout');
+  const [wp] = await architect.addPackages([contract('Continue existing checkout')]);
+  const original = await architect.call('dispatch_work_package', { work_package_id: wp });
+
+  const checkout = join(reposRoot, 'renamed');
+  await rename(old.checkout, checkout);
+  await githubOrigin(root, { ...old, checkout }, 'example/client');
+  await git(root, checkout, 'worktree', 'repair', original.worktree.path);
+  await architect.call('move_work_request', { work_request_id: request, repo: 'example/client', rationale: 'The checkout moved with the repository.' });
+
+  const replay = await architect.call('dispatch_work_package', { work_package_id: wp });
+  expect(replay.replay).toBe(true);
+  expect(replay.worktree.path).toBe(original.worktree.path);
+  expect(await readFile(replay.assignment_file, 'utf8')).toContain('example/client');
 });
