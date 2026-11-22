@@ -24,11 +24,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     if Process.whereis(__MODULE__) do
       GenServer.call(__MODULE__, {:json, source, surface, fun}, :infinity)
     else
-      render(fun, nil) |> elem(0)
+      render(fun, nil, surface) |> elem(0)
     end
   end
 
-  def json(_repo, _surface, fun), do: render(fun, nil) |> elem(0)
+  def json(_repo, surface, fun), do: render(fun, nil, surface) |> elem(0)
 
   @doc false
   @spec invalidate([atom()]) :: :ok
@@ -108,7 +108,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
       else: start_refresh(state, key, version, source, fun)
   end
 
-  defp start_refresh(state, key, version, source, fun) do
+  defp start_refresh(state, {_source, surface} = key, version, source, fun) do
     owner = self()
     ref = make_ref()
     database = Map.get(state.databases, source)
@@ -123,32 +123,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     {:ok, pid} =
       Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
         Process.flag(:priority, :low)
-        send(owner, {:refreshed, key, ref, version, build_on_ledger(source, database, fun, previous)})
+        send(owner, {:refreshed, key, ref, version, build_on_ledger(source, database, fun, previous, surface)})
       end)
 
     %{state | refreshing: Map.put(state.refreshing, {key, version}, {pid, ref, epoch, Process.monitor(pid)})}
   end
 
-  defp build_on_ledger(source, nil, fun, previous) do
+  defp build_on_ledger(source, nil, fun, previous, surface) do
     Repo.put_dynamic_repo(source)
-    build(fun, previous)
+    build(fun, previous, surface)
   end
 
-  defp build_on_ledger(_source, database, fun, previous) do
+  defp build_on_ledger(_source, database, fun, previous, surface) do
     # Projection snapshots may hold a checkout while doing CPU work. Give each
     # file-backed build its own connection so it cannot exhaust the write pool.
     {:ok, reader} = Repo.start_link(database: database, name: nil, pool_size: 1, log: false)
     Repo.put_dynamic_repo(reader)
 
     try do
-      build(fun, previous)
+      build(fun, previous, surface)
     after
       GenServer.stop(reader)
     end
   end
 
-  defp build(fun, previous) do
-    HerdrCore.with_cached_reads(fn -> render(fun, previous) end)
+  defp build(fun, previous, surface) do
+    HerdrCore.with_cached_reads(fn -> render(fun, previous, surface) end)
   rescue
     error in Exqlite.Error ->
       message = Exception.message(error)
@@ -158,12 +158,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
         else: {{:error, {:storage_failed, message}}, nil}
   end
 
-  defp render({read_inputs, project}, previous) do
+  defp render({read_inputs, project}, previous, surface) do
     case read_inputs.() do
       {:ok, inputs} ->
         case previous do
           {_result, ^inputs} -> previous
-          _changed -> {encode(project.(inputs)), inputs}
+          _changed -> {encode(project.(inputs), surface), inputs}
         end
 
       {:error, _} = error ->
@@ -171,7 +171,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     end
   end
 
-  defp render(project, _previous), do: {encode(project.()), nil}
+  defp render(project, _previous, surface), do: {encode(project.(), surface), nil}
 
   @impl true
   def handle_cast({:invalidate, surfaces}, state) do
@@ -390,12 +390,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     end
   end
 
-  defp encode({:ok, payload}) do
-    body = Jason.encode!(payload)
-    # generated_at describes the snapshot, not a board change.
-    digest = :crypto.hash(:sha256, Jason.encode!(Map.delete(payload, :generated_at))) |> Base.encode16(case: :lower)
-    {:ok, body, "\"#{digest}\""}
+  defp encode({:ok, payload}, surface) do
+    # Snapshot metadata stays outside the digest. Herdr's fetch only exposes the body.
+    content = payload |> Map.drop([:generated_at, :etag]) |> Jason.encode!()
+    digest = :crypto.hash(:sha256, content) |> Base.encode16(case: :lower)
+    etag = "\"#{digest}\""
+    body = if surface == :herdr, do: Map.put(payload, :etag, etag), else: payload
+    {:ok, Jason.encode!(body), etag}
   end
 
-  defp encode(error), do: error
+  defp encode(error, _surface), do: error
 end
