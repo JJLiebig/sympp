@@ -153,6 +153,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewStatus do
   def state(:not_started, _head), do: :pending
   def state(_unknown, _head), do: :unknown
 
+  @doc false
+  @spec snapshot(map(), map() | nil) :: map()
+  def snapshot(review, %{} = previous) do
+    if Map.delete(review, "observed_at") == Map.delete(previous, "observed_at"), do: previous, else: review
+  end
+
+  def snapshot(review, nil), do: review
+
   defp normalize(payload) do
     %{
       "evidence_id" => text(payload["review"]),

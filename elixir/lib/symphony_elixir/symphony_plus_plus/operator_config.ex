@@ -15,6 +15,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorConfig do
     end
   end
 
+  @doc false
+  @spec revision() :: binary() | nil
+  def revision do
+    case File.read(config_path()) do
+      {:ok, contents} -> :crypto.hash(:sha256, contents)
+      _unavailable -> nil
+    end
+  end
+
   defp normalize_repos(repos) when is_map(repos), do: Map.new(repos, fn {key, value} -> {String.downcase(key), value} end)
   defp normalize_repos(_repos), do: %{}
 

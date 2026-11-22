@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
+  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub}
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.DefaultClient
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
@@ -303,6 +303,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
         Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
           try do
             fetch_remote(path, state, now_ms())
+            DashboardCache.invalidate([:hydrated, :herdr])
             DashboardPubSub.broadcast_changed()
           after
             :ets.delete(state.table, pending_key)

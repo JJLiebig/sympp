@@ -43,9 +43,17 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
 
   @spec operator_dashboard_payload(module()) :: {:ok, map()} | {:error, term()}
   def operator_dashboard_payload(repo) do
+    with {:ok, repo_identity_catalog} <- Dashboard.local_operator_repo_identity_catalog(repo) do
+      operator_dashboard_payload(repo, repo_identity_catalog)
+    end
+  end
+
+  @doc false
+  @spec operator_dashboard_payload(module(), map()) :: {:ok, map()} | {:error, term()}
+  def operator_dashboard_payload(repo, repo_identity_catalog) do
     operator_config = OperatorConfig.load()
 
-    with {:ok, context} <- operator_dashboard_context(repo),
+    with {:ok, context} <- operator_dashboard_context(repo, repo_identity_catalog),
          {:ok, work_requests} <- WorkRequestRepository.list(repo) do
       priority_dashboard_payload(repo, Map.put(context, :operator_config, operator_config), work_requests)
     end
@@ -348,13 +356,8 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     end
   end
 
-  defp operator_dashboard_context(repo) do
-    operator_dashboard_context(repo, false, nil)
-  end
-
-  defp operator_dashboard_context(repo, false, _work_requests) do
-    with {:ok, repo_identity_catalog} <- Dashboard.local_operator_repo_identity_catalog(repo),
-         {:ok, settings} <- OperatorSettingsRepository.get(repo),
+  defp operator_dashboard_context(repo, repo_identity_catalog) do
+    with {:ok, settings} <- OperatorSettingsRepository.get(repo),
          {:ok, work_request_work_package_id_sets} <- work_request_work_package_id_sets(repo, false) do
       {:ok, operator_dashboard_context_map(repo, repo_identity_catalog, settings, work_request_work_package_id_sets)}
     end

@@ -5,13 +5,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   alias Exqlite.Sqlite3
   alias SymphonyElixir.SymphonyPlusPlus.{DashboardPubSub, HerdrCore, OperatorConfig, Repo}
 
+  # The ledger version doesn't cover run age, card expiry, or local repository
+  # identity changes. A surface can recheck just its external inputs on expiry.
   @ttl_ms 15_000
   @refresh_interval_ms 250
+
+  @type result :: {:ok, term()} | {:error, term()}
+  @type projection :: (-> result()) | {(-> result()), (term() -> result())}
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
-  @spec json(module(), term(), (-> term())) :: {:ok, binary(), binary()} | {:error, term()}
+  @spec json(module(), term(), projection()) :: {:ok, binary(), binary()} | {:error, term()}
   def json(Repo, surface, fun) do
     source = Repo.get_dynamic_repo()
     source = if is_atom(source), do: Process.whereis(source), else: source
@@ -19,11 +24,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     if Process.whereis(__MODULE__) do
       GenServer.call(__MODULE__, {:json, source, surface, fun}, :infinity)
     else
-      encode(fun.())
+      render(fun, nil) |> elem(0)
     end
   end
 
-  def json(_repo, _surface, fun), do: encode(fun.())
+  def json(_repo, _surface, fun), do: render(fun, nil) |> elem(0)
+
+  @doc false
+  @spec invalidate([atom()]) :: :ok
+  def invalidate(surfaces), do: GenServer.cast(__MODULE__, {:invalidate, surfaces})
 
   @impl true
   def init(_opts) do
@@ -38,7 +47,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
        builders: %{},
        refreshing: %{},
        waiters: %{},
-       epoch: 0,
+       epochs: %{},
+       refresh_pending?: false,
        clock: fn -> System.monotonic_time(:millisecond) end
      }}
   end
@@ -51,16 +61,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
       {connection, state} = connection(source, state)
       # Without a file version (for example an in-memory ledger), reads must
       # build independently rather than join a snapshot predating their write.
-      version = cache_version(connection) || make_ref()
+      version = cache_version(connection, surface) || make_ref()
       key = {source, surface}
       state = remember_builder(state, key, source, fun, connection)
       now = state.clock.()
+      epoch = epoch(state, key)
 
       case Map.get(state.entries, key) do
-        {^version, expires, result} when not is_nil(version) and expires > now ->
+        {^version, ^epoch, expires, {result, _inputs}} when expires > now ->
           {:reply, result, state}
 
-        {^version, _expires, result} when not is_nil(version) ->
+        {^version, _epoch, _expires, {result, _inputs}} ->
           # Ledger data is still current. Refresh time-derived observations
           # without making a quiet board's next poll rebuild the projection.
           {:reply, result, refresh(state, key, version, source, fun)}
@@ -101,68 +112,101 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     owner = self()
     ref = make_ref()
     database = Map.get(state.databases, source)
+    epoch = epoch(state, key)
+
+    previous =
+      case Map.get(state.entries, key) do
+        {^version, ^epoch, _expires, snapshot} -> snapshot
+        _changed -> nil
+      end
 
     {:ok, pid} =
       Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
         Process.flag(:priority, :low)
-        send(owner, {:refreshed, key, ref, version, build_on_ledger(source, database, fun)})
+        send(owner, {:refreshed, key, ref, version, build_on_ledger(source, database, fun, previous)})
       end)
 
-    %{state | refreshing: Map.put(state.refreshing, {key, version}, {pid, ref, state.epoch, Process.monitor(pid)})}
+    %{state | refreshing: Map.put(state.refreshing, {key, version}, {pid, ref, epoch, Process.monitor(pid)})}
   end
 
-  defp build_on_ledger(source, nil, fun) do
+  defp build_on_ledger(source, nil, fun, previous) do
     Repo.put_dynamic_repo(source)
-    build(fun)
+    build(fun, previous)
   end
 
-  defp build_on_ledger(_source, database, fun) do
+  defp build_on_ledger(_source, database, fun, previous) do
     # Projection snapshots may hold a checkout while doing CPU work. Give each
     # file-backed build its own connection so it cannot exhaust the write pool.
     {:ok, reader} = Repo.start_link(database: database, name: nil, pool_size: 1, log: false)
     Repo.put_dynamic_repo(reader)
 
     try do
-      build(fun)
+      build(fun, previous)
     after
       GenServer.stop(reader)
     end
   end
 
-  defp build(fun) do
-    encode(HerdrCore.with_cached_reads(fun))
+  defp build(fun, previous) do
+    HerdrCore.with_cached_reads(fn -> render(fun, previous) end)
   rescue
     error in Exqlite.Error ->
       message = Exception.message(error)
 
       if String.contains?(String.downcase(message), ["busy", "locked"]),
-        do: {:error, :database_busy},
-        else: {:error, {:storage_failed, message}}
+        do: {{:error, :database_busy}, nil},
+        else: {{:error, {:storage_failed, message}}, nil}
+  end
+
+  defp render({read_inputs, project}, previous) do
+    case read_inputs.() do
+      {:ok, inputs} ->
+        case previous do
+          {_result, ^inputs} -> previous
+          _changed -> {encode(project.(inputs)), inputs}
+        end
+
+      {:error, _} = error ->
+        {error, nil}
+    end
+  end
+
+  defp render(project, _previous), do: {encode(project.()), nil}
+
+  @impl true
+  def handle_cast({:invalidate, surfaces}, state) do
+    epochs = Enum.reduce(surfaces, state.epochs, &Map.update(&2, &1, 1, fn epoch -> epoch + 1 end))
+    {:noreply, queue_refresh(%{state | epochs: epochs})}
   end
 
   @impl true
   def handle_info(:operator_dashboard_changed, state) do
-    {:noreply, refresh_registered(%{state | epoch: state.epoch + 1}, true)}
+    {:noreply, queue_refresh(state)}
   end
 
   def handle_info(:refresh_tick, state) do
     Process.send_after(self(), :refresh_tick, @refresh_interval_ms)
-    {:noreply, refresh_registered(state, false)}
+    {:noreply, refresh_registered(state)}
   end
 
-  def handle_info({:refreshed, {source, _surface} = key, ref, version, result}, state) do
+  def handle_info(:refresh_registered, state) do
+    {:noreply, refresh_registered(%{state | refresh_pending?: false})}
+  end
+
+  def handle_info({:refreshed, {source, surface} = key, ref, version, {result, _inputs} = snapshot}, state) do
     job_key = {key, version}
 
     case Map.get(state.refreshing, job_key) do
       {_pid, ^ref, epoch, monitor} ->
         Process.demonitor(monitor, [:flush])
-        entries = refreshed_entries(state, source, key, version, result)
+        latest = cache_version(Map.get(state.sources, source), surface)
+        entries = refreshed_entries(state, key, version == latest, {version, epoch}, snapshot)
         state = reply_waiters(state, ref, result)
         state = %{state | entries: entries, refreshing: Map.delete(state.refreshing, job_key)}
         # Publish completed snapshots for liveness, then catch up if a signal
         # arrived while building. Continuous signals must not starve readers.
-        changed? = epoch != state.epoch or cache_version(Map.get(state.sources, source)) != version
-        state = if changed?, do: refresh_key(state, key), else: state
+        changed? = epoch != epoch(state, key) or latest != version
+        state = if changed?, do: refresh_key(state, key, latest), else: state
         {:noreply, state}
 
       _superseded ->
@@ -219,13 +263,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     %{state | waiters: remaining}
   end
 
-  defp refreshed_entries(state, source, key, version, result) do
+  defp refreshed_entries(state, key, current?, {version, epoch}, {result, _inputs} = snapshot) do
     # Never label a snapshot with a newer commit that raced its construction.
-    if version != nil and match?({:ok, _, _}, result) and cache_version(Map.get(state.sources, source)) == version do
-      entry = {version, state.clock.() + @ttl_ms, result}
+    if current? and match?({:ok, _, _}, result) do
+      entry = {version, epoch, state.clock.() + @ttl_ms, snapshot}
 
       case Map.get(state.entries, key) do
-        {_old_version, _expires, {:ok, _body, etag}} when elem(result, 2) != etag ->
+        {_old_version, _epoch, _expires, {{:ok, _body, etag}, _inputs}} when elem(result, 2) != etag ->
           DashboardPubSub.broadcast_refreshed()
           Map.put(state.entries, key, entry)
 
@@ -241,38 +285,64 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     end
   end
 
-  defp refresh_registered(state, force?) do
-    versions = Map.new(state.sources, fn {source, connection} -> {source, cache_version(connection)} end)
-    now = state.clock.()
+  defp queue_refresh(%{refresh_pending?: true} = state), do: state
 
-    Enum.reduce(state.builders, state, fn {key, {source, fun}}, state ->
-      version = Map.get(versions, source)
+  defp queue_refresh(state) do
+    send(self(), :refresh_registered)
+    %{state | refresh_pending?: true}
+  end
 
-      current? =
-        case Map.get(state.entries, key) do
-          {^version, expires, _result} when expires > now -> true
-          _stale -> false
-        end
+  defp refresh_registered(%{builders: builders} = state) when map_size(builders) == 0, do: state
 
-      if version != nil and (force? or not current?),
-        do: refresh(state, key, version, source, fun),
-        else: state
+  defp refresh_registered(state) do
+    versions = Map.new(state.sources, fn {source, connection} -> {source, ledger_versions(connection)} end)
+    config = OperatorConfig.revision()
+
+    Enum.reduce(state.builders, state, fn {{source, surface} = key, _builder}, state ->
+      version = surface_version(Map.get(versions, source), surface, config)
+      refresh_key(state, key, version)
     end)
   end
 
-  defp refresh_key(state, {source, _surface} = key) do
+  defp refresh_key(state, {source, _surface} = key, version) do
     with {^source, fun} <- Map.get(state.builders, key),
-         version when not is_nil(version) <- cache_version(Map.get(state.sources, source)) do
+         false <- is_nil(version),
+         false <- current?(state, key, version) do
       refresh(state, key, version, source, fun)
     else
       _closed -> state
     end
   end
 
-  defp cache_version(connection) do
-    case data_version(connection) do
-      nil -> nil
-      version -> {version, OperatorConfig.load()}
+  defp current?(state, key, version) do
+    epoch = epoch(state, key)
+    now = state.clock.()
+
+    case Map.get(state.entries, key) do
+      {^version, ^epoch, expires, _result} when expires > now -> true
+      _stale -> false
+    end
+  end
+
+  defp epoch(state, {_source, surface}), do: Map.get(state.epochs, surface, 0)
+
+  defp cache_version(connection, surface) do
+    surface_version(ledger_versions(connection), surface, OperatorConfig.revision())
+  end
+
+  defp surface_version(nil, _surface, _config), do: nil
+  defp surface_version({:revisions, [_priority, archived, _live, _native]}, :archived, _config), do: archived
+  defp surface_version({:revisions, [priority, _archived, _live, _native]}, :priority, config), do: {priority, config}
+  defp surface_version({:revisions, [_priority, _archived, live, _native]}, surface, config) when surface in [:deferred, :hydrated], do: {live, config}
+  defp surface_version({:revisions, [_priority, _archived, _live, native]}, _surface, config), do: {native, config}
+  defp surface_version({:data_version, version}, _surface, config), do: {version, config}
+
+  defp ledger_versions(nil), do: nil
+
+  defp ledger_versions(connection) do
+    case query_row(connection, "SELECT priority, archived, live, native FROM sympp_dashboard_revisions") do
+      [_, _, _, _] = revisions -> {:revisions, revisions}
+      _unavailable -> data_version(connection)
     end
   end
 
@@ -284,9 +354,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   end
 
   defp open_connection(source, state) do
-    # A dedicated read-only connection observes commits by *every* writer,
-    # including other factory processes. data_version is connection-local;
-    # querying it through the Ecto pool would not be a valid cache token.
+    # A dedicated reader observes committed versions from every writer,
+    # including other factory processes, without using the write pool.
     with {:ok, %{rows: rows}} <- Repo.query("PRAGMA database_list"),
          [_, "main", path] when path != "" <- Enum.find(rows, &(Enum.at(&1, 1) == "main")),
          {:ok, connection} <- Sqlite3.open(path, mode: :readonly) do
@@ -297,14 +366,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     end
   end
 
-  defp data_version(nil), do: nil
-
   defp data_version(connection) do
-    case Sqlite3.prepare(connection, "PRAGMA data_version") do
+    case query_row(connection, "PRAGMA data_version") do
+      [version] -> {:data_version, version}
+      _unavailable -> nil
+    end
+  end
+
+  defp query_row(connection, sql) do
+    case Sqlite3.prepare(connection, sql) do
       {:ok, statement} ->
         try do
           case Sqlite3.step(connection, statement) do
-            {:row, [version]} -> version
+            {:row, row} -> row
             _unavailable -> nil
           end
         after

@@ -153,9 +153,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
       end)
 
     views = Enum.flat_map(watched, &view/1)
-    Enum.each(watched, &observe_package(repo, &1, Map.get(reviews, &1.package.id, :none), views))
 
-    guarded(fn -> Cards.apply(repo, cards, results, opts) end, :ok)
+    {result, _changed?} =
+      DashboardPubSub.coalesce_changed(fn ->
+        Enum.each(watched, &observe_package(repo, &1, Map.get(reviews, &1.package.id, :none), views))
+        guarded(fn -> Cards.apply(repo, cards, results, opts) end, :ok)
+      end)
+
+    result
   end
 
   # Cards never stop the package sweep.
@@ -415,7 +420,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   # The merge itself goes through the delivery evidence path; a failed merge
   # record is retried on every sweep while the PR stays watched.
   defp merge(repo, package, attached, payload, true = _changed?) do
-    case in_transaction(repo, package, fn -> record(repo, package, attached, payload) end) do
+    work = fn ->
+      with :ok <- record(repo, package, attached, payload), do: {:ok, true}
+    end
+
+    case in_transaction(repo, package, work) do
       :ok -> record_merge(repo, package, payload)
       :retry -> :retry
     end
@@ -430,8 +439,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
          {:ok, candidate_head} <- Qualification.candidate_head(repo, current),
          :ok <- if(changed?, do: record(repo, current, attached, payload), else: :ok),
          {:ok, decision} <- Qualification.decide(repo, current, facts(current, pr, review, stacked_on), candidate_head),
-         {:ok, _updated} <- Qualification.apply_decision(repo, Actor.observer(), current, decision, pr["head_sha"]) do
-      :ok
+         {:ok, updated} <- Qualification.apply_decision(repo, Actor.observer(), current, decision, pr["head_sha"]) do
+      {:ok, changed? or updated.status != current.status}
     end
   end
 
@@ -445,8 +454,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   # `work` runs inside the transaction; an `{:error, _}` result rolls it back.
   defp in_transaction(repo, package, work) do
     case repo.transaction(fn -> rollback_on_error(repo, work.()) end) do
-      {:ok, :ok} ->
-        DashboardPubSub.broadcast_changed()
+      {:ok, {:ok, changed?}} ->
+        if changed?, do: DashboardPubSub.broadcast_changed()
         :ok
 
       {:error, reason} ->
@@ -525,23 +534,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     end
   end
 
-  defp review_payload({:ok, review}, _observation), do: review
+  defp review_payload({:ok, review}, observation), do: ReviewStatus.snapshot(review, observation && observation.review)
   defp review_payload(:not_started, _observation), do: %{"status" => "not_started"}
   defp review_payload(:none, _observation), do: nil
   # An unreachable host keeps the last review it reported.
   defp review_payload(:unknown, observation), do: observation && observation.review
 
   defp store(repo, work_package_id, observation, attrs) do
-    attrs = Map.put(attrs, :observed_at, DateTime.utc_now(:microsecond))
-    fields = [:pr, :review, :stale, :stacked_on]
-    changed? = is_nil(observation) or Map.take(observation, fields) != Map.take(attrs, fields)
+    changeset = Ecto.Changeset.change(observation || %Observation{work_package_id: work_package_id}, attrs)
 
-    (observation || %Observation{work_package_id: work_package_id})
-    |> Ecto.Changeset.change(attrs)
-    |> repo.insert_or_update()
-    |> case do
-      {:ok, _stored} -> if changed?, do: DashboardPubSub.broadcast_changed()
-      {:error, reason} -> log_failure(%WorkPackage{id: work_package_id}, reason)
+    if is_nil(observation) or changeset.changes != %{} do
+      changeset
+      |> Ecto.Changeset.put_change(:observed_at, DateTime.utc_now(:microsecond))
+      |> repo.insert_or_update()
+      |> case do
+        {:ok, _stored} -> DashboardPubSub.broadcast_changed()
+        {:error, reason} -> log_failure(%WorkPackage{id: work_package_id}, reason)
+      end
     end
 
     :ok

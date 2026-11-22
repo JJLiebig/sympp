@@ -368,7 +368,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
   defp pr({:ok, %{} = pr}), do: Map.take(pr, ~w(repository number url state draft merged merged_at head_sha branch base_branch ci github_review))
   defp pr(_none_or_unknown), do: nil
 
-  defp review_payload({:ok, review}, _previous), do: review
+  defp review_payload({:ok, review}, previous), do: ReviewStatus.snapshot(review, previous)
   defp review_payload(:not_started, _previous), do: %{"status" => "not_started"}
   # An unreachable host keeps the last status it reported.
   defp review_payload(_none_or_unknown, previous), do: previous

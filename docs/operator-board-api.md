@@ -276,6 +276,9 @@ Review progress remains in `review_signal.step`, `current`, `total`, `round`,
 `observation_state`. `pr_signal.checks.status` remains `passing`, `pending`,
 `failing`, or `unavailable`; missing checks never imply success.
 
+`review_signal.observed_at` records when the stored review snapshot was observed,
+and it remains unchanged on repeated reads of the same evidence.
+
 Each round-history entry contains `number`, `round_id`, `lane`, `step`, `status`,
 `outcome` (`findings`, `clean`, `blocked`, or `null`), `findings` (integer or
 `null`), `started_at`, and `finished_at`. Provider strings are trimmed and capped
