@@ -68,7 +68,7 @@ type Fresh = Read<Loaded> | null;
 export function App() {
   const { loaded, failure, picked, setAt, read } = useLiveBoard();
   const [direction, setDirection] = useChoice("view", START.direction, (index) => DIRECTIONS[index]?.key ?? null);
-  const [area, setArea] = useChoice<string | null>("area", START.area, (name) => name);
+  const [area, setArea, showArea] = useChoice<string | null>("area", START.area, (name) => name);
   const [density, setDensity] = useChoice<Density>("show", START.density, (key) => key);
   const [seenAt, setSeenAt] = useState<number | null>(rememberedVisit);
   const [replay, setReplay] = useState(false);
@@ -76,7 +76,6 @@ export function App() {
 
   const act = useOperator(read);
   const unarrived = useUnarrived();
-  useShortcuts(setDirection, setNote);
   // The board shows what the operator just did before the factory has caught up; see pending.ts.
   const pending = usePending();
   const data = useMemo(() => (loaded ? { ...loaded, board: project(loaded.board, pending) } : null), [loaded, pending]);
@@ -88,14 +87,16 @@ export function App() {
     rememberVisit(at);
     setSeenAt(at);
   };
-  // An ask can sit in an area that is filtered out, so the filter is lifted before jumping to its goal.
+  // An ask can sit in an area that is filtered out, so the filter is lifted before jumping to its goal. The lift is
+  // not the operator's pick, so the remembered area stays.
   const goToGoal = (goalId: string) => {
-    flushSync(() => setArea(null));
+    flushSync(() => showArea(null));
     focusGoal(goalId);
   };
   const { views, changes, asks, areas, shown, cards, shownCards, lanes, grouped } = useShaped(data, at, since, area);
   const directions = DIRECTIONS.filter((entry) => entry.key !== "phases" || grouped);
   const current = directions.find((entry) => entry.key === DIRECTIONS[direction]?.key) ?? directions[0];
+  useShortcuts(directions.length, setDirection, setNote);
   const View = current.view;
   useTabSignal(asks.length + unarrived.length);
 
@@ -316,14 +317,14 @@ async function sketchOnly<T>(path: string): Promise<T | null> {
 }
 
 // A pick the operator makes is remembered as they make it, so a link that opened the board on something else does
-// not replace it.
+// not replace it. The third value changes what is shown without remembering it.
 function useChoice<T>(key: keyof typeof CHOICE_KEYS, start: T, stored: (value: T) => string | null) {
   const [value, setValue] = useState(start);
   const [choose] = useState(() => (next: T) => {
     rememberChoice(key, stored(next));
     setValue(next);
   });
-  return [value, choose] as const;
+  return [value, choose, setValue] as const;
 }
 
 // Choices, like the last visit, are remembered in this browser only; a private window or cleared data starts over.
@@ -432,14 +433,15 @@ function Scrubber({ at, data, onChange }: { at: number; data: Loaded; onChange: 
   );
 }
 
-function useShortcuts(setDirection: (index: number) => void, setNote: (note: string | null) => void) {
+// Keys 1 to 3 pick the views in the order offered; Phases is last, so a key past the offered views does nothing.
+function useShortcuts(offered: number, setDirection: (index: number) => void, setNote: (note: string | null) => void) {
   useEffect(() => {
     let timer = 0;
     const onKey = (event: KeyboardEvent) => {
       const index = ["1", "2", "3"].indexOf(event.key);
       // Digits typed into a field are text, not a view switch.
       const typing = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
-      if (index >= 0 && !typing) setDirection(index);
+      if (index >= 0 && index < offered && !typing) setDirection(index);
     };
     const onSay = (event: Event) => {
       setNote((event as CustomEvent<string>).detail);
@@ -452,5 +454,5 @@ function useShortcuts(setDirection: (index: number) => void, setNote: (note: str
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("fresh:say", onSay);
     };
-  }, [setDirection, setNote]);
+  }, [offered, setDirection, setNote]);
 }
