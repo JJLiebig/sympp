@@ -426,7 +426,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
     :ets.update_element(table, {:refreshing, slot}, {2, self()})
 
     if fresh(table, slot) == :stale do
-      state = %{table: table, budget: budget, fetch: fetch, deadline: now_ms() + @timeout_ms, memo: %{}, exhausted?: false}
+      deadline = now_ms() + @timeout_ms
+      state = %{table: table, budget: budget, fetch: fetch, deadline: deadline, memo: %{}, exhausted?: false}
       {value, state} = read.(state)
       unless state.exhausted?, do: DashboardCache.deployment_ready(table, slot, value)
     end
