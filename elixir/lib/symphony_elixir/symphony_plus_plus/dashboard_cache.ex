@@ -6,7 +6,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
 
   alias Exqlite.Sqlite3
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.Inputs
-  alias SymphonyElixir.SymphonyPlusPlus.{DashboardPubSub, DeploymentObservation, HerdrCore, Repo}
+  alias SymphonyElixir.SymphonyPlusPlus.{DashboardPubSub, DeploymentObservation, HerdrCore}
+  alias SymphonyElixir.SymphonyPlusPlus.{OperatorConfig, Repo}
 
   @refresh_interval_ms 250
   @deadline_key {__MODULE__, :deadline}
@@ -84,6 +85,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   @spec inputs_changed() :: :ok
   def inputs_changed, do: GenServer.cast(__MODULE__, :inputs_changed)
 
+  @doc false
+  @spec deployment_ready(:ets.table(), term(), term()) :: :ok
+  def deployment_ready(table, slot, value), do: GenServer.cast(__MODULE__, {:deployment_ready, table, slot, value})
+
   @impl true
   def init(_opts) do
     :ok = DashboardPubSub.subscribe()
@@ -95,6 +100,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
        entries: %{},
        watches: %{},
        refreshing: %{},
+       deployment_publication: nil,
        timer: nil,
        refresh_pending?: false,
        clock: fn -> System.monotonic_time(:millisecond) end
@@ -214,6 +220,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   def handle_cast({:unwatch, ref}, state), do: {:noreply, remove_watch(state, ref)}
   def handle_cast(:inputs_changed, state), do: {:noreply, queue_refresh(state)}
 
+  def handle_cast({:deployment_ready, table, slot, value}, state) do
+    {token, ready} = state.deployment_publication || schedule_deployment_publication()
+    {:noreply, %{state | deployment_publication: {token, Map.put(ready, {table, slot}, value)}}}
+  end
+
+  defp schedule_deployment_publication do
+    token = make_ref()
+    Process.send_after(self(), {:publish_deployments, token}, @refresh_interval_ms)
+    {token, %{}}
+  end
+
   @impl true
   def handle_info(:operator_dashboard_changed, state) do
     {:noreply, queue_refresh(state)}
@@ -228,6 +245,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   def handle_info(:refresh_watched, state) do
     {:noreply, refresh_watched(%{state | refresh_pending?: false})}
   end
+
+  def handle_info({:publish_deployments, token}, %{deployment_publication: {token, ready}} = state) do
+    DeploymentObservation.publish(ready)
+    {:noreply, %{state | deployment_publication: nil}}
+  end
+
+  def handle_info({:publish_deployments, _stale}, state), do: {:noreply, state}
 
   def handle_info({:refreshed, {key, generation} = job_key, sequence, {response, deadlines, inputs}}, state) do
     case Map.get(state.refreshing, job_key) do
@@ -388,9 +412,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   end
 
   defp refresh_watch(state, key, {{:revision, previous}, readers}, generation) do
-    if generation != nil and generation != previous do
+    revision = {generation, OperatorConfig.board_revision()}
+
+    if generation != nil and revision != previous do
       notify_readers(readers)
-      put_in(state.watches[key], {{:revision, generation}, readers})
+      put_in(state.watches[key], {{:revision, revision}, readers})
     else
       state
     end

@@ -2,7 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.Inputs
-  alias SymphonyElixir.SymphonyPlusPlus.{DashboardPubSub, OperatorConfig}
+  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub, OperatorConfig}
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.DefaultClient
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
@@ -47,16 +47,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
       deadline: now_ms() + Keyword.get(opts, :timeout_ms, @timeout_ms),
       remaining: Keyword.get(opts, :request_limit, @request_limit),
       memo: %{},
-      exhausted?: false,
-      signals: %{}
+      exhausted?: false
     }
 
-    {details, state} =
+    {details, _state} =
       Enum.map_reduce(payload.work_request_details, state, fn detail, state ->
         enrich_detail(detail, config, state)
       end)
 
-    track_signals(state.table, state.signals)
     observations = Map.new(details, &{&1.work_request.id, Map.take(&1.work_request, [:deployments, :default_branch])})
 
     payload
@@ -142,43 +140,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
     slot = {:signal, key}
     %{table: table, fetch: fetch} = state
     lookup = fn -> cached_signal(table, slot, empty, fetch, read) end
-    {value, _fresh?} = Inputs.memo(slot, lookup)
-    {value, put_in(state.signals[slot], {signal_value(value), lookup})}
+    value = Inputs.memo(slot, lookup)
+    Inputs.record(slot, signal_value(value), fn -> signal_value(lookup.()) end)
+    {value, state}
   end
 
   defp read_signal(_key, _empty, state, read), do: read.(state)
 
-  defp track_signals(table, signals) do
-    signals
-    |> Enum.group_by(fn {slot, _value} -> signal_repo(slot) end)
-    |> Enum.each(fn {repo, group} -> track_repo_signals(table, repo, group) end)
+  defp signal_value(%{observed_at: at} = value) do
+    # Completion of the first provider observation is visible even when
+    # evidence is unavailable. Later refetch timestamps don't change it.
+    value |> Map.delete(:observed_at) |> Map.put(:observed, not is_nil(at))
   end
 
-  defp track_repo_signals(table, repo, signals) do
-    Inputs.record({:deployments, make_ref()}, true, fn -> repo_signals_current?(table, repo, signals) end)
-  end
-
-  defp repo_signals_current?(table, repo, signals) do
-    {unchanged?, outstanding} =
-      Enum.reduce(signals, {true, []}, fn {slot, {previous, read}}, {unchanged?, outstanding} ->
-        {value, fresh?} = Inputs.memo(slot, read)
-        outstanding = if fresh?, do: outstanding, else: [slot | outstanding]
-        {unchanged? and signal_value(value) == previous, outstanding}
-      end)
-
-    case {unchanged?, outstanding} do
-      {false, [_ | _]} ->
-        # A native read can need more badges for this repo than the web
-        # batch did. Request one more wakeup when those badges are ready.
-        :ets.insert(table, {{:deferred_change, repo}, outstanding})
-        true
-
-      _ready_or_unchanged ->
-        unchanged?
-    end
-  end
-
-  defp signal_value(value) when is_map(value), do: Map.delete(value, :observed_at)
   defp signal_value(value), do: value
 
   @doc false
@@ -352,24 +326,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
   defp workflows(_config, nil), do: []
 
   defp workflows(config, repo) do
-    Inputs.record({:deploy_workflows, repo}, configured_workflows(config, repo), fn ->
-      configured_workflows(OperatorConfig.load(), repo)
+    Inputs.record({:deploy_workflows, repo}, OperatorConfig.configured_workflows(config, repo), fn ->
+      OperatorConfig.configured_workflows(OperatorConfig.load(), repo)
     end)
-  end
-
-  defp configured_workflows(config, repo) do
-    repository_config = Map.get(Map.get(config, "repos", %{}), repo)
-
-    case value(repository_config, :deploy_workflows) do
-      workflows when is_map(workflows) ->
-        workflows
-        |> Map.take(["dev", "prod"])
-        |> Enum.filter(fn {_env, name} -> is_binary(name) and String.trim(name) != "" end)
-        |> Enum.sort()
-
-      _absent ->
-        []
-    end
   end
 
   defp package_repo(package), do: canonical(value(value(package, :delivery), :pr_repository)) || repository(package)
@@ -434,21 +393,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
 
     case :ets.lookup(table, key) do
       [{^key, recorded_at, value, _}] when now - recorded_at < @ttl_ms ->
-        {value, true}
+        value
 
       rows ->
         refreshes = Process.get(@refreshes)
-        group = {table, signal_repo(key)}
-        Process.put(@refreshes, Map.update(refreshes, group, %{key => {fetch, read}}, &Map.put(&1, key, {fetch, read})))
+        Process.put(@refreshes, Map.put(refreshes, {table, key}, {fetch, read}))
 
         case rows do
-          [{^key, _at, value, _}] -> {value, false}
-          [] -> {fallback, false}
+          [{^key, _at, value, _}] -> value
+          [] -> fallback
         end
     end
   end
-
-  defp signal_repo({:signal, key}), do: elem(key, 1)
 
   defp start_refreshes(refreshes) when map_size(refreshes) == 0, do: :ok
 
@@ -456,65 +412,50 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
     budget = :atomics.new(1, signed: true)
     :atomics.put(budget, 1, @request_limit)
 
-    for {{table, repo}, signals} <- refreshes, :ets.insert_new(table, {{:refreshing, repo}, nil}) do
-      job = fn -> refresh_batch(table, repo, signals, budget) end
+    for {{table, slot}, recipe} <- refreshes, :ets.insert_new(table, {{:refreshing, slot}, nil}) do
+      job = fn -> refresh_signal(table, slot, recipe, budget) end
 
       case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, job) do
         {:ok, _pid} -> :ok
-        {:error, _reason} -> :ets.delete(table, {:refreshing, repo})
+        {:error, _reason} -> :ets.delete(table, {:refreshing, slot})
       end
     end
   end
 
-  defp refresh_batch(table, repo, signals, budget) do
-    :ets.update_element(table, {:refreshing, repo}, {2, self()})
-    state = %{table: table, budget: budget, deadline: now_ms() + @timeout_ms, memo: %{}, exhausted?: false}
+  defp refresh_signal(table, slot, {fetch, read}, budget) do
+    :ets.update_element(table, {:refreshing, slot}, {2, self()})
 
-    # Publish complete observations together for this repository. A slow
-    # provider read on a different repository can't hold this batch up.
-    observations =
-      signals
-      |> Task.async_stream(&refresh_signal(&1, state), max_concurrency: @request_limit, timeout: :infinity)
-      |> Enum.flat_map(fn
-        {:ok, {key, value}} -> [{key, value}]
-        {:ok, :skip} -> []
-      end)
+    if fresh(table, slot) == :stale do
+      state = %{table: table, budget: budget, fetch: fetch, deadline: now_ms() + @timeout_ms, memo: %{}, exhausted?: false}
+      {value, state} = read.(state)
+      unless state.exhausted?, do: DashboardCache.deployment_ready(table, slot, value)
+    end
+  after
+    :ets.delete(table, {:refreshing, slot})
+  end
 
+  @doc false
+  @spec publish(map()) :: :ok
+  def publish(ready) do
+    changed =
+      ready
+      |> Enum.group_by(fn {{table, _key}, _value} -> table end, fn {{_table, key}, value} -> {key, value} end)
+      |> Enum.map(fn {table, values} -> publish_table(table, values) end)
+
+    if Enum.any?(changed), do: DashboardPubSub.broadcast_changed()
+    :ok
+  end
+
+  defp publish_table(table, values) do
     at = now_ms()
 
     changed? =
-      Enum.any?(observations, fn {key, value} ->
+      Enum.any?(values, fn {key, value} ->
         signal_value(:ets.lookup_element(table, key, 3, nil)) != signal_value(value)
       end)
 
-    :ets.insert(table, Enum.map(observations, fn {key, value} -> {key, at, value, nil} end))
-    ready? = deferred_change_ready?(table, repo)
-    if changed? or ready?, do: DashboardPubSub.broadcast_changed()
-  after
-    :ets.delete(table, {:refreshing, repo})
-  end
-
-  defp deferred_change_ready?(table, repo) do
-    key = {:deferred_change, repo}
-
-    with [{^key, slots}] <- :ets.lookup(table, key),
-         true <- Enum.all?(slots, &match?({:ok, _, _}, fresh(table, &1))) do
-      :ets.delete_object(table, {key, slots})
-      true
-    else
-      _waiting_or_unchanged -> false
-    end
-  end
-
-  defp refresh_signal({key, {fetch, read}}, state) do
-    case fresh(state.table, key) do
-      {:ok, _, _} ->
-        :skip
-
-      :stale ->
-        {value, state} = read.(Map.put(state, :fetch, fetch))
-        if state.exhausted?, do: :skip, else: {key, value}
-    end
+    :ets.insert(table, Enum.map(values, fn {key, value} -> {key, at, value, nil} end))
+    changed?
   end
 
   defp fetch_remote(path, state) do

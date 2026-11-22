@@ -24,6 +24,52 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorConfig do
   defp normalize_repos(repos) when is_map(repos), do: Map.new(repos, fn {key, value} -> {String.downcase(key), value} end)
   defp normalize_repos(_repos), do: %{}
 
+  @doc false
+  @spec board_revision() :: {map(), map()}
+  def board_revision do
+    Inputs.memo(:operator_board_revision, fn ->
+      config = load()
+
+      repos =
+        for repo <- section_keys(config, "repos"),
+            area = configured_area(config, repo),
+            workflows = configured_workflows(config, repo),
+            area != nil or workflows != [],
+            into: %{},
+            do: {repo, {area, workflows}}
+
+      machines =
+        for host <- section_keys(config, "machines"),
+            location = configured_location(config, host),
+            location != nil,
+            into: %{},
+            do: {host, location}
+
+      {repos, machines}
+    end)
+  end
+
+  defp section_keys(config, section) do
+    case Map.get(config, section) do
+      values when is_map(values) -> Map.keys(values)
+      _unavailable -> []
+    end
+  end
+
+  @doc false
+  @spec configured_workflows(map(), String.t()) :: [{String.t(), String.t()}]
+  def configured_workflows(config, repo) do
+    with repository when is_map(repository) <- entry(config, "repos", repo),
+         workflows when is_map(workflows) <- Map.get(repository, :deploy_workflows, repository["deploy_workflows"]) do
+      workflows
+      |> Map.take(["dev", "prod"])
+      |> Enum.filter(fn {_environment, name} -> filled_string?(name) end)
+      |> Enum.sort()
+    else
+      _unconfigured -> []
+    end
+  end
+
   @spec area_path(map(), map()) :: [String.t()] | nil
   def area_path(config, repo_identity) do
     with remote when is_binary(remote) <- Map.get(repo_identity, :repo_remote),

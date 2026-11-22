@@ -104,6 +104,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.Inputs do
         value
 
       _miss ->
+        load_missing(key, stamp, current, read, mode)
+    end
+  end
+
+  defp load_missing(key, stamp, current, read, mode) do
+    case Process.get(@scope) do
+      {nil, _memo} when mode == :background ->
+        refresh_background(key, current, nil, read)
+        nil
+
+      _build ->
         :global.trans({{__MODULE__, key}, self()}, fn -> load(key, stamp.(), read) end)
     end
   end

@@ -260,15 +260,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     details = Enum.map(repos, &%{work_request: %{id: &1, repo: &1, completed_at: nil}, work_packages: []})
     payload = %{work_request_details: details}
     config = %{"repos" => Map.new(repos, &{&1, %{"deploy_workflows" => %{"dev" => "deploy.yml"}}})}
-    config_path = path <> ".json"
-    previous = System.get_env("SYMPP_OPERATOR_CONFIG")
-    File.write!(config_path, Jason.encode!(config))
-    System.put_env("SYMPP_OPERATOR_CONFIG", config_path)
-
-    on_exit(fn ->
-      if previous, do: System.put_env("SYMPP_OPERATOR_CONFIG", previous), else: System.delete_env("SYMPP_OPERATOR_CONFIG")
-      File.rm(config_path)
-    end)
+    operator_config_file(path, config)
 
     fetch = fn "repos/" <> repo, _options ->
       send(caller, {:deployment_fetch, repo, self()})
@@ -309,11 +301,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert :atomics.get(builds, 1) == built
   end
 
+  defp operator_config_file(path, config) do
+    config_path = path <> ".json"
+    previous = System.get_env("SYMPP_OPERATOR_CONFIG")
+    File.write!(config_path, Jason.encode!(config))
+    System.put_env("SYMPP_OPERATOR_CONFIG", config_path)
+
+    on_exit(fn ->
+      if previous, do: System.put_env("SYMPP_OPERATOR_CONFIG", previous), else: System.delete_env("SYMPP_OPERATOR_CONFIG")
+      File.rm(config_path)
+    end)
+
+    config_path
+  end
+
   defp finish_deployment_fetch(table, repo, request, reply) do
-    refresh = :ets.lookup_element(table, {:refreshing, repo}, 2)
+    slot = {:signal, {:default_branch, repo}}
+    refresh = :ets.lookup_element(table, {:refreshing, slot}, 2)
     monitor = Process.monitor(refresh)
     send(request, {:reply, reply})
     assert_receive {:DOWN, ^monitor, :process, ^refresh, :normal}, 2_000
+
+    case :sys.get_state(DashboardCache).deployment_publication do
+      {token, _ready} ->
+        send(DashboardCache, {:publish_deployments, token})
+        :sys.get_state(DashboardCache)
+
+      nil ->
+        :ok
+    end
   end
 
   test "a remote owner becomes unknown when its lease expires and live after a fresh heartbeat" do
@@ -359,8 +375,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert_receive :operator_dashboard_changed
   end
 
-  test "an inspector watches other writers without constructing a board", %{path: path} do
-    {_cache, ref} = watch(:herdr, :revision)
+  test "notification readers see external commits and operator config changes without building boards", %{path: path} do
+    config = operator_config_file(path, %{})
+    {_cache, ref} = watch(:detail, :revision)
     assert_receive {:dashboard_changed, ^ref, _initial}
 
     log =
@@ -370,9 +387,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
         :ok = Exqlite.Sqlite3.close(writer)
         refresh_watches()
         assert_receive {:dashboard_changed, ^ref, _updated}
+
+        File.write!(config, Jason.encode!(%{"repos" => %{"acme/example" => %{"area" => ["Platform"]}}}))
+        refresh_watches()
+        assert_receive {:dashboard_changed, ^ref, _config}
       end)
 
-    assert log =~ "board_revision_probe surface=herdr"
+    assert log =~ "board_revision_probe surface=detail"
     refute log =~ "board_build"
   end
 
