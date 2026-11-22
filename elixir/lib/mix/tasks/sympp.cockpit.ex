@@ -4,6 +4,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
   use Mix.Task
 
   alias SymphonyElixir.HttpServer
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.ArchivedInputs
   alias SymphonyElixir.SymphonyPlusPlus.DashboardCache
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Config, as: MCPConfig
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
@@ -202,6 +203,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
       stop_owned_processes(Process.delete(:sympp_cockpit_pubsub_pids))
       stop_owned_endpoint(Process.delete(:sympp_cockpit_task_supervisor_pid))
       stop_owned_endpoint(Process.delete(:sympp_cockpit_dashboard_cache_pid))
+      stop_owned_endpoint(Process.delete(:sympp_cockpit_archive_inputs_pid))
     end
   end
 
@@ -356,8 +358,23 @@ defmodule Mix.Tasks.Sympp.Cockpit do
          {:ok, _started} <- Application.ensure_all_started(:ecto_sql),
          {:ok, _started} <- ensure_pubsub_started(),
          {:ok, _started} <- ensure_task_supervisor_started(),
-         {:ok, _started} <- ensure_dashboard_cache_started() do
+         {:ok, _started} <- ensure_dashboard_cache_started(),
+         {:ok, _started} <- ensure_archive_inputs_started() do
       {:ok, []}
+    end
+  end
+
+  defp ensure_archive_inputs_started do
+    case ArchivedInputs.start_link([]) do
+      {:ok, pid} ->
+        Process.put(:sympp_cockpit_archive_inputs_pid, pid)
+        {:ok, [pid]}
+
+      {:error, {:already_started, _pid}} ->
+        {:ok, []}
+
+      error ->
+        error
     end
   end
 

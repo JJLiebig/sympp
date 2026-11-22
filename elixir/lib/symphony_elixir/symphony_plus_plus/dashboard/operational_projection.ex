@@ -10,6 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     Sanitizer
   }
 
+  alias SymphonyElixir.SymphonyPlusPlus.OperationalLineage
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
@@ -181,8 +182,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   @spec package_lineage(repo(), String.t()) :: map()
   def package_lineage(repo, work_package_id), do: MetadataProjection.package_lineage(repo, work_package_id)
 
-  @spec package_lineages(repo(), [WorkPackage.t()]) :: map()
-  def package_lineages(repo, work_packages), do: MetadataProjection.package_lineages(repo, work_packages)
+  @spec package_lineages(OperationalLineage.source(), [WorkPackage.t()]) :: map()
+  def package_lineages(source, work_packages), do: MetadataProjection.package_lineages(source, work_packages)
 
   @spec empty_lineage(String.t()) :: map()
   def empty_lineage(work_package_id), do: MetadataProjection.empty_lineage(work_package_id)
