@@ -41,7 +41,8 @@ import * as C from "./controls.js";
 import * as Chrome from "./chrome.js";
 import * as S from "./studio.js";
 import { scopeTitle } from "./scope.js";
-import { request, remoteRequest } from "./transport.js";
+import { request, remoteAuthorization, remoteRequest } from "./transport.js";
+import { boardConnection, currentConnection, readBoard } from "./board.js";
 import { button, message } from "./ui.js";
 import * as O from "./overview.js";
 import * as Lv from "./scopeview.js";
@@ -59,9 +60,6 @@ const CONNECTION = "sympp.connection";
 // furthest a live package reached; and their ask to show one in the panel, { job, at }.
 const BOARD = "sympp.board";
 const OPEN = "sympp.open";
-// Herdr keeps this module loaded when copies close. Each factory's last good read can seed
-// the next view without writing its full board to disk or waking other mods.
-const boardReads = new Map();
 // For desk-tabs' link beside the sympp panel button: the board's address, null when there is none.
 const DASHBOARD = "sympp.dashboard_url";
 // For the spaces sidebar's chief button: each Herdr topic's chiefs, { [topic id]: [{ domain,
@@ -80,22 +78,20 @@ const LEASE = 60e3;
 // shows below it.
 const STRIP = 88;
 
-function factoryReads(endpoint) {
-  let factory = boardReads.get(endpoint);
-  if (!factory) {
-    factory = { latest: null, writes: 0, lastWrite: 0 };
-    boardReads.set(endpoint, factory);
-  }
-  return factory;
-}
-
-async function runtimeEndpoint(path) {
+async function runtimeConnection(path) {
   try {
     const runtime = JSON.parse(await fs.readFile(path, "utf8"));
-    return M.normalizeEndpoint(runtime.backend?.url);
+    const endpoint = M.normalizeEndpoint(runtime.backend?.url);
+    const pid = runtime.backend?.pid;
+    const epoch = pid ? `${pid}:${runtime.publication?.backend?.process_start_time_utc_ticks ?? ""}` : null;
+    return endpoint ? { endpoint, epoch } : null;
   } catch {
     return null;
   }
+}
+
+async function remoteConfig() {
+  return JSON.parse(await fs.readFile(`${appHome()}/sympp-remote.json`, "utf8"));
 }
 
 // Removes a preview copy: a flat mods/sympp-dev-* folder, never another mod.
@@ -147,10 +143,17 @@ export default class Lens extends View {
     const given = stored && typeof stored === "object" ? { ...stored, ...own } : own;
     const runtime = given.remote ? null : given.hosts?.local?.runtime;
     const endpoint = M.normalizeEndpoint(given.endpoint);
+    const loadRemote = given.remote ? remoteConfig : null;
     if (own.role === "chief" || own.role === "chief-menu") {
       const factoryRoot = async () => {
-        const current = runtime ? await runtimeEndpoint(runtime) : endpoint;
-        return boardReads.get(current)?.latest?.board.reposRoot ?? null;
+        const current = runtime ? await runtimeConnection(runtime) : { endpoint };
+        if (!current?.endpoint) return null;
+        try {
+          const authorization = loadRemote ? await remoteAuthorization(current.endpoint, loadRemote) : undefined;
+          return boardConnection(current.endpoint, current.epoch, authorization).latest?.board.reposRoot ?? null;
+        } catch {
+          return null;
+        }
       };
       this.chief = own.role === "chief" ? new ChiefStart(own, endpoint, factoryRoot, cx) : new ChiefMenu(own, cx);
       return;
@@ -174,10 +177,13 @@ export default class Lens extends View {
     this.repoTopics = given.repoTopics && typeof given.repoTopics === "object" ? given.repoTopics : null;
     this.hosts = given.hosts ?? null;
     this.runtime = runtime;
-    this.request = given.remote ? remoteRequest(this.endpoint, async () => JSON.parse(await fs.readFile(`${appHome()}/sympp-remote.json`, "utf8"))) : request;
+    this.loadRemote = loadRemote;
+    this.request = this.loadRemote ? remoteRequest(endpoint, this.loadRemote, () => this.connection?.authorization) : request;
+    this.connection = null;
     this.net = M.initialFetch();
     this.payload = null;
-    this.cachedSince = null;
+    this.seeded = false;
+    this.readSince = 0;
     this.reading = false;
     this.turn = 0;
     this.companion = false;
@@ -219,52 +225,44 @@ export default class Lens extends View {
     }).catch(() => {});
     this.leaseId = `herdr-app-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     this.leasedAt = 0;
-    if (runtime) {
-      // Resolve the current origin before displaying its controls or starting a read or lease.
-      this.resolving = true;
-      cx.spawn(async (cx) => {
-        const current = await runtimeEndpoint(runtime);
-        this.begin(current ?? endpoint, cx, current !== null);
-        cx.notify();
-      });
-    } else {
-      this.begin(endpoint, cx);
-    }
-  }
-
-  useEndpoint(endpoint, restore = true) {
-    if (this.endpoint !== endpoint) {
-      this.endpoint = endpoint;
-      this.dashboard = M.dashboardUrl(endpoint, this.given.dashboardUrl);
-      this.net = M.initialFetch();
-      this.payload = null;
-      this.cachedSince = null;
-      this.taken = [];
-      this.seenNeeds = null;
-      this.leasedAt = 0;
-      this.lastFocus = null;
-    }
-    const cached = restore ? boardReads.get(endpoint)?.latest : null;
-    if (!cached) return null;
-    this.cachedSince = cached.since;
-    this.payload = cached.payload;
-    this.net = M.fetchSucceeded(this.net, cached.board, cached.receivedAt);
-    this.seenNeeds = L.newNeeds(null, cached.board).seen;
-    return cached;
-  }
-
-  begin(endpoint, cx, restore = true) {
-    this.resolving = false;
-    const cached = this.useEndpoint(endpoint, restore);
-    if (cached) {
-      if (this.ownConnection) this.shareConnection();
-      this.holdLease(cached.board, Date.now(), cx);
-    }
-    this.updatePlacement();
+    // Resolve a runtime record or remote authorization before showing its board or controls.
+    this.resolving = Boolean(runtime || this.loadRemote);
+    if (!this.resolving) this.useConnection(boardConnection(endpoint), cx, true);
     cx.timer.every(TICK, (cx) => this.tick(cx));
     this.tick(cx);
     this.started = Date.now();
     if (this.role === "panel") cx.timer.every(250, (cx) => this.checkOpen(cx));
+  }
+
+  clearBoard() {
+    this.net = M.initialFetch();
+    this.payload = null;
+    this.seeded = false;
+    this.readSince = 0;
+    this.taken = [];
+    this.seenNeeds = null;
+    this.leasedAt = 0;
+    this.lastFocus = null;
+  }
+
+  useConnection(connection, cx, restore) {
+    if (this.connection === connection) return;
+    this.connection = connection;
+    this.clearBoard();
+    if (connection) {
+      this.endpoint = connection.endpoint;
+      this.dashboard = M.dashboardUrl(this.endpoint, this.given.dashboardUrl);
+    }
+    const cached = restore ? connection?.latest : null;
+    if (!cached) return;
+    this.seeded = true;
+    this.readSince = cached.since;
+    this.payload = cached.payload;
+    this.net = M.fetchSucceeded(this.net, cached.board, cached.receivedAt);
+    this.seenNeeds = L.newNeeds(null, cached.board).seen;
+    this.updatePlacement();
+    if (this.ownConnection) this.shareConnection();
+    this.holdLease(cached.board, Date.now(), cx);
   }
 
   // Another mod asked the panel to show a job (shared OPEN); asks from before this copy started are old.
@@ -276,26 +274,27 @@ export default class Lens extends View {
     if (job) this.openJob(job, {}, cx);
   }
 
-  waitingForWrite() {
-    return this.cachedSince !== null && (boardReads.get(this.endpoint)?.writes ?? 0) > 0;
-  }
-
   needsControlRead() {
-    const factory = boardReads.get(this.endpoint);
-    return this.cachedSince !== null && (factory?.writes > 0 || this.cachedSince < (factory?.lastWrite ?? 0));
+    const connection = this.connection;
+    return !connection || connection.denied || !currentConnection(connection) ||
+      (this.seeded && (connection.factory.writes > 0 || this.readSince < connection.factory.lastWrite));
   }
 
   // Data timer: the board when due, and agent checks for whichever view has agents to reach.
   // Otherwise it repaints now and then so ages move.
   tick(cx) {
-    if (!this.endpoint) return;
+    if (!this.endpoint && !this.runtime) return;
     const now = Date.now();
     // A copy that starts with the app (the sympp panel) ticks before Herdr has a window.
     const active = appWindow()?.active !== false;
     const cadence = M.nextDelay(this.net, active);
-    let busy = false;
-    const due = (!this.net.error && this.needsControlRead()) || M.fetchDue(this.net, now, active);
-    if (!this.reading && due && !this.waitingForWrite()) { this.read(cx); busy = true; }
+    const connection = this.connection;
+    const changedConnection = connection && !currentConnection(connection);
+    if ((changedConnection || connection?.denied) && this.net.data) this.clearBoard();
+    const newer = (connection?.latest?.since ?? 0) > this.readSince;
+    const afterWrite = this.readSince < (connection?.factory.lastWrite ?? 0);
+    const due = newer || (!this.net.error && afterWrite) || M.fetchDue(this.net, now, active);
+    const busy = (changedConnection || due) && this.read(cx, changedConnection);
     this.shareChiefs(now);
     const watch = this.withChiefs(this.agentWatch);
     if (watch && !this.checking && (this.checkedFor !== watch.key || now - this.checkedAt >= cadence)) this.checkAgents(watch, cx);
@@ -306,79 +305,87 @@ export default class Lens extends View {
     }
   }
 
-  // One read at a time; a reply from an older read never replaces a newer one.
-  read(cx) {
-    if (this.resolving || this.reading || !this.endpoint || this.waitingForWrite()) return;
+  // A new write boundary or explicit refresh can supersede a read that is still on the wire.
+  read(cx, force = false) {
+    const factory = this.connection?.factory;
+    const boundary = factory?.lastWrite ?? 0;
+    if (this.closed || (!this.endpoint && !this.runtime)) return false;
+    if (!force && (factory?.writes || (this.reading && this.readBoundary === boundary))) return false;
     this.reading = true;
+    this.readBoundary = boundary;
     const turn = ++this.turn;
-    const since = C.readStarts();
-    this.net = M.fetchStarted(this.net, Date.now());
+    const after = force ? C.readStarts() : 0;
+    const stillReading = () => !this.closed && turn === this.turn;
     cx.spawn(async (cx) => {
       let outcome;
       try {
-        if (this.runtime) {
-          const endpoint = await runtimeEndpoint(this.runtime);
-          if (endpoint && endpoint !== this.endpoint) {
-            this.useEndpoint(endpoint);
-            this.updatePlacement();
-            cx.notify();
-          }
+        const runtime = this.runtime ? await runtimeConnection(this.runtime) : null;
+        const endpoint = runtime?.endpoint ?? this.endpoint;
+        const authorization = this.loadRemote ? await remoteAuthorization(endpoint, this.loadRemote) : undefined;
+        if (!stillReading()) return;
+        this.resolving = false;
+        const connection = boardConnection(endpoint, runtime?.epoch, authorization);
+        if (!connection) { cx.notify(); return; }
+        const unverified = Boolean(this.runtime && !runtime && !this.connection);
+        if (this.connection !== connection) {
+          this.useConnection(connection, cx, !force && !unverified && !this.connection && !this.net.error);
+          cx.notify();
         }
-        const response = await this.request(M.boardUrl(this.endpoint));
-        if (!response.ok) outcome = { error: M.httpError(response.status) };
-        else {
-          const payload = await response.json().catch(() => null);
-          try {
-            outcome = { board: M.parseBoard(payload), payload };
-          } catch (caught) {
-            outcome = { error: caught.message };
-          }
-        }
+        const factory = connection.factory;
+        if (factory.writes) return;
+        this.readBoundary = factory.lastWrite;
+        const cached = connection.latest;
+        const active = appWindow()?.active !== false;
+        const recent = !unverified && cached && cached.since >= after && !connection.pending && !connection.disconnected &&
+          cached.since > factory.lastWrite && (!this.net.error || cached.since > this.readSince) &&
+          Date.now() - cached.receivedAt < M.nextDelay({ data: cached.board }, active);
+        if (recent && cached.since === this.readSince) return;
+        outcome = recent ? cached : await readBoard(connection, cx, { unconditional: unverified, after, needed: stillReading });
+        if (!stillReading() || !outcome || !currentConnection(connection)) return;
+        if (outcome.board && (factory.writes || outcome.since < factory.lastWrite)) return;
       } catch (caught) {
-        outcome = { error: caught.userMessage || M.networkError(this.endpoint, caught), unreachable: caught.status === undefined };
+        if (!stillReading()) return;
+        this.resolving = false;
+        if (this.loadRemote) this.useConnection(null, cx, false);
+        outcome = { error: caught.userMessage || M.networkError(this.endpoint) };
+      } finally {
+        if (stillReading()) this.reading = false;
       }
-      this.reading = false;
-      if (turn !== this.turn) return;
-      const now = Date.now();
-      if (outcome.board) {
-        // Another copy may already have finished a read that started after this one.
-        const factory = factoryReads(this.endpoint);
-        if (since > (factory.latest?.since ?? 0)) {
-          factory.latest = { board: outcome.board, payload: outcome.payload, receivedAt: now, since };
-        }
-        if (!factory.writes && since > factory.lastWrite) this.cachedSince = null;
-        outcome.board = this.drawn(outcome.payload, outcome.board, since);
-      }
-      this.net = outcome.board ? M.fetchSucceeded(this.net, outcome.board, now) : M.fetchFailed(this.net, outcome.error, now);
-      if (outcome.unreachable) this.startServer(cx);
-      if (outcome.board) {
-        this.updatePlacement();
-        this.outage = false;
-        this.startFailed = false;
-        this.holdLease(outcome.board, now, cx);
-        if (this.ownConnection) this.shareConnection();
-        if ((shared(DASHBOARD) ?? null) !== this.dashboard) setShared(DASHBOARD, this.dashboard);
-        this.announce(outcome.board);
-        const agents = Chrome.nextDecorations(shared(Chrome.AGENTS), Chrome.decorations(outcome.board, terminals(), this.endpoint, now, (a) => this.local(a)), this.endpoint, now);
-        if (agents) setShared(Chrome.AGENTS, agents);
-        const live = outcome.board.jobs.filter((j) => j.state === "live").map((j) => {
-          const moving = j.packages.map(Chrome.deskStage).filter(Boolean);
-          return { id: j.id, title: j.title, stage: STAGES[Math.max(-1, ...moving.map((s) => STAGES.indexOf(s)))] ?? null,
-            needs: j.needs.length > 0, failed: j.packages.some((p) => p.failed && p.stage !== "ended") };
-        });
-        if (JSON.stringify(shared(BOARD)) !== JSON.stringify(live)) setShared(BOARD, live);
-      }
-      this.painted = now;
-      if (this.refreshAfterRead) {
-        this.refreshAfterRead = false;
-        this.read(cx);
-      }
-      try {
-        cx.notify();
-      } catch {
-        // The view closed or reloaded while reading; nothing is left to draw.
-      }
+      this.applyRead(outcome, cx);
+      try { cx.notify(); } catch { /* reloaded while reading */ }
     });
+    return true;
+  }
+
+  applyRead(outcome, cx) {
+    const now = Date.now();
+    this.painted = now;
+    if (!outcome.board) {
+      if (outcome.denied && this.net.data) this.clearBoard();
+      this.net = M.fetchFailed(this.net, outcome.error, now);
+      if (outcome.unreachable) this.startServer(cx);
+      return;
+    }
+
+    this.seeded = false;
+    this.readSince = outcome.since;
+    const board = this.drawn(outcome.payload, outcome.board, outcome.since);
+    this.net = M.fetchSucceeded(this.net, board, outcome.receivedAt);
+    this.updatePlacement();
+    this.outage = false;
+    this.startFailed = false;
+    this.holdLease(board, now, cx);
+    if (this.ownConnection) this.shareConnection();
+    if ((shared(DASHBOARD) ?? null) !== this.dashboard) setShared(DASHBOARD, this.dashboard);
+    this.announce(board);
+    const agents = Chrome.nextDecorations(shared(Chrome.AGENTS), Chrome.decorations(board, terminals(), this.endpoint, now, (a) => this.local(a)), this.endpoint, now);
+    if (agents) setShared(Chrome.AGENTS, agents);
+    const live = board.jobs.filter((j) => j.state === "live").map((j) => {
+      const moving = j.packages.map(Chrome.deskStage).filter(Boolean);
+      return { id: j.id, title: j.title, stage: STAGES[Math.max(-1, ...moving.map((s) => STAGES.indexOf(s)))] ?? null,
+        needs: j.needs.length > 0, failed: j.packages.some((p) => p.failed && p.stage !== "ended") };
+    });
+    if (JSON.stringify(shared(BOARD)) !== JSON.stringify(live)) setShared(BOARD, live);
   }
 
   // A local sympp that doesn't answer starts through its helper, once per outage (Retry asks again), and
@@ -399,8 +406,7 @@ export default class Lens extends View {
       this.startFailed = result?.code !== 0;
       setShared(STARTING, 0);
       this.net = { ...this.net, attemptAt: null };
-      if (this.reading) this.refreshAfterRead = true;
-      else this.read(cx);
+      this.read(cx, true);
       try { cx.notify(); } catch { /* closed while starting */ }
     });
   }
@@ -424,6 +430,7 @@ export default class Lens extends View {
   }
 
   async close() {
+    this.closed = true;
     // A fetch owned by this view may never settle after closing. A new view can verify its result
     // with a board read without waiting on that promise.
     for (const finish of this.writeFinishes ?? []) finish();
@@ -506,8 +513,7 @@ export default class Lens extends View {
     this.net = { ...this.net, attemptAt: null };
     this.checkedFor = null;
     this.outage = false;
-    if (this.reading) this.refreshAfterRead = true;
-    else this.read(cx);
+    this.read(cx, true);
     cx.notify();
   }
 
@@ -1052,7 +1058,7 @@ export default class Lens extends View {
     cx.spawn(async (cx) => {
       const submission = C.submitAction(this.creation, async () => {
         const fields = Object.fromEntries(Object.entries(this.draft).map(([key, input]) => [key, input.value()]));
-        const payload = await this.operatorPost(this.endpoint, "/api/v1/sympp/herdr/work-requests", C.requestBody(fields));
+        const payload = await this.send(`${C.OPERATOR}/work-requests`, C.requestBody(fields), cx);
         const id = payload.work_request?.work_request?.id;
         if (!id) throw new Error("The job was submitted but its ID is missing. Refresh before submitting again.");
         return id;
@@ -1109,8 +1115,10 @@ export default class Lens extends View {
   // A read as drawn: the person's actions still on their way, or agreed and not read yet, shown done. Only a
   // fresh read, begun at `since`, ends the actions it shows; redrawing the last one ends nothing.
   drawn(payload, board = null, since = null) {
-    this.payload = payload;
+    const pending = this.taken.length;
     if (since !== null) C.settle(this.taken, payload, since);
+    if (board && payload === this.payload && this.net.data && this.taken.length === pending) return this.net.data;
+    this.payload = payload;
     return this.taken.length || !board ? M.parseBoard(C.project(payload, this.taken)) : board;
   }
 
@@ -1125,16 +1133,16 @@ export default class Lens extends View {
   // One operator POST on this factory's native routes. Its outcome shows at once; the read that follows
   // its answer draws the factory's own word.
   send(path, body, cx) {
-    const endpoint = this.endpoint;
+    const connection = this.connection;
     if (this.needsControlRead()) return Promise.reject(new Error("Refresh the board before trying again."));
-    return C.take(this.taken, C.actionOf(path, body), () => this.operatorPost(endpoint, path, body),
-      () => { if (this.endpoint === endpoint) this.redraw(cx); });
+    return C.take(this.taken, C.actionOf(path, body), () => this.operatorPost(connection, path, body),
+      () => { if (!this.closed && this.connection === connection) this.redraw(cx); });
   }
 
-  async operatorPost(endpoint, path, body) {
-    if (this.endpoint !== endpoint || this.needsControlRead()) throw new Error("Refresh the board before trying again.");
-    this.cachedSince = null;
-    const factory = factoryReads(endpoint);
+  async operatorPost(connection, path, body) {
+    if (this.connection !== connection || this.needsControlRead()) throw new Error("Refresh the board before trying again.");
+    this.seeded = false;
+    const { endpoint, factory } = connection;
     factory.writes += 1;
     const finish = () => {
       if (!this.writeFinishes.delete(finish)) return;
@@ -1336,8 +1344,7 @@ export default class Lens extends View {
     if (!this.endpoint) {
       return this.root(t, [message(t, "sympp isn't connected", "Give this block an endpoint prop with the local sympp address, for example http://127.0.0.1:4000.")]);
     }
-    const board = this.net.data;
-    if (!board) {
+    if (!this.net.data) {
       if (!this.net.error) return this.root(t, [message(t, "Reading sympp…", null)]);
       if (!this.given.remote && (this.starting || Date.now() - (shared(STARTING) || 0) < START_WAIT)) return this.root(t, [message(t, "Starting sympp…", null)]);
       return this.root(t, [message(t, this.startFailed ? "Couldn't start sympp" : "Couldn't read sympp", this.startFailed ? null : this.net.error, [
@@ -1345,6 +1352,7 @@ export default class Lens extends View {
         ...(this.dashboard ? [button(t, "dashboard-first", "Open dashboard", (cx) => this.openDashboard(cx))] : []),
       ])]);
     }
+    const board = M.withCurrentLanes(this.net.data, now);
     const bindings = this.bindingsOf(board);
 
     if (this.studio) return this.studioLevel(t, board, now, cx);

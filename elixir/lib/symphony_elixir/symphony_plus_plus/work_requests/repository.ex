@@ -143,6 +143,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   defp filter_repo(work_requests, _repo), do: work_requests
 
   defp filter_phase(work_requests, _repo, phase) when phase in [nil, ""], do: {:ok, work_requests}
+  defp filter_phase(work_requests, _repo, "archived"), do: {:ok, work_requests}
 
   defp filter_phase(work_requests, repo, phase) do
     with {:ok, summaries} <- Phase.load(repo, work_requests) do

@@ -2,6 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
+  alias SymphonyElixir.SymphonyPlusPlus.OperationalLineage
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -89,8 +90,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
          decisions_to_review = DecisionFeedback.to_review(repo, work_request_ids),
          {:ok, work_packages_by_request} <- board_work_packages_by_request(repo, work_request_ids, work_requests, opts),
          all_work_packages = Dashboard.all_work_packages(work_requests, work_packages_by_request),
-         {:ok, phases} <- Phase.load(repo, work_requests, all_work_packages),
-         {:ok, work_package_contexts} <- board_work_package_contexts(repo, all_work_packages, opts) do
+         lineage = Keyword.get_lazy(opts, :lineage, fn -> OperationalLineage.lookup(repo, Enum.map(all_work_packages, & &1.id)) end),
+         {:ok, phases} <- Phase.load(repo, work_requests, all_work_packages, lineage, Keyword.get(opts, :phase_deliveries)),
+         {:ok, work_package_contexts} <- board_work_package_contexts(repo, all_work_packages, Keyword.put(opts, :lineage, lineage)) do
       {:ok,
        %{
          work_requests: work_requests,
@@ -100,6 +102,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
          decisions_to_review: decisions_to_review,
          work_packages_by_request: work_packages_by_request,
          work_package_contexts: work_package_contexts,
+         lineage: lineage,
          repo_identity_catalog: Dashboard.repo_identity_catalog_from_opts(opts, Enum.map(work_requests, & &1.repo))
        }}
     end
@@ -159,7 +162,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
         end
 
       :error ->
-        Dashboard.work_package_work_package_contexts(repo, work_packages)
+        Dashboard.work_package_work_package_contexts(repo, work_packages, Keyword.get(opts, :lineage))
 
       {:ok, _other} ->
         {:error, :not_found}
@@ -167,6 +170,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
   end
 
   defp build_work_request_board_details(repo, %{work_requests: work_requests} = context, opts) do
+    opts = Keyword.put(opts, :lineage, context.lineage)
+
     with {:ok, delivery_boards} <- work_request_board_delivery_boards(repo, context, opts) do
       context = Map.put(context, :delivery_boards, delivery_boards)
 
@@ -408,7 +413,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
   end
 
   defp preloaded_delivery_board_opts(work_packages, opts) do
-    product_tree_opts = Keyword.take(opts, [:product_trees_by_request])
+    product_tree_opts = Keyword.take(opts, [:product_trees_by_request, :lineage])
 
     delivery_opts =
       case Keyword.fetch(opts, :deliveries_by_slice_id) do

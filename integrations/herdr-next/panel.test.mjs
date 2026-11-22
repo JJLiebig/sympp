@@ -4,21 +4,28 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { registerHooks } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { boardPayload } from './fixture.mjs';
+import { boardPayload, NOW } from './fixture.mjs';
+import { withCurrentLanes } from './mods/sympp/model.js';
 
 // Run the view's real init, timer and read paths without the native renderer.
 const hostModules = {
   'gpui-kit': 'export class View {} export const div = null, svg = null, image = null;',
-  'gpui-base': 'export const v_flex = null, h_flex = null, Button = null, Input = null, Textarea = null, InputState = null, TextareaState = null;',
+  'gpui-base': `
+    export const v_flex = null, h_flex = null, Button = null, Input = null, Textarea = null, TextareaState = null;
+    export const InputState = { new: () => ({ on() {}, focus() {} }) };
+  `,
   herdr: `
     const values = new Map();
+    let homePath;
     export const shared = (key) => values.get(key) ?? null;
     export const setShared = (key, value) => values.set(key, value);
+    export const setAppHome = (path) => { homePath = path; };
+    export const appHome = () => homePath;
     export const spaces = () => [], panes = () => [], terminals = () => [];
     export const window = () => ({ active: true });
     export const hc = async () => ({ stdout: '{}' });
     export const props = null, theme = null, focused = null, notify = null, run = null, exec = null,
-      appHome = null, watchFolder = null, closeOverlay = null, openOverlay = null, knownAgents = null,
+      watchFolder = null, closeOverlay = null, openOverlay = null, knownAgents = null,
       machines = null, home = null, layout = null, settings = null;
   `,
 };
@@ -29,23 +36,38 @@ const hooks = registerHooks({
   },
 });
 const { default: Lens } = await import('./mods/sympp/main.js');
+const { setAppHome } = await import('herdr');
 hooks.deregister();
 
 class BoardView extends Lens {
-  input() {}
+  input() {
+    let value = '';
+    return { value: () => value, set_value: (next) => { value = next; } };
+  }
   sweep() {}
-  holdLease() {}
+  holdLease(...args) { if (this.enableLeases) super.holdLease(...args); }
 }
 
-function open(props) {
+let hostOwner = null;
+function open(props, { leases = false } = {}) {
   const tasks = [];
+  const view = new BoardView();
+  view.enableLeases = leases;
+  function call(task, owner) {
+    const previous = hostOwner;
+    hostOwner = owner;
+    try { return task(cx); }
+    finally { hostOwner = previous; }
+  }
   const cx = {
-    timer: { every() {} },
-    focus_handle() {},
-    spawn: (task) => tasks.push(task(cx)),
+    timer: { every() {}, after(_delay, task, options) {
+      const owner = options?.owner === null ? null : view;
+      tasks.push(Promise.resolve().then(() => owner?.closed ? undefined : call(task, owner)));
+    } },
+    focus_handle: () => ({ focus() {} }),
+    spawn: (task) => tasks.push(call(task, view)),
     notify() {},
   };
-  const view = new BoardView();
   view.init(props, cx);
   return { view, cx, async finish() {
     while (tasks.length) await Promise.all(tasks.splice(0));
@@ -54,6 +76,264 @@ function open(props) {
 
 Object.defineProperty(globalThis, 'localStorage', { value: { getItem: () => null }, configurable: true });
 const response = (url) => ({ ok: true, status: 200, url, json: async () => boardPayload() });
+const jobTitle = (view) => view.net.data?.jobs.find((job) => job.id === 'wr-pr')?.title;
+const openAsk = (view) => view.net.data?.jobs.find((job) => job.id === 'wr-pr')?.asks.some((ask) => ask.id === 'q1');
+const answerPath = '/api/v1/sympp/herdr/asks/q1/answer';
+
+test('a panel and job tab share a 200, a bodyless 304, and a change after the initiating panel closes', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
+  const day = 24 * 60 * 60 * 1000;
+  const nearBoundary = (days) => new Date(NOW - days * day + 60_000).toISOString();
+  const payload = { ...boardPayload(), etag: '"first"' };
+  payload.work_request_details.push(
+    { work_request: { id: 'landed', phase: 'done', inserted_at: nearBoundary(1) } },
+    { work_request: { id: 'resting', phase: 'planned', inserted_at: nearBoundary(14) }, work_packages: [
+      { id: 'finished', status: 'ended', delivery: { outcome: 'finished', recorded_at: nearBoundary(14) } },
+    ] },
+  );
+  const gets = [], leases = [];
+  let parses = 0, next = payload, hold = null;
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (url.endsWith('/client-lease')) {
+      leases.push(JSON.parse(options.body).action);
+      return response(url);
+    }
+    const owner = hostOwner;
+    const tag = options.headers['If-None-Match'];
+    gets.push(tag);
+    if (hold) {
+      hold.started.resolve();
+      await hold.release.promise;
+      if (owner?.closed) throw new Error('Herdr dropped the fetch owned by the closed view');
+    }
+    if (tag === next.etag) return { ok: false, status: 304, url, json: async () => { parses++; throw new Error('304 has no JSON'); } };
+    return { ...response(url), json: async () => { parses++; return next; } };
+  });
+  const endpoint = 'http://127.0.0.1:4006';
+  const panel = open({ endpoint, role: 'panel' }, { leases: true });
+  const tab = open({ endpoint, job: 'wr-pr' }, { leases: true });
+  await Promise.all([panel.finish(), tab.finish()]);
+  const board = tab.view.net.data;
+  assert.equal(panel.view.net.data, board);
+  const lane = (id) => withCurrentLanes(tab.view.net.data, Date.now()).jobs.find((job) => job.id === id).lane;
+  assert.equal(lane('landed'), 'landed');
+  assert.equal(lane('resting'), 'moving');
+
+  t.mock.timers.tick(60_000);
+  panel.view.tick(panel.cx);
+  tab.view.tick(tab.cx);
+  await Promise.all([panel.finish(), tab.finish()]);
+  assert.deepEqual(gets, [undefined, '"first"']);
+  assert.equal(parses, 1);
+  assert.equal(tab.view.net.data, board, 'the parsed board survives a successful 304');
+  assert.equal(tab.view.net.error, null);
+  assert.equal(tab.view.net.receivedAt, NOW + 60_000);
+  assert.equal(lane('landed'), 'settled');
+  assert.equal(lane('resting'), 'dormant');
+  assert.deepEqual(leases, ['attach', 'attach', 'heartbeat', 'heartbeat']);
+
+  next = structuredClone(payload);
+  next.etag = '"second"';
+  next.work_request_details[0].work_request.title = 'Changed by the factory';
+  hold = { started: Promise.withResolvers(), release: Promise.withResolvers() };
+  t.mock.timers.tick(15_000);
+  panel.view.tick(panel.cx);
+  tab.view.tick(tab.cx);
+  await hold.started.promise;
+  await panel.view.close();
+  hold.release.resolve();
+  await Promise.all([panel.finish(), tab.finish()]);
+  assert.deepEqual(gets, [undefined, '"first"', '"first"']);
+  assert.equal(parses, 2);
+  assert.equal(jobTitle(tab.view), 'Changed by the factory');
+  assert.equal(panel.view.net.data, board, 'the closed panel never applies the late result');
+  assert.deepEqual(leases, ['attach', 'attach', 'heartbeat', 'heartbeat', 'detach']);
+});
+
+test('a post-write read bypasses the older in-flight read and a 304 keeps an unconfirmed answer hidden', async (t) => {
+  const initial = { ...boardPayload(), etag: '"unanswered"' };
+  const oldRead = { started: Promise.withResolvers(), release: Promise.withResolvers() };
+  const tags = [];
+  let staleParses = 0;
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (options.method === 'POST') return { ...response(url), json: async () => ({}) };
+    tags.push(options.headers['If-None-Match']);
+    if (tags.length === 1) return { ...response(url), json: async () => initial };
+    if (tags.length === 2) {
+      oldRead.started.resolve();
+      await oldRead.release.promise;
+      return { ...response(url), json: async () => { staleParses++; return initial; } };
+    }
+    if (tags.length === 3) return { ok: false, status: 304, url };
+    const confirmed = structuredClone(initial);
+    confirmed.etag = '"answered"';
+    confirmed.work_request_details[0].asks = [];
+    return { ...response(url), json: async () => confirmed };
+  });
+  const endpoint = 'http://127.0.0.1:4007';
+  const panel = open({ endpoint, role: 'panel' });
+  const tab = open({ endpoint, job: 'wr-pr' });
+  await Promise.all([panel.finish(), tab.finish()]);
+  assert.equal(openAsk(panel.view), true);
+  panel.view.retry(panel.cx);
+  await oldRead.started.promise;
+  await panel.view.send(answerPath, { answer: 'Ready' }, panel.cx);
+  assert.equal(openAsk(panel.view), false);
+  panel.view.retry(panel.cx);
+  tab.view.tick(tab.cx);
+  await tab.finish();
+
+  assert.deepEqual(tags, [undefined, '"unanswered"', '"unanswered"']);
+  assert.equal(openAsk(tab.view), true, 'the 304 confirms the old server state');
+  assert.equal(openAsk(panel.view), false, 'the panel keeps its unconfirmed action');
+  assert.equal(panel.view.taken.length, 1);
+  oldRead.release.resolve();
+  await panel.finish();
+  assert.equal(staleParses, 0, 'the pre-write response is ineligible even though it finished last');
+
+  panel.view.retry(panel.cx);
+  await panel.finish();
+  tab.view.tick(tab.cx);
+  await tab.finish();
+  assert.equal(tags.length, 4, 'the tab also adopts a completed peer read');
+  assert.equal(openAsk(tab.view), false);
+  assert.equal(panel.view.taken.length, 0, 'the changed response confirmed the answer');
+});
+
+test('Refresh in either view queues one new check when a poll already took its snapshot', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
+  const oldRead = { started: Promise.withResolvers(), release: Promise.withResolvers() };
+  const tags = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    tags.push(options.headers['If-None-Match']);
+    if (tags.length === 2) {
+      oldRead.started.resolve();
+      await oldRead.release.promise;
+      return { ok: false, status: 304, url };
+    }
+    const payload = { ...boardPayload(), etag: '"original"' };
+    if (tags.length > 2) {
+      payload.etag = '"update"';
+      payload.work_request_details[0].work_request.title = 'Updated after the poll started';
+    }
+    return { ...response(url), json: async () => payload };
+  });
+  const endpoint = 'http://127.0.0.1:4014';
+  const panel = open({ endpoint, role: 'panel' });
+  const tab = open({ endpoint, job: 'wr-pr' });
+  await Promise.all([panel.finish(), tab.finish()]);
+  t.mock.timers.tick(15_000);
+  panel.view.tick(panel.cx);
+  await oldRead.started.promise;
+  panel.view.retry(panel.cx);
+  tab.view.retry(tab.cx);
+  oldRead.release.resolve();
+  await Promise.all([panel.finish(), tab.finish()]);
+
+  assert.deepEqual(tags, [undefined, '"original"', '"original"']);
+  assert.equal(jobTitle(panel.view), 'Updated after the poll started');
+  assert.equal(panel.view.net.data, tab.view.net.data);
+});
+
+test('creating a job sends its intake and reads the saved job back through the same connection', async (t) => {
+  const created = 'wr-created';
+  const fields = { title: 'New job', repo: 'owner/web', base_branch: 'main', human_description: 'Test the change' };
+  const calls = [];
+  let saved = false;
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls.push([options.method ?? 'GET', new URL(url).pathname]);
+    if (options.method === 'POST') {
+      const payload = JSON.parse(options.body);
+      for (const [key, value] of Object.entries(fields)) assert.equal(payload[key], value);
+      saved = true;
+      return { ...response(url), json: async () => ({ work_request: { work_request: { id: created } } }) };
+    }
+    const payload = boardPayload();
+    if (saved) payload.work_request_details.push({ work_request: { id: created, ...fields } });
+    return { ...response(url), json: async () => payload };
+  });
+  const panel = open({ endpoint: 'http://127.0.0.1:4015', role: 'panel' });
+  await panel.finish();
+  for (const [key, value] of Object.entries(fields)) panel.view.draft[key].set_value(value);
+  panel.view.createRequest(panel.cx);
+  await panel.finish();
+
+  assert.deepEqual(calls, [
+    ['GET', '/api/v1/sympp/herdr/dashboard'],
+    ['POST', '/api/v1/sympp/herdr/work-requests'],
+    ['GET', '/api/v1/sympp/herdr/dashboard'],
+  ]);
+  assert.equal(panel.view.creation.error, null);
+  assert.equal(panel.view.path.job, created);
+  assert.ok(panel.view.net.data.jobs.some((job) => job.id === created));
+});
+
+test('credential rotation starts a separate read and a refusal invalidates the authenticated board', async (t) => {
+  const home = await mkdtemp(join(tmpdir(), 'sympp-panel-remote-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  setAppHome(home);
+  const endpoint = 'http://127.0.0.1:4008';
+  const config = join(home, 'sympp-remote.json');
+  const configure = (token, origin = endpoint) => writeFile(config, JSON.stringify({ endpoint: origin, token }));
+  const reads = [];
+  let refused = false;
+  const oldRead = { started: Promise.withResolvers(), release: Promise.withResolvers() };
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(options.method, undefined, 'the action using replaced credentials never reaches the server');
+    const credential = options.headers.Authorization === 'Bearer sample-first' ? 'first'
+      : options.headers.Authorization === 'Bearer sample-second' ? 'second' : 'local';
+    reads.push([credential, options.headers['If-None-Match']]);
+    if (credential === 'first' && reads.length === 3) {
+      oldRead.started.resolve();
+      await oldRead.release.promise;
+    }
+    if (refused && credential === 'second') return { ok: false, status: 401, url };
+    const payload = { ...boardPayload(), etag: `"${credential}"` };
+    payload.work_request_details[0].work_request.title = credential;
+    payload.runtime.repos_root = `/fixture/${credential}`;
+    return { ...response(url), json: async () => payload };
+  });
+  await open({ endpoint }).finish();
+  await configure('sample-first');
+  const panel = open({ endpoint, role: 'panel', remote: true });
+  await panel.finish();
+  assert.equal(jobTitle(panel.view), 'first');
+  const chief = open({ role: 'chief', topic: 'fixture' });
+  await chief.finish();
+  assert.equal(await chief.view.chief.factoryRoot(), '/fixture/first');
+  panel.view.retry(panel.cx);
+  await oldRead.started.promise;
+
+  await configure('sample-second');
+  await assert.rejects(panel.view.send(answerPath, { answer: 'Ready' }, panel.cx), /Refresh the board/);
+  assert.equal(await chief.view.chief.factoryRoot(), null);
+  const tab = open({ endpoint, job: 'wr-pr', remote: true });
+  await tab.finish();
+  assert.equal(jobTitle(tab.view), 'second');
+  assert.equal(await chief.view.chief.factoryRoot(), '/fixture/second');
+  oldRead.release.resolve();
+  await panel.finish();
+  assert.deepEqual(reads, [['local', undefined], ['first', undefined], ['first', '"first"'], ['second', undefined]]);
+
+  refused = true;
+  tab.view.retry(tab.cx);
+  await tab.finish();
+  assert.match(tab.view.net.error, /401/);
+  assert.equal(tab.view.net.data, null);
+  refused = false;
+  const reopened = open({ endpoint, job: 'wr-pr', remote: true });
+  assert.equal(reopened.view.net.data, null);
+  await reopened.finish();
+  assert.deepEqual(reads.slice(-2), [['second', '"second"'], ['second', undefined]]);
+
+  await configure('sample-second', 'http://127.0.0.1:4009');
+  const calls = reads.length;
+  reopened.view.retry(reopened.cx);
+  await reopened.finish();
+  assert.match(reopened.view.net.error, /server changed/);
+  assert.equal(reopened.view.net.data, null);
+  assert.equal(reads.length, calls, 'credentials never follow an endpoint change');
+});
 
 test('recreated panels and new tabs show the last successful board before a GET is due', async (t) => {
   let refreshed = false;
@@ -134,6 +414,44 @@ test('recreated panels and new tabs show the last successful board before a GET 
   await moved.finish();
   assert.equal(moved.view.endpoint, unreachable);
   assert.equal(moved.view.net.data, null, 'a changed origin cannot keep the previous endpoint’s board');
+});
+
+test('a changed runtime process at the same origin gets a cold read while an old response is still pending', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'sympp-panel-reconnect-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const runtime = join(dir, 'runtime.json');
+  const endpoint = 'http://127.0.0.1:4013';
+  const record = (pid) => writeFile(runtime, JSON.stringify({ backend: { url: endpoint, pid } }));
+  await record(100);
+  const oldRead = { started: Promise.withResolvers(), release: Promise.withResolvers() };
+  const gets = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    gets.push(options.headers['If-None-Match']);
+    const title = gets.length < 3 ? 'First factory' : 'Replacement factory';
+    if (gets.length === 2) {
+      oldRead.started.resolve();
+      await oldRead.release.promise;
+    }
+    const payload = { ...boardPayload(), etag: '"previous"' };
+    payload.work_request_details[0].work_request.title = title;
+    return { ...response(url), json: async () => payload };
+  });
+  const panel = open({ endpoint, role: 'panel', hosts: { local: { runtime } } });
+  await panel.finish();
+  panel.view.retry(panel.cx);
+  await oldRead.started.promise;
+
+  await record(101);
+  const tab = open({ endpoint, job: 'wr-pr', hosts: { local: { runtime } } });
+  await tab.finish();
+  oldRead.release.resolve();
+  await panel.finish();
+  assert.deepEqual(gets, [undefined, '"previous"', undefined]);
+  assert.equal(jobTitle(tab.view), 'Replacement factory');
+  const reopened = open({ endpoint, job: 'wr-pr' });
+  await reopened.finish();
+  assert.equal(jobTitle(reopened.view), 'Replacement factory');
+  assert.equal(gets.length, 3, 'the late read cannot warm the replacement factory');
 });
 
 test('a failed refresh retains the board in the current view and the next one', async (t) => {
