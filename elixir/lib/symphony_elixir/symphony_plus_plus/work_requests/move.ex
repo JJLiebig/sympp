@@ -4,6 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
   alias Ecto.Changeset
   alias SymphonyElixir.SymphonyPlusPlus.{BaseBranch, DashboardPubSub, FactoryRepos, RepoIdentity}
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{DefaultClient, PullRequest, PullRequestProgress}
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
   alias SymphonyElixir.SymphonyPlusPlus.Planning.{Actor, ProgressEvent}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
@@ -36,12 +37,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
          {:ok, packages} <- Repository.list_work_packages(repo, request.id),
          keys = repository_keys(request.repo, packages),
          {:ok, open} <- open_scope(repo, packages, keys),
-         rename = checkout_rename(request.repo, open, target.key),
-         {:ok, source} <- move_scope(request.repo, open, target.key, rename) do
+         {:ok, source} <- move_scope(request.repo, open, target.key) do
       # Resolve checkout origins and GitHub's canonical name before the write.
       # The proof covers any newer attachment from the same source repository.
-      renamed_to = canonical_destination(repo, source, target.key, rename)
-      target = Map.merge(target, %{renamed_to: renamed_to, checkout_rename: rename})
+      target = Map.put(target, :renamed_to, canonical_destination(repo, source, target.key))
 
       result =
         repo.transact(
@@ -58,12 +57,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
 
   defp apply_move(repo, id, source, target, terminal) do
     with {:ok, current} <- Repository.get(repo, id),
-         :ok <- Phase.require_writable(current) do
+         :ok <- Phase.require_writable(current),
+         :ok <- require_current_owner(repo, id, terminal) do
       cond do
         stored_key(current.repo) == target.key -> {:ok, result("unchanged", current, [])}
         current.repo == source.repo -> persist_move(repo, current, source, target, terminal)
         true -> {:error, :work_request_scope_changed}
       end
+    end
+  end
+
+  defp require_current_owner(_repo, _id, %Terminal{role: "chief"}), do: :ok
+
+  defp require_current_owner(repo, id, %Terminal{key: key}) do
+    case Ownership.owner(repo, id) do
+      %{terminal_key: ^key} -> :ok
+      _other -> {:error, :work_request_owner_changed}
     end
   end
 
@@ -73,7 +82,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
 
     with {:ok, current_packages} <- Repository.list_work_packages(repo, request.id),
          {:ok, open} <- open_scope(repo, current_packages, source.keys),
-         {:ok, current} <- move_scope(source.repo, open, target.key, target.checkout_rename),
+         {:ok, current} <- move_scope(source.repo, open, target.key),
          true <- current.key == source.key,
          %{packages: packages, attachments: attachments} = current,
          :ok <- require_portable_attachments(attachments, allowed_source, target.key),
@@ -106,76 +115,49 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
     end
   end
 
-  defp move_scope(request_repo, open, destination, rename) do
-    with {:ok, source} <- source_key(stored_key(request_repo), request_repo, open, destination, rename) do
+  defp move_scope(request_repo, open, destination) do
+    with {:ok, source} <- source_key(stored_key(request_repo), request_repo, open, destination) do
       moving = Enum.filter(open.packages, &moves?(&1, request_repo, source, open.keys, open.attachments[&1.id]))
       links = Map.take(open.attachments, Enum.map(moving, & &1.id))
       {:ok, %{repo: request_repo, key: source, keys: open.keys, packages: moving, attachments: links}}
     end
   end
 
-  defp source_key({:stored, _path}, request_repo, open, destination, rename) do
-    case recorded_checkout_keys(request_repo, open) do
-      [key] when key != destination -> {:ok, key}
-      [^destination] -> infer_checkout_source(request_repo, open, destination, rename)
-      [] -> infer_checkout_source(request_repo, open, destination, rename)
+  # Only packages using the WorkRequest's own checkout scope can establish
+  # its previous repository. Other packages may be independent overrides.
+  defp source_key({:stored, _path}, request_repo, open, destination) do
+    prior =
+      for package <- open.packages,
+          package.repo == request_repo,
+          key = attachment_key(open.attachments[package.id]),
+          key not in [nil, destination],
+          uniq: true,
+          do: key
+
+    case prior do
+      [key] -> {:ok, key}
+      [] -> infer_checkout_source(request_repo, open, destination)
       _different_repos -> {:error, :ambiguous_source_repository}
     end
   end
 
-  defp source_key(key, _request_repo, _open, _destination, _rename), do: {:ok, key}
+  defp source_key(key, _request_repo, _open, _destination), do: {:ok, key}
 
-  # The prior checkout origin may no longer be available. An attachment on
-  # an inherited scope establishes the source. An independently scoped PR
-  # only establishes it when GitHub confirms that its repo became the target.
-  defp recorded_checkout_keys(request_repo, open) do
-    for package <- open.packages,
-        package.repo == request_repo,
-        key = attachment_key(open.attachments[package.id]),
-        not is_nil(key),
-        uniq: true,
-        do: key
-  end
-
-  defp checkout_rename(request_repo, open, destination) do
-    with {:stored, _path} <- stored_key(request_repo),
-         ^destination <- Map.fetch!(open.keys, request_repo),
-         true <- Enum.all?(recorded_checkout_keys(request_repo, open), &(&1 == destination)) do
-      candidates =
-        for package <- open.packages,
-            key = attachment_key(open.attachments[package.id]),
-            key != destination and key == Map.fetch!(open.keys, package.repo),
-            uniq: true,
-            do: key
-
-      verified =
-        for key <- candidates,
-            canonical = github_rename(key, destination),
-            is_binary(canonical),
-            do: {key, canonical}
-
-      case verified do
-        [rename] -> rename
-        _unconfirmed_or_multiple -> nil
-      end
-    else
-      _no_rename_needed -> nil
-    end
-  end
-
-  defp infer_checkout_source(request_repo, open, destination, rename) do
-    case {Map.fetch!(open.keys, request_repo), rename} do
-      {^destination, {source, _canonical}} ->
-        {:ok, source}
-
-      {^destination, nil} ->
-        if Enum.any?(open.packages, &(Map.fetch!(open.keys, &1.repo) != destination)),
+  defp infer_checkout_source(request_repo, open, destination) do
+    case Map.fetch!(open.keys, request_repo) do
+      ^destination ->
+        if Enum.any?(open.packages, &unresolved_source?(&1, open, destination)),
           do: {:error, :ambiguous_source_repository},
           else: {:ok, {:stored, request_repo}}
 
-      {origin, _rename} ->
+      origin ->
         {:ok, origin}
     end
+  end
+
+  defp unresolved_source?(package, open, destination) do
+    Map.fetch!(open.keys, package.repo) != destination or
+      attachment_key(open.attachments[package.id]) not in [nil, destination]
   end
 
   defp moves?(package, request_repo, source, keys, attachment) do
@@ -208,14 +190,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
 
   # GitHub's old repository endpoint follows the rename and returns the
   # canonical full name. A matching PR number or head alone cannot prove this.
-  defp canonical_destination(_repo, %{key: source}, _destination, {source, canonical}), do: canonical
-
-  defp canonical_destination(repo, %{key: {:github, source}, attachments: links}, {:github, _name} = destination, _checkout_rename) do
+  defp canonical_destination(repo, %{key: {:github, source}, attachments: links}, {:github, _name} = destination) do
     if map_size(links) > 0 or Qualification.repository_has_ci?(repo, source),
       do: github_rename({:github, source}, destination)
   end
 
-  defp canonical_destination(_repo, _source, _destination, _checkout_rename), do: nil
+  defp canonical_destination(_repo, _source, _destination), do: nil
 
   defp github_rename({:github, source}, {:github, destination}) when source != destination do
     with {:ok, %{"id" => id, "full_name" => canonical}} <- DefaultClient.get_json("repos/#{source}", []),

@@ -18,6 +18,7 @@ export type Terminal = { address: string; state: 'live' | 'finished'; cwd?: stri
 export class Provider {
   readonly replies = new Map<number, Reply>();
   readonly apiReplies = new Map<string, Reply>();
+  private readonly pausedApiReplies = new Map<string, () => Promise<void>>();
   readonly calls: { argv: string[]; reply: Reply }[] = [];
   // GitHub's HTTP API: down answers 503; unreadable PRs and branch lookups resolve to nothing.
   github: 'up' | 'down' = 'up';
@@ -42,6 +43,11 @@ export class Provider {
         this.terminalGetRequested(argv[1]);
         return;
       }
+      const paused = program === 'gh' && argv[0] === 'api' && this.pausedApiReplies.get(argv[5]);
+      if (paused) {
+        this.pausedApiReplies.delete(argv[5]);
+        await paused();
+      }
       const answer = program === 'hc' ? this.herdr(argv, rpc) : this.gh(argv);
       if (program !== 'hc') this.calls.push({ argv, reply: answer });
       await appendFile(this.receipt, `${JSON.stringify({ program, argv, rpc, reply: answer })}\n`);
@@ -57,6 +63,15 @@ export class Provider {
 
   set(number: number, metadata: object) {
     this.replies.set(number, { stdout: JSON.stringify(metadata), exitCode: 0 });
+  }
+
+  pauseApiReply(path: string) {
+    let markStarted!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    this.pausedApiReplies.set(path, () => { markStarted(); return released; });
+    return { started, release };
   }
 
   terminal(record: Terminal) {

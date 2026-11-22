@@ -117,6 +117,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
            "next_action" => "Resolve conflicting source PRs or point the recorded checkout back to its original repository, then retry."
          }}
 
+      {:error, :work_request_owner_changed} ->
+        {:error, -32_003, "Forbidden",
+         %{
+           "tool" => tool,
+           "reason" => "work_request_owner_changed",
+           "message" => "Ownership changed while the move was running.",
+           "next_action" => "Ask the current owner or a chief to move the WorkRequest."
+         }}
+
       {:error, :work_request_scope_changed} ->
         {:error, -32_009, "Move blocked",
          %{

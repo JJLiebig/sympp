@@ -16,14 +16,17 @@ test('moving a renamed repository keeps its attached PR and records the merge un
   const checkout = await repository(root, 'renamed');
   await githubOrigin(root, checkout, source);
   const request = await architect.request('Move renamed service', 'beta', checkout.checkout);
-  const [ended, open, planned] = await architect.addPackages([
-    contract('Earlier delivery'), contract('Tracked change', { repo: source, base_branch: 'beta' }), contract('Planned change'),
+  const [ended, open, alreadyRenamed, planned] = await architect.addPackages([
+    contract('Earlier delivery'), contract('Tracked change'), contract('New pull request'),
+    contract('Planned change', { repo: source, base_branch: 'beta' }),
   ]);
   const move = { work_request_id: request, repo: ' git@github.com:example/client.git ', base_branch: 'integration', rationale: 'GitHub renamed the service repository.' };
   await githubOrigin(root, checkout, destination);
   await architect.reject('move_work_request', move, 'ambiguous_source_repository');
   await githubOrigin(root, checkout, source);
-  for (const wp of [ended, open]) await architect.call('dispatch_work_package', { work_package_id: wp, target_repo_root: checkout.checkout });
+  for (const wp of [ended, open, alreadyRenamed]) {
+    await architect.call('dispatch_work_package', { work_package_id: wp, target_repo_root: checkout.checkout });
+  }
   provider.set(830, pr(830, head('a'), merged));
   await sync(architect, ended, 830, head('a'));
   provider.set(831, pr(831, head('b')));
@@ -44,9 +47,27 @@ test('moving a renamed repository keeps its attached PR and records the merge un
   await architect.reject('sync_pr', { work_package_id: open, url: renameUrl(831) }, 'repository_mismatch');
 
   await githubOrigin(root, checkout, destination);
+  provider.set(834, pr(834, head('c'), { url: renameUrl(834) }));
+  await architect.call('sync_pr', { work_package_id: alreadyRenamed, url: renameUrl(834) });
+  const currentProgress = await progress(architect, alreadyRenamed);
   await outsider.reject('move_work_request', move, 'owned_by_other_terminal');
+
+  // Release while the authorized caller is waiting for GitHub, before any ledger writes.
+  const releasePath = `/api/v1/sympp/operator/work-requests/${request}/release`;
+  const pause = provider.pauseApiReply(`repos/${source}`);
+  const pendingMove = architect.tool('move_work_request', move);
+  await Promise.race([pause.started, pendingMove.then(() => { throw new Error('Move returned before GitHub was queried'); })]);
+  try {
+    expect((await architect.operator(releasePath, {})).status).toBe(200);
+  } finally {
+    pause.release();
+  }
+  expect((await pendingMove).error.data.code).toBe('work_request_owner_changed');
+  expect((await read()).work_request.repo).toBe(checkout.checkout);
+  await architect.call('set_report', { work_request_id: request, eta: 'After the repository move' });
+
   expect(await chief.call('move_work_request', move)).toMatchObject({
-    status: 'moved', repo: 'git@github.com:example/client.git', base_branch: 'integration', moved_work_package_count: 2,
+    status: 'moved', repo: 'git@github.com:example/client.git', base_branch: 'integration', moved_work_package_count: 3,
   });
   // The original owner can still write and repeating the move adds no evidence.
   const moved = await read();
@@ -75,6 +96,7 @@ test('moving a renamed repository keeps its attached PR and records the merge un
   expect((await row(architect, request, ended)).delivery).toEqual(endedDelivery);
   expect(await progress(architect, ended)).toEqual(endedProgress);
   expect(await progress(architect, open)).toEqual(expect.arrayContaining(openProgress));
+  expect(await progress(architect, alreadyRenamed)).toEqual(currentProgress);
 
   provider.set(831, pr(831, head('b'), { ...merged, url: renameUrl(831) }));
   expect((await architect.call('sync_pr', { work_package_id: open, url: renameUrl(831) })).pr_sync).toMatchObject({
@@ -85,7 +107,7 @@ test('moving a renamed repository keeps its attached PR and records the merge un
   });
   expect((await architect.call('sync_pr', { work_package_id: open })).pr_sync.status).toBe('already_merged');
 
-  expect((await architect.operator(`/api/v1/sympp/operator/work-requests/${request}/release`, {})).status).toBe(200);
+  expect((await architect.operator(releasePath, {})).status).toBe(200);
   await architect.reject('move_work_request', move, 'work_request_unowned');
   expect((await chief.call('move_work_request', move)).status).toBe('unchanged');
   await outsider.call('set_report', { work_request_id: request, brief: 'The new owner can continue the plan.' });
@@ -160,4 +182,24 @@ test('moving imported work waits for source PRs and dispatches inherited scope f
   const dispatch = await architect.call('dispatch_work_package', dispatchArgs);
   expect(dispatch.worktree.base_branch).toBe('integration');
   expect(await git(root, dispatch.worktree.path, 'rev-parse', 'HEAD')).toBe(await git(root, checkout.checkout, 'rev-parse', 'origin/integration'));
+});
+
+test('moving an import refuses to guess the source of a retargeted checkout with a PR', async ({ delivery: { factory, provider, root } }) => {
+  const architect = await factory.client();
+  const requestCheckout = await repository(root, 'request-source');
+  const packageCheckout = await repository(root, 'package-source');
+  for (const checkout of [requestCheckout, packageCheckout]) await githubOrigin(root, checkout, source);
+  const request = await architect.request('Move checkout import', 'beta', requestCheckout.checkout);
+  const [wp] = await architect.addPackages([contract('Existing source PR', { repo: packageCheckout.checkout, base_branch: 'beta' })]);
+  await architect.call('dispatch_work_package', { work_package_id: wp, target_repo_root: packageCheckout.checkout });
+  provider.set(835, pr(835, head('a')));
+  await sync(architect, wp, 835, head('a'));
+
+  for (const checkout of [requestCheckout, packageCheckout]) await githubOrigin(root, checkout, destination);
+  await architect.reject('move_work_request', {
+    work_request_id: request, repo: destination, rationale: 'Import the old repository.',
+  }, 'ambiguous_source_repository');
+  const result = await architect.call('read_work_request', { work_request_id: request, detail: 'full' });
+  expect(result.work_request.repo).toBe(requestCheckout.checkout);
+  expect(result.work_packages[0].repo).toBe(packageCheckout.checkout);
 });
