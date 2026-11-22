@@ -91,7 +91,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
          {:ok, work_packages_by_request} <- board_work_packages_by_request(repo, work_request_ids, work_requests, opts),
          all_work_packages = Dashboard.all_work_packages(work_requests, work_packages_by_request),
          lineage = Keyword.get_lazy(opts, :lineage, fn -> OperationalLineage.lookup(repo, Enum.map(all_work_packages, & &1.id)) end),
-         {:ok, phases} <- Phase.load(repo, work_requests, all_work_packages, lineage),
+         {:ok, phases} <- Phase.load(repo, work_requests, all_work_packages, lineage, Keyword.get(opts, :phase_deliveries)),
          {:ok, work_package_contexts} <- board_work_package_contexts(repo, all_work_packages, Keyword.put(opts, :lineage, lineage)) do
       {:ok,
        %{

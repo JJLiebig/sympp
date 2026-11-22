@@ -34,7 +34,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.BulkRepository, as: WorkRequestBulkRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase, as: WorkRequestPhase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -95,17 +95,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
       with {:ok, work_packages_by_request} <- WorkRequestBulkRepository.list_work_packages_many(repo, work_request_ids),
            work_packages = all_work_packages(work_requests, work_packages_by_request),
-           {:ok, product_trees_by_request} <- product_tree_contexts_for_work_requests(repo, work_request_ids),
-           {:ok, deliveries_by_slice_id} <- DeliveryBoard.work_package_deliveries_by_id(repo, work_packages) do
+           {:ok, product_trees_by_request} <- product_tree_contexts_for_work_requests(repo, work_request_ids) do
+        work_package_ids = Enum.map(work_packages, & &1.id)
+        deliveries = WorkRequestPhase.delivery_records(repo, work_package_ids)
+
         {:ok,
          %{
            work_packages_by_request: work_packages_by_request,
-           package_records: package_records(repo, Enum.map(work_packages, & &1.id)),
+           package_records: package_records(repo, work_package_ids),
            product_trees_by_request: product_trees_by_request,
-           deliveries_by_slice_id: deliveries_by_slice_id
+           phase_deliveries: deliveries,
+           deliveries_by_slice_id: operator_slice_deliveries(work_packages, deliveries)
          }}
       end
     end)
+  end
+
+  defp operator_slice_deliveries(work_packages, deliveries) do
+    for %{id: id, work_request_id: request_id} <- work_packages,
+        %{work_request_id: ^request_id} = delivery <- [Map.get(deliveries, id)],
+        into: %{},
+        do: {{request_id, id}, delivery}
   end
 
   @spec operator_projection_context(repo(), [WorkRequest.t()], map()) :: {:ok, map()} | {:error, dashboard_error()}

@@ -399,6 +399,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
           work_packages: work_packages,
           work_package_contexts: work_package_contexts,
           product_trees_by_request: product_trees_by_request,
+          phase_deliveries: phase_deliveries,
           deliveries_by_slice_id: deliveries_by_slice_id,
           lineage: lineage
         } ->
@@ -406,6 +407,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
             work_packages: work_packages,
             work_package_contexts: work_package_contexts,
             product_trees_by_request: product_trees_by_request,
+            phase_deliveries: phase_deliveries,
             deliveries_by_slice_id: deliveries_by_slice_id,
             lineage: lineage
           ]

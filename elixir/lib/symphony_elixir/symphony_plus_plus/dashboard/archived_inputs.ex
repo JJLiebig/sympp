@@ -14,11 +14,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.ArchivedInputs do
   @spec load(module(), boolean()) :: {:ok, map()} | {:error, term()}
   def load(repo, true) do
     with server when is_pid(server) <- Process.whereis(__MODULE__),
-         source when is_pid(source) <- GenServer.whereis(repo.get_dynamic_repo()),
          {:ok, %{rows: [[revision]]}} <- repo.query("SELECT revision FROM sympp_dashboard_archive_revision", []) do
-      case GenServer.call(server, {:get, source, revision}) do
+      case GenServer.call(server, {:get, revision}) do
         {:ok, _inputs} = hit -> hit
-        :miss -> load_and_store(repo, server, source, revision)
+        :miss -> load_and_store(repo, server, revision)
       end
     else
       _unavailable -> read(repo)
@@ -27,9 +26,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.ArchivedInputs do
 
   def load(repo, false), do: read(repo)
 
-  defp load_and_store(repo, server, source, revision) do
+  defp load_and_store(repo, server, revision) do
     with {:ok, inputs} <- read(repo) do
-      GenServer.cast(server, {:put, source, revision, inputs})
+      GenServer.cast(server, {:put, revision, inputs})
       {:ok, inputs}
     end
   end
@@ -42,36 +41,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.ArchivedInputs do
   end
 
   @impl true
-  def init(_opts), do: {:ok, %{}}
+  def init(_opts), do: {:ok, nil}
 
   @impl true
-  def handle_call({:get, source, revision}, _from, entries) do
-    reply =
-      case Map.get(entries, source) do
-        {^revision, inputs} -> {:ok, inputs}
-        _other -> :miss
-      end
-
-    {:reply, reply, entries}
-  end
+  def handle_call({:get, revision}, _from, {revision, inputs} = entry), do: {:reply, {:ok, inputs}, entry}
+  def handle_call({:get, _revision}, _from, entry), do: {:reply, :miss, entry}
 
   @impl true
-  def handle_cast({:put, source, revision, inputs}, entries) do
-    case Map.get(entries, source) do
-      {current, _inputs} when current >= revision ->
-        {:noreply, entries}
-
-      nil ->
-        Process.monitor(source)
-        {:noreply, Map.put(entries, source, {revision, inputs})}
-
-      _older ->
-        {:noreply, Map.put(entries, source, {revision, inputs})}
-    end
-  end
-
-  @impl true
-  def handle_info({:DOWN, _ref, :process, source, _reason}, entries) do
-    {:noreply, Map.delete(entries, source)}
-  end
+  def handle_cast({:put, revision, inputs}, _entry), do: {:noreply, {revision, inputs}}
 end

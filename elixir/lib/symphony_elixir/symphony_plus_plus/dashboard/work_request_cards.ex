@@ -64,7 +64,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     open_asks = Asks.open_counts(repo, work_request_ids)
 
     with {:ok, work_packages} <- work_packages(repo, work_request_ids, opts, :priority),
-         {:ok, phases} <- Phase.load(repo, work_requests, work_packages, Keyword.get(opts, :lineage, repo)) do
+         {:ok, phases} <- Phase.load(repo, work_requests, work_packages, Keyword.get(opts, :lineage, repo), Keyword.get(opts, :phase_deliveries)) do
       work_packages_by_request = Enum.group_by(work_packages, & &1.work_request_id)
       work_package_counts = work_packages |> Enum.map(&{&1.work_request_id, &1.status}) |> status_counts()
 
