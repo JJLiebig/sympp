@@ -172,6 +172,51 @@ test('installed Review Suite state for the review id gates qualification', async
   for (const argv of await review.calls()) expect(argv).toEqual(['--id', reviewId, '--show-status', '--json']);
 });
 
+test('large pull requests qualify with only the first page of changed files', async ({ watched: { factory, provider } }) => {
+  const architect = await factory.client();
+  const request = await architect.request('Qualify repository imports');
+  const imports = [
+    { number: 120, sha: head('a'), count: 250 },
+    { number: 121, sha: head('b'), count: 2162 },
+    { number: 122, sha: head('c'), count: 3001 },
+  ];
+  const packages = await architect.addPackages(imports.map(({ number }) =>
+    contract(`Import ${number}`, { branch_pattern: `feature/delivery-${number}` })));
+  const reviews: Record<string, object> = {};
+  const files = Array.from({ length: 100 }, (_, i) => ({ path: `src/import-${i}.ts`, changeType: 'ADDED' }));
+  for (const [i, { number, sha, count }] of imports.entries()) {
+    const branch = `feature/delivery-${number}`;
+    const { work_package: { review_id: id } } = await architect.call('dispatch_work_package', { work_package_id: packages[i], review_mode: 'fast' });
+    reviews[id] = { review: id, branch, done: true, status: 'done', accepted_head: sha, reviewed_head: sha };
+    provider.set(number, pr(number, sha, { changedFiles: count, files }));
+  }
+
+  // A first sweep reads the PRs and their commits; an unchanged sweep reuses the commits.
+  const calls = () => [provider.graphql.length, provider.rest.length, provider.calls.length];
+  const [graphql, rest, gh] = calls();
+  await factory.tick('sweep');
+  expect(calls()).toEqual([graphql + 2, rest, gh]);
+  await factory.tick('sweep');
+  expect(calls()).toEqual([graphql + 3, rest, gh]);
+
+  const review = await installReviewSuite(factory.home);
+  await review.cycles(reviews);
+  const results = [];
+  for (const [i, { number, sha }] of imports.entries()) {
+    const response = await architect.rpc('tools/call', { name: 'sync_pr', arguments: {
+      work_request_id: request, work_package_id: packages[i], url: prUrl(number), head_sha: sha,
+    } });
+    results.push(response.error?.data?.code ?? response.result.structuredContent.pr_sync.status);
+  }
+  expect(results).toEqual(imports.map(() => 'ready'));
+  expect((await row(architect, request, packages[1])).work_package.review_signal.observation_state).toBe('current');
+  for (const [i, { count }] of imports.entries()) {
+    const detail = await architect.inspect(`/api/v1/sympp/operator/work-packages/${packages[i]}`);
+    expect(detail.metadata.pr).toMatchObject({ changed_files_count: count, changed_files_available: false, changed_files_count_available: true });
+    expect(detail.metadata.pr.changed_files).toHaveLength(100);
+  }
+});
+
 test('a ready package replays in its existing worktree and must requalify before merge', async ({ delivery: { factory, provider, root } }) => {
   const local = await repository(root, 'ready-replay');
   const architect = await factory.client();
@@ -268,7 +313,13 @@ test('ordinary PR handoff observes pending qualification then reconciles an exac
   const completion = async () => (await architect.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.completed_at;
   expect(await completion()).toBeNull();
 
+  // GitHub CLI includes the new path of each rename.
+  const fileListing = {
+    changedFiles: 70,
+    files: Array.from({ length: 70 }, (_, i) => ({ path: `src/service-${i}.ts`, changeType: i < 45 ? 'RENAMED' : 'MODIFIED' })),
+  };
   provider.set(101, pr(101, head('a'), {
+    ...fileListing,
     statusCheckRollup: [{ status: 'IN_PROGRESS', conclusion: null }], reviewDecision: 'REVIEW_REQUIRED', mergeStateStatus: 'BLOCKED',
   }));
   const tools = await architect.rpc('tools/list', {});
@@ -286,9 +337,12 @@ test('ordinary PR handoff observes pending qualification then reconciles an exac
   expect(pending.raw_status).toBe('dispatched');
   expect(pending.merge_eligibility.next_action).toBe('wait');
 
-  provider.set(101, pr(101, head('a')));
+  provider.set(101, pr(101, head('a'), fileListing));
   await architect.call('sync_pr', { work_package_id: wp, number: 101, repository: 'example/service' });
   const qualified = await detail();
+  expect(qualified.metadata.pr).toMatchObject({ changed_files_count: 70, changed_files_available: true });
+  expect(qualified.metadata.pr.changed_files).toHaveLength(70);
+  expect(qualified.metadata.pr.changed_files[0]).toEqual({ path: 'src/service-0.ts' });
   expect(qualified.metadata.pr.check_summary.status).toBe('passing');
   expect(qualified.metadata.pr.review_state.status).toBe('approved');
   expect(qualified.metadata.pr.head_sha).toBe(head('a'));
@@ -304,7 +358,7 @@ test('ordinary PR handoff observes pending qualification then reconciles an exac
   expect(await completion()).toBeNull();
 
   const mergeTime = new Date().toISOString();
-  provider.set(101, pr(101, head('a'), { state: 'MERGED', mergedAt: mergeTime, mergeCommit: { oid: head('f') } }));
+  provider.set(101, pr(101, head('a'), { ...fileListing, state: 'MERGED', mergedAt: mergeTime, mergeCommit: { oid: head('f') } }));
   await architect.call('sync_pr', { work_package_id: wp, url: prUrl(101) });
   const delivered = await row(architect, request, wp);
   expect(delivered.raw_status).toBe('ended');
@@ -347,9 +401,7 @@ test('provider errors and incomplete or wrong-head evidence cannot complete a di
   }
   for (const patch of [
     { headRefOid: null }, { headRefOid: head('b') }, { baseRefName: 'other' },
-    { changedFiles: 2 }, { changedFiles: undefined, files: [] }, { files: undefined }, { files: [] }, { files: [{ path: '', changeType: 'MODIFIED' }] },
-    { files: [{ path: 'src/new.ts', changeType: 'RENAMED' }] }, { files: [{ path: 'src/service.ts' }] },
-    { files: [{ path: 'src/service.ts', changeType: {} }] }, { url: prUrl(999), number: 999 },
+    { statusCheckRollup: {} }, { url: prUrl(999), number: 999 },
   ]) {
     provider.set(102, pr(102, head('a'), patch));
     const rejected = await architect.rpc('tools/call', { name: 'sync_pr', arguments: handoff });
@@ -364,12 +416,14 @@ test('provider errors and incomplete or wrong-head evidence cannot complete a di
   expect(initial.metadata.pr.changed_files_count).toBe(1);
   provider.set(102, pr(102, head('a'), {
     state: 'CLOSED', mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN',
+    files: [{ path: '', changeType: 'MODIFIED' }],
     statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'STARTUP_FAILURE' }],
   }));
   await sync(architect, wp, 102, head('a'));
   const failed = await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`);
   expect(failed.metadata.pr.check_summary.status).toBe('failing');
   expect(failed.metadata.pr.merge_state).toEqual({ merged: false, status: 'blocked' });
+  expect(failed.metadata.pr).toMatchObject({ changed_files: [], changed_files_count: 1, changed_files_available: false });
   expect((await row(architect, request, wp)).delivery_outcome).toBeNull();
   for (const missing of [{ mergedAt: new Date().toISOString(), mergeCommit: null }, { mergedAt: null, mergeCommit: { oid: head('f') } }]) {
     provider.set(102, pr(102, head('a'), { state: 'MERGED', ...missing }));
