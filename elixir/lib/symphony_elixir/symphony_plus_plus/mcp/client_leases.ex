@@ -13,7 +13,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
 
   use GenServer
 
-  alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
+  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub, OperatorDashboardOpener}
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
 
   @default_ttl_ms 3 * 60 * 1_000
@@ -77,7 +77,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
   def terminal_live?(terminal_key, server \\ __MODULE__) do
     case Process.whereis(__MODULE__) do
       nil when server == __MODULE__ -> false
-      _pid -> lease_call(server, {:terminal_live?, terminal_key}) == true
+      _pid -> live_until?(server, terminal_key)
+    end
+  end
+
+  defp live_until?(server, terminal_key) do
+    case lease_call(server, {:terminal_deadline, terminal_key}) do
+      deadline when is_integer(deadline) ->
+        DashboardCache.expire_at(deadline)
+        true
+
+      _missing ->
+        false
     end
   end
 
@@ -146,9 +157,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
     {:reply, {:ok, summary(state)}, state}
   end
 
-  def handle_call({:terminal_live?, terminal_key}, _from, state) do
+  def handle_call({:terminal_deadline, terminal_key}, _from, state) do
     state = prune_and_notify_idle(state, now_ms())
-    {:reply, Enum.any?(state.leases, fn {_id, lease} -> lease.terminal == terminal_key end), state}
+
+    last_seen =
+      Enum.reduce(state.leases, nil, fn
+        {_id, %{terminal: ^terminal_key, last_seen_ms: at}}, latest -> max(at, latest || at)
+        _other, latest -> latest
+      end)
+
+    {:reply, if(last_seen, do: last_seen + state.ttl_ms + 1), state}
   end
 
   def handle_call({:detach, client_id, terminal_key, on_last}, _from, state) do
@@ -293,6 +311,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
   defp record_lease(state, client_id, terminal_key) do
     now = now_ms()
     state = prune_and_notify_idle(state, now)
+    previous = state.leases
+    previous_terminal = get_in(previous, [client_id, :terminal])
     first_client? = map_size(state.leases) == 0
 
     state =
@@ -300,33 +320,47 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
       |> Map.put(:lease_seen?, true)
       |> Map.update!(:leases, fn leases ->
         bridge = get_in(leases, [client_id, :bridge]) || local_bridge(state.bridge_lease_dir, client_id)
-        terminal = terminal_key || get_in(leases, [client_id, :terminal])
+        terminal = terminal_key || previous_terminal
         Map.put(leases, client_id, %{last_seen_ms: now, bridge: bridge, terminal: terminal})
       end)
 
     if first_client?, do: notify_dashboard_opener(state, :client_attached)
+    if terminal_key && terminal_key != previous_terminal, do: notify_terminal_changes(previous, state.leases)
     state
   end
 
   defp delete_lease(state, client_id) do
-    had_clients? = map_size(state.leases) > 0
+    previous = state.leases
     state = Map.update!(state, :leases, &Map.delete(&1, client_id))
 
-    if had_clients? and map_size(state.leases) == 0,
+    if map_size(previous) > 0 and map_size(state.leases) == 0,
       do: notify_dashboard_opener(state, :clients_idle)
 
+    if map_size(previous) != map_size(state.leases), do: notify_terminal_changes(previous, state.leases)
     state
   end
 
   defp prune_and_notify_idle(state, now, probe_bridges? \\ false) do
-    had_clients? = map_size(state.leases) > 0
+    previous = state.leases
     state = prune(state, now)
     state = if probe_bridges?, do: prune_dead_bridges(state), else: state
 
-    if had_clients? and map_size(state.leases) == 0,
+    if map_size(previous) > 0 and map_size(state.leases) == 0,
       do: notify_dashboard_opener(state, :clients_idle)
 
+    if map_size(previous) != map_size(state.leases), do: notify_terminal_changes(previous, state.leases)
     state
+  end
+
+  defp notify_terminal_changes(previous, current) do
+    if leased_terminals(previous) != leased_terminals(current) do
+      DashboardCache.invalidate([:archived, :deferred, :hydrated, :herdr])
+      DashboardPubSub.broadcast_changed()
+    end
+  end
+
+  defp leased_terminals(leases) do
+    for {_id, %{terminal: terminal}} <- leases, is_binary(terminal), into: MapSet.new(), do: terminal
   end
 
   defp local_bridge(directory, client_id) when is_binary(directory) do

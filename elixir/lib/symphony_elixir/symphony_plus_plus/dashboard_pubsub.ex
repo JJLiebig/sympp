@@ -3,12 +3,37 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardPubSub do
 
   @pubsub SymphonyElixir.PubSub
   @topic "sympp:operator_dashboard"
+  @delivery_topic "sympp:operator_delivery"
   @changed :operator_dashboard_changed
   @suppressed_key {__MODULE__, :broadcast_suppressed}
   @changed_key {__MODULE__, :broadcast_changed}
 
   @spec subscribe() :: :ok | {:error, term()}
   def subscribe, do: Phoenix.PubSub.subscribe(@pubsub, @topic)
+
+  @doc false
+  @spec unsubscribe() :: :ok
+  def unsubscribe, do: Phoenix.PubSub.unsubscribe(@pubsub, @topic)
+
+  @doc false
+  @spec subscribe_delivery() :: :ok | {:error, term()}
+  def subscribe_delivery, do: Phoenix.PubSub.subscribe(@pubsub, @delivery_topic)
+
+  @doc false
+  @spec unsubscribe_delivery() :: :ok
+  def unsubscribe_delivery, do: Phoenix.PubSub.unsubscribe(@pubsub, @delivery_topic)
+
+  @doc false
+  @spec broadcast_delivery_completed() :: :ok
+  def broadcast_delivery_completed do
+    broadcast_changed()
+
+    if Process.whereis(@pubsub) do
+      Phoenix.PubSub.broadcast(@pubsub, @delivery_topic, :operator_delivery_completed)
+    end
+
+    :ok
+  end
 
   @doc false
   @spec broadcast_refreshed() :: :ok

@@ -96,14 +96,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
   The same-WorkRequest successors recorded for the ended packages among
   `work_packages`, which a superseded or skipped prerequisite delivers through.
   """
-  @spec successors(module(), [map() | struct()]) :: {:ok, map()} | {:error, term()}
-  def successors(repo, work_packages) do
+  @spec successors(OperationalLineage.source(), [map() | struct()]) :: {:ok, map()} | {:error, term()}
+  def successors(source, work_packages) do
     retired =
       work_packages
       |> Enum.filter(&Lifecycle.ended?(value(&1, :status) || value(&1, :raw_status)))
       |> Enum.map(&%{id: value(&1, :id), work_request_id: value(&1, :work_request_id)})
 
-    if retired == [], do: {:ok, %{}}, else: OperationalLineage.delivery_successors(repo, retired)
+    if retired == [], do: {:ok, %{}}, else: OperationalLineage.delivery_successors(source, retired)
   end
 
   @spec scope(graph(), Enumerable.t()) :: graph()

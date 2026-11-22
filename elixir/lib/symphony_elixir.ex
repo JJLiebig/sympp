@@ -46,6 +46,7 @@ defmodule SymphonyElixir.Application do
       {Phoenix.PubSub, name: SymphonyElixir.PubSub},
       {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
       SymphonyElixir.SymphonyPlusPlus.DashboardCache,
+      SymphonyElixir.SymphonyPlusPlus.Dashboard.ArchivedInputs,
       SymphonyElixirWeb.BoardLoginCodes,
       SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
     ] ++
@@ -87,7 +88,7 @@ defmodule SymphonyElixir.Application do
         {Retention, repo: Repo},
         SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore,
         SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases,
-        {SymphonyElixir.HttpServer, host: "127.0.0.1", prime_dashboard: true}
+        {SymphonyElixir.HttpServer, host: "127.0.0.1", migrate_ledger: true}
       ]
     else
       [

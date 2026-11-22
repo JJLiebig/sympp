@@ -142,12 +142,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
             load.()
           end
 
-          {surface, fn -> DashboardCache.json(repo, surface, build) end}
+          {surface, build}
         end)
 
-      first = Map.new(boards, fn {surface, get} -> {surface, get.()} end)
+      read = fn surface -> DashboardCache.json(repo, surface, Map.fetch!(boards, surface)) end
+      read_all = fn -> Map.new(Map.keys(boards), &{&1, read.(&1)}) end
+      first = read_all.()
       assert Enum.all?(Map.values(first), &match?({:ok, _, _}, &1))
       assert Enum.map(1..4, &:counters.get(builds, &1)) == [1, 1, 1, 1]
+      {:ok, cache, watch} = DashboardCache.watch(repo, Map.to_list(Map.take(boards, [:hydrated, :archived])))
+      on_exit(fn -> DashboardCache.unwatch(cache, watch) end)
       :ok = DashboardPubSub.subscribe()
       {:ok, reader} = Exqlite.Sqlite3.open(database_path, mode: :readonly)
       on_exit(fn -> Exqlite.Sqlite3.close(reader) end)
@@ -163,23 +167,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert {:row, ^before} = Exqlite.Sqlite3.step(reader, version)
       :ok = Exqlite.Sqlite3.reset(version)
       assert repo.get!(Observation, package.id) == stored
-      send(DashboardCache, :refresh_tick)
-      assert Map.new(boards, fn {surface, get} -> {surface, get.()} end) == first
+      send(cache, :refresh_watched)
+      assert read_all.() == first
       assert Enum.map(1..4, &:counters.get(builds, &1)) == [1, 1, 1, 1]
       refute_received :operator_dashboard_changed
+      refute_received {:dashboard_changed, ^watch, _version}
 
       changed = %{"status" => "failed", "observed_at" => "2026-11-22T02:03:00Z"}
       :ok = sweep(repo, snapshot, review: fn _, _ -> {:ok, changed} end)
       assert %{review: ^changed} = repo.get!(Observation, package.id)
+      assert_receive {:dashboard_changed, ^watch, _version}
 
       for surface <- [:hydrated, :herdr] do
-        assert {:ok, body, etag} = boards[surface].()
+        assert {:ok, body, etag} = read.(surface)
         assert etag != elem(first[surface], 2)
         assert %{"work_request_details" => [%{"work_packages" => [%{"review_signal" => %{"status" => "failed"}}]}]} = Jason.decode!(body)
       end
 
-      assert boards.priority.() == first.priority
-      assert boards.archived.() == first.archived
+      assert read.(:priority) == first.priority
+      assert read.(:archived) == first.archived
       assert Enum.map(1..4, &:counters.get(builds, &1)) == [1, 1, 2, 2]
     end
 

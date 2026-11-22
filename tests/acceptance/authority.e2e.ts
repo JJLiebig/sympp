@@ -498,8 +498,12 @@ test('any Herdr terminal flags a decision, redacted, and the operator reviews it
   });
   const warm = await nativeRead();
   expect(warm.status).toBe(200);
-  const etag = warm.headers.get('etag')!;
-  expect((await nativeRead(etag)).status).toBe(304);
+  const { etag } = await warm.json();
+  expect(etag).toMatch(/^"[a-f0-9]{64}"$/);
+  expect(etag).toBe(warm.headers.get('etag'));
+  const unchanged = await nativeRead(etag);
+  expect(unchanged.status).toBe(304);
+  expect(await unchanged.text()).toBe('');
   const stop = new AbortController();
   const events = await fetch(`${origin}/api/v1/sympp/operator/dashboard/events`, { headers: { origin }, signal: stop.signal });
   expect(events.status).toBe(200);
@@ -514,7 +518,10 @@ test('any Herdr terminal flags a decision, redacted, and the operator reviews it
   stop.abort();
   const fresh = await nativeRead(etag);
   expect(fresh.status).toBe(200);
-  const decisions = (await fresh.json()).work_request_details.find((detail: any) => detail.work_request.id === request).decisions_to_review;
+  const freshBoard = await fresh.json();
+  expect(freshBoard.etag).toBe(fresh.headers.get('etag'));
+  expect(freshBoard.etag).not.toBe(etag);
+  const decisions = freshBoard.work_request_details.find((detail: any) => detail.work_request.id === request).decisions_to_review;
   expect(decisions.map((entry: any) => entry.id)).toEqual([flagged.decision_log_entry.id]);
   expect((await toReview()).map((entry: any) => entry.id)).toEqual([flagged.decision_log_entry.id]);
 
@@ -574,6 +581,7 @@ test('the native board\'s operator actions finish, release, complete, archive, r
   const architect = await factory.client();
   const native = new Client(await factory.endpoint, factory.receipt);
   const act = async (path: string) => native.raw({}, {}, 'POST', `/api/v1/sympp/herdr/${path}`);
+  const nativeBoard = () => native.raw(null, {}, 'GET', '/api/v1/sympp/herdr/dashboard');
   const request = await architect.request('Native operator actions');
   const [dispatched] = await packages(architect, ['Native finish']);
   const [planned] = await architect.addPackages([contract('Native planned')]);
@@ -621,16 +629,30 @@ test('the native board\'s operator actions finish, release, complete, archive, r
   const browser = await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated');
   expect(browser.work_request_details.map((detail: any) => detail.work_request.id)).not.toContain(request);
   for (const wp of [dispatched, planned, active, noPr]) expect(browser.linked_work_package_ids ?? []).not.toContain(wp);
-  const shelf = await native.raw(null, {}, 'GET', '/api/v1/sympp/herdr/dashboard');
+  const shelf = await nativeBoard();
   const shelved = shelf.body.work_request_details.find((detail: any) => detail.work_request.id === request);
   expect(shelved.work_request.phase).toBe('archived');
   expect(Number.isFinite(Date.parse(shelved.work_request.archived_at))).toBe(true);
   expect(shelved.work_packages.map((wp: any) => wp.id).sort()).toEqual([dispatched, planned, active, noPr].sort());
   expect(shelf.body.work_request_details.find((detail: any) => detail.work_request.id === intake).work_request.phase).toBe('intake');
+  // Exercise an archived history commit from outside the factory VM after the shelf was read.
+  const updatedProgress = 'Recorded after the archive was read.';
+  const writer = new DatabaseSync(factory.database);
+  try {
+    const change = writer.prepare(`UPDATE sympp_progress_events SET summary = ?
+      WHERE id = (SELECT id FROM sympp_progress_events WHERE work_package_id = ? ORDER BY sequence DESC LIMIT 1)`).run(updatedProgress, active);
+    expect(change.changes).toBe(1);
+  } finally { writer.close(); }
+  const refreshedShelf = await nativeBoard();
+  const refreshedRequest = refreshedShelf.body.work_request_details.find((detail: any) => detail.work_request.id === request);
+  expect(refreshedRequest.work_packages.find((wp: any) => wp.id === active).activity_signal.last_update).toBe(updatedProgress);
   const archivedComplete = await act(`work-requests/${request}/complete`);
   expect([archivedComplete.status, archivedComplete.body.error.code, archivedComplete.body.error.next_action]).toEqual([409, 'work_request_archived', 'restore']);
   const restored = await act(`work-requests/${request}/restore`);
   expect(restored.body.work_request.archived_at).toBeNull();
+  const restoredBoard = await nativeBoard();
+  expect(restoredBoard.body.work_request_details.filter((detail: any) => detail.work_request.id === request)
+    .map((detail: any) => detail.work_request.phase)).toEqual(['done']);
   expect((await architect.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.phase).toBe('done');
   expect((await act('work-requests/missing-request/restore')).status).toBe(404);
   expect((await act(`work-requests/${request}/delete`)).body).toMatchObject({ ok: true, work_request: { id: request } });

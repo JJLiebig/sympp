@@ -288,6 +288,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
 
     case :ets.lookup(state.table, path) do
       [{^path, recorded_at, result, observed_at}] when now - recorded_at < @ttl_ms ->
+        if state.async?, do: DashboardCache.expire_at(recorded_at + @ttl_ms)
         {result, observed_at, %{state | memo: Map.put(state.memo, path, {result, observed_at})}}
 
       _missing ->

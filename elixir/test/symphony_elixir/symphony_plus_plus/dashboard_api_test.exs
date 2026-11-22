@@ -8,6 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.Cards.Card
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.RetentionThrottle
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
@@ -165,6 +166,62 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   test "hydrated dashboard rejects unsupported methods" do
     assert json_response(post(build_conn(), "/api/v1/sympp/operator/dashboard/hydrated", %{}), 405) ==
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
+  end
+
+  test "an unchanged web board receives delivery completion and releases its connection on close" do
+    hydrated = "/api/v1/sympp/operator/dashboard/hydrated"
+    assert %{status: 200} = response = get(local_operator_conn(), hydrated)
+    assert %{status: 200} = get(local_operator_conn(), "/api/v1/sympp/operator/dashboard?surface=archived")
+    [etag] = Plug.Conn.get_resp_header(response, "etag")
+    path = "/api/v1/sympp/operator/dashboard/events"
+    handler = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:phoenix, :endpoint, :start],
+        fn _, _, %{conn: conn}, caller ->
+          if conn.request_path == path, do: send(caller, {:dashboard_stream, self()})
+        end,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+    server = start_supervised!({Bandit, plug: @endpoint, ip: {127, 0, 0, 1}, port: 0})
+    {:ok, {ip, port}} = ThousandIsland.listener_info(server)
+    {:ok, socket} = :gen_tcp.connect(ip, port, [:binary, active: false, packet: :line])
+
+    :ok =
+      :gen_tcp.send(socket, [
+        "GET ",
+        path,
+        " HTTP/1.1\r\n",
+        "Host: localhost:",
+        Integer.to_string(port),
+        "\r\n",
+        "Sec-Fetch-Site: same-origin\r\n",
+        "Sec-Fetch-Mode: cors\r\n\r\n"
+      ])
+
+    assert {:ok, "HTTP/1.1 200 " <> _} = :gen_tcp.recv(socket, 0, 1_000)
+    assert_receive {:dashboard_stream, stream}
+    assert Process.alive?(stream)
+    :ok = DashboardPubSub.broadcast_delivery_completed()
+    await_event(socket, "event: dashboard_changed\n")
+
+    assert %{status: 304, resp_body: ""} =
+             local_operator_conn()
+             |> put_req_header("if-none-match", etag)
+             |> get(hydrated)
+
+    ref = Process.monitor(stream)
+    :ok = :gen_tcp.close(socket)
+    assert_receive {:DOWN, ^ref, :process, ^stream, _reason}, 1_000
+  end
+
+  defp await_event(socket, expected) do
+    assert {:ok, line} = :gen_tcp.recv(socket, 0, 1_000)
+    if line != expected, do: await_event(socket, expected)
   end
 
   test "the first operator write to a current ledger does not wait for a migration lock" do

@@ -2,6 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardCache
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
     BlockerProjection,
@@ -10,6 +11,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     Sanitizer
   }
 
+  alias SymphonyElixir.SymphonyPlusPlus.OperationalLineage
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
@@ -49,7 +51,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   @spec stale_agent_run?(AgentRun.t(), DateTime.t(), non_neg_integer()) :: boolean()
   def stale_agent_run?(%AgentRun{status: status, last_seen_at: %DateTime{} = last_seen_at}, %DateTime{} = now, threshold_seconds)
       when status in ["starting", "running", "retrying"] and is_integer(threshold_seconds) and threshold_seconds >= 0 do
-    DateTime.diff(now, last_seen_at, :second) >= threshold_seconds
+    stale? = DateTime.diff(now, last_seen_at, :second) >= threshold_seconds
+    unless stale?, do: DashboardCache.expire_at(DateTime.add(last_seen_at, threshold_seconds, :second))
+    stale?
   end
 
   def stale_agent_run?(%AgentRun{}, %DateTime{}, _threshold_seconds), do: false
@@ -181,8 +185,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   @spec package_lineage(repo(), String.t()) :: map()
   def package_lineage(repo, work_package_id), do: MetadataProjection.package_lineage(repo, work_package_id)
 
-  @spec package_lineages(repo(), [WorkPackage.t()]) :: map()
-  def package_lineages(repo, work_packages), do: MetadataProjection.package_lineages(repo, work_packages)
+  @spec package_lineages(OperationalLineage.source(), [WorkPackage.t()]) :: map()
+  def package_lineages(source, work_packages), do: MetadataProjection.package_lineages(source, work_packages)
 
   @spec empty_lineage(String.t()) :: map()
   def empty_lineage(work_package_id), do: MetadataProjection.empty_lineage(work_package_id)
