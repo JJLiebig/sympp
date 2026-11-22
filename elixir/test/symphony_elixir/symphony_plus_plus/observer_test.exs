@@ -317,7 +317,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
     fn prs ->
       Map.new(prs, fn {owner, name, number} = pr ->
         {:ok, %{"head_sha" => head} = read} = Map.fetch!(snapshot, {:pr, owner, name, number})
-        {pr, {:ok, %{"head_sha" => head, "base_sha" => read["base_sha"], "commits" => Map.get(lists, number, [head])}}}
+        {pr, {:ok, %{"head_sha" => head, "base_sha" => read["base_sha"], "base_tip_sha" => read["base_tip_sha"], "commits" => Map.get(lists, number, [head])}}}
       end)
     end
   end

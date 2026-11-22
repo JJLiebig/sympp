@@ -170,15 +170,13 @@ same repository (`stacked_on_unmerged_work`): its next action is to remove that
 package's unmerged commits or wait for its PR to merge. Commits reachable from the base never count; ended packages and a
 package's own earlier PRs are left out. When two PRs share commits, the one
 holding all of the other's commits and more is the stacked one; otherwise the
-later-opened PR is. Commit lists come from GitHub: the Observer reads them only
-for repositories with two or more open watched PRs and only when a PR's head or
-base moves; `sync_pr` reads its own PR and the other active packages' attached
-PRs in the repository with `gh`. When another PR's state or commits can't be
-read (GitHub lists at most 250 commits; `gh` at most 100, so `sync_pr` leaves a
-longer PR to the Observer), qualification waits (`stale:
-stacking`) rather than blocking. A sibling PR the Observer hasn't attached yet
-is checked on its next sweep. The check matches exact commits; a cherry-pick with new commit ids
-isn't detected.
+later-opened PR is. For short PRs, Sympp checks complete commit lists for shared
+unmerged commits. When a commit list is incomplete or too long, Sympp runs
+GitHub ancestry comparisons using the exact PR heads and current target branch
+commits. When the available evidence cannot resolve a pair, qualification waits
+for the affected PRs (`stale: stacking`). A sibling PR the Observer hasn't attached
+yet is checked on its next sweep. The check matches exact commit IDs, so a
+cherry-pick with a new commit ID is a different commit.
 
 A ready-for-merge package can acquire a new integration blocker without changing
 its readiness or reviewed evidence. The architect declares and clears it with

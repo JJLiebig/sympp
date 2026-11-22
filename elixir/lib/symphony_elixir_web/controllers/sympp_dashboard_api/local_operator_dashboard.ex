@@ -133,8 +133,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   end
 
   defp hydrated_dashboard_payload(repo, operator_config) do
-    with {:ok, work_requests} <- WorkRequestRepository.list(repo),
-         {:ok, inputs} <- Dashboard.operator_projection_inputs(repo, work_requests),
+    with {:ok, work_requests, inputs} <- Dashboard.live_projection_inputs(repo),
          {:ok, context} <- operator_execution_context(repo, work_requests, inputs, operator_config),
          {:ok, projection_context} <- operator_projection_context(repo, work_requests, inputs),
          {:ok, base} <- priority_dashboard_payload(repo, context, work_requests, projection_context),
@@ -156,8 +155,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   end
 
   defp native_dashboard_payload(repo, operator_config, cache_archive?) do
-    with {:ok, live_requests} <- WorkRequestRepository.list(repo),
-         {:ok, live_inputs} <- Dashboard.operator_projection_inputs(repo, live_requests),
+    with {:ok, live_requests, live_inputs} <- Dashboard.live_projection_inputs(repo),
          {:ok, archive} <- ArchivedInputs.load(repo, cache_archive?),
          work_requests = WorkRequestCards.ordered_work_requests(live_requests ++ archive.work_requests),
          {:ok, context} <- operator_execution_context(repo, work_requests, live_inputs, operator_config),

@@ -21,10 +21,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
       recorded; a merge is recorded as `pr_merged` through the delivery
       evidence path; otherwise the package qualifies or unqualifies through
       `Qualification`;
-    * where two or more watched PRs are open in one repository, their commit
-      lists are read (one batched GraphQL read, again only when a PR's head or
-      base moves), and a PR stacked on another package's unmerged work
-      (`Stacking`) doesn't qualify;
+    * where two or more watched PRs are open in one repository, their complete
+      commit lists are read and reused until the head or base moves. Pairs with
+      incomplete lists use cached ancestry comparisons (`Stacking`);
     * the same snapshot reads the PRs of cards (`Cards`), the work of the
       terminals the operator talks to.
 
@@ -71,7 +70,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     Api.create_table()
     Process.send_after(self(), :terminals, 1_000)
     Process.send_after(self(), :sweep, 5_000)
-    {:ok, %{repo: Keyword.fetch!(opts, :repo)}}
+    {:ok, %{repo: Keyword.fetch!(opts, :repo), pending: nil, sweep_round: 0}}
   end
 
   @impl true
@@ -81,11 +80,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     {:noreply, state}
   end
 
-  def handle_info(:sweep, state) do
-    safely(fn -> sweep(state.repo) end)
+  def handle_info(:sweep, %{pending: nil} = state) do
+    case safely(fn -> prepare_sweep(state.repo, [], state.sweep_round) end, nil) do
+      nil ->
+        finish_sweep(state)
+
+      {read, publish} ->
+        # Keep terminal observations on their own timer during slow compares.
+        task = Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, read)
+        {:noreply, %{state | pending: {task.ref, publish}}}
+    end
+  end
+
+  def handle_info(:sweep, state), do: {:noreply, state}
+
+  def handle_info({ref, stacks}, %{pending: {ref, publish}} = state) do
+    Process.demonitor(ref, [:flush])
+    safely(fn -> publish.(stacks) end)
+    finish_sweep(state)
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{pending: {ref, publish}} = state) do
+    safely(fn -> publish.(%{}) end)
+    finish_sweep(state)
+  end
+
+  defp finish_sweep(state) do
     ReviewRefresh.advance()
     Process.send_after(self(), :sweep, @sweep_interval_ms)
-    {:noreply, state}
+    {:noreply, %{state | pending: nil, sweep_round: state.sweep_round + 1}}
   end
 
   @doc "Selects the packages in scope whose branches have no PR."
@@ -181,6 +204,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   """
   @spec sweep(module(), keyword()) :: :ok
   def sweep(repo, opts \\ []) do
+    case prepare_sweep(repo, opts, 0) do
+      nil -> :ok
+      {read, publish} -> publish.(read.())
+    end
+  end
+
+  defp prepare_sweep(repo, opts, round) do
     watched = watched_packages(repo)
     observations = observations(repo, Enum.map(watched, & &1.package.id))
     watched = Enum.map(watched, &Map.put(&1, :observation, Map.get(observations, &1.package.id)))
@@ -199,15 +229,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
     to_read = for %{package: package} = item <- watched, reviewed?(package) and not pre_pr?(item), do: package
     reviews = review_results(repo, to_read, opts)
-    views = Enum.flat_map(watched, &view/1)
+    apply_cards = fn -> guarded(fn -> Cards.apply(repo, cards, results, opts) end, :ok) end
+    plan_observations(repo, watched, reviews, round, apply_cards)
+  end
 
-    {result, _changed?} =
-      DashboardPubSub.coalesce_changed(fn ->
-        Enum.each(watched, &observe_package(repo, &1, package_review(&1.package, reviews), views))
-        guarded(fn -> Cards.apply(repo, cards, results, opts) end, :ok)
-      end)
+  defp plan_observations(repo, watched, reviews, round, apply_cards) do
+    {settled, waiting, read} = watched |> Enum.flat_map(&view/1) |> Stacking.prepare(round)
+    {deferred, ready} = Enum.split_with(watched, &MapSet.member?(waiting, &1.package.id))
 
-    result
+    DashboardPubSub.coalesce_changed(fn ->
+      observe_packages(repo, ready, reviews, settled)
+      apply_cards.()
+    end)
+
+    if read != nil do
+      fallback = Map.new(waiting, &{&1, :unknown})
+
+      {read,
+       fn stacks ->
+         {result, _changed?} = DashboardPubSub.coalesce_changed(fn -> observe_packages(repo, deferred, reviews, Map.merge(fallback, stacks)) end)
+         result
+       end}
+    end
+  end
+
+  defp observe_packages(repo, packages, reviews, stacks) do
+    Enum.each(packages, &observe_package(repo, &1, package_review(&1.package, reviews), stacks))
   end
 
   # Only successful branch discovery can establish absence. A missing result
@@ -420,10 +467,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     end
   end
 
-  defp observe_package(repo, %{package: package, observation: observation, github: github, pr: pr} = item, review, views) do
+  defp observe_package(repo, %{package: package, observation: observation, github: github, pr: pr} = item, review, stacks) do
     previous_pr = observation && observation.pr
     changed? = match?({:ok, %{}}, github) and pr != previous_pr and snapshot_changed?(previous_pr, pr)
-    stacked_on = stacking(item, views)
+
+    stacked_on = Map.get(stacks, package.id, [])
     stale = stale(github, review, stacked_on, observation)
 
     # A stale GitHub read changes nothing; a stale review host or stacking
@@ -445,8 +493,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   # What this sweep read of each watched package's current PR. A PR that
   # couldn't be read is unknown; a closed PR no longer watched, or none, is left out.
-  defp view(%{package: package, fresh?: true, pr: pr}),
-    do: [%{work_package_id: package.id, repository: pr["repository"], number: pr["number"], state: pr["state"], commits: pr["commits"], fresh?: true}]
+  defp view(%{package: package, fresh?: true, pr: pr}), do: [stack_view(package, pr)]
 
   defp view(%{package: package, github: {:error, _reason}, attached: %{} = attached}),
     do: [%{work_package_id: package.id, repository: attached.repository, number: attached.number, state: nil, commits: nil, fresh?: true}]
@@ -457,34 +504,38 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   defp view(_item), do: []
 
-  # The packages an open PR read in this sweep is stacked on, or `:unknown`;
-  # every view is this sweep's read.
-  defp stacking(%{package: package, fresh?: true, pr: %{"state" => "open"} = pr}, views) do
-    case Stacking.check(%{work_package_id: package.id, repository: pr["repository"], number: pr["number"], commits: pr["commits"]}, views) do
-      {:ok, ids} -> ids
-      :unknown -> :unknown
-    end
+  defp stack_view(package, pr) do
+    %{
+      work_package_id: package.id,
+      repository: pr["repository"],
+      number: pr["number"],
+      state: pr["state"],
+      head_sha: pr["head_sha"],
+      base_tip_sha: pr["base_tip_sha"],
+      commits: pr["commits"],
+      fresh?: true
+    }
   end
 
-  defp stacking(_item, _views), do: []
-
   # Commit lists are read only where the stacking check needs them (a
-  # repository with two or more open watched PRs) and only when a PR's head or
-  # base moved; otherwise the last list is kept.
+  # repository with two or more open watched PRs), when GitHub can return a full
+  # list and the head or base moved. Otherwise reuse the last complete list.
   defp with_commits(watched, github, opts) do
     open = for item <- watched, {:ok, %{"state" => "open"} = pr} <- [Map.get(github, item.package.id)], do: {item, pr}
     shared = open |> Enum.frequencies_by(fn {_item, pr} -> String.downcase(pr["repository"] || "") end) |> Enum.filter(&(elem(&1, 1) > 1)) |> Map.new()
     {kept, wanted} = open |> Enum.map(fn {item, pr} -> {item.package.id, carry_commits(pr, item.observation)} end) |> Enum.split_with(fn {_id, pr} -> is_list(pr["commits"]) end)
-    wanted = Enum.filter(wanted, fn {_id, pr} -> Map.has_key?(shared, String.downcase(pr["repository"] || "")) end)
+    wanted = Enum.filter(wanted, fn {_id, pr} -> Snapshot.commit_list_available?(pr) and Map.has_key?(shared, String.downcase(pr["repository"] || "")) end)
     read = Keyword.get(opts, :commits, &Snapshot.commits/1)
     lists = if wanted == [], do: %{}, else: read.(Enum.map(wanted, fn {_id, pr} -> commits_entry(pr) end))
 
     read_prs =
       Map.new(wanted, fn {id, pr} ->
         head = pr["head_sha"]
+        base = pr["base_sha"]
+        base_tip = pr["base_tip_sha"]
 
         case Map.get(lists, commits_entry(pr)) do
-          {:ok, %{"head_sha" => ^head, "base_sha" => base, "commits" => commits}} -> {id, {:ok, Map.merge(pr, %{"base_sha" => base, "commits" => commits})}}
+          {:ok, %{"head_sha" => ^head, "base_sha" => ^base, "base_tip_sha" => ^base_tip, "commits" => commits}} -> {id, {:ok, Map.put(pr, "commits", commits)}}
           _unreadable_or_moved -> {id, {:ok, pr}}
         end
       end)
@@ -493,7 +544,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   end
 
   defp carry_commits(pr, %Observation{pr: %{"commits" => commits} = previous}) when is_list(commits) do
-    same? = Enum.all?(~w(repository number head_sha base_sha), &(previous[&1] == pr[&1]))
+    same? = Enum.all?(~w(repository number head_sha base_sha base_tip_sha), &(previous[&1] == pr[&1]))
     if same?, do: Map.put(pr, "commits", commits), else: pr
   end
 

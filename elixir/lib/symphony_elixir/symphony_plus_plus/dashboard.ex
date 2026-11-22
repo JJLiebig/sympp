@@ -10,6 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
     BlockerProjection,
     DeliveryWorkPackageProjection,
+    Inputs,
     MetadataProjection,
     OperationalProjection,
     Sanitizer,
@@ -109,6 +110,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
          }}
       end
     end)
+  end
+
+  @doc false
+  @spec live_projection_inputs(repo()) :: {:ok, [WorkRequest.t()], map()} | {:error, dashboard_error()}
+  def live_projection_inputs(repo) do
+    with source when is_pid(source) <- Inputs.ledger(),
+         true <- repo.in_transaction?(),
+         {:ok, %{rows: [[revision, rows_revision]]}} <- repo.query("SELECT live, live_inputs FROM sympp_dashboard_revisions", []) do
+      shared_live_projection_inputs(repo, source, revision, rows_revision)
+    else
+      _not_cacheable ->
+        with {:ok, requests} <- WorkRequestRepository.list(repo),
+             {:ok, inputs} <- operator_projection_inputs(repo, requests) do
+          {:ok, requests, inputs}
+        end
+    end
+  end
+
+  defp shared_live_projection_inputs(repo, source, revision, rows_revision) do
+    # Both versions come from the transaction that will consume the rows.
+    requests = Inputs.shared({:ledger, source, :live_requests}, fn -> revision end, fn -> WorkRequestRepository.list(repo) end)
+
+    with {:ok, requests} <- requests,
+         read_inputs = fn -> operator_projection_inputs(repo, requests) end,
+         {:ok, inputs} <- Inputs.shared({:ledger, source, :live_inputs}, fn -> rows_revision end, read_inputs) do
+      {:ok, requests, inputs}
+    end
   end
 
   defp operator_slice_deliveries(work_packages, deliveries) do
@@ -217,7 +245,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       {:ok,
        repo
        |> repo_identity_repo_values()
-       |> build_repo_identity_catalog(local_operator_trusted_repo_remotes(), local_path_remotes?: true)}
+       |> local_operator_catalog()}
     end)
   end
 
@@ -230,7 +258,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
         repo.all(from(package in WorkPackage, order_by: [asc: package.inserted_at, asc: package.id], select: package.repo))
 
       repo_values = package_repos ++ Enum.map(work_requests, & &1.repo) ++ repo_values(repo, WorkRequest)
-      {:ok, build_repo_identity_catalog(repo_values, local_operator_trusted_repo_remotes(), local_path_remotes?: true)}
+      {:ok, local_operator_catalog(repo_values)}
     end)
   end
 
@@ -914,15 +942,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   end
 
   defp build_repo_identity_catalog(repo_values) do
-    build_repo_identity_catalog(repo_values, configured_trusted_repo_remotes())
-  end
-
-  defp build_repo_identity_catalog(repo_values, trusted_remotes, opts \\ []) when is_list(trusted_remotes) do
-    repo_identity_opts =
-      opts
-      |> Keyword.put(:trusted_remotes, Enum.uniq(trusted_remotes))
-
-    RepoIdentity.catalog(repo_values, repo_identity_opts)
+    RepoIdentity.catalog(repo_values, trusted_remotes: Enum.uniq(configured_trusted_repo_remotes()))
   end
 
   defp configured_trusted_repo_remotes do
@@ -931,16 +951,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     |> List.wrap()
   end
 
-  defp local_operator_trusted_repo_remotes do
-    (configured_trusted_repo_remotes() ++ local_operator_origin_remotes())
-    |> Enum.uniq()
-  end
-
-  defp local_operator_origin_remotes do
-    :symphony_elixir
-    |> Application.get_env(:sympp_repo_root)
-    |> RepoIdentity.local_git_origin_remote()
-    |> List.wrap()
+  defp local_operator_catalog(repos) do
+    root = Application.get_env(:symphony_elixir, :sympp_repo_root)
+    RepoIdentity.board_catalog(repos, configured_trusted_repo_remotes(), root)
   end
 
   defp safe_read(fun) when is_function(fun, 0) do

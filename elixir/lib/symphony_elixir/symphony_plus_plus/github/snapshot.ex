@@ -19,6 +19,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
 
   @batch_size 25
   @max_concurrency 4
+  @commit_list_limit 250
   @codex_login "chatgpt-codex-connector"
   @commit_page "totalCount pageInfo { hasNextPage endCursor } nodes { commit { oid } }"
   @failing_conclusions ~w(failure cancelled timed_out startup_failure action_required stale)
@@ -26,9 +27,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
   @fragment """
   fragment pr on PullRequest {
     number url state isDraft merged mergedAt mergeable headRefOid headRefName baseRefName baseRefOid
+    baseRef { target { oid } }
     mergeCommit { oid }
     headRepositoryOwner { login }
-    commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 1) {
+    commits(last: 1) { totalCount nodes { commit { oid statusCheckRollup { state contexts(first: 1) {
       checkRunCountsByState { state count } statusContextCountsByState { state count } } } } } }
     reviews(last: 20) { nodes { author { login } state commit { oid } submittedAt } }
   }
@@ -109,6 +111,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
     {["$o#{index}: String!", "$r#{index}: String!", "$b#{index}: String!"], selection, %{"o#{index}" => owner, "r#{index}" => repo, "b#{index}" => branch}}
   end
 
+  @doc "Whether the PR snapshot still admits a complete commit-list read."
+  @spec commit_list_available?(map()) :: boolean()
+  def commit_list_available?(%{"commit_count" => count}) when is_integer(count), do: count <= @commit_list_limit
+  def commit_list_available?(_pr), do: true
+
   @doc """
   The commit lists of open PRs, as GitHub lists a PR's commits (commits
   reachable from its base are left out). One batched document per 25 PRs.
@@ -136,7 +143,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
     selections =
       Enum.map(indexed, fn {_pr, index} ->
         "e#{index}: repository(owner: $o#{index}, name: $r#{index}) { pullRequest(number: $n#{index}) " <>
-          "{ headRefOid baseRefOid commits(first: 100) { #{@commit_page} } } }"
+          "{ headRefOid baseRefOid baseRef { target { oid } } commits(first: 100) { #{@commit_page} } } }"
       end)
 
     query = "query(#{Enum.join(declarations, ", ")}) {\n#{Enum.join(selections, "\n")}\n}\n"
@@ -152,17 +159,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
     end
   end
 
-  # Follows a PR's commit pages while the head stays the one first read.
+  defp read_on(_pr, %{"commits" => %{"totalCount" => count}}, _earlier, _graphql, _priority) when is_integer(count) and count > @commit_list_limit,
+    do: {:error, :request_failed}
+
+  # Follows a PR's commit pages while the head and base stay the ones first read.
   defp read_on(pr, %{"headRefOid" => head, "commits" => %{"nodes" => nodes} = page} = node, earlier, graphql, priority) when is_binary(head) and is_list(nodes) do
     oids = earlier ++ for(%{"commit" => %{"oid" => oid}} when is_binary(oid) <- nodes, do: oid)
-    read = %{"head_sha" => head, "base_sha" => node["baseRefOid"], "commits" => oids, "total" => page["totalCount"]}
+    base = node["baseRefOid"]
+    base_tip = get_in(node, ["baseRef", "target", "oid"])
+    read = %{"head_sha" => head, "base_sha" => base, "base_tip_sha" => base_tip, "commits" => oids, "total" => page["totalCount"]}
 
     case page do
       %{"pageInfo" => %{"hasNextPage" => true, "endCursor" => cursor}} when is_binary(cursor) ->
-        case next_page(pr, cursor, graphql, priority) do
-          {:ok, %{"headRefOid" => ^head} = next} -> read_on(pr, Map.put(next, "baseRefOid", node["baseRefOid"]), oids, graphql, priority)
-          _moved_or_unreadable -> {:error, :request_failed}
-        end
+        read_next(pr, cursor, read, graphql, priority)
 
       _last_page ->
         {:ok, read}
@@ -171,10 +180,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
 
   defp read_on(_pr, _unusable, _earlier, _graphql, _priority), do: {:error, :request_failed}
 
+  defp read_next(pr, cursor, %{"head_sha" => head, "base_sha" => base, "base_tip_sha" => tip, "commits" => oids}, graphql, priority) do
+    with {:ok, %{"headRefOid" => ^head, "baseRefOid" => ^base} = next} <- next_page(pr, cursor, graphql, priority),
+         ^tip <- get_in(next, ["baseRef", "target", "oid"]) do
+      read_on(pr, next, oids, graphql, priority)
+    else
+      _moved_or_unreadable -> {:error, :request_failed}
+    end
+  end
+
   defp next_page({owner, repo, number}, cursor, graphql, priority) do
     query =
       "query($o: String!, $r: String!, $n: Int!, $c: String!) { repository(owner: $o, name: $r) { pullRequest(number: $n) " <>
-        "{ headRefOid commits(first: 100, after: $c) { #{@commit_page} } } } }"
+        "{ headRefOid baseRefOid baseRef { target { oid } } commits(first: 100, after: $c) { #{@commit_page} } } } }"
 
     case graphql.(query, %{"o" => owner, "r" => repo, "n" => number, "c" => cursor}, priority) do
       {:ok, data} -> {:ok, get_in(data, ["repository", "pullRequest"])}
@@ -241,6 +259,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Snapshot do
       "merge_commit_sha" => get_in(node, ["mergeCommit", "oid"]),
       "head_sha" => node["headRefOid"],
       "base_sha" => node["baseRefOid"],
+      "base_tip_sha" => get_in(node, ["baseRef", "target", "oid"]),
+      "commit_count" => get_in(node, ["commits", "totalCount"]),
       "branch" => node["headRefName"],
       "base_branch" => node["baseRefName"],
       "mergeable" => node["mergeable"] && String.downcase(node["mergeable"]),

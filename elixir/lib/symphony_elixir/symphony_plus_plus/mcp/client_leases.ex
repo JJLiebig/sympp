@@ -13,12 +13,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
 
   use GenServer
 
-  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub, OperatorDashboardOpener}
+  alias SymphonyElixir.SymphonyPlusPlus.{DashboardPubSub, OperatorDashboardOpener}
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
 
   @default_ttl_ms 3 * 60 * 1_000
   @default_sweep_ms 30 * 1_000
   @default_shutdown_delay_ms 1_000
+  @dashboard_deadlines :sympp_dashboard_lease_deadlines
   @actions ["attach", "heartbeat", "detach"]
 
   @type summary :: %{active_client_count: non_neg_integer(), stale_after_ms: pos_integer()}
@@ -81,10 +82,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
     end
   end
 
+  @doc false
+  @spec dashboard_deadlines() :: %{optional(String.t()) => integer()}
+  def dashboard_deadlines do
+    :ets.lookup_element(@dashboard_deadlines, :terminals, 2, %{})
+  rescue
+    ArgumentError -> %{}
+  end
+
   defp live_until?(server, terminal_key) do
     case lease_call(server, {:terminal_deadline, terminal_key}) do
       deadline when is_integer(deadline) ->
-        DashboardCache.expire_at(deadline)
         true
 
       _missing ->
@@ -130,6 +138,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
 
     state = %{
       leases: %{},
+      dashboard_deadlines: init_dashboard_deadlines(),
       bridge_lease_dir: Keyword.get(opts, :bridge_lease_dir, System.get_env("SYMPP_MCP_BRIDGE_LEASE_DIR")),
       bridge_probe: Keyword.get(opts, :bridge_probe, System.get_env("SYMPP_MCP_BRIDGE_PROBE")),
       dashboard_opener: Keyword.get(opts, :dashboard_opener),
@@ -145,6 +154,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
 
     schedule_sweep(state)
     {:ok, state}
+  end
+
+  defp init_dashboard_deadlines do
+    if Process.whereis(__MODULE__) == self() do
+      :ets.new(@dashboard_deadlines, [:named_table, :protected, read_concurrency: true])
+    end
   end
 
   @impl true
@@ -325,6 +340,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
       end)
 
     if first_client?, do: notify_dashboard_opener(state, :client_attached)
+    put_dashboard_deadlines(state)
     if terminal_key && terminal_key != previous_terminal, do: notify_terminal_changes(previous, state.leases)
     state
   end
@@ -336,7 +352,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
     if map_size(previous) > 0 and map_size(state.leases) == 0,
       do: notify_dashboard_opener(state, :clients_idle)
 
-    if map_size(previous) != map_size(state.leases), do: notify_terminal_changes(previous, state.leases)
+    publish_removed_leases(previous, state)
     state
   end
 
@@ -348,13 +364,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
     if map_size(previous) > 0 and map_size(state.leases) == 0,
       do: notify_dashboard_opener(state, :clients_idle)
 
-    if map_size(previous) != map_size(state.leases), do: notify_terminal_changes(previous, state.leases)
+    publish_removed_leases(previous, state)
     state
+  end
+
+  defp publish_removed_leases(previous, state) do
+    if map_size(previous) != map_size(state.leases) do
+      put_dashboard_deadlines(state)
+      notify_terminal_changes(previous, state.leases)
+    end
+  end
+
+  defp put_dashboard_deadlines(%{dashboard_deadlines: nil}), do: :ok
+
+  defp put_dashboard_deadlines(state) do
+    deadlines =
+      Enum.reduce(state.leases, %{}, fn
+        {_id, %{terminal: key, last_seen_ms: at}}, deadlines when is_binary(key) ->
+          deadline = at + state.ttl_ms + 1
+          Map.update(deadlines, key, deadline, &max(&1, deadline))
+
+        _unnamed, deadlines ->
+          deadlines
+      end)
+
+    :ets.insert(state.dashboard_deadlines, {:terminals, deadlines})
   end
 
   defp notify_terminal_changes(previous, current) do
     if leased_terminals(previous) != leased_terminals(current) do
-      DashboardCache.invalidate([:archived, :deferred, :hydrated, :herdr])
       DashboardPubSub.broadcast_changed()
     end
   end

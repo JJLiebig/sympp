@@ -194,18 +194,27 @@ function createReporter(env = process.env, connect = selected => connectCore(und
           provider: "agent", cwd: terminal.cwd || process.cwd(), role: binding.role,
           work_request_id: binding.work_request_id || null, work_package_id: binding.work_package_id || null,
           process_liveness_pipe: probe.pipe, process_liveness_token: probe.token };
-        fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-        const temporary = `${file}.tmp`;
-        fs.writeFileSync(temporary, JSON.stringify(receipt), { mode: 0o600 });
-        fs.renameSync(temporary, file);
-        await core.call("terminal.label", { terminal: terminal.address, labels: {
+        const contents = JSON.stringify(receipt);
+        let existing;
+        try { existing = fs.readFileSync(file, "utf8"); } catch (_) { /* Replace missing or unreadable receipts. */ }
+        if (existing !== contents) {
+          fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+          const temporary = `${file}.tmp`;
+          fs.writeFileSync(temporary, contents, { mode: 0o600 });
+          fs.renameSync(temporary, file);
+        }
+        const labels = {
           "sympp.session_id": clientId, "sympp.session_core_id": receipt.core_id,
           "sympp.session_pid": String(receipt.pid), "sympp.session_process_id": String(receipt.process_id),
           "sympp.session_receipt": file, "sympp.session_role": receipt.role,
-          // Herdr takes only text labels; an empty one removes a scope this session no longer has.
+          // An empty string clears a scope label in Herdr.
           "sympp.session_work_request_id": receipt.work_request_id ?? "",
           "sympp.session_work_package_id": receipt.work_package_id ?? "",
-        } });
+        };
+        const currentLabels = terminal.labels ?? {};
+        if (Object.entries(labels).some(([key, value]) => (currentLabels[key] ?? "") !== value)) {
+          await core.call("terminal.label", { terminal: terminal.address, labels });
+        }
       })).catch(() => {});
       return reports;
     },
