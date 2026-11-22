@@ -10,7 +10,10 @@ import { withCurrentLanes } from './mods/sympp/model.js';
 // Run the view's real init, timer and read paths without the native renderer.
 const hostModules = {
   'gpui-kit': 'export class View {} export const div = null, svg = null, image = null;',
-  'gpui-base': 'export const v_flex = null, h_flex = null, Button = null, Input = null, Textarea = null, InputState = null, TextareaState = null;',
+  'gpui-base': `
+    export const v_flex = null, h_flex = null, Button = null, Input = null, Textarea = null, TextareaState = null;
+    export const InputState = { new: () => ({ on() {}, focus() {} }) };
+  `,
   herdr: `
     const values = new Map();
     let homePath;
@@ -37,7 +40,10 @@ const { setAppHome } = await import('herdr');
 hooks.deregister();
 
 class BoardView extends Lens {
-  input() {}
+  input() {
+    let value = '';
+    return { value: () => value, set_value: (next) => { value = next; } };
+  }
   sweep() {}
   holdLease(...args) { if (this.enableLeases) super.holdLease(...args); }
 }
@@ -58,7 +64,7 @@ function open(props, { leases = false } = {}) {
       const owner = options?.owner === null ? null : view;
       tasks.push(Promise.resolve().then(() => owner?.closed ? undefined : call(task, owner)));
     } },
-    focus_handle() {},
+    focus_handle: () => ({ focus() {} }),
     spawn: (task) => tasks.push(call(task, view)),
     notify() {},
   };
@@ -194,6 +200,74 @@ test('a post-write read bypasses the older in-flight read and a 304 keeps an unc
   assert.equal(panel.view.taken.length, 0, 'the changed response confirmed the answer');
 });
 
+test('Refresh in either view queues one new check when a poll already took its snapshot', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
+  const oldRead = { started: Promise.withResolvers(), release: Promise.withResolvers() };
+  const tags = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    tags.push(options.headers['If-None-Match']);
+    if (tags.length === 2) {
+      oldRead.started.resolve();
+      await oldRead.release.promise;
+      return { ok: false, status: 304, url };
+    }
+    const payload = { ...boardPayload(), etag: '"original"' };
+    if (tags.length > 2) {
+      payload.etag = '"update"';
+      payload.work_request_details[0].work_request.title = 'Updated after the poll started';
+    }
+    return { ...response(url), json: async () => payload };
+  });
+  const endpoint = 'http://127.0.0.1:4014';
+  const panel = open({ endpoint, role: 'panel' });
+  const tab = open({ endpoint, job: 'wr-pr' });
+  await Promise.all([panel.finish(), tab.finish()]);
+  t.mock.timers.tick(15_000);
+  panel.view.tick(panel.cx);
+  await oldRead.started.promise;
+  panel.view.retry(panel.cx);
+  tab.view.retry(tab.cx);
+  oldRead.release.resolve();
+  await Promise.all([panel.finish(), tab.finish()]);
+
+  assert.deepEqual(tags, [undefined, '"original"', '"original"']);
+  assert.equal(jobTitle(panel.view), 'Updated after the poll started');
+  assert.equal(panel.view.net.data, tab.view.net.data);
+});
+
+test('creating a job sends its intake and reads the saved job back through the same connection', async (t) => {
+  const created = 'wr-created';
+  const fields = { title: 'New job', repo: 'owner/web', base_branch: 'main', human_description: 'Test the change' };
+  const calls = [];
+  let saved = false;
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls.push([options.method ?? 'GET', new URL(url).pathname]);
+    if (options.method === 'POST') {
+      const payload = JSON.parse(options.body);
+      for (const [key, value] of Object.entries(fields)) assert.equal(payload[key], value);
+      saved = true;
+      return { ...response(url), json: async () => ({ work_request: { work_request: { id: created } } }) };
+    }
+    const payload = boardPayload();
+    if (saved) payload.work_request_details.push({ work_request: { id: created, ...fields } });
+    return { ...response(url), json: async () => payload };
+  });
+  const panel = open({ endpoint: 'http://127.0.0.1:4015', role: 'panel' });
+  await panel.finish();
+  for (const [key, value] of Object.entries(fields)) panel.view.draft[key].set_value(value);
+  panel.view.createRequest(panel.cx);
+  await panel.finish();
+
+  assert.deepEqual(calls, [
+    ['GET', '/api/v1/sympp/herdr/dashboard'],
+    ['POST', '/api/v1/sympp/herdr/work-requests'],
+    ['GET', '/api/v1/sympp/herdr/dashboard'],
+  ]);
+  assert.equal(panel.view.creation.error, null);
+  assert.equal(panel.view.path.job, created);
+  assert.ok(panel.view.net.data.jobs.some((job) => job.id === created));
+});
+
 test('credential rotation starts a separate read and a refusal invalidates the authenticated board', async (t) => {
   const home = await mkdtemp(join(tmpdir(), 'sympp-panel-remote-'));
   t.after(() => rm(home, { recursive: true, force: true }));
@@ -205,7 +279,7 @@ test('credential rotation starts a separate read and a refusal invalidates the a
   let refused = false;
   const oldRead = { started: Promise.withResolvers(), release: Promise.withResolvers() };
   t.mock.method(globalThis, 'fetch', async (url, options) => {
-    assert.equal(options.method, undefined, 'a board action using replaced credentials stays local');
+    assert.equal(options.method, undefined, 'the action using replaced credentials never reaches the server');
     const credential = options.headers.Authorization === 'Bearer sample-first' ? 'first'
       : options.headers.Authorization === 'Bearer sample-second' ? 'second' : 'local';
     reads.push([credential, options.headers['If-None-Match']]);
@@ -216,6 +290,7 @@ test('credential rotation starts a separate read and a refusal invalidates the a
     if (refused && credential === 'second') return { ok: false, status: 401, url };
     const payload = { ...boardPayload(), etag: `"${credential}"` };
     payload.work_request_details[0].work_request.title = credential;
+    payload.runtime.repos_root = `/fixture/${credential}`;
     return { ...response(url), json: async () => payload };
   });
   await open({ endpoint }).finish();
@@ -223,14 +298,19 @@ test('credential rotation starts a separate read and a refusal invalidates the a
   const panel = open({ endpoint, role: 'panel', remote: true });
   await panel.finish();
   assert.equal(jobTitle(panel.view), 'first');
+  const chief = open({ role: 'chief', topic: 'fixture' });
+  await chief.finish();
+  assert.equal(await chief.view.chief.factoryRoot(), '/fixture/first');
   panel.view.retry(panel.cx);
   await oldRead.started.promise;
 
   await configure('sample-second');
   await assert.rejects(panel.view.send(answerPath, { answer: 'Ready' }, panel.cx), /Refresh the board/);
+  assert.equal(await chief.view.chief.factoryRoot(), null);
   const tab = open({ endpoint, job: 'wr-pr', remote: true });
   await tab.finish();
   assert.equal(jobTitle(tab.view), 'second');
+  assert.equal(await chief.view.chief.factoryRoot(), '/fixture/second');
   oldRead.release.resolve();
   await panel.finish();
   assert.deepEqual(reads, [['local', undefined], ['first', undefined], ['first', '"first"'], ['second', undefined]]);

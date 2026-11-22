@@ -48,19 +48,30 @@ async function fetchBoard(connection, cached, since, stillCurrent) {
   }
 }
 
-export function readBoard(connection, cx, unconditional = false) {
+export function readBoard(connection, cx, { unconditional, after, needed }) {
   const { factory } = connection;
   const boundary = factory.lastWrite;
-  if (connection.pending?.boundary === boundary) return connection.pending.promise;
-  const since = readStarts();
+  const inFlight = connection.pending;
+  if (inFlight?.boundary === boundary) {
+    if (inFlight.since === null || inFlight.since >= after) return inFlight.promise;
+    // Refresh may follow a write from another client, which leaves our local boundary unchanged.
+    return inFlight.promise.then(() => needed() && currentConnection(connection) && !factory.writes
+      ? readBoard(connection, cx, { unconditional, after, needed }) : null);
+  }
+
   const cached = unconditional || connection.disconnected ? null : connection.latest;
   const stillCurrent = () => currentConnection(connection) && !factory.writes && factory.lastWrite === boundary;
-  const promise = new Promise((resolve) => {
+  const pending = { boundary, since: null, promise: null };
+  pending.promise = new Promise((resolve) => {
     // Native fetch inherits the owner of the host call. Start in an ownerless
     // timer so the request can settle after the initiating view closes.
-    cx.timer.after(0, () => resolve(stillCurrent() ? fetchBoard(connection, cached, since, stillCurrent) : null), { owner: null });
+    cx.timer.after(0, () => {
+      if (!stillCurrent()) { resolve(null); return; }
+      pending.since = readStarts();
+      resolve(fetchBoard(connection, cached, pending.since, stillCurrent));
+    }, { owner: null });
   }).then((outcome) => {
-    if (connection.pending?.promise === promise) connection.pending = null;
+    if (connection.pending === pending) connection.pending = null;
     if (!outcome || !stillCurrent()) return null;
     if (outcome.denied) {
       connection.denied = true;
@@ -74,6 +85,6 @@ export function readBoard(connection, cx, unconditional = false) {
     }
     return outcome;
   });
-  connection.pending = { boundary, promise };
-  return promise;
+  connection.pending = pending;
+  return pending.promise;
 }

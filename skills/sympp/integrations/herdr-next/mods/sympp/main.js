@@ -90,6 +90,10 @@ async function runtimeConnection(path) {
   }
 }
 
+async function remoteConfig() {
+  return JSON.parse(await fs.readFile(`${appHome()}/sympp-remote.json`, "utf8"));
+}
+
 // Removes a preview copy: a flat mods/sympp-dev-* folder, never another mod.
 async function removeCopy(name) {
   if (!name.startsWith(S.DEV_PREFIX)) return;
@@ -139,10 +143,17 @@ export default class Lens extends View {
     const given = stored && typeof stored === "object" ? { ...stored, ...own } : own;
     const runtime = given.remote ? null : given.hosts?.local?.runtime;
     const endpoint = M.normalizeEndpoint(given.endpoint);
+    const loadRemote = given.remote ? remoteConfig : null;
     if (own.role === "chief" || own.role === "chief-menu") {
       const factoryRoot = async () => {
         const current = runtime ? await runtimeConnection(runtime) : { endpoint };
-        return current && !given.remote ? boardConnection(current.endpoint, current.epoch)?.latest?.board.reposRoot ?? null : null;
+        if (!current?.endpoint) return null;
+        try {
+          const authorization = loadRemote ? await remoteAuthorization(current.endpoint, loadRemote) : undefined;
+          return boardConnection(current.endpoint, current.epoch, authorization).latest?.board.reposRoot ?? null;
+        } catch {
+          return null;
+        }
       };
       this.chief = own.role === "chief" ? new ChiefStart(own, endpoint, factoryRoot, cx) : new ChiefMenu(own, cx);
       return;
@@ -166,7 +177,7 @@ export default class Lens extends View {
     this.repoTopics = given.repoTopics && typeof given.repoTopics === "object" ? given.repoTopics : null;
     this.hosts = given.hosts ?? null;
     this.runtime = runtime;
-    this.loadRemote = given.remote ? async () => JSON.parse(await fs.readFile(`${appHome()}/sympp-remote.json`, "utf8")) : null;
+    this.loadRemote = loadRemote;
     this.request = this.loadRemote ? remoteRequest(endpoint, this.loadRemote, () => this.connection?.authorization) : request;
     this.connection = null;
     this.net = M.initialFetch();
@@ -303,6 +314,7 @@ export default class Lens extends View {
     this.reading = true;
     this.readBoundary = boundary;
     const turn = ++this.turn;
+    const after = force ? C.readStarts() : 0;
     const stillReading = () => !this.closed && turn === this.turn;
     cx.spawn(async (cx) => {
       let outcome;
@@ -324,11 +336,11 @@ export default class Lens extends View {
         this.readBoundary = factory.lastWrite;
         const cached = connection.latest;
         const active = appWindow()?.active !== false;
-        const recent = !force && !unverified && cached && !connection.pending && !connection.disconnected &&
+        const recent = !unverified && cached && cached.since >= after && !connection.pending && !connection.disconnected &&
           cached.since > factory.lastWrite && (!this.net.error || cached.since > this.readSince) &&
           Date.now() - cached.receivedAt < M.nextDelay({ data: cached.board }, active);
         if (recent && cached.since === this.readSince) return;
-        outcome = recent ? cached : await readBoard(connection, cx, unverified);
+        outcome = recent ? cached : await readBoard(connection, cx, { unconditional: unverified, after, needed: stillReading });
         if (!stillReading() || !outcome || !currentConnection(connection)) return;
         if (outcome.board && (factory.writes || outcome.since < factory.lastWrite)) return;
       } catch (caught) {
@@ -1046,7 +1058,7 @@ export default class Lens extends View {
     cx.spawn(async (cx) => {
       const submission = C.submitAction(this.creation, async () => {
         const fields = Object.fromEntries(Object.entries(this.draft).map(([key, input]) => [key, input.value()]));
-        const payload = await this.operatorPost(this.endpoint, "/api/v1/sympp/herdr/work-requests", C.requestBody(fields));
+        const payload = await this.send(`${C.OPERATOR}/work-requests`, C.requestBody(fields), cx);
         const id = payload.work_request?.work_request?.id;
         if (!id) throw new Error("The job was submitted but its ID is missing. Refresh before submitting again.");
         return id;
