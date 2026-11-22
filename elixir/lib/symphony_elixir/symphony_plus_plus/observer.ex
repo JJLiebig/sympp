@@ -15,7 +15,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     * one batched GraphQL snapshot covers every watched PR, plus branch
       discovery for packages without a PR (`GitHub.Snapshot`);
     * the Review Suite cycle is read by `review_id` on the worker's machine
-      (`ReviewStatus`);
+      (`ReviewStatus`). A branch confirmed to have no PR only needs a
+      review read when a consumer is using its progress;
     * a PR found on the package's branch is attached; a changed PR snapshot is
       recorded; a merge is recorded as `pr_merged` through the delivery
       evidence path; otherwise the package qualifies or unqualifies through
@@ -39,14 +40,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   require Logger
 
-  alias SymphonyElixir.SymphonyPlusPlus.{BaseBranch, Cards, DashboardPubSub, HerdrCore, Ownership}
+  alias SymphonyElixir.SymphonyPlusPlus.{BaseBranch, Cards, DashboardPubSub, HerdrCore, OfflineSandbox, Ownership}
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{Api, DryClient, MergeReconciler, PullRequest}
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{RateGovernor, Snapshot}
   alias SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope
-  alias SymphonyElixir.SymphonyPlusPlus.Observer.Observation
+  alias SymphonyElixir.SymphonyPlusPlus.Observer.{Observation, ReviewRefresh}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.{RepoIdentity, ReviewStatus}
+  alias SymphonyElixir.SymphonyPlusPlus.{Repo, RepoIdentity, ReviewStatus}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, Qualification, Stacking, WorkPackage}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -54,6 +55,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   @sweep_interval_ms 60_000
   @review_concurrency 4
   @review_timeout_ms ReviewStatus.timeout_ms() + 1_000
+  @type review_scope :: :all | {:request, String.t()} | {:package, String.t(), String.t()}
+  @type review_candidate :: {WorkPackage.t(), Observation.t()}
+  @type display_review :: {{String.t(), String.t() | nil}, [Observation.t()]}
 
   # The PR fields whose change is recorded as a new snapshot.
   @snapshot_fields ~w(state draft merged merged_at merge_commit_sha head_sha branch base_branch ci github_review)
@@ -79,17 +83,59 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   def handle_info(:sweep, state) do
     safely(fn -> sweep(state.repo) end)
+    ReviewRefresh.advance()
     Process.send_after(self(), :sweep, @sweep_interval_ms)
     {:noreply, state}
   end
 
+  @doc "Selects the packages in scope whose branches have no PR."
+  @spec pre_pr_review_candidates(module(), review_scope()) :: [review_candidate()]
+  def pre_pr_review_candidates(repo, scope) do
+    safely(fn -> review_candidates_in_scope(repo, scope) end, [])
+  end
+
+  @doc "Refreshes review progress for the selected pre-PR packages."
+  @spec refresh_review_progress(module(), [review_candidate()]) :: :ok
+  def refresh_review_progress(repo, candidates) do
+    unless OfflineSandbox.enabled?(), do: safely(fn -> read_pre_pr_reviews(repo, candidates) end)
+    :ok
+  end
+
+  @doc false
+  @spec display_reviews(module(), [review_candidate()]) :: [display_review()]
+  def display_reviews(_repo, []), do: []
+
+  def display_reviews(repo, candidates) do
+    safely(fn -> display_review_jobs(repo, candidates) end, [])
+  end
+
+  defp display_review_jobs(repo, candidates) do
+    observations = Map.new(candidates, fn {package, observation} -> {package.id, observation} end)
+    packages = Enum.map(candidates, &elem(&1, 0))
+
+    for {cycle, ids} <- review_groups(repo, packages, []) do
+      {cycle, Enum.map(ids, &Map.fetch!(observations, &1))}
+    end
+  end
+
+  @doc false
+  @spec record_display_review(module(), [Observation.t()], ReviewStatus.result()) :: :ok
+  def record_display_review(repo, observations, result) do
+    safely(fn -> publish_review_progress(repo, observations, result) end)
+    :ok
+  end
+
   # A failed pass is retried on the next tick; the Observer keeps running.
-  defp safely(fun) do
+  defp safely(fun, fallback \\ :ok) do
     fun.()
   rescue
-    error -> Logger.warning("sympp observer pass failed: #{Exception.message(error)}")
+    error ->
+      Logger.warning("sympp observer pass failed: #{Exception.message(error)}")
+      fallback
   catch
-    :exit, reason -> Logger.warning("sympp observer pass failed: #{inspect(reason)}")
+    :exit, reason ->
+      Logger.warning("sympp observer pass failed: #{inspect(reason)}")
+      fallback
   end
 
   @doc "Stored observations of these packages, by package id."
@@ -143,7 +189,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     watched = Enum.map(watched, &Map.put(&1, :entry, github_entry(&1)))
     {github, results} = github_results(watched, Enum.map(cards, & &1.entry), opts)
     github = with_commits(watched, github, opts)
-    reviews = review_results(repo, Enum.map(watched, & &1.package), opts)
 
     watched =
       Enum.map(watched, fn item ->
@@ -152,15 +197,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
         Map.merge(item, %{github: result, fresh?: fresh?, pr: current_pr(item, result, item.observation && item.observation.pr, opts)})
       end)
 
+    to_read = for %{package: package} = item <- watched, reviewed?(package) and not pre_pr?(item), do: package
+    reviews = review_results(repo, to_read, opts)
     views = Enum.flat_map(watched, &view/1)
 
     {result, _changed?} =
       DashboardPubSub.coalesce_changed(fn ->
-        Enum.each(watched, &observe_package(repo, &1, Map.get(reviews, &1.package.id, :none), views))
+        Enum.each(watched, &observe_package(repo, &1, package_review(&1.package, reviews), views))
         guarded(fn -> Cards.apply(repo, cards, results, opts) end, :ok)
       end)
 
     result
+  end
+
+  # Only successful branch discovery can establish absence. A missing result
+  # for an attached PR or a provider failure keeps its usual review read.
+  defp pre_pr?(%{entry: {:branch, _, _, _, _}, github: {:ok, nil}, pr: nil, package: package}), do: reviewed?(package)
+  defp pre_pr?(_item), do: false
+
+  defp package_review(package, reviews) do
+    default = if reviewed?(package), do: :deferred, else: :none
+    Map.get(reviews, package.id, default)
   end
 
   # Cards never stop the package sweep.
@@ -246,43 +303,128 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     end
   end
 
-  # Each package's review read, by id: `:none` for packages that review in mode
-  # `none`; a read that times out is `:unknown`.
-  defp review_results(repo, packages, opts) do
+  defp review_results(_repo, [], _opts), do: %{}
+
+  defp review_results(Repo, packages, []) do
+    if Process.whereis(ReviewRefresh) do
+      Repo |> review_groups(packages, []) |> ReviewRefresh.sweep() |> reviews_by_package()
+    else
+      Repo |> review_reads(packages, []) |> reviews_by_package()
+    end
+  end
+
+  defp review_results(repo, packages, opts), do: repo |> review_reads(packages, opts) |> reviews_by_package()
+
+  defp reviews_by_package(reads) do
+    reads
+    |> Enum.flat_map(fn {ids, result} -> Enum.map(ids, &{&1, result}) end)
+    |> Map.new()
+  end
+
+  # Share a cycle read among packages on the same route. A timeout is unknown.
+  defp review_reads(_repo, [], _opts), do: []
+
+  defp review_reads(repo, packages, opts) do
     read = Keyword.get(opts, :review, &ReviewStatus.read/2)
-    {reviewed, unreviewed} = Enum.split_with(packages, &reviewed?/1)
-    workers = Ownership.workers(repo, Enum.map(reviewed, & &1.id))
+
+    repo
+    |> review_groups(packages, opts)
+    |> Task.async_stream(fn {{review_id, route}, ids} -> {ids, read.(review_id, route)} end,
+      max_concurrency: @review_concurrency,
+      ordered: false,
+      timeout: @review_timeout_ms,
+      on_timeout: :kill_task,
+      zip_input_on_exit: true
+    )
+    |> Stream.map(fn
+      {:ok, result} -> result
+      {:exit, {{_cycle, ids}, _reason}} -> {ids, :unknown}
+    end)
+  end
+
+  defp review_groups(repo, packages, opts) do
+    workers = Ownership.workers(repo, Enum.map(packages, & &1.id))
     core = Keyword.get_lazy(opts, :core, &HerdrCore.current/0)
 
-    results =
-      reviewed
-      |> Stream.map(fn package ->
+    Enum.group_by(
+      packages,
+      fn package ->
         route = Qualification.review_route(package.launch_machine, workers[package.id], core)
-        {package.id, package.review_id, route}
-      end)
-      |> Task.async_stream(fn {id, review_id, route} -> {id, read.(review_id, route)} end,
-        max_concurrency: @review_concurrency,
-        ordered: false,
-        timeout: @review_timeout_ms,
-        on_timeout: :kill_task
-      )
-      |> Enum.flat_map(fn
-        {:ok, result} -> [result]
-        {:exit, _reason} -> []
-      end)
-      |> Map.new()
-
-    Map.new(reviewed, &{&1.id, Map.get(results, &1.id, :unknown)})
-    |> Map.merge(Map.new(unreviewed, &{&1.id, :none}))
+        {package.review_id, route}
+      end,
+      & &1.id
+    )
   end
 
   defp reviewed?(%WorkPackage{review_mode: mode, review_id: id}), do: mode in ["fast", "normal", "deep"] and is_binary(id)
+
+  defp review_candidates_in_scope(repo, scope) do
+    candidates = repo.all(pre_pr_review_query(scope))
+    package_ids = for {package, _observation} <- candidates, do: package.id
+    {:ok, attachments} = PlanningRepository.pr_attachments(repo, package_ids)
+
+    Enum.filter(candidates, fn {package, _observation} ->
+      reviewed?(package) and is_nil(attached_pr(attachments[package.id]))
+    end)
+  end
+
+  defp read_pre_pr_reviews(repo, candidates) do
+    observations = Map.new(candidates, fn {package, observation} -> {package.id, observation} end)
+    packages = Enum.map(candidates, &elem(&1, 0))
+
+    # An unrelated slow worker must not hold up progress for this reader.
+    Enum.each(review_reads(repo, packages, []), fn {ids, review} ->
+      publish_review_progress(repo, Enum.map(ids, &Map.fetch!(observations, &1)), review)
+    end)
+  end
+
+  defp publish_review_progress(repo, observations, review) do
+    DashboardPubSub.coalesce_changed(fn ->
+      Enum.each(observations, &store_review_progress(repo, &1, review))
+    end)
+  end
+
+  defp pre_pr_review_query(scope) do
+    from(package in WorkPackage,
+      join: request in WorkRequest,
+      on: request.id == package.work_request_id,
+      join: observation in Observation,
+      on: observation.work_package_id == package.id,
+      where: package.status in ^Lifecycle.in_flight_statuses() and is_nil(request.archived_at) and observation.pr_absent,
+      select: {package, observation}
+    )
+    |> scope_review_query(scope)
+  end
+
+  defp scope_review_query(query, :all), do: query
+  defp scope_review_query(query, {:request, id}), do: from(package in query, where: package.work_request_id == ^id)
+
+  defp scope_review_query(query, {:package, request_id, id}),
+    do: from(package in query, where: package.id == ^id and package.work_request_id == ^request_id)
+
+  defp store_review_progress(repo, observation, review) do
+    attrs = Observation.review_attributes(observation, review)
+
+    if Ecto.Changeset.change(observation, attrs).changes != %{} do
+      # A one-shot reader can run in another VM. A newer sweep owns its PR
+      # and review evidence, so only update the observation that was read.
+      query =
+        from(current in Observation,
+          where: current.work_package_id == ^observation.work_package_id,
+          where: current.updated_at == ^observation.updated_at and current.pr_absent
+        )
+
+      now = DateTime.utc_now(:microsecond)
+      {count, _} = repo.update_all(query, set: Map.to_list(Map.put(attrs, :updated_at, now)))
+      if count > 0, do: DashboardPubSub.broadcast_changed()
+    end
+  end
 
   defp observe_package(repo, %{package: package, observation: observation, github: github, pr: pr} = item, review, views) do
     previous_pr = observation && observation.pr
     changed? = match?({:ok, %{}}, github) and pr != previous_pr and snapshot_changed?(previous_pr, pr)
     stacked_on = stacking(item, views)
-    stale = stale(github, review, stacked_on)
+    stale = stale(github, review, stacked_on, observation)
 
     # A stale GitHub read changes nothing; a stale review host or stacking
     # input only blocks qualifying.
@@ -290,7 +432,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     stored_pr = if outcome == :retry, do: previous_pr, else: pr
     stored_stacking = if is_list(stacked_on), do: stacked_on, else: (observation && observation.stacked_on) || []
 
-    store(repo, package.id, observation, %{pr: stored_pr, review: review_payload(review, observation), stale: stale, stacked_on: stored_stacking})
+    attrs = %{
+      pr: stored_pr,
+      pr_absent: pre_pr?(item),
+      review: Observation.review_payload(review, observation),
+      stale: stale,
+      stacked_on: stored_stacking
+    }
+
+    store(repo, package.id, observation, attrs, review)
   end
 
   # What this sweep read of each watched package's current PR. A PR that
@@ -361,9 +511,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   defp current_pr(_item, _unknown_or_missing, previous_pr, _opts), do: previous_pr
 
   # Unknown inputs only flag the package; a stale GitHub read changes nothing.
-  defp stale(github, review, stacked_on) do
+  defp stale(github, review, stacked_on, observation) do
     github_stale = match?({:error, _reason}, github)
-    review_stale = review == :unknown
+    review_stale = review == :unknown or (review == :deferred and "review" in ((observation && observation.stale) || []))
     stacking_stale = stacked_on == :unknown
 
     Enum.flat_map([{github_stale, "github"}, {review_stale, "review"}, {stacking_stale, "stacking"}], fn
@@ -405,11 +555,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   defp act(_repo, _item, nil, _changed?, _review, _stacked_on), do: :ok
 
   defp act(repo, %{package: %WorkPackage{} = package, attached: attached}, %{} = pr, changed?, review, stacked_on) do
-    with :ok <- check_attachment(repo, package.id, attached),
-         {:ok, payload} <- payload(pr) do
+    # Only a PR merged into the package's base delivers it.
+    merged? = pr["merged"] == true and base_matches?(package, pr)
+
+    with {:ok, payload} <- payload(pr),
+         :ok <- if(merged?, do: check_attachment(repo, package.id, attached), else: :ok) do
       work = fn -> record_and_qualify(repo, package, attached, payload, changed?, pr, review, stacked_on) end
-      # A PR merged into another base doesn't deliver this package: it unqualifies instead.
-      merged? = pr["merged"] == true and base_matches?(package, pr)
       if merged?, do: merge(repo, package, attached, payload, changed?), else: in_transaction(repo, package, work)
     else
       {:error, reason} -> retry(package, reason)
@@ -434,9 +585,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   # Recording a new head and the qualification it causes commit together: the
   # candidate head is read before the new snapshot is recorded.
   defp record_and_qualify(repo, package, attached, payload, changed?, pr, review, stacked_on) do
-    with {:ok, current} <- fetch(repo, package),
+    with :ok <- check_attachment(repo, package.id, attached),
+         {:ok, current} <- fetch(repo, package),
          {:ok, candidate_head} <- Qualification.candidate_head(repo, current),
-         :ok <- if(changed?, do: record(repo, current, attached, payload), else: :ok),
+         :ok <- if(changed?, do: Qualification.record_pr(repo, Actor.observer(), current, payload), else: :ok),
          {:ok, decision} <- Qualification.decide(repo, current, facts(current, pr, review, stacked_on), candidate_head),
          {:ok, updated} <- Qualification.apply_decision(repo, Actor.observer(), current, decision, pr["head_sha"]) do
       {:ok, changed? or updated.status != current.status}
@@ -539,27 +691,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     end
   end
 
-  defp review_payload({:ok, review}, observation), do: ReviewStatus.snapshot(review, observation && observation.review)
-  defp review_payload(:not_started, _observation), do: %{"status" => "not_started"}
-  defp review_payload(:none, _observation), do: nil
-  # An unreachable host keeps the last review it reported.
-  defp review_payload(:unknown, observation), do: observation && observation.review
-
-  defp store(repo, work_package_id, observation, attrs) do
+  defp store(repo, work_package_id, observation, attrs, review) do
     changeset = Ecto.Changeset.change(observation || %Observation{work_package_id: work_package_id}, attrs)
+    changeset = finish_pre_pr_review(changeset, observation, attrs, review)
 
     if is_nil(observation) or changeset.changes != %{} do
-      changeset
-      |> Ecto.Changeset.put_change(:observed_at, DateTime.utc_now(:microsecond))
-      |> repo.insert_or_update()
-      |> case do
-        {:ok, _stored} -> DashboardPubSub.broadcast_changed()
-        {:error, reason} -> log_failure(%WorkPackage{id: work_package_id}, reason)
-      end
+      now = DateTime.utc_now(:microsecond)
+      attrs = Map.merge(changeset.changes, %{observed_at: now, updated_at: now})
+      {count, _} = write_observation(repo, work_package_id, observation, attrs)
+      if count > 0, do: DashboardPubSub.broadcast_changed()
     end
 
     :ok
   end
+
+  defp write_observation(repo, id, nil, attrs) do
+    attrs = Map.merge(attrs, %{work_package_id: id, inserted_at: attrs.observed_at})
+    repo.insert_all(Observation, [attrs], on_conflict: :nothing, conflict_target: [:work_package_id])
+  end
+
+  # A manual sync can publish authoritative evidence while a sweep is still
+  # waiting for other providers. Display reads change only updated_at.
+  defp write_observation(repo, id, %Observation{observed_at: observed_at}, attrs) do
+    query = from(current in Observation, where: current.work_package_id == ^id and current.observed_at == ^observed_at)
+    repo.update_all(query, set: Map.to_list(attrs))
+  end
+
+  # A display refresh may have changed review fields since the sweep read the
+  # row. Closing its pre-PR window publishes the sweep's current review facts.
+  defp finish_pre_pr_review(changeset, %Observation{pr_absent: true}, %{pr_absent: false} = attrs, review) do
+    changeset = Ecto.Changeset.force_change(changeset, :stale, attrs.stale)
+    if review == :unknown, do: changeset, else: Ecto.Changeset.force_change(changeset, :review, attrs.review)
+  end
+
+  defp finish_pre_pr_review(changeset, _observation, _attrs, _review), do: changeset
 
   defp repository(%WorkPackage{repo: repo} = package) do
     [repo, RepoIdentity.local_git_origin_remote(repo), RepoIdentity.local_git_origin_remote(package.worktree_path)]

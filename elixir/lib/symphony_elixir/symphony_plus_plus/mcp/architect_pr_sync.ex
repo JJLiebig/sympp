@@ -19,7 +19,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
 
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
+  alias SymphonyElixir.SymphonyPlusPlus.{RepoIdentity, ReviewStatus}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, Qualification, Stacking, WorkPackage}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
@@ -100,12 +100,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
   defp require_overridable(_override, _failing?), do: :ok
 
   defp persist(repo, actor, work_package, payload, pr_facts, override) do
+    {review_result, pr_facts} = Map.pop!(pr_facts, :review_result)
+
     repo.transaction(fn ->
       with :ok <- lock_package(repo, work_package),
            {:ok, current} <- WorkPackageRepository.get(repo, work_package.id),
            :ok <- require_handoff(repo, current, payload),
            {:ok, candidate_head} <- Qualification.candidate_head(repo, current),
-           :ok <- Qualification.record_pr(repo, actor, current, payload),
+           :ok <- Qualification.record_pr(repo, actor, current, payload, review_result),
            {:ok, current} <- put_ci_override(repo, current, override, payload),
            pr_facts = put_no_ci(repo, pr_facts, payload),
            {:ok, decision} <- decide(repo, current, pr_facts, candidate_head, payload),
@@ -153,13 +155,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
   defp pr_facts(repo, work_package, metadata, payload) do
     merged? = PullRequestProgress.merged?(payload)
     pr_state = metadata |> Map.get("state") |> normalize_state()
-    review = if merged?, do: :none, else: Qualification.review(repo, work_package, payload["head_sha"])
+    review_result = if merged?, do: :deferred, else: Qualification.read_review(repo, work_package)
+    review = if review_result in [:none, :deferred], do: :none, else: ReviewStatus.state(review_result, payload["head_sha"])
 
     %{
       pr_state: pr_state,
       pr_draft?: Map.get(metadata, "draft") == true,
       ci_status: get_in(payload, ["check_summary", "status"]),
       review: review,
+      review_result: review_result,
       head_sha: payload["head_sha"],
       stacked_on: if(merged? or pr_state != "open", do: [], else: stacking(repo, work_package, metadata, payload))
     }
