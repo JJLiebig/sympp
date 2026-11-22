@@ -71,6 +71,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   def current, do: snapshot(false)
 
   @doc false
+  @spec last_good_deadline() :: integer() | nil
+  def last_good_deadline do
+    command = Application.get_env(:symphony_elixir, :sympp_herdr_core, "hc")
+
+    case last_good(:persistent_term.get(@cache_key, nil), command) do
+      {at, _snapshot} -> at + @last_good_ms
+      nil -> nil
+    end
+  end
+
+  @doc false
   @spec with_cached_reads((-> result)) :: result when result: var
   def with_cached_reads(fun) do
     previous = Process.put(@cached_reads_key, true)
@@ -211,8 +222,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
       end
 
     case {result, good} do
-      {:unavailable, {at, good_result}} when last_good? and now - at < @last_good_ms -> good_result
-      _current -> result
+      {:unavailable, {at, good_result}} when last_good? and now - at < @last_good_ms ->
+        DashboardCache.track_core_expiry()
+        good_result
+
+      {{:ok, _snapshot}, _good} when last_good? ->
+        DashboardCache.track_core_expiry()
+        result
+
+      _current ->
+        result
     end
   end
 

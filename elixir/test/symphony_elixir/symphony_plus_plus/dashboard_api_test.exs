@@ -167,6 +167,45 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
   end
 
+  test "closing an idle web stream releases its HTTP connection before the keepalive" do
+    path = "/api/v1/sympp/operator/dashboard/events"
+    handler = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:phoenix, :endpoint, :start],
+        fn _, _, %{conn: conn}, caller ->
+          if conn.request_path == path, do: send(caller, {:dashboard_stream, self()})
+        end,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+    server = start_supervised!({Bandit, plug: @endpoint, ip: {127, 0, 0, 1}, port: 0})
+    {:ok, {ip, port}} = ThousandIsland.listener_info(server)
+    {:ok, socket} = :gen_tcp.connect(ip, port, [:binary, active: false, packet: :line])
+
+    :ok =
+      :gen_tcp.send(socket, [
+        "GET ",
+        path,
+        " HTTP/1.1\r\n",
+        "Host: localhost:",
+        Integer.to_string(port),
+        "\r\n",
+        "Sec-Fetch-Site: same-origin\r\n",
+        "Sec-Fetch-Mode: cors\r\n\r\n"
+      ])
+
+    assert {:ok, "HTTP/1.1 200 " <> _} = :gen_tcp.recv(socket, 0, 1_000)
+    assert_receive {:dashboard_stream, stream}
+    assert Process.alive?(stream)
+    ref = Process.monitor(stream)
+    :ok = :gen_tcp.close(socket)
+    assert_receive {:DOWN, ^ref, :process, ^stream, _reason}, 1_000
+  end
+
   test "the first operator write to a current ledger does not wait for a migration lock" do
     path = WorkPackageFactory.database_path()
     {:ok, prepared} = Repo.start_link(database: path, name: nil, log: false)

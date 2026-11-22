@@ -11,6 +11,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardPubSub do
   def subscribe, do: Phoenix.PubSub.subscribe(@pubsub, @topic)
 
   @doc false
+  @spec unsubscribe() :: :ok
+  def unsubscribe, do: Phoenix.PubSub.unsubscribe(@pubsub, @topic)
+
+  @doc false
   @spec broadcast_refreshed() :: :ok
   def broadcast_refreshed, do: Phoenix.PubSub.broadcast_from(@pubsub, self(), @topic, @changed)
 

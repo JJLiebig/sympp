@@ -86,7 +86,7 @@ defmodule SymphonyElixir.Application do
         {Retention, repo: Repo},
         SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore,
         SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases,
-        {SymphonyElixir.HttpServer, host: "127.0.0.1", prime_dashboard: true}
+        {SymphonyElixir.HttpServer, host: "127.0.0.1", migrate_ledger: true}
       ]
     else
       [

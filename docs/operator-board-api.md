@@ -93,23 +93,20 @@ response sees the committed state, including an acknowledged decision leaving
 `decisions_to_review`. An earlier in-flight read may describe an older snapshot;
 clients must discard reads started before their successful mutation.
 
-Factory startup prepares the first hydrated browser and Herdr reads before
-opening its listener. The backend then maintains encoded projections for
-registered views. A dedicated read-only SQLite connection checks commits from
-every writer before reuse and every 250 ms while clients are idle. Runtime
-notifications refresh observations without evicting other usable views;
-time-derived signals refresh every 15 seconds independently of client reads.
-Reads may join a projection already building for their exact ledger version.
-A committed write always requires a projection containing that commit.
+A plain dashboard `GET` checks the latest revision and reuses the prepared
+board and its ETag when the data is still current. The first read may build the
+board from scratch, and overlapping reads for the same version can share work
+already underway.
 
-The full response fields are preserved. GitHub deployment/default-branch
-observations and Herdr terminal refreshes run in the background at their
-existing provider cadence. Unavailable evidence stays unknown, then a
-notification makes the prepared observation available to clients. The extra
-work happens during startup or background refresh rather than quiet HTTP reads.
+An open SSE stream watches the hydrated and archived boards and checks every
+250 ms for changes from other writers. It notifies clients when an updated
+view is ready to read, and background board checks stop after the last stream
+disconnects. Time-sensitive items, such as card retention or a stale heartbeat,
+become due at their own deadlines, and a watched view refreshes when its
+deadline arrives.
 
 The browser stream is `GET /api/v1/sympp/operator/dashboard/events`, under the
-same board authority as browser reads. It uses Phoenix PubSub and SSE:
+same board authority as browser reads.
 
 ```text
 event: dashboard_changed
@@ -352,9 +349,8 @@ are hints, not durable history; compare saved client-side timestamps and heads
 for best-effort "since last looked" indicators.
 
 The packaged board subscribes to `GET /api/v1/sympp/operator/dashboard/events`
-instead. That stream emits `dashboard_changed` after the same changes and
-registers the open board, so the backend does not open a second one when a
-client attaches.
+instead. That stream registers the open board so the backend does not open a
+second one when a client attaches.
 
 ## Finished goal retention and operator actions
 
