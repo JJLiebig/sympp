@@ -125,6 +125,14 @@ for (const mode of ['factory', 'local']) {
     });
 
     const args = { work_package_id: wp, target_repo_root: checkout };
+    const relativeMirror = 'example/client.git';
+    await git(root, checkout, 'clone', '--bare', old.origin, relativeMirror);
+    await git(root, checkout, 'remote', 'set-url', 'origin', relativeMirror);
+    const denied = await architect.call('dispatch_work_package', args);
+    expect(denied.error?.reason).toBe(mode === 'factory' ? 'target_repo_root_required' : 'target_repo_root_scope_mismatch');
+    expect(denied.launch_line).toBeUndefined();
+    await githubOrigin(root, { ...old, checkout }, 'example/client');
+
     const replay = await architect.call('dispatch_work_package', args);
     expect(move.base_branch).toBe('integration');
     expect(replay.replay).toBe(true);

@@ -127,12 +127,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
 
   @spec matches?(String.t(), String.t()) :: boolean()
   def matches?(checkout, expected) do
+    case repository_scope(expected) do
+      {:ok, _scope, key} -> checkout_key(checkout) == key
+      {:error, :invalid_repo_remote} -> false
+    end
+  end
+
+  @spec checkout_key(Path.t()) :: term()
+  def checkout_key(checkout) do
+    # Git treats a slug-shaped origin as a relative filesystem path.
     with origin when is_binary(origin) <- RepoIdentity.local_git_origin_remote(checkout),
-         {:ok, left, _} <- remote(origin),
-         {:ok, right, _} <- remote(expected) do
-      identity(left) == identity(right)
+         {:ok, remote, _name} <- network_remote(origin),
+         key = identity(remote),
+         true <- repository_key?(key) do
+      key
     else
-      _ -> false
+      _unresolved -> nil
     end
   end
 
@@ -199,9 +209,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
   end
 
   defp discovered_checkout(path) do
-    case remote(RepoIdentity.local_git_origin_remote(path)) do
-      {:ok, origin, _name} -> [{path, identity(origin)}]
-      _ -> []
+    case checkout_key(path) do
+      nil -> []
+      key -> [{path, key}]
     end
   end
 
@@ -263,28 +273,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
   defp remote(value) when is_binary(value) do
     value = String.trim(value)
 
-    cond do
-      Regex.match?(~r/\A[A-Za-z]:[\\\/]/, value) ->
-        {:error, :invalid_repo_remote}
+    if Regex.match?(@owner_repo, value) do
+      network_remote("https://github.com/" <> String.replace_suffix(value, ".git", "") <> ".git")
+    else
+      network_remote(value)
+    end
+  end
 
-      Regex.match?(@owner_repo, value) ->
-        remote("https://github.com/" <> String.replace_suffix(value, ".git", "") <> ".git")
+  defp remote(_), do: {:error, :invalid_repo_remote}
 
-      true ->
-        {uri, path} = parsed_remote(value)
-        name = Path.basename(path || "") |> String.replace_suffix(".git", "")
+  defp network_remote(value) do
+    {uri, path} = parsed_remote(value)
+    name = Path.basename(path || "") |> String.replace_suffix(".git", "")
 
-        if usable_authority?(uri) and name not in ["", ".", ".."] and not String.contains?(value, <<0>>) do
-          {:ok, clone_remote(value, uri), name}
-        else
-          {:error, :invalid_repo_remote}
-        end
+    if usable_authority?(uri) and name not in ["", ".", ".."] and not String.contains?(value, <<0>>) and
+         not Regex.match?(~r/\A[A-Za-z]:[\\\/]/, value) do
+      {:ok, clone_remote(value, uri), name}
+    else
+      {:error, :invalid_repo_remote}
     end
   rescue
     _ in [URI.Error, ArgumentError] -> {:error, :invalid_repo_remote}
   end
-
-  defp remote(_), do: {:error, :invalid_repo_remote}
 
   defp clone_remote(value, %URI{scheme: scheme}) when scheme in ["http", "https"] do
     String.replace(value, ~r{\A(https?://)[^/?#]*@}i, "\\1", global: false)

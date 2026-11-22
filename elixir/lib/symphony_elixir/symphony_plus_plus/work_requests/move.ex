@@ -2,7 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
   @moduledoc false
 
   alias Ecto.Changeset
-  alias SymphonyElixir.SymphonyPlusPlus.{BaseBranch, DashboardPubSub, FactoryRepos, RepoIdentity}
+  alias SymphonyElixir.SymphonyPlusPlus.{BaseBranch, DashboardPubSub, FactoryRepos}
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{DefaultClient, PullRequest, PullRequestProgress}
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
@@ -172,18 +172,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
 
   defp scope_key(value) do
     case stored_key(value) do
-      {:stored, _} = key ->
-        # An origin without a host can be a relative path shaped like owner/repo.
-        with origin when is_binary(origin) <- RepoIdentity.local_git_origin_remote(value),
-             true <- String.contains?(origin, ":"),
-             {:ok, _scope, origin_key} <- FactoryRepos.repository_scope(origin) do
-          origin_key
-        else
-          _unresolved -> key
-        end
-
-      key ->
-        key
+      {:stored, _} = key -> FactoryRepos.checkout_key(value) || key
+      key -> key
     end
   end
 
