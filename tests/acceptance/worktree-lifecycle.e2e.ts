@@ -1,9 +1,9 @@
 import { expect } from 'e2e';
-import { access, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { test, snapshot } from '../support/authority.js';
-import { Client } from '../support/factory.js';
-import { git, repository, workPackage } from '../support/worktree-git.js';
+import { Client, contract } from '../support/factory.js';
+import { git, githubOrigin, repository, workPackage } from '../support/worktree-git.js';
 import { requestPath } from '../support/retention-history.js';
 
 const exists = async (path: string) => access(path).then(() => true, () => false);
@@ -102,3 +102,46 @@ test('offline snapshot lifecycle changes leave copied live worktree paths and so
   expect((await original.call('list_work_requests')).work_requests.map((row: any) => row.id)).toContain(request);
   expect(await readFile(join(path, 'keep.txt'), 'utf8')).toBe('Source worktree content\n');
 });
+
+for (const mode of ['factory', 'local']) {
+  test(`dispatch reuses the repaired worktree and its base in ${mode} mode`, async ({ processes }) => {
+    const { root } = processes;
+    const reposRoot = join(root, 'repos');
+    await mkdir(reposRoot);
+    const old = await repository(reposRoot, 'original');
+    await githubOrigin(root, old, 'example/service');
+    const factory = processes.factory('worktree-move', { env: mode === 'factory' ? { SYMPP_REPOS_ROOT: reposRoot } : {} });
+    const architect = await factory.client();
+    const request = await architect.request('Move factory checkout');
+    const [wp] = await architect.addPackages([contract('Continue existing checkout')]);
+    const original = await architect.call('dispatch_work_package', { work_package_id: wp, target_repo_root: old.checkout });
+
+    const checkout = join(reposRoot, 'renamed');
+    await rename(old.checkout, checkout);
+    await githubOrigin(root, { ...old, checkout }, 'example/client');
+    await git(root, checkout, 'worktree', 'repair', original.worktree.path);
+    const move = await architect.call('move_work_request', {
+      work_request_id: request, repo: 'example/client', base_branch: 'integration', rationale: 'The checkout moved with the repository.',
+    });
+
+    const args = { work_package_id: wp, target_repo_root: checkout };
+    const relativeMirror = 'example/client.git';
+    await git(root, checkout, 'clone', '--bare', old.origin, relativeMirror);
+    await git(root, checkout, 'remote', 'set-url', 'origin', relativeMirror);
+    const denied = await architect.call('dispatch_work_package', args);
+    expect(denied.error?.reason).toBe(mode === 'factory' ? 'target_repo_root_required' : 'target_repo_root_scope_mismatch');
+    expect(denied.launch_line).toBeUndefined();
+    await githubOrigin(root, { ...old, checkout }, 'example/client');
+
+    const replay = await architect.call('dispatch_work_package', args);
+    expect(move.base_branch).toBe('integration');
+    expect(replay.replay).toBe(true);
+    expect(replay.worktree).toMatchObject({ path: original.worktree.path, base_branch: 'beta' });
+    expect(await readFile(replay.assignment_file, 'utf8')).toContain('example/client');
+
+    await git(root, checkout, 'config', 'protocol.https.allow', 'never');
+    await git(root, checkout, 'remote', 'set-url', 'origin', 'https://fixture-user:fixture-password@github.com/example/client.git');
+    const retry = await architect.call('dispatch_work_package', args);
+    expect(retry.worktree).toMatchObject({ path: replay.worktree.path });
+  });
+}

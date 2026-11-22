@@ -59,6 +59,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
           | :invalid_worktree_path
           | :offline_sandbox
           | :recorded_worktree_missing
+          | :stale_contract_revision
           | {:stale_existing_branch, map()}
           | :unsafe_worktree_path
           | :worktree_path_exists
@@ -76,6 +77,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
       when is_atom(repo) and is_binary(work_package_id) and is_map(attrs) and is_list(opts) do
     with :ok <- OfflineSandbox.require_online(),
          {:ok, %WorkPackage{} = work_package} <- Repository.get(repo, work_package_id),
+         :ok <- require_revision(work_package, Map.get(attrs, "contract_revision")),
          {:ok, target_repo_root} <- target_repo_root(attrs),
          {:ok, requested_base_branch} <- ref_name(attrs, "base_branch", :invalid_base_branch, target_repo_root, opts),
          base_branch = BaseBranch.canonicalize(requested_base_branch),
@@ -85,7 +87,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
          worktree_parent = factory_worktree_parent(worktree_parent, target_repo_root),
          {:ok, worktree_path} <- worktree_path(work_package, target_repo_root, branch, worktree_parent, opts),
          {:ok, worktree_path} <-
-           validate_recorded_prepare_path(work_package, worktree_path, target_repo_root, branch, worktree_parent) do
+           validate_recorded_prepare_path(
+             work_package,
+             worktree_path,
+             target_repo_root,
+             branch,
+             worktree_parent,
+             opts
+           ) do
       maybe_replay_prepared(repo, work_package, target_repo_root, base_branch, branch, worktree_path, opts)
     end
   end
@@ -218,6 +227,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
     if BaseBranch.canonicalize(recorded) == requested, do: :ok, else: {:error, :invalid_base_branch}
   end
 
+  defp require_revision(_package, nil), do: :ok
+  defp require_revision(%WorkPackage{contract_revision: revision}, revision), do: :ok
+  defp require_revision(_package, _revision), do: {:error, :stale_contract_revision}
+
   defp worktree_parent(attrs, opts) do
     with {:ok, root} <- worktree_root(opts),
          {:ok, parent} <- optional_string(attrs, "worktree_parent") do
@@ -284,9 +297,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
   defp same_recorded_path?(recorded_path, candidate) when is_binary(recorded_path), do: same_path?(recorded_path, candidate)
   defp same_recorded_path?(_recorded_path, _candidate), do: false
 
-  defp validate_recorded_prepare_path(%WorkPackage{worktree_path: nil}, worktree_path, _repo_root, _branch, _worktree_parent), do: {:ok, worktree_path}
+  defp validate_recorded_prepare_path(%WorkPackage{worktree_path: nil}, worktree_path, _repo_root, _branch, _worktree_parent, _opts),
+    do: {:ok, worktree_path}
 
-  defp validate_recorded_prepare_path(%WorkPackage{worktree_path: recorded_path} = work_package, worktree_path, repo_root, branch, worktree_parent) do
+  defp validate_recorded_prepare_path(
+         %WorkPackage{worktree_path: recorded_path} = work_package,
+         worktree_path,
+         repo_root,
+         branch,
+         worktree_parent,
+         opts
+       ) do
     with {:ok, recorded_path} <- canonicalize(recorded_path) do
       cond do
         same_path?(recorded_path, worktree_path) ->
@@ -295,11 +316,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
         replayable_managed_prepare_path?(work_package, repo_root, branch, recorded_path, worktree_parent) ->
           {:ok, recorded_path}
 
+        relocated_worktree?(work_package, recorded_path, repo_root, opts) ->
+          {:ok, recorded_path}
+
         true ->
           {:error, {:worktree_path_already_recorded, recorded_path}}
       end
     end
   end
+
+  # Git can keep the linked worktree in place when its checkout is relocated.
+  defp relocated_worktree?(%WorkPackage{worktree_target_repo_root: prior_root}, recorded_path, repo_root, opts)
+       when is_binary(prior_root) do
+    with {:ok, root} <- worktree_root(opts),
+         true <- inside_root?(recorded_path, root),
+         :ok <- require_recorded_worktree_owner(repo_root, recorded_path, opts) do
+      true
+    else
+      _no_factory_root -> false
+    end
+  end
+
+  defp relocated_worktree?(_package, _path, _repo_root, _opts), do: false
 
   defp maybe_replay_prepared(repo, %WorkPackage{worktree_path: recorded_path} = work_package, repo_root, base_branch, branch, worktree_path, opts)
        when is_binary(recorded_path) do
@@ -345,7 +383,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
   end
 
   defp record_prepared_worktree(repo, %WorkPackage{} = work_package, repo_root, base_branch, branch, worktree_path, branch_created?, opts) do
-    case Repository.update(repo, work_package.id, %{
+    case Repository.record_prepared_worktree(repo, work_package, %{
            worktree_path: worktree_path,
            worktree_target_repo_root: repo_root,
            worktree_cleanup_proof: nil
@@ -361,8 +399,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
     end
   end
 
-  defp ensure_recorded_target_repo_root(repo, %WorkPackage{worktree_target_repo_root: nil} = work_package, repo_root) do
-    Repository.update(repo, work_package.id, %{worktree_target_repo_root: repo_root})
+  defp ensure_recorded_target_repo_root(repo, %WorkPackage{worktree_target_repo_root: recorded_root} = work_package, repo_root)
+       when recorded_root != repo_root do
+    Repository.record_prepared_worktree(repo, work_package, %{
+      worktree_target_repo_root: repo_root,
+      worktree_cleanup_proof: nil
+    })
   end
 
   defp ensure_recorded_target_repo_root(_repo, %WorkPackage{} = work_package, _repo_root), do: {:ok, work_package}

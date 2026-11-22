@@ -30,6 +30,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -37,6 +38,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   @tools [
     "list_work_requests",
     "read_work_request",
+    "move_work_request",
     "dispatch_work_package"
   ]
   @work_request_views ToolCatalog.work_request_views()
@@ -77,6 +79,65 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_work_request", "reason" => reason}}
       {:error, :not_found} -> not_found_error("read_work_request")
       {:error, reason} -> architect_error(reason, "read_work_request")
+    end
+  end
+
+  defp call_tool("move_work_request" = tool, config, terminal, arguments, _opts) do
+    with {:ok, id} <- required_argument(arguments, "work_request_id"),
+         {:ok, destination} <- required_argument(arguments, "repo"),
+         {:ok, base_branch} <- optional_string_argument(arguments, "base_branch"),
+         {:ok, rationale} <- required_argument(arguments, "rationale"),
+         {:ok, result} <- Move.run(config.repo, id, %{repo: destination, base_branch: base_branch, rationale: rationale}, terminal) do
+      {:ok, ToolResult.agent_tool_result(Redactor.redact_output(result))}
+    else
+      {:tool_error, reason} ->
+        invalid_params_error(tool, reason)
+
+      {:error, :not_found} ->
+        not_found_error(tool)
+
+      {:error, :invalid_repo_remote} ->
+        invalid_params_error(tool, "invalid_repo")
+
+      {:error, {:attached_pull_requests, packages}} ->
+        {:error, -32_009, "Move blocked",
+         %{
+           "tool" => tool,
+           "reason" => "attached_pull_requests",
+           "message" => "These packages have pull requests that cannot follow the move.",
+           "next_action" => "Reconcile merged PRs or close the source PRs and end or supersede their packages. Then retry the move.",
+           "packages" => packages
+         }}
+
+      {:error, :ambiguous_source_repository} ->
+        {:error, -32_009, "Move blocked",
+         %{
+           "tool" => tool,
+           "reason" => "ambiguous_source_repository",
+           "message" => "The recorded checkout and pull requests do not establish the previous repository.",
+           "next_action" => "Resolve conflicting source PRs or point the recorded checkout back to its original repository, then retry."
+         }}
+
+      {:error, :work_request_owner_changed} ->
+        {:error, -32_003, "Forbidden",
+         %{
+           "tool" => tool,
+           "reason" => "work_request_owner_changed",
+           "message" => "Ownership changed while the move was running.",
+           "next_action" => "Ask the current owner or a chief to move the WorkRequest."
+         }}
+
+      {:error, :work_request_scope_changed} ->
+        {:error, -32_009, "Move blocked",
+         %{
+           "tool" => tool,
+           "reason" => "work_request_scope_changed",
+           "message" => "Repository scope changed while this call was running.",
+           "next_action" => "Read the WorkRequest and retry if needed."
+         }}
+
+      {:error, reason} ->
+        architect_error(reason, tool)
     end
   end
 
