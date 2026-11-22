@@ -71,10 +71,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
          {:ok, branch} <- metadata_branch(metadata),
          {:ok, base_branch} <- metadata_base_branch(metadata),
          {:ok, base_sha} <- metadata_base_sha(metadata),
-         {:ok, changed_file_metadata} <- metadata_changed_files(metadata),
          {:ok, check_summary} <- metadata_map(metadata, "check_summary", %{}),
          {:ok, review_state} <- metadata_map(metadata, "review_state", github_review_state(metadata)),
          {:ok, merge_state} <- metadata_map(metadata, "merge_state", github_merge_state(metadata)) do
+      changed_file_metadata = metadata_changed_files(metadata)
+
       {:ok,
        %{
          "type" => "pr",
@@ -113,7 +114,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
       when is_map(metadata) and is_map(ref) and (is_binary(expected_head_sha) or is_nil(expected_head_sha)) do
     with :ok <- provider_snapshot_complete(metadata),
          {:ok, payload} <- metadata(metadata, ref, nil),
-         :ok <- provider_changed_files_complete(metadata, payload),
          :ok <- provider_head_matches(payload["head_sha"], expected_head_sha),
          {:ok, provider_reference} <- provider_reference(metadata),
          {:ok, check_summary} <- provider_check_summary(metadata),
@@ -191,27 +191,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
 
   defp provider_snapshot_complete(%{"provider_snapshot_complete" => false}), do: {:error, :provider_incomplete}
   defp provider_snapshot_complete(_metadata), do: :ok
-
-  defp provider_changed_files_complete(%{"provider_snapshot_complete" => true} = metadata, payload) do
-    files = Map.get(payload, "changed_files", [])
-    count = Map.get(payload, "changed_files_count")
-    provider_files = Map.get(metadata, "changed_files")
-
-    if Map.get(payload, "changed_files_available") == true and is_integer(count) and count == length(files) and
-         is_list(provider_files) and Enum.all?(provider_files, &provider_file_complete?/1),
-       do: :ok,
-       else: {:error, :provider_incomplete}
-  end
-
-  defp provider_changed_files_complete(_metadata, _payload), do: :ok
-
-  defp provider_file_complete?(%{"path" => path, "changeType" => change_type} = file) do
-    filled_string?(path) and is_binary(change_type) and
-      (String.downcase(change_type) != "renamed" or
-         filled_string?(Map.get(file, "previous_path") || Map.get(file, "previous_filename")))
-  end
-
-  defp provider_file_complete?(_file), do: false
 
   defp imported_observed_at(metadata) do
     case clean_string(Map.get(metadata, "observed_at")) do
@@ -643,47 +622,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
     |> clean_string()
   end
 
+  # Changed files are display metadata. GitHub CLI can return only the first page.
   defp metadata_changed_files(metadata) do
-    with {:ok, reported_count} <- metadata_changed_files_count(metadata) do
-      case Map.get(metadata, "changed_files", :missing) do
-        values when is_list(values) ->
-          changed_files = Enum.map(values, &changed_file/1)
-          changed_file_count_metadata(changed_files, reported_count)
+    reported_count = metadata_changed_files_count(metadata)
 
-        count when is_integer(count) and count >= 0 ->
-          {:ok, changed_file_metadata([], count, false, true)}
+    case Map.get(metadata, "changed_files") do
+      values when is_list(values) ->
+        files = values |> Enum.map(&changed_file/1) |> Enum.filter(&filled_string?(&1["path"]))
+        count = max(reported_count || 0, length(values))
+        count_available? = is_integer(reported_count) or values != []
+        changed_file_metadata(files, count, count_available? and count == length(files), count_available?)
 
-        :missing ->
-          missing_changed_file_count_metadata(reported_count)
+      count when is_integer(count) and count >= 0 ->
+        changed_file_metadata([], count, false, true)
 
-        _value ->
-          {:error, :invalid_changed_files}
-      end
+      _unavailable ->
+        changed_file_metadata([], reported_count || 0, false, is_integer(reported_count))
     end
   end
 
-  defp metadata_changed_files_count(metadata) do
-    case Map.get(metadata, "changed_files_count") do
-      nil -> {:ok, nil}
-      count when is_integer(count) and count >= 0 -> {:ok, count}
-      _value -> {:error, :invalid_changed_files_count}
-    end
-  end
-
-  defp changed_file_count_metadata([], nil), do: {:ok, changed_file_metadata([], 0, false, false)}
-
-  defp changed_file_count_metadata(changed_files, nil) do
-    count = length(changed_files)
-    {:ok, changed_file_metadata(changed_files, count, true, true)}
-  end
-
-  defp changed_file_count_metadata(changed_files, reported_count) do
-    count = max(reported_count, length(changed_files))
-    {:ok, changed_file_metadata(changed_files, count, reported_count <= length(changed_files), true)}
-  end
-
-  defp missing_changed_file_count_metadata(nil), do: {:ok, changed_file_metadata([], 0, false, false)}
-  defp missing_changed_file_count_metadata(reported_count), do: {:ok, changed_file_metadata([], reported_count, false, true)}
+  defp metadata_changed_files_count(%{"changed_files_count" => count}) when is_integer(count) and count >= 0, do: count
+  defp metadata_changed_files_count(_metadata), do: nil
 
   defp changed_file_metadata(files, count, files_available, count_available) do
     %{
