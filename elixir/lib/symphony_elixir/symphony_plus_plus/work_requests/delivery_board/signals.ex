@@ -7,6 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
   alias SymphonyElixir.SymphonyPlusPlus.HerdrCore
+  alias SymphonyElixir.SymphonyPlusPlus.OperationalLineage
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, ExecutionGraph}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
@@ -31,6 +32,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
 
     edges_by_request = execution_edges_by_request(repo, missing_work_request_ids)
 
+    lineage =
+      Keyword.get_lazy(opts, :lineage, fn ->
+        ended_ids = for packages <- Map.values(work_packages_by_request), package <- packages, Lifecycle.ended?(package), do: package.id
+        OperationalLineage.lookup(repo, ended_ids)
+      end)
+
     deliveries_by_request =
       deliveries_by_slice_id
       |> Map.values()
@@ -43,7 +50,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
       product_tree =
         product_tree_for_request(work_request.id, product_trees_by_request, edges_by_request)
 
-      case ExecutionGraph.successors(repo, work_packages) do
+      case ExecutionGraph.successors(lineage, work_packages) do
         {:ok, successors} ->
           graph = ExecutionGraph.evaluate(product_tree, work_packages, deliveries, successors)
           {:cont, {:ok, Map.put(graphs, work_request.id, scope_execution_graph(graph, work_packages, opts))}}

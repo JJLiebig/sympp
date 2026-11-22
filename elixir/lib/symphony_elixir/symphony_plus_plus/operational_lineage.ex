@@ -20,6 +20,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperationalLineage do
           | :self_relationship
           | PlanningRepository.error()
           | term()
+  @type lookup :: %{
+          by_source: %{String.t() => [map()]},
+          by_target: %{String.t() => [map()]},
+          packages: %{String.t() => WorkPackage.t()}
+        }
+  @type source :: repo() | {:ok, lookup()} | {:error, lineage_error()}
 
   @lineage_type "operational_lineage"
   @source_tool "record_operational_lineage"
@@ -114,21 +120,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperationalLineage do
     })
   end
 
-  @spec for_work_packages(repo(), [WorkPackage.t()]) :: {:ok, %{String.t() => map()}} | {:error, lineage_error()}
-  def for_work_packages(repo, work_packages) when is_atom(repo) and is_list(work_packages) do
-    work_package_ids = Enum.map(work_packages, & &1.id)
-
-    with {:ok, relationships} <- list_relationships(repo, work_package_ids) do
-      relationships = relationships_visible_to_packages(relationships, work_package_ids)
-      relationships_by_source_id = Enum.group_by(relationships, & &1.source_work_package_id)
-      relationships_by_target_id = Enum.group_by(relationships, & &1.target_work_package_id)
+  @spec lookup(repo(), [String.t()]) :: {:ok, lookup()} | {:error, lineage_error()}
+  def lookup(repo, work_package_ids) do
+    with {:ok, work_package_ids} <- normalize_work_package_ids(work_package_ids),
+         {:ok, events} <- lineage_progress_events(repo, {:related_to, work_package_ids}),
+         {:ok, packages} <- lineage_packages_by_id(repo, events) do
+      relationships = Enum.flat_map(events, &event_to_relationship_list(&1, packages))
 
       {:ok,
-       Map.new(work_packages, fn
-         %WorkPackage{} = work_package ->
-           outgoing = Map.get(relationships_by_source_id, work_package.id, [])
-           incoming = Map.get(relationships_by_target_id, work_package.id, [])
-           {work_package.id, package_lineage(work_package, outgoing, incoming)}
+       %{
+         by_source: Enum.group_by(relationships, & &1.source_work_package_id),
+         by_target: Enum.group_by(relationships, & &1.target_work_package_id),
+         packages: packages
+       }}
+    end
+  end
+
+  @spec for_work_packages(source(), [WorkPackage.t()]) :: {:ok, %{String.t() => map()}} | {:error, lineage_error()}
+  def for_work_packages(source, work_packages) do
+    visible_ids = MapSet.new(work_packages, & &1.id)
+
+    with {:ok, lookup} <- resolve_lookup(source, work_packages) do
+      {:ok,
+       Map.new(work_packages, fn %WorkPackage{} = work_package ->
+         outgoing = lookup.by_source |> Map.get(work_package.id, []) |> Enum.filter(&MapSet.member?(visible_ids, &1.target_work_package_id))
+         incoming = lookup.by_target |> Map.get(work_package.id, []) |> Enum.filter(&MapSet.member?(visible_ids, &1.source_work_package_id))
+         {work_package.id, package_lineage(work_package, outgoing, incoming)}
        end)}
     end
   end
@@ -142,28 +159,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperationalLineage do
     end
   end
 
-  @spec delivery_successors(repo(), [WorkPackage.t()]) ::
+  @spec delivery_successors(source(), [WorkPackage.t() | map()]) ::
           {:ok, %{String.t() => [String.t()]}} | {:error, lineage_error()}
-  def delivery_successors(repo, work_packages) do
-    packages = packages_by_id(work_packages)
-
-    with {:ok, events} <- lineage_progress_events(repo, {:related_to, Map.keys(packages)}),
-         {:ok, related_packages} <- lineage_packages_by_id(repo, events) do
+  def delivery_successors(source, work_packages) do
+    with {:ok, lookup} <- resolve_lookup(source, work_packages) do
       successors =
-        events
-        |> Enum.flat_map(&event_to_relationship_list(&1, related_packages))
-        |> Enum.filter(fn relationship ->
-          source = Map.get(packages, relationship.source_work_package_id)
-          target = Map.get(related_packages, relationship.target_work_package_id)
+        for package <- work_packages,
+            ids = successor_ids(lookup, package),
+            ids != [],
+            into: %{},
+            do: {package.id, ids}
 
-          successor_relationship?(relationship) and not is_nil(source) and
-            (is_nil(target) or source.work_request_id == target.work_request_id)
-        end)
-        |> Enum.group_by(& &1.source_work_package_id, & &1.target_work_package_id)
-
-      {:ok, Map.new(successors, fn {id, ids} -> {id, Enum.uniq(ids)} end)}
+      {:ok, successors}
     end
   end
+
+  defp resolve_lookup(repo, work_packages) when is_atom(repo), do: lookup(repo, Enum.map(work_packages, & &1.id))
+  defp resolve_lookup(lookup, _work_packages), do: lookup
+
+  defp successor_ids(lookup, package) do
+    for relationship <- Map.get(lookup.by_source, package.id, []),
+        successor_relationship?(relationship),
+        same_request_or_missing?(package, Map.get(lookup.packages, relationship.target_work_package_id)),
+        uniq: true,
+        do: relationship.target_work_package_id
+  end
+
+  defp same_request_or_missing?(_package, nil), do: true
+  defp same_request_or_missing?(package, target), do: package.work_request_id == target.work_request_id
 
   defp list_relationships(repo, work_package_ids) when is_atom(repo) and is_list(work_package_ids) do
     with {:ok, work_package_ids} <- normalize_work_package_ids(work_package_ids),
@@ -269,14 +292,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperationalLineage do
 
   defp payload_value(payload, key) when is_binary(key), do: Map.get(payload, key) || Map.get(payload, String.to_atom(key))
 
-  defp relationships_visible_to_packages(relationships, work_package_ids) do
-    visible_ids = MapSet.new(work_package_ids)
-
-    Enum.filter(relationships, fn relationship ->
-      MapSet.member?(visible_ids, relationship.source_work_package_id) and
-        MapSet.member?(visible_ids, relationship.target_work_package_id)
-    end)
-  end
+  defp lineage_progress_events(_repo, {:related_to, []}), do: {:ok, []}
 
   defp lineage_progress_events(repo, scope) do
     {:ok, repo.all(lineage_progress_events_query(scope))}
@@ -321,7 +337,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperationalLineage do
     {:ok,
      repo.all(
        from(work_package in WorkPackage,
-         where: work_package.id in ^package_ids
+         where: work_package.id in ^package_ids,
+         select: struct(work_package, [:id, :branch_pattern, :status, :work_request_id])
        )
      )
      |> packages_by_id()}
