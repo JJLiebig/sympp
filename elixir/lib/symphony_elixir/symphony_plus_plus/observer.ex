@@ -56,6 +56,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   @review_concurrency 4
   @review_timeout_ms ReviewStatus.timeout_ms() + 1_000
   @type review_scope :: :all | {:request, String.t()} | {:package, String.t(), String.t()}
+  @type review_candidate :: {WorkPackage.t(), Observation.t()}
 
   # The PR fields whose change is recorded as a new snapshot.
   @snapshot_fields ~w(state draft merged merged_at merge_commit_sha head_sha branch base_branch ci github_review)
@@ -86,20 +87,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     {:noreply, state}
   end
 
-  @doc "Refreshes review progress for packages whose branches have no PR."
-  @spec refresh_review_progress(module(), review_scope(), [review_scope()]) :: :ok
-  def refresh_review_progress(repo, scope, excluded_scopes \\ []) do
-    unless OfflineSandbox.enabled?(), do: safely(fn -> read_pre_pr_reviews(repo, scope, excluded_scopes) end)
+  @doc "Selects the packages in scope whose branches have no PR."
+  @spec pre_pr_review_candidates(module(), review_scope()) :: [review_candidate()]
+  def pre_pr_review_candidates(repo, scope) do
+    safely(fn -> review_candidates_in_scope(repo, scope) end, [])
+  end
+
+  @doc "Refreshes review progress for the selected pre-PR packages."
+  @spec refresh_review_progress(module(), [review_candidate()]) :: :ok
+  def refresh_review_progress(repo, candidates) do
+    unless OfflineSandbox.enabled?(), do: safely(fn -> read_pre_pr_reviews(repo, candidates) end)
     :ok
   end
 
   # A failed pass is retried on the next tick; the Observer keeps running.
-  defp safely(fun) do
+  defp safely(fun, fallback \\ :ok) do
     fun.()
   rescue
-    error -> Logger.warning("sympp observer pass failed: #{Exception.message(error)}")
+    error ->
+      Logger.warning("sympp observer pass failed: #{Exception.message(error)}")
+      fallback
   catch
-    :exit, reason -> Logger.warning("sympp observer pass failed: #{inspect(reason)}")
+    :exit, reason ->
+      Logger.warning("sympp observer pass failed: #{inspect(reason)}")
+      fallback
   end
 
   @doc "Stored observations of these packages, by package id."
@@ -305,16 +316,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   defp reviewed?(%WorkPackage{review_mode: mode, review_id: id}), do: mode in ["fast", "normal", "deep"] and is_binary(id)
 
-  defp read_pre_pr_reviews(repo, scope, excluded_scopes) do
-    candidates = repo.all(pre_pr_review_query(scope, excluded_scopes))
+  defp review_candidates_in_scope(repo, scope) do
+    candidates = repo.all(pre_pr_review_query(scope))
     package_ids = for {package, _observation} <- candidates, do: package.id
     {:ok, attachments} = PlanningRepository.pr_attachments(repo, package_ids)
 
-    candidates =
-      Enum.filter(candidates, fn {package, _observation} ->
-        reviewed?(package) and is_nil(attached_pr(attachments[package.id]))
-      end)
+    Enum.filter(candidates, fn {package, _observation} ->
+      reviewed?(package) and is_nil(attached_pr(attachments[package.id]))
+    end)
+  end
 
+  defp read_pre_pr_reviews(repo, candidates) do
     observations = Map.new(candidates, fn {package, observation} -> {package.id, observation} end)
     packages = Enum.map(candidates, &elem(&1, 0))
 
@@ -326,17 +338,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     end)
   end
 
-  defp pre_pr_review_query(scope, excluded_scopes) do
-    excluded_requests = for {:request, id} <- excluded_scopes, do: id
-    excluded_packages = for {:package, _request_id, id} <- excluded_scopes, do: id
-
+  defp pre_pr_review_query(scope) do
     from(package in WorkPackage,
       join: request in WorkRequest,
       on: request.id == package.work_request_id,
       join: observation in Observation,
       on: observation.work_package_id == package.id,
       where: package.status in ^Lifecycle.in_flight_statuses() and is_nil(request.archived_at) and observation.pr_absent,
-      where: package.work_request_id not in ^excluded_requests and package.id not in ^excluded_packages,
       select: {package, observation}
     )
     |> scope_review_query(scope)
