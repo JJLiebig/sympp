@@ -7,6 +7,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.ArchivedInputs
   alias SymphonyElixir.SymphonyPlusPlus.DashboardCache
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Config, as: MCPConfig
+  alias SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Retention
@@ -183,6 +184,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
       configure_cockpit(opts, original_endpoint_config)
       {:ok, _started} = ensure_runtime_started()
       :ok = prepare_work_request_ledger()
+      :ok = ensure_review_refresh_started()
       opts = put_open_dashboard_default(opts)
       :ok = start_http_server_or_raise(opts)
       port = wait_for_bound_port()
@@ -199,6 +201,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
       Application.put_env(:symphony_elixir, Endpoint, original_endpoint_config)
       Repo.put_dynamic_repo(original_dynamic_repo)
       stop_owned_endpoint(Process.delete(:sympp_cockpit_endpoint_pid))
+      stop_owned_endpoint(Process.delete(:sympp_cockpit_review_refresh_pid))
       stop_owned_endpoint(Process.delete(:sympp_cockpit_repo_pid))
       stop_owned_processes(Process.delete(:sympp_cockpit_pubsub_pids))
       stop_owned_endpoint(Process.delete(:sympp_cockpit_task_supervisor_pid))
@@ -358,6 +361,18 @@ defmodule Mix.Tasks.Sympp.Cockpit do
          {:ok, _started} <- ensure_archive_inputs_started() do
       {:ok, []}
     end
+  end
+
+  defp ensure_review_refresh_started do
+    unless OfflineSandbox.enabled?() do
+      case ReviewRefresh.start_link(repo_source: Repo.get_dynamic_repo(), refresh_interval: 60_000) do
+        {:ok, pid} -> Process.put(:sympp_cockpit_review_refresh_pid, pid)
+        {:error, {:already_started, _pid}} -> :ok
+        {:error, reason} -> Mix.raise("sympp cockpit review refresh start failed: #{inspect(reason)}")
+      end
+    end
+
+    :ok
   end
 
   defp ensure_archive_inputs_started do

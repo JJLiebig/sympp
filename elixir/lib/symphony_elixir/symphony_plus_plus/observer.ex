@@ -119,13 +119,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   end
 
   @doc false
-  @spec refresh_display_review(module(), display_review()) :: :ok
-  def refresh_display_review(repo, {{review_id, route}, observations}) do
-    safely(fn ->
-      result = ReviewStatus.read(review_id, route)
-      publish_review_progress(repo, observations, result)
-    end)
-
+  @spec record_display_review(module(), [Observation.t()], ReviewStatus.result()) :: :ok
+  def record_display_review(repo, observations, result) do
+    safely(fn -> publish_review_progress(repo, observations, result) end)
     :ok
   end
 

@@ -39,18 +39,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
     test "a PR attachment closes the pre-PR display read window", %{repo: repo} do
       package = package!(repo, "WP-OBS-REVIEW-ATTACH", branch_pattern: "agent/example", review_mode: "fast", review_id: "review-attach")
       :ok = sweep(repo, %{{:branch, "nextide", "repo", "agent/example", "main"} => {:ok, nil}})
-      candidates = Observer.pre_pr_review_candidates(repo, {:request, package.work_request_id})
-      [job] = Observer.display_reviews(repo, candidates)
+      observed = repo.get!(Observation, package.id)
+      :ok = Observer.record_display_review(repo, [observed], :unknown)
+      [{_package, displayed}] = Observer.pre_pr_review_candidates(repo, {:request, package.work_request_id})
+      assert displayed.stale == ["review"]
 
       assert {:ok, :ok} =
                repo.transaction(fn ->
                  Qualification.record_pr(repo, Actor.observer(), package, pr_event_payload(939, "head-a"))
                end)
 
-      # The already selected display read finishes with an unavailable host.
-      :ok = Observer.refresh_display_review(repo, job)
+      # Only a fresh check of the attached PR can clear the outage.
+      :ok = Observer.record_display_review(repo, [displayed], :not_started)
 
-      assert %Observation{pr_absent: false, stale: []} = repo.get!(Observation, package.id)
+      assert %Observation{pr_absent: false, stale: ["review"]} = repo.get!(Observation, package.id)
     end
 
     test "PR discovery clears a review outage recorded during its sweep", %{repo: repo} do

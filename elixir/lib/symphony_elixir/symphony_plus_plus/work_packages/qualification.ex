@@ -114,7 +114,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
     # A pre-PR display read started before this attachment cannot publish
     # review or outage evidence for the attached PR.
     query = from(observation in Observation, where: observation.work_package_id == ^id and observation.pr_absent)
-    repo.update_all(query, set: [pr_absent: false, stale: []])
+    repo.update_all(query, set: [pr_absent: false])
   end
 
   @doc """
