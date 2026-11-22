@@ -41,7 +41,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   require Logger
 
   alias SymphonyElixir.SymphonyPlusPlus.{BaseBranch, Cards, DashboardPubSub, HerdrCore, OfflineSandbox, Ownership}
-  alias SymphonyElixir.SymphonyPlusPlus.GitHub.{Api, DryClient, MergeReconciler, PullRequest, PullRequestProgress}
+  alias SymphonyElixir.SymphonyPlusPlus.GitHub.{Api, DryClient, MergeReconciler, PullRequest}
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{RateGovernor, Snapshot}
   alias SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope
   alias SymphonyElixir.SymphonyPlusPlus.Observer.Observation
@@ -247,28 +247,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   end
 
   defp watched_packages(repo) do
-    repo.all(
-      from(package in WorkPackage,
-        join: request in WorkRequest,
-        on: request.id == package.work_request_id,
-        where: package.status in ^Lifecycle.in_flight_statuses() and is_nil(request.archived_at),
-        order_by: [asc: package.id]
+    packages =
+      repo.all(
+        from(package in WorkPackage,
+          join: request in WorkRequest,
+          on: request.id == package.work_request_id,
+          where: package.status in ^Lifecycle.in_flight_statuses() and is_nil(request.archived_at),
+          order_by: [asc: package.id]
+        )
       )
-    )
-    |> Enum.map(fn package -> %{package: package, attached: attached_pr(repo, package)} end)
+
+    {:ok, attachments} = PlanningRepository.pr_attachments(repo, Enum.map(packages, & &1.id))
+    Enum.map(packages, fn package -> %{package: package, attached: attached_pr(attachments[package.id])} end)
   end
 
-  defp attached_pr(repo, %WorkPackage{} = package) do
-    with {:ok, state} <- PlanningRepository.get_state(repo, package.id),
-         {:ok, current} <- PullRequestProgress.current_pr_state(state.progress_events) do
-      # The attaching event's sequence tells a newer `sync_pr` of the same PR
-      # apart; who wrote it tells whether the architect has synced it since.
-      by_observer? = Enum.any?(state.progress_events, &(&1.sequence == current.sequence and &1.actor_id == Actor.observer().id))
-      current.ref |> Map.put(:sequence, current.sequence) |> Map.put(:by_observer?, by_observer?)
-    else
-      _missing -> nil
-    end
+  defp attached_pr({:ok, attachment}) do
+    # The sequence distinguishes another sync of the same PR, and the actor
+    # distinguishes an architect's sync from the observer's last snapshot.
+    Map.merge(attachment.ref, %{sequence: attachment.sequence, by_observer?: attachment.actor_id == Actor.observer().id})
   end
+
+  defp attached_pr(_missing_or_invalid), do: nil
 
   # What GitHub entry each package needs: its attached PR, or its branch.
   defp github_entry(%{attached: %{owner: owner, repo: repo, number: number} = ref, observation: observation}) do
@@ -374,8 +373,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
         :all -> query
       end
 
+    candidates = repo.all(query)
+    package_ids = for {package, _observation} <- candidates, do: package.id
+    {:ok, attachments} = PlanningRepository.pr_attachments(repo, package_ids)
+
     candidates =
-      Enum.filter(repo.all(query), fn {package, _observation} -> reviewed?(package) and is_nil(attached_pr(repo, package)) end)
+      Enum.filter(candidates, fn {package, _observation} ->
+        reviewed?(package) and is_nil(attached_pr(attachments[package.id]))
+      end)
 
     reviews = review_results(repo, Enum.map(candidates, &elem(&1, 0)), [])
 
@@ -540,7 +545,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   defp act(_repo, _item, nil, _changed?, _review, _stacked_on), do: :ok
 
   defp act(repo, %{package: %WorkPackage{} = package, attached: attached}, %{} = pr, changed?, review, stacked_on) do
-    with :ok <- same_attachment(attached_pr(repo, package), attached),
+    with :ok <- check_attachment(repo, package.id, attached),
          {:ok, payload} <- payload(pr) do
       work = fn -> record_and_qualify(repo, package, attached, payload, changed?, pr, review, stacked_on) end
       # A PR merged into another base doesn't deliver this package: it unqualifies instead.
@@ -581,8 +586,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   # The PR is recorded only if the package's PR record is still the one the
   # sweep read: an architect may have synced that PR or attached another one.
   defp record(repo, package, attached, payload) do
-    with :ok <- same_attachment(attached_pr(repo, package), attached),
+    with :ok <- check_attachment(repo, package.id, attached),
          do: Qualification.record_pr(repo, Actor.observer(), package, payload)
+  end
+
+  defp check_attachment(repo, package_id, attached) do
+    with {:ok, attachments} <- PlanningRepository.pr_attachments(repo, [package_id]) do
+      same_attachment(attached_pr(attachments[package_id]), attached)
+    end
   end
 
   # `work` runs inside the transaction; an `{:error, _}` result rolls it back.

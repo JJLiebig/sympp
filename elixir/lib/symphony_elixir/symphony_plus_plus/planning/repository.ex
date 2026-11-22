@@ -19,6 +19,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   @state_item_limit 100
 
   @type repo :: module()
+  @type attachments :: %{String.t() => PullRequestProgress.attachment_result()}
   @type planning_record :: PlanNode.t() | ProgressEvent.t() | Artifact.t()
   @type error ::
           :idempotency_scope_conflict
@@ -326,6 +327,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
         order_by: [asc: progress_event.work_package_id, asc: progress_event.sequence, asc: progress_event.id]
       )
     end)
+  end
+
+  @spec pr_attachments(repo(), [String.t()]) :: {:ok, attachments()} | {:error, error()}
+  def pr_attachments(repo, work_package_ids) do
+    attachments =
+      work_package_ids
+      |> Enum.uniq()
+      |> Enum.chunk_every(500)
+      |> Enum.flat_map(&repo.all(pr_attachment_events(&1)))
+      |> Enum.group_by(& &1.work_package_id)
+      |> Map.new(fn {id, events} -> {id, PullRequestProgress.current_attachment(events)} end)
+
+    {:ok, attachments}
+  rescue
+    error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
+  defp pr_attachment_events(work_package_ids) do
+    from(event in ProgressEvent,
+      where: event.work_package_id in ^work_package_ids,
+      where: fragment("json_extract(?, '$.type') = 'pr'", event.payload),
+      where:
+        fragment("json_extract(?, '$.source_tool') = 'attach_pr'", event.payload) or
+          (fragment("json_extract(?, '$.source_tool') = 'sync_pr'", event.payload) and
+             fragment("json_type(?, '$.attachment_repair') = 'true'", event.payload)),
+      select: struct(event, [:id, :work_package_id, :sequence, :created_at, :actor_id, :payload])
+    )
   end
 
   @spec get_progress_event_by_idempotency_key(repo(), String.t(), String.t()) ::
