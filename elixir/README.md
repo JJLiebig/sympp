@@ -11,6 +11,14 @@ sympp MCP tool calls return JSON `structuredContent` plus compact TOON text over
 and HTTP. `create_work_request` takes `title`, `repo`, `base_branch`, `description` and
 `work_type`, with optional `constraints`, `desired_dispatch_shape` and `own`.
 
+The owner or a chief can use `move_work_request` with `work_request_id`, `repo`,
+`rationale`, and an optional `base_branch` to move a WorkRequest after a repository
+rename or import. It moves open packages on the old repository and preserves delivery
+history. GitHub-confirmed renames carry attached PRs. For imports, reconcile source
+merges or close the source PR and end or supersede its package first. Existing
+checkouts keep their paths and must point to the destination before you can dispatch
+them again.
+
 Dispatch refreshes preserve an existing worker: message it to re-read the assignment.
 Launch lines omit `--on` for the factory's Herdr machine name, which is also the
 dispatch default. Run that local form on the factory host. Initial Review Suite

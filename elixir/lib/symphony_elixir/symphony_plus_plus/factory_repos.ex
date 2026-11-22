@@ -7,10 +7,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
 
+  @owner_repo ~r/\A[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\z/
   @scp_remote ~r/\A(?:([^@:\/\s]+)@)?(\[[^\]]+\]|[^:\/\s]+):((?!\/\/).+)\z/
 
   @spec enabled?() :: boolean()
   def enabled?, do: is_binary(Config.factory_repos_root())
+
+  @doc "The stored repo scope and the identity used to match factory checkouts."
+  @spec repository_scope(String.t()) :: {:ok, String.t(), term()} | {:error, :invalid_repo_remote}
+  def repository_scope(value) when is_binary(value) do
+    value = String.trim(value)
+
+    with {:ok, remote, _name} <- remote(value),
+         key = identity(remote),
+         true <- repository_key?(key) do
+      scope = if Regex.match?(@owner_repo, value), do: String.replace_suffix(value, ".git", ""), else: remote
+      {:ok, scope, key}
+    else
+      _invalid -> {:error, :invalid_repo_remote}
+    end
+  end
 
   @spec resolve(String.t()) :: {:ok, String.t()} | {:error, atom() | {:target_repo_root_scope_mismatch, String.t()}}
   def resolve(repo) do
@@ -215,6 +231,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
 
   defp github_owner(_identity), do: nil
 
+  defp repository_key?({:github, path}) do
+    case String.split(path, "/") do
+      [owner, _name] when owner not in [".", ".."] -> Regex.match?(@owner_repo, path)
+      _path -> false
+    end
+  end
+
+  defp repository_key?(_identity), do: true
+
   defp inside_root?(path, root), do: String.starts_with?(path, String.trim_trailing(root, "/") <> "/")
 
   defp checkout(remote, checkout) do
@@ -242,7 +267,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
       Regex.match?(~r/\A[A-Za-z]:[\\\/]/, value) ->
         {:error, :invalid_repo_remote}
 
-      Regex.match?(~r/\A[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\z/, value) ->
+      Regex.match?(@owner_repo, value) ->
         remote("https://github.com/" <> String.replace_suffix(value, ".git", "") <> ".git")
 
       true ->

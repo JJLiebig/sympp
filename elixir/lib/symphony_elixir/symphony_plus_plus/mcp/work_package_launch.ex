@@ -56,6 +56,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
          {:ok, result} <-
            WorkPackageService.prepare_worktree(config.repo, work_package.id, %{
              "target_repo_root" => target_repo_root,
+             "contract_revision" => work_package.contract_revision,
              "base_branch" => work_package.base_branch,
              "branch" => branch
            }),

@@ -328,7 +328,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          :ok <- require_write_identity(name, arguments, terminal),
          :ok <- prepare_repository(config.repo, name),
          {:ok, arguments} <- tool_arguments(params, name) do
-      if ToolCatalog.owner_gated_call?(name, arguments),
+      if ToolCatalog.owner_gated_call?(name, arguments, terminal),
         do: owner_gated(name, arguments, terminal, server),
         else: run(name, arguments, terminal, server)
     end
