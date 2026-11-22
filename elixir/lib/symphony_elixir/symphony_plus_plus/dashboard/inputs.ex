@@ -83,7 +83,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.Inputs do
   # Reuse the last stored value across projection workers. Read the stamp again
   # under the lock so another builder can fill the same cache miss.
   @spec shared(term(), (-> term()), (-> result)) :: result when result: var
-  @spec shared(term(), (-> term()), (-> result), :sync | :background) :: result when result: var
+  @spec shared(term(), (-> term()), (-> result), :sync | :background) :: result | nil when result: var
   def shared(key, stamp, read, mode \\ :sync) do
     if active?() do
       memo({:shared, key}, fn -> shared_value(key, stamp, read, mode) end)
@@ -103,18 +103,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.Inputs do
         refresh_background(key, current, value, read)
         value
 
-      _miss ->
-        load_missing(key, stamp, current, read, mode)
-    end
-  end
-
-  defp load_missing(key, stamp, current, read, mode) do
-    case Process.get(@scope) do
-      {nil, _memo} when mode == :background ->
+      [] when mode == :background ->
+        # A cold Git lookup can outlast the board's SQLite checkout.
         refresh_background(key, current, nil, read)
         nil
 
-      _build ->
+      _miss ->
         :global.trans({{__MODULE__, key}, self()}, fn -> load(key, stamp.(), read) end)
     end
   end

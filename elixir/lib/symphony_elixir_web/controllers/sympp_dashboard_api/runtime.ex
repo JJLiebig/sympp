@@ -1,6 +1,7 @@
 defmodule SymphonyElixirWeb.SymppDashboardApi.Runtime do
   @moduledoc false
 
+  alias SymphonyElixir.PathSafety
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.Repo.MigrationFileLock
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
@@ -182,9 +183,17 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.Runtime do
   end
 
   defp ensure_repo_started(database_path) do
-    case :global.whereis_name(Repo.process_key(database_path)) do
-      pid when is_pid(pid) -> {:ok, pid, :shared}
-      :undefined -> start_repo(database_path)
+    local = Process.whereis(Repo)
+
+    # The packaged listener opens after its ledger pool starts. Reuse that
+    # pool so concurrent first reads cannot race a second pool's registration.
+    if is_pid(local) and repo_matches_database?(local, database_path) do
+      {:ok, local, :local}
+    else
+      case :global.whereis_name(Repo.process_key(database_path)) do
+        pid when is_pid(pid) -> {:ok, pid, :shared}
+        :undefined -> start_repo(database_path)
+      end
     end
   end
 
@@ -332,16 +341,26 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.Runtime do
   defp database_rows_match?(rows, database_path) do
     Enum.any?(rows, fn
       [_seq, "main", path] when path in [nil, ""] -> Repo.memory_database?(database_path)
-      [_seq, _name, path] when is_binary(path) and path != "" -> database_row_path_matches?(path, database_path)
+      [_seq, "main", path] when is_binary(path) and path != "" -> database_row_path_matches?(path, database_path)
       _row -> false
     end)
   end
 
-  defp database_row_path_matches?(path, "file:" <> _rest = database_path) do
-    Repo.same_database_path?(path, Repo.sqlite_file_uri_path(database_path))
+  defp database_row_path_matches?(path, database_path) do
+    requested = Repo.sqlite_file_uri_path(database_path) || database_path
+    Repo.same_database_path?(path, requested) or same_resolved_database?(path, requested)
   end
 
-  defp database_row_path_matches?(path, database_path), do: Repo.same_database_path?(path, database_path)
+  # SQLite can report the real file path when the configured path is a symlink.
+  defp same_resolved_database?(path, requested) do
+    with true <- is_binary(requested) and File.regular?(requested) and File.regular?(path),
+         {:ok, actual} <- PathSafety.canonicalize(path),
+         {:ok, expected} <- PathSafety.canonicalize(requested) do
+      Repo.same_database_path?(actual, expected)
+    else
+      _unresolved -> false
+    end
+  end
 
   defp start_custom_repo(repo, database_path) do
     case repo.start_link(database: database_path, name: repo) do

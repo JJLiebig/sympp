@@ -587,6 +587,48 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     Enum.each(builds, &Task.await/1)
   end
 
+  test "cold boards return ledger data while a repository lookup is pending", %{pid: ledger} do
+    caller = self()
+    input = make_ref()
+
+    lookup = fn ->
+      Inputs.shared(
+        input,
+        fn -> :unchanged end,
+        fn ->
+          send(caller, {:lookup_started, self()})
+          receive do: (:continue -> "acme/example")
+        end,
+        :background
+      )
+    end
+
+    builder = fn ->
+      Repo.transaction(fn ->
+        {:ok, stored} = payload()
+        Map.put(stored, :repository, Inputs.observe(input, lookup))
+      end)
+    end
+
+    web = :gen_server.send_request(DashboardCache, {:json, ledger, :hydrated, builder})
+    assert_receive {:lookup_started, worker}, 2_000
+    release = release_on_exit(worker)
+
+    native = :gen_server.send_request(DashboardCache, {:json, ledger, :herdr, builder})
+
+    for request <- [web, native] do
+      assert {:reply, {:ok, body, _etag}} = :gen_server.wait_response(request, 2_000)
+      assert %{"decision" => "recorded", "repository" => nil} = Jason.decode!(body)
+    end
+
+    {_cache, ref} = watch(:herdr_events, :revision)
+    assert_receive {:dashboard_changed, ^ref, _initial}
+    release.()
+    assert_receive {:dashboard_changed, ^ref, _lookup_finished}, 2_000
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :herdr, builder)
+    assert %{"decision" => "recorded", "repository" => "acme/example"} = Jason.decode!(body)
+  end
+
   test "provider-only invalidations catch up to the latest input before waking the stream" do
     value = :atomics.new(1, [])
     caller = self()

@@ -56,9 +56,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
   end
 
   defp workflow_signal(root, identity, opts) do
-    checkouts = checkouts_for_signal(root, opts)
-
-    with path when is_binary(path) <- Map.get(checkouts, identity),
+    with %{^identity => path} when is_binary(path) <- checkouts_for_signal(root, opts),
          true <- current_checkout?(path, identity) do
       %{has_ci: has_workflows?(path)}
     else
