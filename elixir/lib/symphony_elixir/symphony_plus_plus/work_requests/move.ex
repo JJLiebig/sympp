@@ -35,11 +35,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
     with :ok <- validate_base_branch(target.base_branch),
          {:ok, packages} <- Repository.list_work_packages(repo, request.id),
          keys = repository_keys(request.repo, packages),
-         {:ok, source} <- move_scope(repo, request.repo, packages, keys, target.key) do
+         {:ok, open} <- open_scope(repo, packages, keys),
+         rename = checkout_rename(request.repo, open, target.key),
+         {:ok, source} <- move_scope(request.repo, open, target.key, rename) do
       # Resolve checkout origins and GitHub's canonical name before the write.
       # The proof covers any newer attachment from the same source repository.
-      renamed_to = confirmed_rename(repo, source.key, target.key, source.attachments)
-      target = Map.put(target, :renamed_to, renamed_to)
+      renamed_to = canonical_destination(repo, source, target.key, rename)
+      target = Map.merge(target, %{renamed_to: renamed_to, checkout_rename: rename})
 
       result =
         repo.transact(
@@ -70,7 +72,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
     allowed_source = if target.renamed_to, do: source.key
 
     with {:ok, current_packages} <- Repository.list_work_packages(repo, request.id),
-         {:ok, current} <- move_scope(repo, source.repo, current_packages, source.keys, target.key),
+         {:ok, open} <- open_scope(repo, current_packages, source.keys),
+         {:ok, current} <- move_scope(source.repo, open, target.key, target.checkout_rename),
          true <- current.key == source.key,
          %{packages: packages, attachments: attachments} = current,
          :ok <- require_portable_attachments(attachments, allowed_source, target.key),
@@ -91,53 +94,88 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
     values |> Enum.uniq() |> Map.new(&{&1, scope_key(&1)})
   end
 
-  defp move_scope(repo, request_repo, packages, keys, destination) do
+  defp open_scope(repo, packages, keys) do
     open = Enum.reject(packages, &Lifecycle.ended?/1)
 
     with true <- Enum.all?(open, &Map.has_key?(keys, &1.repo)),
-         {:ok, attachments} <- PlanningRepository.pr_attachments(repo, Enum.map(open, & &1.id)),
-         {:ok, source} <- source_key(request_repo, open, keys, attachments, destination) do
-      moving = Enum.filter(open, &moves?(&1, request_repo, source, keys, attachments[&1.id]))
-      links = Map.take(attachments, Enum.map(moving, & &1.id))
-      {:ok, %{repo: request_repo, key: source, keys: keys, packages: moving, attachments: links}}
+         {:ok, attachments} <- PlanningRepository.pr_attachments(repo, Enum.map(open, & &1.id)) do
+      {:ok, %{packages: open, keys: keys, attachments: attachments}}
     else
       false -> {:error, :work_request_scope_changed}
       {:error, _reason} = error -> error
     end
   end
 
-  defp source_key(request_repo, open, keys, attachments, destination) do
-    case stored_key(request_repo) do
-      {:stored, _path} -> checkout_source_key(request_repo, open, keys, attachments, destination)
-      key -> {:ok, key}
+  defp move_scope(request_repo, open, destination, rename) do
+    with {:ok, source} <- source_key(stored_key(request_repo), request_repo, open, destination, rename) do
+      moving = Enum.filter(open.packages, &moves?(&1, request_repo, source, open.keys, open.attachments[&1.id]))
+      links = Map.take(open.attachments, Enum.map(moving, & &1.id))
+      {:ok, %{repo: request_repo, key: source, keys: open.keys, packages: moving, attachments: links}}
     end
   end
 
-  # A checkout's origin can be edited before the move. For a request scoped to
-  # that checkout, attachments on packages with the same scope are evidence of
-  # its previous repository. A conflicting origin by itself cannot settle it.
-  defp checkout_source_key(request_repo, open, keys, attachments, destination) do
-    recorded =
-      for package <- open,
-          package.repo == request_repo,
-          key = attachment_key(attachments[package.id]),
-          not is_nil(key),
-          uniq: true,
-          do: key
-
-    case recorded do
-      [key] -> require_unambiguous_source(key, open, keys, destination)
-      [] -> require_unambiguous_source(Map.fetch!(keys, request_repo), open, keys, destination)
+  defp source_key({:stored, _path}, request_repo, open, destination, rename) do
+    case recorded_checkout_keys(request_repo, open) do
+      [key] when key != destination -> {:ok, key}
+      [^destination] -> infer_checkout_source(request_repo, open, destination, rename)
+      [] -> infer_checkout_source(request_repo, open, destination, rename)
       _different_repos -> {:error, :ambiguous_source_repository}
     end
   end
 
-  defp require_unambiguous_source(source, open, keys, destination) do
-    unresolved? = source == destination or match?({:stored, _}, source)
+  defp source_key(key, _request_repo, _open, _destination, _rename), do: {:ok, key}
 
-    if unresolved? and Enum.any?(open, &(Map.fetch!(keys, &1.repo) != source)),
-      do: {:error, :ambiguous_source_repository},
-      else: {:ok, source}
+  # The prior checkout origin may no longer be available. An attachment on
+  # an inherited scope establishes the source. An independently scoped PR
+  # only establishes it when GitHub confirms that its repo became the target.
+  defp recorded_checkout_keys(request_repo, open) do
+    for package <- open.packages,
+        package.repo == request_repo,
+        key = attachment_key(open.attachments[package.id]),
+        not is_nil(key),
+        uniq: true,
+        do: key
+  end
+
+  defp checkout_rename(request_repo, open, destination) do
+    with {:stored, _path} <- stored_key(request_repo),
+         ^destination <- Map.fetch!(open.keys, request_repo),
+         true <- Enum.all?(recorded_checkout_keys(request_repo, open), &(&1 == destination)) do
+      candidates =
+        for package <- open.packages,
+            key = attachment_key(open.attachments[package.id]),
+            key != destination and key == Map.fetch!(open.keys, package.repo),
+            uniq: true,
+            do: key
+
+      verified =
+        for key <- candidates,
+            canonical = github_rename(key, destination),
+            is_binary(canonical),
+            do: {key, canonical}
+
+      case verified do
+        [rename] -> rename
+        _unconfirmed_or_multiple -> nil
+      end
+    else
+      _no_rename_needed -> nil
+    end
+  end
+
+  defp infer_checkout_source(request_repo, open, destination, rename) do
+    case {Map.fetch!(open.keys, request_repo), rename} do
+      {^destination, {source, _canonical}} ->
+        {:ok, source}
+
+      {^destination, nil} ->
+        if Enum.any?(open.packages, &(Map.fetch!(open.keys, &1.repo) != destination)),
+          do: {:error, :ambiguous_source_repository},
+          else: {:ok, {:stored, request_repo}}
+
+      {origin, _rename} ->
+        {:ok, origin}
+    end
   end
 
   defp moves?(package, request_repo, source, keys, attachment) do
@@ -170,11 +208,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
 
   # GitHub's old repository endpoint follows the rename and returns the
   # canonical full name. A matching PR number or head alone cannot prove this.
-  defp confirmed_rename(repo, {:github, source}, {:github, destination}, attachments) when source != destination do
-    needs_proof? = map_size(attachments) > 0 or Qualification.repository_has_ci?(repo, source)
+  defp canonical_destination(_repo, %{key: source}, _destination, {source, canonical}), do: canonical
 
-    with true <- needs_proof?,
-         {:ok, %{"id" => id, "full_name" => canonical}} <- DefaultClient.get_json("repos/#{source}", []),
+  defp canonical_destination(repo, %{key: {:github, source}, attachments: links}, {:github, _name} = destination, _checkout_rename) do
+    if map_size(links) > 0 or Qualification.repository_has_ci?(repo, source),
+      do: github_rename({:github, source}, destination)
+  end
+
+  defp canonical_destination(_repo, _source, _destination, _checkout_rename), do: nil
+
+  defp github_rename({:github, source}, {:github, destination}) when source != destination do
+    with {:ok, %{"id" => id, "full_name" => canonical}} <- DefaultClient.get_json("repos/#{source}", []),
          true <- is_integer(id) and id > 0 and is_binary(canonical),
          true <- String.downcase(canonical) == destination do
       canonical
@@ -183,7 +227,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
     end
   end
 
-  defp confirmed_rename(_repo, _source, _destination, _attachments), do: nil
+  defp github_rename(_source, _destination), do: nil
 
   defp require_portable_attachments(attachments, allowed_source, destination) do
     blockers =

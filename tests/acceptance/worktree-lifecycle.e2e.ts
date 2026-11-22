@@ -124,10 +124,13 @@ for (const mode of ['factory', 'local']) {
       work_request_id: request, repo: 'example/client', base_branch: 'integration', rationale: 'The checkout moved with the repository.',
     });
 
-    const replay = await architect.call('dispatch_work_package', { work_package_id: wp, target_repo_root: checkout });
+    const args = { work_package_id: wp, target_repo_root: checkout };
+    const replay = await architect.call('dispatch_work_package', args);
     expect(move.base_branch).toBe('integration');
     expect(replay.replay).toBe(true);
     expect(replay.worktree).toMatchObject({ path: original.worktree.path, base_branch: 'beta' });
     expect(await readFile(replay.assignment_file, 'utf8')).toContain('example/client');
+    const retry = await architect.call('dispatch_work_package', args);
+    expect(retry.worktree.path).toBe(replay.worktree.path);
   });
 }

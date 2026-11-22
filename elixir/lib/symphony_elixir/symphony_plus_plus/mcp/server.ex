@@ -339,8 +339,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:ok, work_request_id} ->
         arguments = Map.put(arguments, "work_request_id", work_request_id)
 
-        config.repo
-        |> Ownership.gated(work_request_id, terminal, fn -> run(name, arguments, terminal, server) end)
+        with_ownership(name, config.repo, work_request_id, terminal, fn -> run(name, arguments, terminal, server) end)
         |> ownership_result(name)
 
       {:error, :missing_target} ->
@@ -350,6 +349,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
         not_found_error(name)
     end
   end
+
+  defp with_ownership("move_work_request", repo, id, terminal, fun) do
+    with :ok <- Ownership.require_owner(repo, id, terminal), do: fun.()
+  end
+
+  defp with_ownership(_tool, repo, id, terminal, fun), do: Ownership.gated(repo, id, terminal, fun)
 
   defp target_work_request_id(repo, %{"work_request_id" => id}) when is_binary(id) and id != "" do
     case WorkRequestService.get(repo, id) do
@@ -379,6 +384,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   end
 
   defp ownership_result({:error, :not_found}, name), do: not_found_error(name)
+
+  defp ownership_result({:error, :work_request_unowned}, name) do
+    {:error, -32_003, "Forbidden",
+     %{
+       "tool" => name,
+       "reason" => "work_request_unowned",
+       "message" => "This WorkRequest has no owner.",
+       "next_action" => "Ask a chief to move this WorkRequest or take ownership through a plan write."
+     }}
+  end
 
   defp ownership_result({:error, :work_request_archived}, name), do: archived_error(name)
 

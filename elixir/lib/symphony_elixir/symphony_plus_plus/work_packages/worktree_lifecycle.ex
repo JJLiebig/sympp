@@ -327,7 +327,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
 
   # Git can keep the linked worktree in place when its checkout is relocated.
   defp relocated_worktree?(%WorkPackage{worktree_target_repo_root: prior_root}, recorded_path, repo_root, opts)
-       when is_binary(prior_root) and prior_root != repo_root do
+       when is_binary(prior_root) do
     with {:ok, root} <- worktree_root(opts),
          true <- inside_root?(recorded_path, root),
          :ok <- require_recorded_worktree_owner(repo_root, recorded_path, opts) do
