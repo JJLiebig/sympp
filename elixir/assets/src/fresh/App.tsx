@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 
 import { api } from "./api";
-import { setAreas, type AreaRule } from "./areas";
+import { areasWith, setAreas, type AreaRule } from "./areas";
 import { NeedsYou } from "./asks";
 import { lanesOf, Rest } from "./board";
 import { Briefing } from "./briefing";
@@ -40,6 +40,8 @@ const STEP_MS = 15 * 60 * 1000;
 // A frozen snapshot never changes, so there the sketch pretends the last visit was three hours ago.
 const AWAY_MS = 3 * 3600e3;
 const SEEN_KEY = "sympp.board.seenAt";
+// The view, density and area last picked, so a reload or a new tab opens where the operator left off.
+const CHOICE_KEYS = { view: "sympp.board.view", show: "sympp.board.show", area: "sympp.board.area" } as const;
 // Change signals keep the board current. A slow reread covers a signal lost without the stream dropping; between
 // reads the board's clock still moves, so the time each package has spent does too.
 const REREAD_MS = 5 * 60e3;
@@ -47,11 +49,15 @@ const CLOCK_MS = 60e3;
 
 // `vite --mode demo` runs the board on invented work with no backend. `?demo=quiet` shows it with nobody waiting, `?demo=empty` with nothing on it.
 const DEMO = import.meta.env.MODE === "demo";
-// A link can open the board on a view, a density and an area: `?view=phases&show=open&area=Herdr`.
+// A link can open the board on a view, a density and an area: `?view=phases&show=open&area=Herdr`. What a link
+// leaves out comes from the operator's last pick in this browser.
 const LINKED = typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search);
+const directionOf = (key: string | null) => DIRECTIONS.findIndex((entry) => entry.key === key);
+const densityOf = (key: string | null) => DENSITIES.find((entry) => entry.key === key)?.key;
 const START = {
-  direction: Math.max(0, DIRECTIONS.findIndex((entry) => entry.key === LINKED.get("view"))),
-  density: DENSITIES.find((entry) => entry.key === LINKED.get("show"))?.key ?? "active",
+  direction: [directionOf(LINKED.get("view")), directionOf(rememberedChoice("view")), 0].find((index) => index >= 0) ?? 0,
+  density: densityOf(LINKED.get("show")) ?? densityOf(rememberedChoice("show")) ?? "active",
+  area: LINKED.has("area") ? LINKED.get("area") : rememberedChoice("area"),
 };
 
 // `replayable` is true on a snapshot, which carries recorded history; a backend only knows the present.
@@ -61,9 +67,9 @@ type Fresh = Read<Loaded> | null;
 
 export function App() {
   const { loaded, failure, picked, setAt, read } = useLiveBoard();
-  const [direction, setDirection] = useState(START.direction);
-  const [area, setArea] = useState<string | null>(LINKED.get("area"));
-  const [density, setDensity] = useState<Density>(START.density);
+  const [direction, setDirection] = useChoice("view", START.direction, (index) => DIRECTIONS[index]?.key ?? null);
+  const [area, setArea] = useChoice<string | null>("area", START.area, (name) => name);
+  const [density, setDensity] = useChoice<Density>("show", START.density, (key) => key);
   const [seenAt, setSeenAt] = useState<number | null>(rememberedVisit);
   const [replay, setReplay] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -120,7 +126,7 @@ export function App() {
             ))}
           </nav>
           <nav className="flex min-w-0 max-w-full gap-1 overflow-x-auto whitespace-nowrap text-xs [scrollbar-width:none]">
-            {[null, ...areas].map((name) => (
+            {[null, ...areasWith(areas, area)].map((name) => (
               <button key={name ?? "all"} className={`rounded px-2 py-1 ${name === area ? "bg-line text-ink" : "text-dim hover:text-ink"}`} type="button" onClick={() => setArea(name)}>
                 {name ?? "Everything"}
               </button>
@@ -307,6 +313,35 @@ async function sketchOnly<T>(path: string): Promise<T | null> {
   const response = await fetch(path).catch(() => null);
   if (!response?.ok || !response.headers.get("content-type")?.includes("json")) return null;
   return (await response.json()) as T;
+}
+
+// A pick the operator makes is remembered as they make it, so a link that opened the board on something else does
+// not replace it.
+function useChoice<T>(key: keyof typeof CHOICE_KEYS, start: T, stored: (value: T) => string | null) {
+  const [value, setValue] = useState(start);
+  const [choose] = useState(() => (next: T) => {
+    rememberChoice(key, stored(next));
+    setValue(next);
+  });
+  return [value, choose] as const;
+}
+
+// Choices, like the last visit, are remembered in this browser only; a private window or cleared data starts over.
+function rememberedChoice(key: keyof typeof CHOICE_KEYS): string | null {
+  try {
+    return window.localStorage.getItem(CHOICE_KEYS[key]);
+  } catch {
+    return null;
+  }
+}
+
+function rememberChoice(key: keyof typeof CHOICE_KEYS, value: string | null) {
+  try {
+    if (value === null) window.localStorage.removeItem(CHOICE_KEYS[key]);
+    else window.localStorage.setItem(CHOICE_KEYS[key], value);
+  } catch {
+    // Without storage the board still works; it only opens on its defaults after a reload.
+  }
 }
 
 // The last visit is remembered in this browser only; a private window or cleared data starts over.
