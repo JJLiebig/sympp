@@ -82,37 +82,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
     end
   end
 
-  @doc """
-  One terminal's full record from the factory's core (`hc get`), with its
-  labels and title. With a function source (tests) it is the snapshot's record.
-  """
-  @spec get(String.t()) :: {:ok, map()} | :error
-  def get(address) when is_binary(address) do
-    case Application.get_env(:symphony_elixir, :sympp_herdr_core, "hc") do
-      nil -> :error
-      fun when is_function(fun, 0) -> snapshot_record(normalize(fun.()), address)
-      command when is_binary(command) -> get_with(System.find_executable(command), address)
-    end
-  end
-
-  defp snapshot_record({:ok, %{terminals: terminals}}, address) do
-    case Map.get(terminals, address) do
-      %{} = record -> {:ok, record}
-      nil -> :error
-    end
-  end
-
-  defp snapshot_record(:unavailable, _address), do: :error
-
-  defp get_with(nil, _address), do: :error
-
-  defp get_with(path, address) do
-    case run(path, ["get", address, "--json"]) do
-      {:ok, %{"address" => ^address} = record} -> {:ok, Map.delete(record, "argv")}
-      _unavailable -> :error
-    end
-  end
-
   @doc "One terminal's record from the factory's core, for its live working/idle state."
   @spec status_state(String.t(), String.t()) :: String.t()
   def status_state(core_id, address) do
@@ -313,8 +282,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
     end
   end
 
-  # The CLI's compact `hc ls` output omits labels. The underlying list API
-  # carries current labels for every terminal in one request, including removals.
+  # The CLI's compact `hc ls` output omits labels. `terminal.list` returns full
+  # public records, including those forwarded by other machines.
   defp list_terminals(path) do
     task =
       Task.async(fn ->

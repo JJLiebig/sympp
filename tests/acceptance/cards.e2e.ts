@@ -32,12 +32,18 @@ test('a terminal working for an architect or chief gets a card that follows its 
   live(provider, { address: 'c1', cwd: child.dir, parent: architect.terminal!, title: 'Dark theme' });
   live(provider, { address: 'w1', cwd: (await checkout(root, 'worker', 'feature/worker')).dir, parent: architect.terminal!, title: 'Worker',
     labels: { 'sympp.role': 'worker', 'sympp.work_package_id': 'wp_elsewhere' } });
-  live(provider, { address: 'b1', cwd: (await checkout(root, 'base', 'main')).dir, parent: architect.terminal!, title: 'On base' });
+  // Herdr lists remote terminals with a machine-qualified address and a local parent's bare address.
+  live(provider, { address: 'builder/b1', cwd: (await checkout(root, 'base', 'main')).dir, parent: architect.terminal!, title: 'On base' });
   live(provider, { address: 'k1', cwd: (await checkout(root, 'labelled', 'feature/labelled', false)).dir, title: 'Labelled', labels: { 'sympp.card': '1' } });
   live(provider, { address: 'ch', title: 'Chief', labels: { 'sympp.role': 'chief' } });
   live(provider, { address: 'c2', cwd: (await checkout(root, 'chief-child', 'feature/chief-child')).dir, parent: 'ch', title: 'Chief child' });
   live(provider, { address: 'x1', cwd: (await checkout(root, 'stranger', 'feature/stranger')).dir, title: 'Stranger' });
-  await observe(factory);
+  // The sweep should finish even while individual terminal reads cannot reply.
+  const blockedGet = provider.holdTerminalGets().then((address) => {
+    throw new Error(`Observer blocked on hc get for terminal ${address}`);
+  });
+  const sweep = () => Promise.race([observe(factory), blockedGet]);
+  await sweep();
   let board = await cards(architect);
   expect(Object.keys(board).sort()).toEqual(['Chief child', 'Dark theme', 'Labelled']);
   expect(board['Dark theme']).toMatchObject({ state: 'working', repository: 'example/service', base_branch: 'main', branch: 'feature/card-1' });
@@ -50,39 +56,39 @@ test('a terminal working for an architect or chief gets a card that follows its 
   live(provider, { address: 'c1', labels: { 'sympp.review_id': 'rvw_card000000001' } });
   const review = await installReviewSuite(factory.home);
   await review.answer({ review: 'rvw_card000000001', done: true, status: 'done', reviewed_head: head('a'), accepted_head: head('a'), progress: '1/1' });
-  await observe(factory);
+  await sweep();
   board = await cards(architect);
   expect(board['Dark theme']).toMatchObject({ state: 'review_ci', pr: { number: 950, state: 'open', head_sha: head('a') } });
   expect(board['Dark theme'].review).toMatchObject({ id: 'rvw_card000000001', state: 'done' });
   // A new review cycle never shows the previous cycle's result.
   live(provider, { address: 'c1', labels: { 'sympp.review_id': 'rvw_card000000002' } });
   await review.answer({ error: 'unknown review cycle id: rvw_card000000002', status: 'usage_error' }, 2);
-  await observe(factory);
+  await sweep();
   expect((await cards(architect))['Dark theme'].review).toMatchObject({ id: 'rvw_card000000002', state: 'pending' });
 
   provider.set(950, branchPr(950, head('a'), 'feature/card-1', { state: 'MERGED', mergedAt: new Date().toISOString(), mergeCommit: { oid: head('f') } }));
-  await observe(factory);
+  await sweep();
   board = await cards(architect);
   expect(board['Dark theme'].state).toBe('merged');
   expect(board['Dark theme'].ended_at).toBeTruthy();
   // An ended card's branch isn't taken for new work while its terminal stays on it.
-  await observe(factory);
+  await sweep();
   expect((await cards(architect))['Dark theme'].state).toBe('merged');
 
   // The same terminal starts another branch: the card opens again.
   await child.switch('feature/card-2');
-  await observe(factory);
+  await sweep();
   expect((await cards(architect))['Dark theme']).toMatchObject({ state: 'working', branch: 'feature/card-2' });
   provider.set(951, branchPr(951, head('b'), 'feature/card-2'));
-  await observe(factory);
+  await sweep();
   expect((await cards(architect))['Dark theme'].state).toBe('review_ci');
   provider.set(951, branchPr(951, head('b'), 'feature/card-2', { state: 'CLOSED' }));
-  await observe(factory);
+  await sweep();
   expect((await cards(architect))['Dark theme'].state).toBe('done');
 
   // A terminal on its base branch shows work once a PR from that branch opens.
   provider.set(952, branchPr(952, head('c'), 'main', { baseRefName: 'release' }));
-  await observe(factory);
+  await sweep();
   expect((await cards(architect))['On base']).toMatchObject({ state: 'review_ci', repository: 'example/service', base_branch: 'main', branch: 'main' });
 });
 

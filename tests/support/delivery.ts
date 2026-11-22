@@ -30,6 +30,7 @@ export class Provider {
   readonly terminals = new Map<string, Terminal>();
   readonly sent: string[][] = [];
   readonly execRoutes: string[] = [];
+  private terminalGetRequested?: (address: string) => void;
   readonly server = createServer(async (request, response) => {
     let body = '';
     for await (const chunk of request) body += chunk;
@@ -37,6 +38,10 @@ export class Provider {
     let reply: unknown;
     if (request.url === '/cli') {
       const { program, argv, rpc } = JSON.parse(body);
+      if (program === 'hc' && argv[0] === 'get' && this.terminalGetRequested) {
+        this.terminalGetRequested(argv[1]);
+        return;
+      }
       const answer = program === 'hc' ? this.herdr(argv, rpc) : this.gh(argv);
       if (program !== 'hc') this.calls.push({ argv, reply: answer });
       await appendFile(this.receipt, `${JSON.stringify({ program, argv, rpc, reply: answer })}\n`);
@@ -56,6 +61,11 @@ export class Provider {
 
   terminal(record: Terminal) {
     this.terminals.set(record.address, { labels: {}, ...this.terminals.get(record.address), ...record });
+  }
+
+  // Withhold get replies until the fixture closes, and signal the first request.
+  holdTerminalGets(): Promise<string> {
+    return new Promise((resolve) => { this.terminalGetRequested = resolve; });
   }
 
   // A client's own Herdr terminal is live unless the journey says otherwise.

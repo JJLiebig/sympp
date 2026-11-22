@@ -56,8 +56,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
   @doc """
   What one sweep observes: each eligible live terminal and each open card,
   with the GitHub entry it needs (`:skip` when it needs none). Options (tests):
-  `:core` replaces `HerdrCore.current/0`, `:terminal` replaces
-  `HerdrCore.get/1`, `:git` replaces `Cards.Git.read/1`.
+  `:core` replaces `HerdrCore.current/0`, `:git` replaces `Cards.Git.read/1`.
   """
   @spec watch(repo(), keyword()) :: [item()]
   def watch(repo, opts \\ []) do
@@ -95,16 +94,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
   # Eligible live terminals whose directory is a GitHub checkout. `git` runs
   # once per directory.
   defp live_items(repo, %{core_id: core_id, terminals: terminals} = core, by_key, opts) do
-    get = Keyword.get(opts, :terminal, &HerdrCore.get/1)
     git = Keyword.get(opts, :git, &Git.read/1)
     parent? = parent_predicate(repo, core_id, terminals)
 
-    candidates =
-      terminals
-      |> Enum.filter(fn {_address, record} -> candidate?(record, parent?) end)
-      |> Enum.map(fn {address, record} -> {address, full_record(get, address, record)} end)
-      |> Enum.reject(fn {_address, record} -> worker?(record) end)
-
+    candidates = Enum.filter(terminals, fn {_address, record} -> candidate?(record, parent?) end)
     reads = candidates |> Enum.map(fn {_address, record} -> record["cwd"] end) |> Enum.uniq() |> Map.new(&{&1, git.(&1)})
 
     for {address, record} <- candidates, {:ok, git_info} <- [Map.get(reads, record["cwd"])] do
@@ -132,17 +125,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
   defp candidate?(_record, _parent?), do: false
 
   defp worker?(record), do: get_in(record, ["labels", "sympp.role"]) == "worker"
-
-  # The full record adds labels `hc ls` leaves out, such as `sympp.review_id`.
-  defp full_record(get, address, record) do
-    case get.(address) do
-      {:ok, %{} = full} -> Map.merge(record, full, &merge_field/3)
-      _unavailable -> record
-    end
-  end
-
-  defp merge_field(_key, %{} = listed, %{} = read), do: Map.merge(listed, read)
-  defp merge_field(_key, _listed, read), do: read
 
   defp title(record) do
     Enum.find_value([record["title"], record["name"]], fn

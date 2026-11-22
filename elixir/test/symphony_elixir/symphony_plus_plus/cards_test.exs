@@ -29,7 +29,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CardsTest do
     assert [%{"id" => card_id, "state" => "review_ci"}] = list(repo)
 
     # The operator dismisses after the sweep read the card, before it applies.
-    items = Cards.watch(repo, core: core(terminals), terminal: fn _address -> :error end, git: on_main)
+    items = Cards.watch(repo, core: core(terminals), git: on_main)
     assert {:ok, _dismissed} = Cards.dismiss(repo, card_id)
     Cards.apply(repo, items, %{{:pr, "acme", "app", 4} => {:ok, %{pr(4, "open") | "head_sha" => "h2"}}}, review: fn _id, _machine -> :not_started end)
     assert [%{"state" => "dismissed", "pr" => %{"head_sha" => "h1"}}] = list(repo)
@@ -41,7 +41,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CardsTest do
       Keyword.merge(
         [
           core: core(terminals),
-          terminal: fn _address -> :error end,
           git: fn _cwd -> {:ok, @git} end,
           snapshot: fn entries -> Map.new(entries, &{&1, Map.get(github, &1, {:ok, nil})}) end,
           review: fn _id, _machine -> :not_started end
