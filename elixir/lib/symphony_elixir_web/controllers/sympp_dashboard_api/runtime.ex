@@ -182,9 +182,17 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.Runtime do
   end
 
   defp ensure_repo_started(database_path) do
-    case :global.whereis_name(Repo.process_key(database_path)) do
-      pid when is_pid(pid) -> {:ok, pid, :shared}
-      :undefined -> start_repo(database_path)
+    local = Process.whereis(Repo)
+
+    # The packaged listener opens after its ledger pool starts. Reuse that
+    # pool so concurrent first reads cannot race a second pool's registration.
+    if is_pid(local) and repo_matches_database?(local, database_path) do
+      {:ok, local, :local}
+    else
+      case :global.whereis_name(Repo.process_key(database_path)) do
+        pid when is_pid(pid) -> {:ok, pid, :shared}
+        :undefined -> start_repo(database_path)
+      end
     end
   end
 
