@@ -67,8 +67,9 @@ test('compiled inspector binds and pins actual request detail without stealing f
     provider!.set(402, pr(402, head('a'), { state: 'MERGED', mergedAt: new Date().toISOString(), mergeCommit: { oid: head('f') } }));
     await client.call('sync_pr', { work_package_id: wp });
     expect((await row(client, request, left)).merge_eligibility.eligible).toBe(true);
-    await press('j');
-    await expect.poll(() => host.screen).toMatch(/│Ready to merge\s*│/);
+    // The merge redraws the graph asynchronously. Watch Inspector API's badge
+    // in the visible row while that update arrives.
+    await expect.poll(() => host.screen).toMatch(/│[ ›]*Inspector API[^\n]*\n[^\n]*\n│Ready to merge *│/);
     expect(host.screen).not.toMatch(/│Qualified\s*│/);
 
     host.process!.stdin.write('p');
