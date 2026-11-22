@@ -225,28 +225,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubApiTest do
       assert :counters.get(documents, 1) == 3
     end
 
-    test "commit lists carry the head and base they were read at, follow further pages, and are an error when incomplete" do
+    test "commit lists follow further pages only at the same head and base" do
       page = fn oids, total, cursor ->
         %{"totalCount" => total, "pageInfo" => %{"hasNextPage" => cursor != nil, "endCursor" => cursor}, "nodes" => Enum.map(oids, &%{"commit" => %{"oid" => &1}})}
       end
 
       first = Enum.map(1..100, &"c#{&1}")
+      pr = fn head, tip, commits -> %{"headRefOid" => head, "baseRefOid" => "recorded", "baseRef" => %{"target" => %{"oid" => tip}}, "commits" => commits} end
 
       data = %{
-        "e0" => %{"pullRequest" => %{"headRefOid" => "h1", "baseRefOid" => "b1", "commits" => page.(["c1", "h1"], 2, nil)}},
-        "e1" => %{"pullRequest" => %{"headRefOid" => "h2", "baseRefOid" => "b1", "commits" => page.(first, 101, "p2")}},
-        "e2" => %{"pullRequest" => %{"headRefOid" => "h3", "baseRefOid" => "b1", "commits" => page.(first, 300, nil)}}
+        "e0" => %{"pullRequest" => pr.("h1", "b1", page.(["c1", "h1"], 2, nil))},
+        "e1" => %{"pullRequest" => pr.("h2", "b1", page.(first, 101, "p2"))},
+        "e2" => %{"pullRequest" => pr.("h3", "b1", page.(first, 300, "p2"))},
+        "e3" => %{"pullRequest" => pr.("h4", "b1", page.(first, 101, "p2"))}
       }
 
       graphql = fn
-        _query, %{"c" => "p2", "n" => 2}, _priority -> {:ok, %{"repository" => %{"pullRequest" => %{"headRefOid" => "h2", "commits" => page.(["h2"], 101, nil)}}}}
-        _query, _variables, _priority -> {:ok, data}
+        _query, %{"c" => "p2", "n" => 2}, _priority -> {:ok, %{"repository" => %{"pullRequest" => pr.("h2", "b1", page.(["h2"], 101, nil))}}}
+        _query, %{"c" => "p2", "n" => 4}, _priority -> {:ok, %{"repository" => %{"pullRequest" => pr.("h4", "b2", page.(["h4"], 101, nil))}}}
+        _query, %{"n0" => 1}, _priority -> {:ok, data}
       end
 
-      results = Snapshot.commits([{"o", "r", 1}, {"o", "r", 2}, {"o", "r", 3}], graphql: graphql)
-      assert results[{"o", "r", 1}] == {:ok, %{"head_sha" => "h1", "base_sha" => "b1", "commits" => ["c1", "h1"]}}
-      assert results[{"o", "r", 2}] == {:ok, %{"head_sha" => "h2", "base_sha" => "b1", "commits" => first ++ ["h2"]}}
-      assert {:error, _incomplete} = results[{"o", "r", 3}]
+      results = Snapshot.commits(for(number <- 1..4, do: {"o", "r", number}), graphql: graphql)
+      assert results[{"o", "r", 1}] == {:ok, %{"head_sha" => "h1", "base_sha" => "recorded", "base_tip_sha" => "b1", "commits" => ["c1", "h1"]}}
+      assert results[{"o", "r", 2}] == {:ok, %{"head_sha" => "h2", "base_sha" => "recorded", "base_tip_sha" => "b1", "commits" => first ++ ["h2"]}}
+      assert {:error, _capped} = results[{"o", "r", 3}]
+      assert {:error, _moved} = results[{"o", "r", 4}]
     end
   end
 

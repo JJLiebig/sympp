@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Api do
   @moduledoc """
-  The Observer's GitHub HTTP access: GraphQL and ETag-cached REST reads.
+  GitHub HTTP access for the Observer and PR ancestry checks.
 
   The token comes from `GITHUB_TOKEN` or `GH_TOKEN`, else from `gh auth token`,
   read once and kept until GitHub answers 401. Requests go out over HTTP; `gh`
@@ -20,9 +20,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Api do
   @api "https://api.github.com"
   @token_key {__MODULE__, :token}
   @etag_table Module.concat(__MODULE__, ETags)
+  @comparison_table Module.concat(__MODULE__, Comparisons)
   @timeout_ms 10_000
   @missing_token_retry_ms 5 * 60_000
   @etag_entries 512
+  @comparison_entries 4_096
 
   @type priority :: RateGovernor.priority()
   @type error ::
@@ -34,12 +36,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Api do
           | {:rate_limited, integer()}
           | {:github_status, integer()}
           | :request_failed
+  @type comparison :: %{merge_base: String.t(), ahead: non_neg_integer(), behind: non_neg_integer()}
 
-  @doc "Creates the ETag table; the owning process keeps it alive."
+  @doc "Creates the response caches; the owning process keeps them alive."
   @spec create_table() :: :ok
   def create_table do
-    if :ets.whereis(@etag_table) == :undefined do
-      :ets.new(@etag_table, [:named_table, :public, :set, read_concurrency: true, write_concurrency: true])
+    for table <- [@etag_table, @comparison_table], :ets.whereis(table) == :undefined do
+      :ets.new(table, [:named_table, :public, :set, read_concurrency: true, write_concurrency: true])
     end
 
     :ok
@@ -87,6 +90,86 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Api do
       with {:ok, response} <- send_request(token, :get, @api <> "/" <> path, conditional, nil),
            do: revalidated(token, credential, path, cached, response)
     end
+  end
+
+  @doc "Compares two commit SHAs. Successful immutable results need no revalidation."
+  @spec compare(String.t(), String.t(), String.t(), :fetch | :cached_only) :: {:ok, comparison()} | {:error, error()}
+  def compare(repository, left, right, mode) when is_binary(repository) and is_binary(left) and is_binary(right) do
+    with true <- commit_sha?(left) and commit_sha?(right),
+         {:ok, token} <- credential() do
+      {first, second} = if left <= right, do: {left, right}, else: {right, left}
+      key = {fingerprint(token), String.downcase(repository), first, second}
+
+      with {:ok, comparison} <- comparison(token, key, mode) do
+        {:ok, if(left == first, do: comparison, else: %{comparison | ahead: comparison.behind, behind: comparison.ahead})}
+      end
+    else
+      false -> {:error, :request_failed}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  def compare(_repository, _left, _right, _mode), do: {:error, :request_failed}
+
+  defp comparison(_token, {_credential, _repository, same, same}, _mode), do: {:ok, %{merge_base: same, ahead: 0, behind: 0}}
+
+  defp comparison(token, {credential, repository, first, second} = key, mode) do
+    case comparison_cache(key) do
+      {:ok, _summary} = cached ->
+        cached
+
+      :miss when mode == :cached_only ->
+        {:error, :request_failed}
+
+      :miss ->
+        # GitHub includes changed files only on page one. We need the summary.
+        url = "#{@api}/repos/#{repository}/compare/#{first}...#{second}?per_page=1&page=2"
+
+        with :ok <- RateGovernor.allow(credential, "core", :background),
+             {:ok, response} <- send_request(token, :get, url, [], nil),
+             {:ok, body} <- handle(token, response),
+             {:ok, summary} <- compare_summary(body, first) do
+          store_comparison(key, summary)
+          {:ok, summary}
+        end
+    end
+  end
+
+  defp compare_summary(%{"base_commit" => %{"sha" => first}, "merge_base_commit" => %{"sha" => base}, "ahead_by" => ahead, "behind_by" => behind}, first)
+       when is_binary(base) and is_integer(ahead) and ahead >= 0 and is_integer(behind) and behind >= 0 do
+    if commit_sha?(base), do: {:ok, %{merge_base: base, ahead: ahead, behind: behind}}, else: {:error, :request_failed}
+  end
+
+  defp compare_summary(_body, _first), do: {:error, :request_failed}
+
+  defp commit_sha?(sha), do: Regex.match?(~r/\A[0-9a-f]{40}\z/, sha)
+
+  defp comparison_cache(key) do
+    case :ets.whereis(@comparison_table) do
+      :undefined ->
+        :miss
+
+      table ->
+        case :ets.lookup(table, key) do
+          [{^key, summary}] -> {:ok, summary}
+          [] -> :miss
+        end
+    end
+  rescue
+    ArgumentError -> :miss
+  end
+
+  defp store_comparison(key, summary) do
+    case :ets.whereis(@comparison_table) do
+      :undefined ->
+        :ok
+
+      table ->
+        if :ets.info(table, :size) >= @comparison_entries, do: :ets.delete_all_objects(table)
+        :ets.insert(table, {key, summary})
+    end
+  rescue
+    ArgumentError -> :ok
   end
 
   defp revalidated(_token, credential, _path, {_etag, body}, %{status: 304} = response) do

@@ -3,9 +3,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Stacking do
   Whether a package's PR is built on another package's unmerged work.
 
   A PR is stacked on another active package's open PR in the same repository
-  when it carries commits of that PR. Commit lists come from GitHub's PR
-  commits, which leave out commits reachable from the PR's base, so work
-  imported by merging the base never counts. When two PRs share commits, the
+  when it carries commits of that PR outside both PRs' bases. Complete lists
+  come from GitHub. A pair with a missing or capped list instead uses immutable
+  GitHub comparisons of the heads and base tips. When two PRs share commits, the
   one that holds all of the other's commits and more is the stacked one;
   otherwise the PR opened later (higher number) is.
 
@@ -16,30 +16,42 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Stacking do
   A view is what is known about one package's current PR:
 
     * `work_package_id`, `repository`, `number`;
-    * `state` (`open`, `merged`, `closed`) and `commits` (oids), when read;
+    * `state` (`open`, `merged`, `closed`), `head_sha`, `base_branch`, and
+      `commits` (oids), when read;
+    * `base_tip_sha` - the current target branch tip, when read by the Observer;
     * `fresh?` - read in this pass; other views name only the attached PR.
 
   A merged or closed PR never counts. A view that wasn't read in this pass is
-  read first (`refresh`); one without a state or commit list after that is
-  unknown and defers qualification.
+  read first (`refresh`); a pair without enough evidence stays unknown and
+  defers qualification.
   """
 
   import Ecto.Query, only: [from: 2]
 
-  alias SymphonyElixir.SymphonyPlusPlus.GitHub.{Client, DefaultClient, PullRequest, PullRequestProgress}
+  alias SymphonyElixir.SymphonyPlusPlus.GitHub.{Api, Client, DefaultClient, PullRequest, PullRequestProgress}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, WorkPackage}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
+
+  @compare_concurrency 4
+  # Bound extra qualification delay during a REST outage.
+  @compare_budget_ms 12_000
+  @task_supervisor SymphonyElixir.TaskSupervisor
 
   @type view :: %{
           required(:work_package_id) => String.t(),
           required(:repository) => String.t(),
           required(:number) => integer() | nil,
           optional(:state) => String.t() | nil,
+          optional(:head_sha) => String.t() | nil,
+          optional(:base_branch) => String.t() | nil,
+          optional(:base_tip_sha) => String.t() | nil,
           optional(:commits) => [String.t()] | nil,
           optional(:fresh?) => boolean()
         }
   @type result :: {:ok, [String.t()]} | :unknown
+  @type pair_result :: {boolean() | :unknown, boolean() | :unknown}
+  @type observations :: %{String.t() => [String.t()] | :unknown}
 
   @doc """
   The packages `own`'s PR is stacked on, or `:unknown`. `refresh` re-reads
@@ -47,12 +59,119 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Stacking do
   """
   @spec check(view(), [view()], ([view()] -> [view()])) :: result()
   def check(own, others, refresh \\ & &1) do
-    candidates = Enum.filter(others, &(&1.work_package_id != own.work_package_id and same_repository?(&1, own) and not ended_pr?(&1)))
+    candidates = own |> siblings(others) |> refreshed(refresh)
+    base_tips = base_tips(own, candidates)
+    outcomes = for other <- candidates, do: {other.work_package_id, elem(pair(own, other, base_tips, :fetch), 0)}
 
-    cond do
-      candidates == [] -> {:ok, []}
-      not is_list(Map.get(own, :commits)) -> :unknown
-      true -> candidates |> refreshed(refresh) |> verdict(own)
+    case verdict(outcomes) do
+      :unknown -> :unknown
+      ids -> {:ok, ids}
+    end
+  end
+
+  @doc "Returns settled observations, pending packages, and their network check."
+  @spec prepare([view()], non_neg_integer()) :: {observations(), MapSet.t(String.t()), nil | (-> observations())}
+  def prepare(views, round) do
+    open = Enum.filter(views, &match?(%{state: "open"}, &1))
+    {cached, pending} = open |> ancestry_pairs() |> cached_pairs()
+    waiting = for {left, right} <- pending, id <- [left.work_package_id, right.work_package_id], into: MapSet.new(), do: id
+    {deferred, ready} = Enum.split_with(open, &MapSet.member?(waiting, &1.work_package_id))
+
+    finish =
+      if pending != [] do
+        fn ->
+          results = pending |> rotate(round) |> compare_during_sweep()
+          observations(deferred, views, Map.merge(cached, results))
+        end
+      end
+
+    {observations(ready, views, cached), waiting, finish}
+  end
+
+  defp observations(open, views, results) do
+    Map.new(open, fn own ->
+      outcomes = for other <- siblings(own, views), do: {other.work_package_id, observed_pair(own, other, results)}
+      {own.work_package_id, verdict(outcomes)}
+    end)
+  end
+
+  defp siblings(own, views) do
+    Enum.filter(views, &(&1.work_package_id != own.work_package_id and same_repository?(&1, own) and not ended_pr?(&1)))
+  end
+
+  defp ancestry_pairs(open) do
+    for {left, index} <- Enum.with_index(open),
+        right <- Enum.drop(open, index + 1),
+        same_repository?(left, right),
+        needs_ancestry?(left, right),
+        do: {left, right}
+  end
+
+  defp cached_pairs(pairs) do
+    {cached, pending} =
+      Enum.reduce(pairs, {%{}, []}, fn views, {cached, pending} ->
+        case read_pair(views, :cached_only) do
+          {_left, _right, {:unknown, :unknown}} -> {cached, [views | pending]}
+          result -> {put_pair(cached, result), pending}
+        end
+      end)
+
+    {cached, Enum.reverse(pending)}
+  end
+
+  # A timeout can cut off a batch. Start at a different pair on the next sweep.
+  defp rotate(pairs, round) do
+    {first, rest} = Enum.split(pairs, rem(round * @compare_concurrency, length(pairs)))
+    rest ++ first
+  end
+
+  defp compare_during_sweep([]), do: %{}
+
+  defp compare_during_sweep(pairs) do
+    parent = self()
+    ref = make_ref()
+
+    task =
+      Task.Supervisor.async_nolink(@task_supervisor, fn ->
+        @task_supervisor
+        |> Task.Supervisor.async_stream_nolink(pairs, &read_pair(&1, :fetch),
+          max_concurrency: @compare_concurrency,
+          ordered: false,
+          on_timeout: :kill_task,
+          timeout: @compare_budget_ms
+        )
+        |> Enum.each(fn
+          {:ok, result} -> send(parent, {ref, result})
+          {:exit, _reason} -> :ok
+        end)
+      end)
+
+    _outcome = Task.yield(task, @compare_budget_ms) || Task.shutdown(task, :brutal_kill)
+    completed_pairs(ref, %{})
+  end
+
+  defp read_pair({left, right}, mode) do
+    {left.work_package_id, right.work_package_id, pair(left, right, %{}, mode)}
+  end
+
+  defp completed_pairs(ref, results) do
+    receive do
+      {^ref, result} -> completed_pairs(ref, put_pair(results, result))
+    after
+      0 -> results
+    end
+  end
+
+  defp put_pair(results, {left, right, {left_stacked, right_stacked}}) do
+    results |> Map.put({left, right}, left_stacked) |> Map.put({right, left}, right_stacked)
+  end
+
+  defp observed_pair(own, other, results) do
+    # A slow request can use up the budget. Still evaluate any pair whose
+    # evidence is already cached, without issuing another request.
+    case Map.fetch(results, {own.work_package_id, other.work_package_id}) do
+      {:ok, status} -> status
+      :error -> elem(pair(own, other, %{}, :cached_only), 0)
     end
   end
 
@@ -61,28 +180,184 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Stacking do
     if unread == [], do: read, else: read ++ refresh.(unread)
   end
 
-  defp verdict(candidates, own) do
-    known = Enum.reject(candidates, &(ended_pr?(&1) or unknown?(&1)))
-    stacked = for view <- known, stacked_on?(own, view), do: view.work_package_id
-    unknown? = Enum.any?(candidates, &(not ended_pr?(&1) and unknown?(&1)))
+  defp verdict(results) do
+    stacked = for {id, true} <- results, do: id
 
     cond do
-      stacked != [] -> {:ok, Enum.sort(Enum.uniq(stacked))}
-      unknown? -> :unknown
-      true -> {:ok, []}
+      stacked != [] -> Enum.sort(Enum.uniq(stacked))
+      Enum.any?(results, &(elem(&1, 1) == :unknown)) -> :unknown
+      true -> []
     end
   end
 
-  defp unknown?(view), do: Map.get(view, :state) != "open" or not is_list(Map.get(view, :commits))
   defp ended_pr?(view), do: Map.get(view, :state) in ["merged", "closed"]
+  defp needs_ancestry?(left, right), do: not (is_list(Map.get(left, :commits)) and is_list(Map.get(right, :commits)))
 
-  defp stacked_on?(own, other) do
-    mine = MapSet.new(own.commits)
-    theirs = MapSet.new(other.commits)
+  @spec pair(view(), view(), map(), :fetch | :cached_only) :: pair_result()
+  defp pair(_own, %{state: state}, _base_tips, _mode) when state in ["merged", "closed"], do: {false, false}
 
-    not MapSet.disjoint?(mine, theirs) and not proper_subset?(mine, theirs) and
-      (proper_subset?(theirs, mine) or opened_before?(other, own))
+  defp pair(%{commits: left} = own, %{state: "open", commits: right} = other, _base_tips, _mode) when is_list(left) and is_list(right) do
+    mine = MapSet.new(left)
+    theirs = MapSet.new(right)
+
+    cond do
+      MapSet.disjoint?(mine, theirs) -> {false, false}
+      proper_subset?(mine, theirs) -> {false, true}
+      proper_subset?(theirs, mine) -> {true, false}
+      true -> by_age(own, other)
+    end
   end
+
+  defp pair(%{head_sha: left} = own, %{state: "open", head_sha: right} = other, base_tips, mode) do
+    left_base = base_tip(own, base_tips)
+    right_base = base_tip(other, base_tips)
+    compare = &Api.compare(own.repository, &1, &2, mode)
+
+    if left <= right do
+      ancestry_pair(own, other, left_base, right_base, compare)
+    else
+      {other_stacked, own_stacked} = ancestry_pair(other, own, right_base, left_base, compare)
+      {own_stacked, other_stacked}
+    end
+  end
+
+  defp pair(_own, _other, _base_tips, _mode), do: {:unknown, :unknown}
+
+  defp ancestry_pair(own, other, left_base, right_base, compare) do
+    with {:ok, comparison} <- compare.(own.head_sha, other.head_sha),
+         true <- common_work(compare, other.head_sha, left_base, right_base, comparison) do
+      stacked_direction(own, other, left_base, right_base, comparison.merge_base, compare)
+    else
+      false -> {false, false}
+      _unresolved -> {:unknown, :unknown}
+    end
+  end
+
+  defp common_work(compare, right, left_base, right_base, %{merge_base: shared, ahead: ahead, behind: behind}) do
+    left_merged = reachable?(compare, shared, left_base)
+    right_merged = if left_base == right_base, do: left_merged, else: reachable?(compare, shared, right_base)
+    merged? = left_merged == true or right_merged == true
+
+    cond do
+      left_merged == false and right_merged == false -> true
+      merged? and all_common_from?(compare, right, shared, ahead, behind) -> false
+      true -> :unknown
+    end
+  end
+
+  # A single merge base outside both bases proves overlap. To prove disjointness
+  # we must also rule out another merge base outside the bases. The shared SHA
+  # is already an ancestor of both heads; equal ahead counts show that replacing
+  # the left head by that ancestor removes none of the common history.
+  defp all_common_from?(_compare, _right, _shared, ahead, behind) when ahead == 0 or behind == 0, do: true
+
+  defp all_common_from?(compare, right, shared, ahead, _behind) do
+    match?({:ok, %{merge_base: ^shared, ahead: ^ahead}}, compare.(shared, right))
+  end
+
+  defp reachable?(_compare, sha, sha), do: true
+  defp reachable?(_compare, _sha, nil), do: :unknown
+
+  defp reachable?(compare, sha, tip) do
+    case compare.(sha, tip) do
+      {:ok, %{merge_base: merge_base}} -> merge_base == sha
+      {:error, _reason} -> :unknown
+    end
+  end
+
+  defp stacked_direction(%{head_sha: head} = left, %{head_sha: head} = right, left_base, right_base, _shared, compare) do
+    left_retained = retains_unmerged?(compare, head, left_base, right_base)
+    right_retained = retains_unmerged?(compare, head, right_base, left_base)
+
+    case {left_retained, right_retained} do
+      {true, true} -> by_age(left, right)
+      {true, false} -> {false, true}
+      {false, true} -> {true, false}
+      _unresolved -> {:unknown, :unknown}
+    end
+  end
+
+  defp stacked_direction(%{head_sha: head} = left, %{head_sha: other} = right, left_base, right_base, head, compare) when head != other do
+    containing_head(left, right, left_base, right_base, compare)
+  end
+
+  defp stacked_direction(%{head_sha: head} = left, %{head_sha: other} = right, left_base, right_base, other, compare) when head != other do
+    {right_stacked, left_stacked} = containing_head(right, left, right_base, left_base, compare)
+    {left_stacked, right_stacked}
+  end
+
+  # Divergent heads outside both bases rule out inclusion in either direction.
+  defp stacked_direction(%{head_sha: head} = left, %{head_sha: other} = right, _left_base, _right_base, shared, _compare) when shared != head and shared != other,
+    do: by_age(left, right)
+
+  defp stacked_direction(_left, _right, _left_base, _right_base, _shared, _compare), do: {:unknown, :unknown}
+
+  # The descendant PR is stacked if it retains all the ancestor PR's unmerged
+  # commits or if the PR-number rule would hold it even with partial overlap.
+  defp containing_head(ancestor, descendant, ancestor_base, descendant_base, compare) do
+    if opened_before?(ancestor, descendant) do
+      {false, true}
+    else
+      case retains_unmerged?(compare, ancestor.head_sha, ancestor_base, descendant_base) do
+        true -> {false, true}
+        false -> by_age(ancestor, descendant)
+        :unknown -> {:unknown, :unknown}
+      end
+    end
+  end
+
+  defp retains_unmerged?(_compare, _head, base, base), do: true
+
+  defp retains_unmerged?(compare, head, ancestor_base, descendant_base) do
+    case compare.(ancestor_base, descendant_base) do
+      {:ok, %{merge_base: ^descendant_base}} -> true
+      {:ok, %{merge_base: ^ancestor_base}} -> equal_unmerged_counts(compare, head, ancestor_base, descendant_base)
+      _unresolved -> :unknown
+    end
+  end
+
+  # The descendant base contains the ancestor base. Equal counts then prove
+  # it has absorbed none of the ancestor PR's unmerged commits.
+  defp equal_unmerged_counts(compare, head, ancestor_base, descendant_base) do
+    with {:ok, %{ahead: before}} <- compare.(ancestor_base, head),
+         {:ok, %{ahead: after_merge}} <- compare.(descendant_base, head) do
+      before == after_merge
+    else
+      {:error, _reason} -> :unknown
+    end
+  end
+
+  defp by_age(left, right), do: {opened_before?(right, left), opened_before?(left, right)}
+
+  # `gh pr view` gives the PR's recorded base OID, which can lag the branch.
+  # Resolve each target once during a manual sync that needs ancestry evidence.
+  defp base_tips(%{base_tip_sha: _read_by_observer}, _candidates), do: %{}
+
+  defp base_tips(own, candidates) do
+    fallback = Enum.filter(candidates, &(Map.get(&1, :state) == "open" and needs_ancestry?(own, &1)))
+
+    if fallback == [] do
+      %{}
+    else
+      [own | fallback]
+      |> Enum.map(&Map.get(&1, :base_branch))
+      |> Enum.filter(&is_binary/1)
+      |> Enum.uniq()
+      |> Map.new(&{&1, read_base_tip(own.repository, &1)})
+    end
+  end
+
+  defp read_base_tip(repository, branch) do
+    path = "repos/#{repository}/git/ref/heads/#{URI.encode(branch, &URI.char_unreserved?/1)}"
+
+    case Api.rest_get(path) do
+      {:ok, %{"object" => %{"sha" => sha}}} when is_binary(sha) -> sha
+      _unavailable -> nil
+    end
+  end
+
+  defp base_tip(%{base_tip_sha: sha}, _base_tips), do: sha
+  defp base_tip(view, base_tips), do: Map.get(base_tips, Map.get(view, :base_branch))
 
   defp proper_subset?(left, right), do: MapSet.subset?(left, right) and MapSet.size(left) < MapSet.size(right)
 
@@ -148,7 +423,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Stacking do
     Enum.map(views, fn view ->
       with {:ok, ref} <- PullRequest.parse_number(view.number, view.repository),
            {:ok, metadata} <- Client.fetch_pull_request(client, ref, provider_snapshot: true) do
-        Map.merge(view, %{state: pr_state(metadata), commits: metadata["commits"], fresh?: true})
+        Map.merge(view, %{
+          state: pr_state(metadata),
+          commits: metadata["commits"],
+          head_sha: get_in(metadata, ["head", "sha"]),
+          base_branch: get_in(metadata, ["base", "ref"]),
+          fresh?: true
+        })
       else
         _unreadable -> Map.merge(view, %{state: nil, commits: nil, fresh?: true})
       end
