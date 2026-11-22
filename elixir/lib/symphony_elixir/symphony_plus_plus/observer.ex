@@ -21,10 +21,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
       recorded; a merge is recorded as `pr_merged` through the delivery
       evidence path; otherwise the package qualifies or unqualifies through
       `Qualification`;
-    * where two or more watched PRs are open in one repository, their commit
-      lists are read (one batched GraphQL read, again only when a PR's head or
-      base moves), and a PR stacked on another package's unmerged work
-      (`Stacking`) doesn't qualify;
+    * where two or more watched PRs are open in one repository, their complete
+      commit lists are read and reused until the head or base moves. Pairs with
+      incomplete lists use cached ancestry comparisons (`Stacking`);
     * the same snapshot reads the PRs of cards (`Cards`), the work of the
       terminals the operator talks to.
 
@@ -445,8 +444,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   # What this sweep read of each watched package's current PR. A PR that
   # couldn't be read is unknown; a closed PR no longer watched, or none, is left out.
-  defp view(%{package: package, fresh?: true, pr: pr}),
-    do: [%{work_package_id: package.id, repository: pr["repository"], number: pr["number"], state: pr["state"], commits: pr["commits"], fresh?: true}]
+  defp view(%{package: package, fresh?: true, pr: pr}), do: [stack_view(package, pr)]
 
   defp view(%{package: package, github: {:error, _reason}, attached: %{} = attached}),
     do: [%{work_package_id: package.id, repository: attached.repository, number: attached.number, state: nil, commits: nil, fresh?: true}]
@@ -457,10 +455,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   defp view(_item), do: []
 
+  defp stack_view(package, pr) do
+    %{
+      work_package_id: package.id,
+      repository: pr["repository"],
+      number: pr["number"],
+      state: pr["state"],
+      head_sha: pr["head_sha"],
+      base_tip_sha: pr["base_tip_sha"],
+      commits: pr["commits"],
+      fresh?: true
+    }
+  end
+
   # The packages an open PR read in this sweep is stacked on, or `:unknown`;
   # every view is this sweep's read.
   defp stacking(%{package: package, fresh?: true, pr: %{"state" => "open"} = pr}, views) do
-    case Stacking.check(%{work_package_id: package.id, repository: pr["repository"], number: pr["number"], commits: pr["commits"]}, views) do
+    case Stacking.check(stack_view(package, pr), views) do
       {:ok, ids} -> ids
       :unknown -> :unknown
     end
@@ -469,22 +480,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   defp stacking(_item, _views), do: []
 
   # Commit lists are read only where the stacking check needs them (a
-  # repository with two or more open watched PRs) and only when a PR's head or
-  # base moved; otherwise the last list is kept.
+  # repository with two or more open watched PRs), when GitHub can return a full
+  # list and the head or base moved. Otherwise reuse the last complete list.
   defp with_commits(watched, github, opts) do
     open = for item <- watched, {:ok, %{"state" => "open"} = pr} <- [Map.get(github, item.package.id)], do: {item, pr}
     shared = open |> Enum.frequencies_by(fn {_item, pr} -> String.downcase(pr["repository"] || "") end) |> Enum.filter(&(elem(&1, 1) > 1)) |> Map.new()
     {kept, wanted} = open |> Enum.map(fn {item, pr} -> {item.package.id, carry_commits(pr, item.observation)} end) |> Enum.split_with(fn {_id, pr} -> is_list(pr["commits"]) end)
-    wanted = Enum.filter(wanted, fn {_id, pr} -> Map.has_key?(shared, String.downcase(pr["repository"] || "")) end)
+    wanted = Enum.filter(wanted, fn {_id, pr} -> Snapshot.commit_list_available?(pr) and Map.has_key?(shared, String.downcase(pr["repository"] || "")) end)
     read = Keyword.get(opts, :commits, &Snapshot.commits/1)
     lists = if wanted == [], do: %{}, else: read.(Enum.map(wanted, fn {_id, pr} -> commits_entry(pr) end))
 
     read_prs =
       Map.new(wanted, fn {id, pr} ->
         head = pr["head_sha"]
+        base = pr["base_sha"]
+        base_tip = pr["base_tip_sha"]
 
         case Map.get(lists, commits_entry(pr)) do
-          {:ok, %{"head_sha" => ^head, "base_sha" => base, "commits" => commits}} -> {id, {:ok, Map.merge(pr, %{"base_sha" => base, "commits" => commits})}}
+          {:ok, %{"head_sha" => ^head, "base_sha" => ^base, "base_tip_sha" => ^base_tip, "commits" => commits}} -> {id, {:ok, Map.put(pr, "commits", commits)}}
           _unreadable_or_moved -> {id, {:ok, pr}}
         end
       end)
@@ -493,7 +506,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   end
 
   defp carry_commits(pr, %Observation{pr: %{"commits" => commits} = previous}) when is_list(commits) do
-    same? = Enum.all?(~w(repository number head_sha base_sha), &(previous[&1] == pr[&1]))
+    same? = Enum.all?(~w(repository number head_sha base_sha base_tip_sha), &(previous[&1] == pr[&1]))
     if same?, do: Map.put(pr, "commits", commits), else: pr
   end
 

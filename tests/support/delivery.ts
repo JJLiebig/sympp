@@ -25,6 +25,9 @@ export class Provider {
   readonly unreadableBranches = new Set<string>();
   readonly graphql: { query: string; variables: Record<string, unknown> }[] = [];
   readonly rest: string[] = [];
+  readonly baseTips = new Map<string, string>();
+  readonly commitParents = new Map<string, string[]>();
+  readonly unreadableComparisons = new Set<string>();
   // herdr-core: `core` null is unreachable. `sent` records `hc send`.
   core: { id: string; name: string } | null = { id: 'acceptance-core', name: 'acceptance' };
   readonly terminals = new Map<string, Terminal>();
@@ -81,7 +84,10 @@ export class Provider {
       return this.apiReplies.get(argv[5]) ?? { stdout: 'HTTP 404 synthetic API not found', exitCode: 1 };
     } else if (argv.length === 7 && argv[0] === 'pr' && argv[1] === 'view' &&
       /^\d+$/.test(argv[2]) && argv[3] === '--repo' && ['example/service', 'example/client'].includes(argv[4]) && argv[5] === '--json') {
-      return this.replies.get(Number(argv[2])) ?? { stdout: 'HTTP 404 synthetic PR not found', exitCode: 1 };
+      const number = Number(argv[2]);
+      const pr = this.pr(number);
+      if (pr?.commits?.length > 100) return { stdout: JSON.stringify({ ...pr, commits: pr.commits.slice(0, 100) }), exitCode: 0 };
+      return this.replies.get(number) ?? { stdout: 'HTTP 404 synthetic PR not found', exitCode: 1 };
     }
     return { stdout: 'Unexpected synthetic provider command', exitCode: 1 };
   }
@@ -123,34 +129,73 @@ export class Provider {
       .filter((pr) => pr && typeof pr.url === 'string' && pr.url.startsWith(`https://github.com/${repository}/pull/`));
   }
 
+  private baseTip(pr: any) {
+    const repository = new URL(pr.url).pathname.split('/').slice(1, 3).join('/');
+    return this.baseTips.get(`${repository}/${pr.baseRefName}`) ?? pr.baseRefOid;
+  }
+
+  private ancestors(oid: string) {
+    const pending = [oid];
+    const seen = new Set<string>();
+    while (pending.length) {
+      const sha = pending.pop()!;
+      if (seen.has(sha)) continue;
+      seen.add(sha);
+      pending.push(...this.commitParents.get(sha) ?? []);
+    }
+    return seen;
+  }
+
+  private compare(left: string, right: string): [number, unknown] {
+    if (this.unreadableComparisons.has(`${left}...${right}`) || !this.commitParents.has(left) || !this.commitParents.has(right)) return [404, {}];
+    const mine = this.ancestors(left);
+    const theirs = this.ancestors(right);
+    const common = [...mine].filter((sha) => theirs.has(sha));
+    const older = new Set(common.flatMap((sha) => this.commitParents.get(sha) ?? []));
+    const mergeBase = common.filter((sha) => !older.has(sha)).sort()[0];
+    if (!mergeBase) return [404, {}];
+    return [200, { base_commit: { sha: left }, merge_base_commit: { sha: mergeBase }, ahead_by: theirs.size - common.length, behind_by: mine.size - common.length }];
+  }
+
   private http(method: string, url: string, body: string): [number, unknown] {
     if (this.github === 'down') return [503, { message: 'Synthetic GitHub unavailable' }];
     if (method === 'POST' && url === '/graphql') {
       const { query, variables } = JSON.parse(body);
       this.graphql.push({ query, variables });
+      if (typeof variables.c === 'string') {
+        const pr = this.pr(variables.n);
+        return [200, { data: { repository: { pullRequest: pr && commitsNode(pr, this.baseTip(pr), Number(variables.c)) } } }];
+      }
       const data: Record<string, unknown> = {};
       for (let index = 0; `o${index}` in variables; index++) {
         const repository = `${variables[`o${index}`]}/${variables[`r${index}`]}`;
         const selection = query.slice(query.indexOf(`e${index}: repository(`));
         if (!['example/service', 'example/client'].includes(repository)) { data[`e${index}`] = null; continue; }
-        if (selection.includes(`pullRequest(number: $n${index}) { headRefOid baseRefOid commits(first: 100)`)) {
+        if (selection.includes(`pullRequest(number: $n${index}) { headRefOid baseRefOid`) && selection.includes('commits(first: 100)')) {
           const pr = this.pr(variables[`n${index}`]);
-          data[`e${index}`] = pr ? { pullRequest: commitsNode(pr) } : null;
+          data[`e${index}`] = pr ? { pullRequest: commitsNode(pr, this.baseTip(pr)) } : null;
         } else if (selection.includes(`pullRequest(number: $n${index})`)) {
           if (this.unreadable.has(variables[`n${index}`])) { data[`e${index}`] = null; continue; }
           const pr = this.pr(variables[`n${index}`]);
-          data[`e${index}`] = { pullRequest: pr && prNode(pr) };
+          data[`e${index}`] = { pullRequest: pr && prNode(pr, this.baseTip(pr)) };
         } else if (this.unreadableBranches.has(variables[`b${index}`])) {
           data[`e${index}`] = null;
         } else {
           const base = variables[`t${index}`];
           const nodes = this.prs(repository).filter((pr) => pr.headRefName === variables[`b${index}`] && (!base || pr.baseRefName === base));
-          data[`e${index}`] = { pullRequests: { nodes: nodes.map(prNode) } };
+          data[`e${index}`] = { pullRequests: { nodes: nodes.map((pr) => prNode(pr, this.baseTip(pr))) } };
         }
       }
       return [200, { data }];
     }
     this.rest.push(url);
+    const comparison = url.match(/^\/repos\/example\/service\/compare\/([0-9a-f]+)\.\.\.([0-9a-f]+)\?per_page=1&page=2$/);
+    if (method === 'GET' && comparison) return this.compare(comparison[1], comparison[2]);
+    const ref = url.match(/^\/repos\/([^/]+\/[^/]+)\/git\/ref\/heads\/(.+)$/);
+    if (method === 'GET' && ref) {
+      const sha = this.baseTips.get(`${ref[1]}/${decodeURIComponent(ref[2])}`);
+      return sha ? [200, { object: { sha } }] : [404, {}];
+    }
     const checks = url.match(/^\/repos\/([^/]+\/[^/]+)\/commits\/([0-9a-f]+)\/(check-runs|status)\?per_page=100$/);
     if (method === 'GET' && checks) {
       const pr = this.prs(checks[1]).find((candidate) => candidate.headRefOid === checks[2]);
@@ -185,7 +230,7 @@ export class Provider {
 
 // GitHub's GraphQL view of a `gh pr view` PR: the head commit's check rollup
 // is derived from the same checks, and no checks at all is no rollup.
-function prNode(pr: any) {
+function prNode(pr: any, baseTip: string) {
   const checks: any[] = pr.statusCheckRollup ?? [];
   const states = checks.map((check) => (check.status === 'COMPLETED' ? check.conclusion : check.status ?? check.state));
   const counts = [...new Set(states)].map((state) => ({ state, count: states.filter((item) => item === state).length }));
@@ -197,17 +242,21 @@ function prNode(pr: any) {
   return {
     number: pr.number, url: pr.url, state: pr.state, isDraft: pr.isDraft, merged: pr.state === 'MERGED', mergedAt: pr.mergedAt,
     mergeable: pr.mergeable, headRefOid: pr.headRefOid, headRefName: pr.headRefName, baseRefName: pr.baseRefName,
-    baseRefOid: pr.baseRefOid, mergeCommit: pr.mergeCommit, headRepositoryOwner: { login: new URL(pr.url).pathname.split('/')[1] },
-    commits: { nodes: [{ commit: { oid: pr.headRefOid, statusCheckRollup: rollup } }] },
+    baseRefOid: pr.baseRefOid, baseRef: { target: { oid: baseTip } }, mergeCommit: pr.mergeCommit,
+    headRepositoryOwner: { login: new URL(pr.url).pathname.split('/')[1] },
+    commits: { totalCount: pr.commits?.length ?? 0, nodes: [{ commit: { oid: pr.headRefOid, statusCheckRollup: rollup } }] },
     reviews: { nodes: [] },
   };
 }
 
-function commitsNode(pr: any) {
+function commitsNode(pr: any, baseTip: string, offset = 0) {
   const commits = pr.commits ?? [];
+  const end = Math.min(offset + 100, 250, commits.length);
   return {
     headRefOid: pr.headRefOid, baseRefOid: pr.baseRefOid,
-    commits: { totalCount: commits.length, pageInfo: { hasNextPage: false, endCursor: null }, nodes: commits.map((commit: any) => ({ commit: { oid: commit.oid } })) },
+    baseRef: { target: { oid: baseTip } },
+    commits: { totalCount: commits.length, pageInfo: { hasNextPage: end < Math.min(250, commits.length), endCursor: String(end) },
+      nodes: commits.slice(offset, end).map((commit: any) => ({ commit: { oid: commit.oid } })) },
   };
 }
 

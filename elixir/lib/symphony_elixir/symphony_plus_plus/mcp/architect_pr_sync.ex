@@ -178,7 +178,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectPRSync do
   defp put_no_ci(_repo, pr_facts, _payload), do: pr_facts
 
   defp stacking(repo, work_package, metadata, payload) do
-    own = %{work_package_id: work_package.id, repository: payload["repository"], number: payload["number"], commits: metadata["commits"]}
+    own = %{
+      work_package_id: work_package.id,
+      repository: payload["repository"],
+      number: payload["number"],
+      head_sha: payload["head_sha"],
+      base_branch: payload["base_branch"],
+      commits: metadata["commits"]
+    }
 
     case Stacking.check(own, Stacking.attached_views(repo, work_package.id), &Stacking.refresh_with_client/1) do
       {:ok, ids} -> ids

@@ -201,3 +201,109 @@ test('the watcher holds a PR stacked on another package\'s unmerged work until t
   expect(replaced.raw_status).toBe('ready');
   expect(replaced.work_package.stacked_on).toEqual([]);
 });
+
+test('independent PRs qualify alongside history imports whose commit lists are truncated', async ({ watched: { factory, provider } }) => {
+  const architect = await factory.client();
+  const request = await architect.request('History imports');
+  const sizes = [4, 403, 1737, ...Array(16).fill(1)];
+  const numbers = sizes.map((_, index) => 501 + index);
+  const packages = await architect.addPackages(numbers.map((number) =>
+    contract(`PR ${number}`, { branch_pattern: `feature/delivery-${number}` })));
+  for (const wp of packages) await architect.call('dispatch_work_package', { work_package_id: wp });
+
+  const oid = (number: number, index: number) => (number * 10000 + index).toString(16).padStart(40, '0');
+  const base = head('0');
+  provider.baseTips.set('example/service/beta', base);
+  provider.commitParents.set(base, []);
+  const chain = (number: number, size: number, parent: string, offset = 0) => Array.from({ length: size }, (_, index) => {
+    const sha = oid(number, offset + index);
+    provider.commitParents.set(sha, [parent]);
+    parent = sha;
+    return sha;
+  });
+  const open = (number: number, commits: string[], sha = commits.at(-1)!) =>
+    provider.set(number, pr(number, sha, { commits: commits.map((oid) => ({ oid })) }));
+  for (const [index, number] of numbers.entries()) {
+    open(number, chain(number, sizes[index], base));
+  }
+
+  await factory.tick('sweep');
+  const [candidate, imported] = packages;
+  const [candidateNumber, importNumber] = numbers;
+  const candidateHead = oid(candidateNumber, 3);
+  expect((await row(architect, request, candidate)).raw_status).toBe('ready');
+  expect((await row(architect, request, imported)).raw_status).toBe('ready');
+  // One snapshot and one short-list batch. Compare each pair involving a long
+  // PR once, plus one comparison per head to verify the shared base.
+  expect([provider.graphql.length, provider.rest.length]).toEqual([2, 54]);
+  await factory.tick('sweep');
+  expect([provider.graphql.length, provider.rest.length]).toEqual([3, 54]);
+  expect((await sync(architect, candidate, candidateNumber, candidateHead)).pr_sync.readiness_reasons).toEqual([]);
+  expect(provider.rest.slice(54)).toEqual(['/repos/example/service/git/ref/heads/beta']);
+
+  // One unreadable comparison holds just the two affected PRs. They can
+  // recover on the same heads as soon as the comparison works again.
+  const importCommits = chain(importNumber, sizes[1] + 1, base);
+  const importHead = importCommits.at(-1)!;
+  open(importNumber, importCommits);
+  const unavailable = [candidateHead, importHead].sort().join('...');
+  provider.unreadableComparisons.add(unavailable);
+  await factory.tick('sweep');
+  const stale = (await architect.board(request, 'full')).work_packages
+    .filter((item: any) => item.work_package.observation_stale.includes('stacking')).map((item: any) => item.id);
+  expect(stale.sort()).toEqual([candidate, imported].sort());
+  expect((await sync(architect, candidate, candidateNumber, candidateHead)).pr_sync.readiness_reasons).toEqual(['stacking_unknown']);
+  provider.unreadableComparisons.delete(unavailable);
+  await factory.tick('sweep');
+  expect((await row(architect, request, candidate)).work_package.observation_stale).toEqual([]);
+
+  // The older PR picked up the entire history import. Containment wins over
+  // PR creation order, including when neither commit list is complete.
+  const stackedCommits = chain(candidateNumber, 251, importHead, 1000);
+  const stackedHead = stackedCommits.at(-1)!;
+  open(candidateNumber, [...importCommits, ...stackedCommits]);
+  await factory.tick('sweep');
+  const stacked = await row(architect, request, candidate);
+  expect(stacked.raw_status).toBe('dispatched');
+  expect(stacked.work_package.stacked_on).toEqual([imported]);
+  const synced = (await sync(architect, candidate, candidateNumber, stackedHead)).pr_sync;
+  expect(synced.readiness_reasons).toEqual(['stacked_on_unmerged_work']);
+  expect(synced.next_action).toBe(`remove ${imported}'s unmerged commits, or wait for its PR to merge`);
+
+  // The target branch can advance while the PR heads and recorded base OIDs
+  // stay fixed. The shared commits are part of the base now.
+  provider.baseTips.set('example/service/beta', importHead);
+  open(candidateNumber, stackedCommits);
+  open(importNumber, [], importHead);
+  await factory.tick('sweep');
+  const qualified = await row(architect, request, candidate);
+  expect(qualified.raw_status).toBe('ready');
+  expect(qualified.work_package.stacked_on).toEqual([]);
+});
+
+test('a reachable merge base cannot clear a comparison with additional common history', async ({ watched: { factory, provider } }) => {
+  const architect = await factory.client();
+  const request = await architect.request('Two merge bases');
+  const [older, later] = await architect.addPackages([contract('Long import', { branch_pattern: 'feature/delivery-551' }),
+    contract('Feature', { branch_pattern: 'feature/delivery-552' })]);
+  for (const wp of [older, later]) await architect.call('dispatch_work_package', { work_package_id: wp });
+
+  const [root, merged, unmerged, feature, join] = ['0', '1', '2', '3', '4'].map(head);
+  provider.baseTips.set('example/service/beta', merged);
+  for (const [sha, parents] of [[root, []], [merged, [root]], [unmerged, [root]], [feature, [merged, unmerged]], [join, [unmerged, merged]]] as const) {
+    provider.commitParents.set(sha, [...parents]);
+  }
+  const incoming = [unmerged, join];
+  for (let index = 0; index < 251; index++) {
+    const sha = (60000 + index).toString(16).padStart(40, 'e');
+    provider.commitParents.set(sha, [incoming.at(-1)!]);
+    incoming.push(sha);
+  }
+  provider.set(551, pr(551, incoming.at(-1)!, { commits: incoming.map((oid) => ({ oid })) }));
+  provider.set(552, pr(552, feature, { commits: [unmerged, feature].map((oid) => ({ oid })) }));
+  await factory.tick('sweep');
+  // The compare endpoint returns `merged`, but both heads also contain `unmerged`.
+  const observed = await row(architect, request, later);
+  expect(observed.raw_status).toBe('dispatched');
+  expect(observed.work_package.observation_stale).toEqual(['stacking']);
+});
