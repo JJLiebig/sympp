@@ -212,10 +212,41 @@ test("hand-started MCP bridges report native identity and require an authenticat
     assert.equal(chief.body.work_package_id, null);
     for (const [key, value] of Object.entries(original)) assert.equal(chiefLabels[key], value);
 
-    await reporter.report({ role: "architect", work_request_id: "wr-manual" }, probe);
+    const architectBinding = { role: "architect", work_request_id: "wr-manual" };
+    await reporter.report(architectBinding, probe);
     const labels = state().terminal.labels;
     for (const [key, value] of Object.entries(original)) assert.equal(labels[key], value);
-    const args = ["check", "--receipt", labels["sympp.session_receipt"]];
+    const file = labels["sympp.session_receipt"];
+    const published = fs.readFileSync(file, "utf8");
+    const labelCalls = () => state().calls.filter(({ method }) => method === "terminal.label").length;
+    const calls = labelCalls();
+    const mark = new Date("2000-01-01T00:00:00Z");
+    fs.utimesSync(file, mark, mark);
+    await reporter.report(architectBinding, probe);
+    assert.equal(fs.statSync(file).mtimeMs, mark.getTime(), "an unchanged receipt stays in place");
+    assert.equal(labelCalls(), calls, "an absent optional scope label already matches");
+
+    fs.unlinkSync(file);
+    await reporter.report(architectBinding, probe);
+    assert.ok(fs.readFileSync(file, "utf8") === published, "a missing receipt is restored");
+    fs.writeFileSync(file, "{}");
+    await reporter.report(architectBinding, probe);
+    assert.ok(fs.readFileSync(file, "utf8") === published, "a changed receipt is restored");
+    assert.equal(labelCalls(), calls, "receipt repair needs no label call");
+
+    const damaged = state();
+    delete damaged.terminal.labels["sympp.session_work_request_id"];
+    save({ ...damaged, lose_label_reply: true });
+    fs.utimesSync(file, mark, mark);
+    await reporter.report(architectBinding, probe);
+    assert.equal(state().terminal.labels["sympp.session_work_request_id"], undefined);
+    save({ ...state(), lose_label_reply: false });
+    await reporter.report(architectBinding, probe);
+    assert.equal(state().terminal.labels["sympp.session_work_request_id"], "wr-manual");
+    assert.equal(labelCalls(), calls + 2, "the missing label is retried when transport recovers");
+    assert.equal(fs.statSync(file).mtimeMs, mark.getTime(), "label repair leaves the matching receipt in place");
+
+    const args = ["check", "--receipt", file];
     const alive = await run(args);
     assert.equal(alive.code, 0);
     assert.equal(alive.body.state, "live");
