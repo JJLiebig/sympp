@@ -63,13 +63,13 @@ test('compiled inspector binds and pins actual request detail without stealing f
     await client.call('edit_plan', { ops: [{ op: 'set_dependency', from: left, to: wp, reason: 'Findings must land before follow-up work.' }] });
     expect((await row(client, request, left)).merge_eligibility.reason_codes).toContain('dependency_not_delivered');
     await press('j');
-    await expect.poll(() => host.screen).toMatch(/│Qualified\s*│/);
+    await expect.poll(() => cardBadge(host.screen, 'Inspector API')).toBe('Qualified');
     provider!.set(402, pr(402, head('a'), { state: 'MERGED', mergedAt: new Date().toISOString(), mergeCommit: { oid: head('f') } }));
     await client.call('sync_pr', { work_package_id: wp });
     expect((await row(client, request, left)).merge_eligibility.eligible).toBe(true);
     // The merge redraws the graph asynchronously. Watch Inspector API's badge
     // in the visible row while that update arrives.
-    await expect.poll(() => host.screen).toMatch(/│[ ›]*Inspector API[^\n]*\n[^\n]*\n│Ready to merge *│/);
+    await expect.poll(() => cardBadge(host.screen, 'Inspector API')).toBe('Ready to merge');
     expect(host.screen).not.toMatch(/│Qualified\s*│/);
 
     host.process!.stdin.write('p');
@@ -104,3 +104,14 @@ test('compiled inspector binds and pins actual request detail without stealing f
     expect(host.calls.filter((call) => call.method === 'pane.focus')).toEqual([]);
   } finally { await host.stop(); }
 });
+
+function cardBadge(screen: string, title: string): string | undefined {
+  const rows = screen.split('\n');
+  for (const [index, row] of rows.entries()) {
+    if (!row.startsWith('│')) continue;
+    const column = row.split('│').findIndex((cell) => cell.trim().replace(/^› /, '') === title);
+    // The badge is two lines below the title in the same card column.
+    if (column >= 0) return rows[index + 2]?.split('│')[column]?.trim();
+  }
+  return undefined;
+}
