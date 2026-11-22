@@ -25,6 +25,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.HerdrCore
+  alias SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -167,6 +168,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   defp launch_next_action(_agent, false), do: "Run launch_line."
 
   defp read_view("overview", repo, work_request, _arguments, detail) do
+    if detail == "summary", do: ReviewRefresh.request(repo, {:request, work_request.id}, true)
+
     with {:ok, payload} <- WorkRequestPayloads.work_request_read(repo, work_request, detail) do
       payload = Map.put(payload, "scope", WorkRequestPayloads.redacted_work_request_scope(work_request))
       {:ok, work_request_read_result(payload, detail)}
@@ -174,6 +177,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   end
 
   defp read_view("plan", repo, work_request, _arguments, detail) do
+    ReviewRefresh.request(repo, {:request, work_request.id}, true)
+
     case repo.transaction(fn -> read_plan_transaction(repo, work_request, detail) end) do
       {:ok, result} -> {:ok, result}
       {:error, {:error, reason}} -> {:error, reason}
@@ -182,6 +187,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   end
 
   defp read_view("board", repo, work_request, _arguments, detail) do
+    ReviewRefresh.request(repo, {:request, work_request.id}, true)
+
     with {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request.id),
          {:ok, delivery_board} <- WorkRequestScope.scoped_delivery_board(repo, work_request, work_packages),
          mutation = WorkRequestPayloads.work_request_mutation(work_request),
@@ -200,6 +207,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   defp read_view("package", repo, work_request, arguments, detail) do
     with {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
          {:ok, work_package} <- WorkRequestService.get_work_package(repo, work_request.id, work_package_id),
+         _review <- ReviewRefresh.request(repo, {:package, work_request.id, work_package.id}, true),
          {:ok, payload} <- WorkRequestPayloads.work_package_read(repo, work_request, work_package, detail),
          {:ok, task_plan} <- TaskPlanTools.task_plan(repo, work_package.id, detail) do
       payload =

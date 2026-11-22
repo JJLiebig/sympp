@@ -83,6 +83,7 @@ defmodule SymphonyElixir.Application do
       [
         {Repo, Repo.child_options()},
         {WorktreeCleanupQueue, repo: Repo},
+        SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh,
         {Observer, repo: Repo},
         {Retention, repo: Repo},
         SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore,

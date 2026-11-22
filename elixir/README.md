@@ -297,10 +297,11 @@ The factory watches dispatched packages without agent calls:
   host to see worker terminals start and finish and labels change; live workers
   can publish an http(s) `sympp.preview_url` for the board's Preview link;
 - every 60 seconds it reads every watched PR, and finds PRs on packages'
-  branches, in one batched GitHub GraphQL request per 25 PRs, and reads each
-  package's Review Suite cycle on the worker's machine, following explicit
-  same-branch successors within one shared 30-second deadline, including remote
-  transport;
+  branches, in one batched GitHub GraphQL request per 25 entries. It reads
+  current Review Suite evidence on the worker's machine before deciding PR
+  readiness. When GitHub confirms a package has no PR, it reads review progress
+  for board or detail readers. Each read follows explicit same-branch successors
+  within one 30-second deadline, including remote transport;
 - it moves packages to `ready` and back, and records merges, from what it sees.
 
 It uses `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token` (read once) over HTTP.

@@ -14,6 +14,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.DashboardCache
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
+  alias SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit.Target
   alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
@@ -193,8 +194,11 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
       try do
         :ok = DashboardPubSub.subscribe_delivery()
-        conn |> open_dashboard_stream() |> stream_dashboard_events(subscription, :board)
+        conn = open_dashboard_stream(conn)
+        :ok = subscribe_review_stream(:all)
+        stream_dashboard_events(conn, subscription, :board, :all)
       after
+        ReviewRefresh.unsubscribe()
         DashboardPubSub.unsubscribe_delivery()
         unsubscribe_dashboard(subscription)
         OperatorDashboardOpener.dashboard_disconnected()
@@ -270,6 +274,13 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   defp dashboard_json(conn, repo, surface, fun) do
+    conn =
+      if surface in [:deferred, :hydrated, :herdr] and ReviewRefresh.request(repo, :all, true) == :pending do
+        put_resp_header(conn, "retry-after", "1")
+      else
+        conn
+      end
+
     with {:ok, body, etag} <- DashboardCache.json(repo, surface, fun) do
       conn = conn |> put_resp_header("etag", etag) |> put_resp_header("cache-control", "private, no-cache")
 
@@ -295,28 +306,37 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   defp herdr_work_request_detail_response(repo, conn, work_request_id) do
+    :ok = ReviewRefresh.request(repo, {:request, work_request_id}, false)
+
     with {:ok, payload} <- LocalOperatorDashboard.herdr_work_request_detail_payload(repo, work_request_id) do
       json(conn, payload)
     end
   end
 
   @spec herdr_events(Conn.t(), map()) :: Conn.t()
-  def herdr_events(conn, _params) do
-    notification_events(conn, herdr_consumer?(conn))
+  def herdr_events(conn, params) do
+    scope =
+      case params do
+        %{"work_request_id" => id} when is_binary(id) -> {:request, id}
+        _params -> nil
+      end
+
+    notification_events(conn, herdr_consumer?(conn), scope)
   end
 
   @spec operator_events(Conn.t(), map()) :: Conn.t()
   def operator_events(conn, _params) do
-    notification_events(conn, local_operator_browser?(conn))
+    notification_events(conn, local_operator_browser?(conn), nil)
   end
 
-  defp notification_events(conn, authorized?) do
+  defp notification_events(conn, authorized?, scope) do
     with true <- authorized?,
          {:ok, subscription} <-
            Runtime.with_dashboard_repo(&subscribe_dashboard(&1, [detail: :revision], true), migrate?: false) do
       try do
-        conn |> open_dashboard_stream() |> stream_events_after_ready(subscription)
+        conn |> open_dashboard_stream() |> stream_events_after_ready(subscription, scope)
       after
+        if scope, do: ReviewRefresh.unsubscribe()
         unsubscribe_dashboard(subscription)
       end
     else
@@ -325,11 +345,21 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     end
   end
 
-  defp stream_events_after_ready(conn, subscription) do
+  defp stream_events_after_ready(conn, subscription, scope) do
     case Conn.chunk(conn, "event: ready\ndata: {}\n\n") do
-      {:ok, conn} -> stream_dashboard_events(conn, subscription, :notification)
-      {:error, _reason} -> conn
+      {:ok, conn} ->
+        :ok = subscribe_review_stream(scope)
+        stream_dashboard_events(conn, subscription, :notification, scope)
+
+      {:error, _reason} ->
+        conn
     end
+  end
+
+  defp subscribe_review_stream(nil), do: :ok
+
+  defp subscribe_review_stream(scope) do
+    with :ok <- ReviewRefresh.subscribe(), do: ReviewRefresh.demand(scope)
   end
 
   @spec operator_config(Conn.t(), map()) :: Conn.t()
@@ -730,16 +760,19 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp maybe_broadcast_dashboard_change(:work_package_read), do: :ok
   defp maybe_broadcast_dashboard_change(_action), do: DashboardPubSub.broadcast_changed()
 
-  defp stream_dashboard_events(conn, {_cache, ref, monitor} = subscription, mode) do
+  defp stream_dashboard_events(conn, {_cache, ref, monitor} = subscription, mode, scope) do
     receive do
       {:dashboard_changed, ^ref, version} ->
-        stream_dashboard_version(conn, subscription, mode, version)
+        stream_dashboard_version(conn, subscription, mode, scope, version)
 
       :operator_dashboard_changed when is_nil(ref) or mode == :notification ->
-        stream_dashboard_version(conn, subscription, mode, System.unique_integer([:positive, :monotonic]))
+        stream_dashboard_version(conn, subscription, mode, scope, System.unique_integer([:positive, :monotonic]))
 
       :operator_delivery_completed ->
-        stream_dashboard_version(conn, subscription, mode, System.unique_integer([:positive, :monotonic]))
+        stream_dashboard_version(conn, subscription, mode, scope, System.unique_integer([:positive, :monotonic]))
+
+      :review_refresh_due when not is_nil(scope) ->
+        stream_review_heartbeat(conn, subscription, mode, scope)
 
       {:dashboard_source_closed, ^ref} ->
         conn
@@ -758,7 +791,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     after
       30_000 ->
         case Conn.chunk(conn, ": keep-alive\n\n") do
-          {:ok, conn} -> stream_dashboard_events(conn, subscription, mode)
+          {:ok, conn} -> stream_dashboard_events(conn, subscription, mode, scope)
           {:error, _reason} -> conn
         end
     end
@@ -769,9 +802,20 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     conn
   end
 
-  defp stream_dashboard_version(conn, subscription, mode, version) do
+  defp stream_review_heartbeat(conn, subscription, mode, scope) do
+    case Conn.chunk(conn, ": keep-alive\n\n") do
+      {:ok, conn} ->
+        :ok = ReviewRefresh.demand(scope)
+        stream_dashboard_events(conn, subscription, mode, scope)
+
+      {:error, _reason} ->
+        conn
+    end
+  end
+
+  defp stream_dashboard_version(conn, subscription, mode, scope, version) do
     case Conn.chunk(conn, dashboard_event(mode, version)) do
-      {:ok, conn} -> stream_dashboard_events(conn, subscription, mode)
+      {:ok, conn} -> stream_dashboard_events(conn, subscription, mode, scope)
       {:error, _reason} -> conn
     end
   end

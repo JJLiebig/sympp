@@ -206,8 +206,9 @@ and agent text uses TOON.
 The factory's Observer watches dispatched packages: worker terminals through the
 factory host's herdr-core, PRs, CI and merges through one batched GitHub GraphQL
 read per minute, and the Review Suite cycle by its review id on the worker's
-machine. Explicit Review Suite successor links are followed to the latest cycle
-on the same branch, preserving the dispatch id and predecessor outcomes.
+machine. Review progress for a branch with no PR is read when a board or detail
+reader needs it. Explicit Review Suite successor links are followed to the latest
+cycle on the same branch, preserving the dispatch id and predecessor outcomes.
 It qualifies, unqualifies and records merges itself; `sync_pr` attaches
 PRs it can't find. A review counts while Review Suite accepts it for the PR's
 current head, including after a merge or rebase that leaves the PR's own patch

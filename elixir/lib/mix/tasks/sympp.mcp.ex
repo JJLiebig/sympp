@@ -5,6 +5,7 @@ defmodule Mix.Tasks.Sympp.Mcp do
 
   alias Ecto.Adapters.SQL
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, Repository, Stdio}
+  alias SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh
   alias SymphonyElixir.SymphonyPlusPlus.Repo
 
   @shortdoc "Starts the sympp MCP server"
@@ -33,7 +34,7 @@ defmodule Mix.Tasks.Sympp.Mcp do
         {:ok, _repo_ownership} ->
           case Repository.ensure_migrated(Repo) do
             :ok ->
-              Stdio.run(config, [])
+              ReviewRefresh.with_stdio_session(fn -> Stdio.run(config, []) end)
 
             {:error, reason} ->
               Mix.raise("Failed to start sympp MCP server: #{inspect(reason)}")
