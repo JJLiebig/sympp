@@ -34,7 +34,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Stacking do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @compare_concurrency 4
-  # Leave time for the Observer's 15-second terminal pass during a REST outage.
+  # Bound extra qualification delay during a REST outage.
   @compare_budget_ms 12_000
   @task_supervisor SymphonyElixir.TaskSupervisor
 
@@ -51,6 +51,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Stacking do
         }
   @type result :: {:ok, [String.t()]} | :unknown
   @type pair_result :: {boolean() | :unknown, boolean() | :unknown}
+  @type observations :: %{String.t() => [String.t()] | :unknown}
 
   @doc """
   The packages `own`'s PR is stacked on, or `:unknown`. `refresh` re-reads
@@ -68,12 +69,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Stacking do
     end
   end
 
-  @doc "Checks the Observer's fresh views within one budget for network comparisons."
-  @spec observed([view()]) :: %{String.t() => [String.t()] | :unknown}
-  def observed(views) do
+  @doc "Returns settled observations, pending packages, and their network check."
+  @spec prepare([view()], non_neg_integer()) :: {observations(), MapSet.t(String.t()), nil | (-> observations())}
+  def prepare(views, round) do
     open = Enum.filter(views, &match?(%{state: "open"}, &1))
-    results = open |> ancestry_pairs() |> compare_during_sweep()
+    {cached, pending} = open |> ancestry_pairs() |> cached_pairs()
+    waiting = for {left, right} <- pending, id <- [left.work_package_id, right.work_package_id], into: MapSet.new(), do: id
+    {deferred, ready} = Enum.split_with(open, &MapSet.member?(waiting, &1.work_package_id))
 
+    finish =
+      if pending != [] do
+        fn ->
+          results = pending |> rotate(round) |> compare_during_sweep()
+          observations(deferred, views, Map.merge(cached, results))
+        end
+      end
+
+    {observations(ready, views, cached), waiting, finish}
+  end
+
+  defp observations(open, views, results) do
     Map.new(open, fn own ->
       outcomes = for other <- siblings(own, views), do: {other.work_package_id, observed_pair(own, other, results)}
       {own.work_package_id, verdict(outcomes)}
@@ -92,6 +107,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Stacking do
         do: {left, right}
   end
 
+  defp cached_pairs(pairs) do
+    {cached, pending} =
+      Enum.reduce(pairs, {%{}, []}, fn views, {cached, pending} ->
+        case read_pair(views, :cached_only) do
+          {_left, _right, {:unknown, :unknown}} -> {cached, [views | pending]}
+          result -> {put_pair(cached, result), pending}
+        end
+      end)
+
+    {cached, Enum.reverse(pending)}
+  end
+
+  # A timeout can cut off a batch. Start at a different pair on the next sweep.
+  defp rotate(pairs, round) do
+    {first, rest} = Enum.split(pairs, rem(round * @compare_concurrency, length(pairs)))
+    rest ++ first
+  end
+
   defp compare_during_sweep([]), do: %{}
 
   defp compare_during_sweep(pairs) do
@@ -101,7 +134,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Stacking do
     task =
       Task.Supervisor.async_nolink(@task_supervisor, fn ->
         @task_supervisor
-        |> Task.Supervisor.async_stream_nolink(pairs, &read_pair/1,
+        |> Task.Supervisor.async_stream_nolink(pairs, &read_pair(&1, :fetch),
           max_concurrency: @compare_concurrency,
           ordered: false,
           on_timeout: :kill_task,
@@ -117,17 +150,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Stacking do
     completed_pairs(ref, %{})
   end
 
-  defp read_pair({left, right}) do
-    {left.work_package_id, right.work_package_id, pair(left, right, %{}, :fetch)}
+  defp read_pair({left, right}, mode) do
+    {left.work_package_id, right.work_package_id, pair(left, right, %{}, mode)}
   end
 
   defp completed_pairs(ref, results) do
     receive do
-      {^ref, {left, right, {left_stacked, right_stacked}}} ->
-        completed_pairs(ref, results |> Map.put({left, right}, left_stacked) |> Map.put({right, left}, right_stacked))
+      {^ref, result} -> completed_pairs(ref, put_pair(results, result))
     after
       0 -> results
     end
+  end
+
+  defp put_pair(results, {left, right, {left_stacked, right_stacked}}) do
+    results |> Map.put({left, right}, left_stacked) |> Map.put({right, left}, right_stacked)
   end
 
   defp observed_pair(own, other, results) do
@@ -229,7 +265,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Stacking do
     end
   end
 
-  defp stacked_direction(%{head_sha: head} = left, %{head_sha: head} = right, base, base, _shared, _compare), do: by_age(left, right)
+  defp stacked_direction(%{head_sha: head} = left, %{head_sha: head} = right, left_base, right_base, _shared, compare) do
+    left_retained = retains_unmerged?(compare, head, left_base, right_base)
+    right_retained = retains_unmerged?(compare, head, right_base, left_base)
+
+    case {left_retained, right_retained} do
+      {true, true} -> by_age(left, right)
+      {true, false} -> {false, true}
+      {false, true} -> {true, false}
+      _unresolved -> {:unknown, :unknown}
+    end
+  end
 
   defp stacked_direction(%{head_sha: head} = left, %{head_sha: other} = right, left_base, right_base, head, compare) when head != other do
     containing_head(left, right, left_base, right_base, compare)

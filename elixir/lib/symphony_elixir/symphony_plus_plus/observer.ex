@@ -70,7 +70,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     Api.create_table()
     Process.send_after(self(), :terminals, 1_000)
     Process.send_after(self(), :sweep, 5_000)
-    {:ok, %{repo: Keyword.fetch!(opts, :repo)}}
+    {:ok, %{repo: Keyword.fetch!(opts, :repo), pending: nil, sweep_round: 0}}
   end
 
   @impl true
@@ -80,11 +80,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     {:noreply, state}
   end
 
-  def handle_info(:sweep, state) do
-    safely(fn -> sweep(state.repo) end)
+  def handle_info(:sweep, %{pending: nil} = state) do
+    case safely(fn -> prepare_sweep(state.repo, [], state.sweep_round) end, nil) do
+      nil ->
+        finish_sweep(state)
+
+      {read, publish} ->
+        # Keep terminal observations on their own timer during slow compares.
+        task = Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, read)
+        {:noreply, %{state | pending: {task.ref, publish}}}
+    end
+  end
+
+  def handle_info(:sweep, state), do: {:noreply, state}
+
+  def handle_info({ref, stacks}, %{pending: {ref, publish}} = state) do
+    Process.demonitor(ref, [:flush])
+    safely(fn -> publish.(stacks) end)
+    finish_sweep(state)
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{pending: {ref, publish}} = state) do
+    safely(fn -> publish.(%{}) end)
+    finish_sweep(state)
+  end
+
+  defp finish_sweep(state) do
     ReviewRefresh.advance()
     Process.send_after(self(), :sweep, @sweep_interval_ms)
-    {:noreply, state}
+    {:noreply, %{state | pending: nil, sweep_round: state.sweep_round + 1}}
   end
 
   @doc "Selects the packages in scope whose branches have no PR."
@@ -180,6 +204,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   """
   @spec sweep(module(), keyword()) :: :ok
   def sweep(repo, opts \\ []) do
+    case prepare_sweep(repo, opts, 0) do
+      nil -> :ok
+      {read, publish} -> publish.(read.())
+    end
+  end
+
+  defp prepare_sweep(repo, opts, round) do
     watched = watched_packages(repo)
     observations = observations(repo, Enum.map(watched, & &1.package.id))
     watched = Enum.map(watched, &Map.put(&1, :observation, Map.get(observations, &1.package.id)))
@@ -198,15 +229,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
     to_read = for %{package: package} = item <- watched, reviewed?(package) and not pre_pr?(item), do: package
     reviews = review_results(repo, to_read, opts)
-    stacks = watched |> Enum.flat_map(&view/1) |> Stacking.observed()
+    apply_cards = fn -> guarded(fn -> Cards.apply(repo, cards, results, opts) end, :ok) end
+    plan_observations(repo, watched, reviews, round, apply_cards)
+  end
 
-    {result, _changed?} =
-      DashboardPubSub.coalesce_changed(fn ->
-        Enum.each(watched, &observe_package(repo, &1, package_review(&1.package, reviews), stacks))
-        guarded(fn -> Cards.apply(repo, cards, results, opts) end, :ok)
-      end)
+  defp plan_observations(repo, watched, reviews, round, apply_cards) do
+    {settled, waiting, read} = watched |> Enum.flat_map(&view/1) |> Stacking.prepare(round)
+    {deferred, ready} = Enum.split_with(watched, &MapSet.member?(waiting, &1.package.id))
 
-    result
+    DashboardPubSub.coalesce_changed(fn ->
+      observe_packages(repo, ready, reviews, settled)
+      apply_cards.()
+    end)
+
+    if read != nil do
+      fallback = Map.new(waiting, &{&1, :unknown})
+
+      {read,
+       fn stacks ->
+         {result, _changed?} = DashboardPubSub.coalesce_changed(fn -> observe_packages(repo, deferred, reviews, Map.merge(fallback, stacks)) end)
+         result
+       end}
+    end
+  end
+
+  defp observe_packages(repo, packages, reviews, stacks) do
+    Enum.each(packages, &observe_package(repo, &1, package_review(&1.package, reviews), stacks))
   end
 
   # Only successful branch discovery can establish absence. A missing result

@@ -227,6 +227,12 @@ test('independent PRs qualify alongside history imports whose commit lists are t
     open(number, chain(number, sizes[index], base));
   }
 
+  const otherArchitect = await factory.client();
+  const otherRequest = await otherArchitect.request('Independent repository', 'beta', 'example/client');
+  const [unrelated] = await otherArchitect.addPackages([contract('Independent PR', { branch_pattern: 'feature/delivery-530' })]);
+  await otherArchitect.call('dispatch_work_package', { work_package_id: unrelated });
+  provider.set(530, pr(530, head('a'), { url: 'https://github.com/example/client/pull/530' }));
+
   // Hold the first pair open while the second starts. The watcher must make
   // progress on comparisons even while an earlier provider request is waiting.
   const branches = packages.map((wp, index) => ({ wp, head: oid(numbers[index], sizes[index] - 1), size: sizes[index] }))
@@ -239,6 +245,7 @@ test('independent PRs qualify alongside history imports whose commit lists are t
   const cold = factory.tick('sweep');
   try {
     await Promise.all([first.started, second.started]);
+    expect((await row(otherArchitect, otherRequest, unrelated)).raw_status).toBe('ready');
   } finally {
     first.release();
     second.release();
@@ -359,4 +366,15 @@ test('a long PR on an older target can be stacked on a newer PR targeting anothe
   expect((await row(main, mainRequest, feature)).raw_status).toBe('ready');
   expect((await row(release, releaseRequest, backport)).work_package.stacked_on).toEqual([feature]);
   expect((await sync(release, backport, 581, backportHead)).pr_sync.next_action).toBe(`remove ${feature}'s unmerged commits, or wait for its PR to merge`);
+
+  // Both PRs now submit the same long head. The newer base absorbs one of the
+  // commits, so the backport still has a strict superset of unmerged work.
+  provider.set(582, pr(582, backportHead, { baseRefOid: beta, commits: commits.slice(1).map((oid) => ({ oid })) }));
+  await factory.tick('sweep');
+  const sameHead = await row(main, mainRequest, feature);
+  expect(sameHead.raw_status).toBe('ready');
+  expect(sameHead.work_package.observation_stale).toEqual([]);
+  const held = (await sync(release, backport, 581, backportHead)).pr_sync;
+  expect(held.readiness_reasons).toEqual(['stacked_on_unmerged_work']);
+  expect(held.next_action).toBe(`remove ${feature}'s unmerged commits, or wait for its PR to merge`);
 });
