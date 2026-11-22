@@ -9,8 +9,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
 
   @doc """
   Checks a call's arguments against the tool's one input schema: unknown keys
-  are refused (sync_pr and dispatch_work_package drop them), and required
-  arguments must be present with the right type.
+  are refused unless the input schema allows them, in which case they are
+  dropped. Required arguments must be present with the right type.
   """
   @spec tool_arguments(map(), String.t()) :: tool_call_result()
   def tool_arguments(params, name) do
@@ -183,7 +183,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
   defp validate_arguments(name, arguments) do
     schema = ToolCatalog.input_schema(name)
     allowed = schema |> Map.get("properties", %{}) |> Map.keys() |> MapSet.new()
-    arguments = if name in ["sync_pr", "dispatch_work_package"], do: Map.take(arguments, MapSet.to_list(allowed)), else: arguments
+    arguments = if schema["additionalProperties"], do: Map.take(arguments, MapSet.to_list(allowed)), else: arguments
     unexpected = arguments |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
 
     if unexpected != [] do

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { appendFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 import { contract, type Client } from './factory.js';
 
@@ -35,6 +35,16 @@ export async function repository(root: string, name: string) {
   await git(root, checkout, 'remote', 'add', 'origin', origin);
   await git(root, checkout, 'push', '-u', 'origin', 'beta');
   return { origin, checkout };
+}
+
+// Keep a normal GitHub origin for scope checks and serve fetches from the
+// disposable bare repository through Git's SSH transport.
+export async function githubOrigin(root: string, repo: { origin: string; checkout: string }, slug: string) {
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  const ssh = join(root, `${basename(repo.origin)}-ssh`);
+  await writeFile(ssh, `#!/bin/sh\nexec git-upload-pack ${quote(repo.origin)}\n`, { mode: 0o700 });
+  await git(root, repo.checkout, 'config', 'core.sshCommand', quote(ssh));
+  await git(root, repo.checkout, 'remote', 'set-url', 'origin', `git@github.com:${slug}.git`);
 }
 
 // A checkout of github.com/example/service on `branch`, with no fetchable
