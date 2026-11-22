@@ -203,7 +203,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
 
   defp project(surface, fun) do
     Logger.debug("board_build surface=#{surface}")
-    encode(fun.())
+    encode(fun.(), surface)
   end
 
   @impl true
@@ -525,12 +525,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     end
   end
 
-  defp encode({:ok, payload}) do
-    body = Jason.encode!(payload)
-    # generated_at describes the snapshot, not a board change.
-    digest = :crypto.hash(:sha256, Jason.encode!(Map.delete(payload, :generated_at))) |> Base.encode16(case: :lower)
-    {:ok, body, "\"#{digest}\""}
+  defp encode({:ok, payload}, surface) do
+    # Snapshot metadata stays outside the digest. Herdr's fetch only exposes the body.
+    content = payload |> Map.drop([:generated_at, :etag]) |> Jason.encode!()
+    digest = :crypto.hash(:sha256, content) |> Base.encode16(case: :lower)
+    etag = "\"#{digest}\""
+    body = if surface == :herdr, do: Map.put(payload, :etag, etag), else: payload
+    {:ok, Jason.encode!(body), etag}
   end
 
-  defp encode(error), do: error
+  defp encode(error, _surface), do: error
 end

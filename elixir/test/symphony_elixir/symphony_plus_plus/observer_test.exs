@@ -34,6 +34,41 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   end
 
   describe "GitHub" do
+    test "the sweep uses each package's newest valid attachment in chronological order", %{repo: repo} do
+      legacy = package!(repo, "WP-OBS-LEGACY-ATTACHMENT", status: "ready")
+      repaired = package!(repo, "WP-OBS-REPAIRED-ATTACHMENT")
+
+      url_only = Map.drop(pr_event_payload(910, "head-a"), ["repository", "number"])
+      repair = Map.merge(pr_event_payload(913, "head-r"), %{"source_tool" => "sync_pr", "attachment_repair" => true})
+      plain_sync = Map.merge(pr_event_payload(914, "head-s"), %{"source_tool" => "sync_pr", "attachment_repair" => 1})
+      malformed = Map.put(pr_event_payload(912, "head-invalid"), "number", 0)
+
+      for {package, created_at, payload} <- [
+            {legacy, ~U[2026-11-09 10:00:02.000000Z], url_only},
+            {legacy, ~U[2026-11-09 10:00:01.000000Z], pr_event_payload(911, "head-older")},
+            {legacy, ~U[2026-11-09 10:00:03.000000Z], malformed},
+            {repaired, ~U[2026-11-09 10:00:01.000000Z], Map.delete(repair, "url")},
+            {repaired, ~U[2026-11-09 10:00:02.000000Z], plain_sync}
+          ] do
+        assert {:ok, _event} =
+                 PlanningRepository.append_progress_event(repo, %{
+                   work_package_id: package.id,
+                   summary: "Historical PR evidence",
+                   created_at: created_at,
+                   payload: payload
+                 })
+      end
+
+      sweep(repo, %{
+        {:pr, "nextide", "repo", 910} => {:ok, pr(910, "head-b", %{"ci" => %{"status" => "unknown"}})},
+        {:pr, "nextide", "repo", 913} => {:ok, pr(913, "head-r")}
+      })
+
+      assert repo.get!(Observation, legacy.id).pr["head_sha"] == "head-b"
+      assert repo.get!(WorkPackage, legacy.id).status == "dispatched"
+      assert repo.get!(WorkPackage, repaired.id).status == "ready"
+    end
+
     test "equivalent sweeps leave cached boards alone and changed review evidence appears on the live boards", %{
       repo: repo,
       database_path: database_path
