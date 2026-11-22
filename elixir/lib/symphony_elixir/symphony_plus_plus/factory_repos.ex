@@ -137,7 +137,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
   def checkout_key(checkout) do
     # Git treats a slug-shaped origin as a relative filesystem path.
     with origin when is_binary(origin) <- RepoIdentity.local_git_origin_remote(checkout),
-         {:ok, remote, _name} <- network_remote(origin),
+         {:ok, remote, _name} <- network_remote(origin, :checkout),
          key = identity(remote),
          true <- repository_key?(key) do
       key
@@ -282,9 +282,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
 
   defp remote(_), do: {:error, :invalid_repo_remote}
 
-  defp network_remote(value) do
+  defp network_remote(value, source \\ :scope) do
     {uri, path} = parsed_remote(value)
     name = Path.basename(path || "") |> String.replace_suffix(".git", "")
+    uri = if source == :checkout and uri.scheme in ["http", "https"], do: %{uri | userinfo: nil}, else: uri
 
     if usable_authority?(uri) and name not in ["", ".", ".."] and not String.contains?(value, <<0>>) and
          not Regex.match?(~r/\A[A-Za-z]:[\\\/]/, value) do

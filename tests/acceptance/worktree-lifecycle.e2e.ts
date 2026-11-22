@@ -138,7 +138,10 @@ for (const mode of ['factory', 'local']) {
     expect(replay.replay).toBe(true);
     expect(replay.worktree).toMatchObject({ path: original.worktree.path, base_branch: 'beta' });
     expect(await readFile(replay.assignment_file, 'utf8')).toContain('example/client');
+
+    await git(root, checkout, 'config', 'protocol.https.allow', 'never');
+    await git(root, checkout, 'remote', 'set-url', 'origin', 'https://fixture-user:fixture-password@github.com/example/client.git');
     const retry = await architect.call('dispatch_work_package', args);
-    expect(retry.worktree.path).toBe(replay.worktree.path);
+    expect(retry.worktree).toMatchObject({ path: replay.worktree.path });
   });
 }
