@@ -313,7 +313,13 @@ test('ordinary PR handoff observes pending qualification then reconciles an exac
   const completion = async () => (await architect.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.completed_at;
   expect(await completion()).toBeNull();
 
+  // GitHub CLI includes the new path of each rename.
+  const fileListing = {
+    changedFiles: 70,
+    files: Array.from({ length: 70 }, (_, i) => ({ path: `src/service-${i}.ts`, changeType: i < 45 ? 'RENAMED' : 'MODIFIED' })),
+  };
   provider.set(101, pr(101, head('a'), {
+    ...fileListing,
     statusCheckRollup: [{ status: 'IN_PROGRESS', conclusion: null }], reviewDecision: 'REVIEW_REQUIRED', mergeStateStatus: 'BLOCKED',
   }));
   const tools = await architect.rpc('tools/list', {});
@@ -331,9 +337,12 @@ test('ordinary PR handoff observes pending qualification then reconciles an exac
   expect(pending.raw_status).toBe('dispatched');
   expect(pending.merge_eligibility.next_action).toBe('wait');
 
-  provider.set(101, pr(101, head('a')));
+  provider.set(101, pr(101, head('a'), fileListing));
   await architect.call('sync_pr', { work_package_id: wp, number: 101, repository: 'example/service' });
   const qualified = await detail();
+  expect(qualified.metadata.pr).toMatchObject({ changed_files_count: 70, changed_files_available: true });
+  expect(qualified.metadata.pr.changed_files).toHaveLength(70);
+  expect(qualified.metadata.pr.changed_files[0]).toEqual({ path: 'src/service-0.ts' });
   expect(qualified.metadata.pr.check_summary.status).toBe('passing');
   expect(qualified.metadata.pr.review_state.status).toBe('approved');
   expect(qualified.metadata.pr.head_sha).toBe(head('a'));
@@ -349,7 +358,7 @@ test('ordinary PR handoff observes pending qualification then reconciles an exac
   expect(await completion()).toBeNull();
 
   const mergeTime = new Date().toISOString();
-  provider.set(101, pr(101, head('a'), { state: 'MERGED', mergedAt: mergeTime, mergeCommit: { oid: head('f') } }));
+  provider.set(101, pr(101, head('a'), { ...fileListing, state: 'MERGED', mergedAt: mergeTime, mergeCommit: { oid: head('f') } }));
   await architect.call('sync_pr', { work_package_id: wp, url: prUrl(101) });
   const delivered = await row(architect, request, wp);
   expect(delivered.raw_status).toBe('ended');
