@@ -6,6 +6,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
+    ArchivedInputs,
     OperationalProjection,
     Sanitizer,
     WorkRequestCards
@@ -53,9 +54,11 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   def operator_dashboard_payload(repo, repo_identity_catalog) do
     operator_config = OperatorConfig.load()
 
-    with {:ok, context} <- operator_dashboard_context(repo, repo_identity_catalog),
+    with {:ok, settings} <- OperatorSettingsRepository.get(repo),
+         {:ok, active_ids} <- active_work_package_ids(repo),
          {:ok, work_requests} <- WorkRequestRepository.list(repo) do
-      priority_dashboard_payload(repo, Map.put(context, :operator_config, operator_config), work_requests)
+      context = execution_context(repo, repo_identity_catalog, settings, active_ids, operator_config)
+      priority_dashboard_payload(repo, context, work_requests)
     end
   end
 
@@ -86,9 +89,10 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     operator_config = OperatorConfig.load()
 
     with {:ok, work_requests} <- WorkRequestRepository.list(repo),
-         {:ok, context} <- operator_execution_context(repo, work_requests),
-         {:ok, projection_context} <- operator_projection_context(repo, work_requests, context) do
-      execution_dashboard_payload(repo, Map.put(context, :operator_config, operator_config), work_requests, projection_context)
+         {:ok, inputs} <- Dashboard.operator_projection_inputs(repo, work_requests),
+         {:ok, context} <- operator_execution_context(repo, work_requests, inputs, operator_config),
+         {:ok, projection_context} <- operator_projection_context(repo, work_requests, inputs) do
+      execution_dashboard_payload(repo, context, work_requests, projection_context)
     end
   end
 
@@ -103,15 +107,14 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     with {:ok, execution_signals} <-
            Dashboard.operator_work_package_signals(repo, context.active_work_request_work_package_ids, opts),
          {:ok, work_request_details} <-
-           operator_work_request_board_details(repo, work_requests, context.repo_identity_catalog, board_detail_opts),
-         {:ok, settings} <- OperatorSettingsRepository.get(repo) do
+           operator_work_request_board_details(repo, work_requests, context.repo_identity_catalog, board_detail_opts) do
       {:ok,
        %{
          generated_at: DateTime.utc_now(:microsecond) |> DateTime.to_iso8601(),
          active_blocking_edges: execution_signals.active_blocking_edges,
          work_packages: execution_signals.work_packages,
          work_request_details: operator_board_labels(work_request_details, context, projection_context),
-         cards: Cards.list(repo, settings.card_retention_days),
+         cards: Cards.list(repo, context.settings_record.card_retention_days),
          deferred: %{dashboard_sections: false}
        }}
     end
@@ -144,9 +147,9 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
 
   defp hydrated_dashboard_payload(repo, operator_config) do
     with {:ok, work_requests} <- WorkRequestRepository.list(repo),
-         {:ok, context} <- operator_execution_context(repo, work_requests),
-         context = Map.put(context, :operator_config, operator_config),
-         {:ok, projection_context} <- operator_projection_context(repo, work_requests, context),
+         {:ok, inputs} <- Dashboard.operator_projection_inputs(repo, work_requests),
+         {:ok, context} <- operator_execution_context(repo, work_requests, inputs, operator_config),
+         {:ok, projection_context} <- operator_projection_context(repo, work_requests, inputs),
          {:ok, base} <- priority_dashboard_payload(repo, context, work_requests, projection_context),
          {:ok, active} <- execution_dashboard_payload(repo, context, work_requests, projection_context) do
       {:ok, Map.merge(base, active) |> Map.put(:runtime, %{offline: OfflineSandbox.enabled?()})}
@@ -156,21 +159,23 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   @spec herdr_dashboard_payload(module()) :: {:ok, map()} | {:error, term()}
   def herdr_dashboard_payload(repo) do
     operator_config = OperatorConfig.load()
+    cache_archive? = not repo.in_transaction?()
 
-    case repo.transaction(fn -> native_dashboard_payload(repo, operator_config) end) do
+    case repo.transaction(fn -> native_dashboard_payload(repo, operator_config, cache_archive?) end) do
       {:ok, {:ok, payload}} -> {:ok, payload |> DeploymentObservation.enrich(operator_config, async: true) |> native_projection()}
       {:ok, result} -> result
       {:error, reason} -> {:error, reason}
     end
   end
 
-  # Archived WorkRequests are included (phase `archived`) so the panel can
-  # show them and offer Restore.
-  defp native_dashboard_payload(repo, operator_config) do
-    with {:ok, work_requests} <- WorkRequestRepository.list(repo, %{include_archived: true}),
-         {:ok, context} <- operator_execution_context(repo, work_requests),
-         context = Map.put(context, :operator_config, operator_config),
-         {:ok, projection_context} <- operator_projection_context(repo, work_requests, context),
+  defp native_dashboard_payload(repo, operator_config, cache_archive?) do
+    with {:ok, live_requests} <- WorkRequestRepository.list(repo),
+         {:ok, live_inputs} <- Dashboard.operator_projection_inputs(repo, live_requests),
+         {:ok, archive} <- ArchivedInputs.load(repo, cache_archive?),
+         work_requests = WorkRequestCards.ordered_work_requests(live_requests ++ archive.work_requests),
+         {:ok, context} <- operator_execution_context(repo, work_requests, live_inputs, operator_config),
+         inputs = merge_archived_inputs(live_inputs, archive.projection_inputs),
+         {:ok, projection_context} <- operator_projection_context(repo, work_requests, inputs),
          opts = dashboard_opts(context, projection_context),
          opts =
            Keyword.merge(opts,
@@ -192,10 +197,17 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     end
   end
 
+  defp merge_archived_inputs(live, archive) do
+    Map.merge(live, archive, fn
+      :package_records, live, archive -> Map.merge(live, archive, fn _kind, rows, archived_rows -> Map.merge(rows, archived_rows) end)
+      _kind, live, archive -> Map.merge(live, archive)
+    end)
+  end
+
   # Native clients only use the run identity from the package-card projection.
   # Reuse the loaded run context instead of projecting every card a second time.
   defp native_active_runs(context, projection_context) do
-    visible = MapSet.difference(MapSet.new(context.active_work_request_work_package_ids), context.hidden_work_package_ids)
+    visible = MapSet.new(context.active_work_request_work_package_ids)
 
     projection_context.work_packages
     |> Enum.filter(&MapSet.member?(visible, &1.id))
@@ -350,71 +362,35 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     end
   end
 
-  defp operator_projection_context(repo, work_requests, context) do
-    with {:ok, projection} <- Dashboard.operator_projection_context(repo, work_requests, context.work_packages) do
+  defp operator_projection_context(repo, work_requests, inputs) do
+    with {:ok, projection} <- Dashboard.operator_projection_context(repo, work_requests, inputs) do
       {:ok, Map.put(projection, :worked_on, Ownership.owners(repo, Enum.map(work_requests, & &1.id)))}
     end
   end
 
-  defp operator_dashboard_context(repo, repo_identity_catalog) do
+  defp operator_execution_context(repo, work_requests, inputs, operator_config) do
     with {:ok, settings} <- OperatorSettingsRepository.get(repo),
-         {:ok, work_request_work_package_id_sets} <- work_request_work_package_id_sets(repo, false) do
-      {:ok, operator_dashboard_context_map(repo, repo_identity_catalog, settings, work_request_work_package_id_sets)}
+         {:ok, repo_identity_catalog} <- Dashboard.local_operator_repo_identity_catalog(repo, work_requests) do
+      active_ids =
+        inputs.work_packages_by_request
+        |> Map.values()
+        |> Enum.flat_map(fn packages -> Enum.map(packages, & &1.id) end)
+        |> Enum.sort()
+
+      {:ok, execution_context(repo, repo_identity_catalog, settings, active_ids, operator_config)}
     end
   end
 
-  defp operator_dashboard_context(repo, true, work_requests) do
-    with {:ok, settings} <- OperatorSettingsRepository.get(repo),
-         {:ok, work_request_work_package_id_sets} <- work_request_work_package_id_sets(repo, true),
-         {:ok, repo_identity_catalog} <-
-           execution_repo_identity_catalog(repo, work_request_work_package_id_sets, work_requests) do
-      {:ok, operator_dashboard_context_map(repo, repo_identity_catalog, settings, work_request_work_package_id_sets)}
-    end
-  end
-
-  defp execution_repo_identity_catalog(repo, work_request_work_package_id_sets, work_requests) do
-    Dashboard.local_operator_repo_identity_catalog(
-      repo,
-      work_request_work_package_id_sets.work_packages,
-      work_requests
-    )
-  end
-
-  defp operator_dashboard_context_map(repo, repo_identity_catalog, settings, work_request_work_package_id_sets) do
-    context = %{
+  defp execution_context(repo, repo_identity_catalog, settings, active_ids, operator_config) do
+    %{
       repo: repo,
       repo_identity_catalog: repo_identity_catalog,
       settings_record: settings,
       settings: operator_settings_payload(settings),
-      active_work_request_work_package_ids: work_request_work_package_id_sets.active |> MapSet.to_list() |> Enum.sort(),
-      archived_work_request_work_package_ids: work_request_work_package_id_sets.archived_only
+      active_work_request_work_package_ids: active_ids,
+      operator_config: operator_config
     }
-
-    maybe_put_work_packages(context, work_request_work_package_id_sets)
   end
-
-  defp operator_execution_context(repo, work_requests) do
-    with {:ok, context} <- operator_dashboard_context(repo, true, work_requests),
-         {:ok, expired_unwork_request_work_package_ids} <-
-           expired_unwork_request_work_package_ids_for_local_operator(
-             repo,
-             context.settings_record,
-             MapSet.new(context.active_work_request_work_package_ids)
-           ) do
-      hidden_work_package_ids =
-        context.settings_record
-        |> effective_hidden_work_package_ids(MapSet.new(context.active_work_request_work_package_ids))
-        |> MapSet.union(expired_unwork_request_work_package_ids)
-        |> MapSet.union(context.archived_work_request_work_package_ids)
-
-      {:ok, Map.put(context, :hidden_work_package_ids, hidden_work_package_ids)}
-    end
-  end
-
-  defp maybe_put_work_packages(context, %{work_packages: work_packages}),
-    do: Map.put(context, :work_packages, work_packages)
-
-  defp maybe_put_work_packages(context, _work_request_work_package_id_sets), do: context
 
   defp dashboard_opts(context, projection_context) do
     projection_opts =
@@ -423,23 +399,22 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
           work_packages: work_packages,
           work_package_contexts: work_package_contexts,
           product_trees_by_request: product_trees_by_request,
-          deliveries_by_slice_id: deliveries_by_slice_id
+          deliveries_by_slice_id: deliveries_by_slice_id,
+          lineage: lineage
         } ->
           [
             work_packages: work_packages,
             work_package_contexts: work_package_contexts,
             product_trees_by_request: product_trees_by_request,
-            deliveries_by_slice_id: deliveries_by_slice_id
+            deliveries_by_slice_id: deliveries_by_slice_id,
+            lineage: lineage
           ]
 
         _other ->
           []
       end
 
-    [
-      repo_identity_catalog: context.repo_identity_catalog,
-      hidden_work_package_ids: Map.get(context, :hidden_work_package_ids, MapSet.new())
-    ] ++ projection_opts
+    [repo_identity_catalog: context.repo_identity_catalog] ++ projection_opts
   end
 
   defp base_payload(context) do
@@ -451,98 +426,17 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     }
   end
 
-  defp effective_hidden_work_package_ids(%OperatorSettings{} = settings, work_request_work_package_ids) do
-    settings.hidden_work_package_ids
-    |> MapSet.new()
-    |> MapSet.difference(work_request_work_package_ids)
-  end
-
-  defp expired_unwork_request_work_package_ids_for_local_operator(repo, %OperatorSettings{} = settings, work_request_work_package_ids) do
-    cutoff = DateTime.add(DateTime.utc_now(:microsecond), -settings.work_request_archive_after_days * 24 * 60 * 60, :second)
-
-    WorkPackage
-    |> expired_terminal_work_package_query(cutoff)
-    |> repo.all()
-    |> MapSet.new()
-    |> MapSet.difference(work_request_work_package_ids)
-    |> then(&{:ok, &1})
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp expired_terminal_work_package_query(queryable, cutoff) do
-    from(work_package in queryable,
-      where: work_package.status == "ended",
-      where: is_nil(work_package.parent_id),
-      where: is_nil(work_package.phase_id),
-      where: is_nil(work_package.work_request_id),
-      where: work_package.updated_at <= ^cutoff,
-      select: work_package.id
-    )
-  end
-
-  defp work_request_work_package_id_sets(repo, include_work_packages?) do
-    {rows, work_packages} =
-      if include_work_packages? do
-        rows =
-          repo.all(
-            from(work_package in WorkPackage,
-              left_join: work_request in WorkRequest,
-              on: work_request.id == work_package.work_request_id,
-              order_by: [asc: work_package.inserted_at, asc: work_package.id],
-              select: {work_package, work_request.id, work_request.archived_at}
-            )
-          )
-
-        {rows, Enum.map(rows, &elem(&1, 0))}
-      else
-        rows =
-          repo.all(
-            from(work_package in WorkPackage,
-              left_join: work_request in WorkRequest,
-              on: work_request.id == work_package.work_request_id,
-              where: not is_nil(work_package.work_request_id),
-              select: {work_package.id, work_request.id, work_request.archived_at}
-            )
-          )
-
-        {rows, nil}
-      end
-
-    sets =
-      Enum.reduce(rows, %{active: MapSet.new(), archived: MapSet.new()}, fn
-        {%WorkPackage{}, nil, _archived_at}, sets ->
-          sets
-
-        {%WorkPackage{id: work_package_id}, _work_request_id, archived_at}, sets when is_nil(archived_at) ->
-          %{sets | active: MapSet.put(sets.active, work_package_id)}
-
-        {%WorkPackage{id: work_package_id}, _work_request_id, _archived_at}, sets ->
-          %{sets | archived: MapSet.put(sets.archived, work_package_id)}
-
-        {_work_package_id, nil, _archived_at}, sets ->
-          sets
-
-        {work_package_id, _work_request_id, nil}, sets ->
-          %{sets | active: MapSet.put(sets.active, work_package_id)}
-
-        {work_package_id, _work_request_id, _archived_at}, sets ->
-          %{sets | archived: MapSet.put(sets.archived, work_package_id)}
-      end)
-
-    result = %{
-      active: sets.active,
-      archived_only: MapSet.difference(sets.archived, sets.active)
-    }
-
-    result =
-      if is_nil(work_packages) do
-        result
-      else
-        Map.put(result, :work_packages, work_packages)
-      end
-
-    {:ok, result}
+  defp active_work_package_ids(repo) do
+    {:ok,
+     repo.all(
+       from(work_package in WorkPackage,
+         join: work_request in WorkRequest,
+         on: work_request.id == work_package.work_request_id,
+         where: is_nil(work_request.archived_at),
+         order_by: [asc: work_package.id],
+         select: work_package.id
+       )
+     )}
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end

@@ -100,10 +100,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase do
   @doc "Like `load/2`, with the WorkRequests' packages already read."
   @spec load(module(), [WorkRequest.t()], [WorkPackage.t()]) ::
           {:ok, %{optional(String.t()) => summary()}} | {:error, term()}
-  def load(repo, work_requests, work_packages) when is_atom(repo) and is_list(work_requests) and is_list(work_packages) do
+  def load(repo, work_requests, work_packages), do: load(repo, work_requests, work_packages, repo)
+
+  @spec load(module(), [WorkRequest.t()], [WorkPackage.t()], OperationalLineage.source()) ::
+          {:ok, %{optional(String.t()) => summary()}} | {:error, term()}
+  def load(repo, work_requests, work_packages, lineage) when is_atom(repo) and is_list(work_requests) and is_list(work_packages) do
     deliveries = deliveries(repo, Enum.map(work_packages, & &1.id))
 
-    with {:ok, successors} <- OperationalLineage.delivery_successors(repo, work_packages) do
+    with {:ok, successors} <- OperationalLineage.delivery_successors(lineage, work_packages) do
       packages_by_request = Enum.group_by(work_packages, & &1.work_request_id)
 
       {:ok,

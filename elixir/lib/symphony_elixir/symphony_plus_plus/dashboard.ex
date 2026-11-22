@@ -31,6 +31,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.BulkRepository, as: WorkRequestBulkRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
@@ -86,41 +87,42 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     end)
   end
 
-  @spec operator_projection_context(repo(), [WorkRequest.t()]) :: {:ok, map()} | {:error, dashboard_error()}
-  def operator_projection_context(repo, work_requests)
-      when is_atom(repo) and is_list(work_requests) do
-    with {:ok, work_packages} <- WorkPackageRepository.list(repo) do
-      operator_projection_context(repo, work_requests, work_packages)
-    end
-  end
-
-  @spec operator_projection_context(repo(), [WorkRequest.t()], [WorkPackage.t()]) ::
+  @spec operator_projection_inputs(repo(), [WorkRequest.t()]) ::
           {:ok, map()} | {:error, dashboard_error()}
-  def operator_projection_context(repo, work_requests, work_packages)
-      when is_atom(repo) and is_list(work_requests) and is_list(work_packages) do
+  def operator_projection_inputs(repo, work_requests) do
     safe_read(fn ->
-      work_request_ids = MapSet.new(work_requests, & &1.id)
+      work_request_ids = Enum.map(work_requests, & &1.id)
 
-      work_packages_by_request =
-        work_packages
-        |> Enum.filter(&MapSet.member?(work_request_ids, &1.work_request_id))
-        |> Enum.group_by(& &1.work_request_id)
-
-      linked_work_packages = all_work_packages(work_requests, work_packages_by_request)
-
-      with {:ok, work_package_contexts} <- work_package_work_package_contexts(repo, linked_work_packages),
-           {:ok, product_trees_by_request} <-
-             product_tree_contexts_for_work_requests(repo, MapSet.to_list(work_request_ids)),
-           {:ok, deliveries_by_slice_id} <-
-             DeliveryBoard.work_package_deliveries_by_id(repo, linked_work_packages) do
+      with {:ok, work_packages_by_request} <- WorkRequestBulkRepository.list_work_packages_many(repo, work_request_ids),
+           work_packages = all_work_packages(work_requests, work_packages_by_request),
+           {:ok, product_trees_by_request} <- product_tree_contexts_for_work_requests(repo, work_request_ids),
+           {:ok, deliveries_by_slice_id} <- DeliveryBoard.work_package_deliveries_by_id(repo, work_packages) do
         {:ok,
          %{
-           work_packages: work_packages,
            work_packages_by_request: work_packages_by_request,
-           work_package_contexts: work_package_contexts,
+           package_records: package_records(repo, Enum.map(work_packages, & &1.id)),
            product_trees_by_request: product_trees_by_request,
            deliveries_by_slice_id: deliveries_by_slice_id
          }}
+      end
+    end)
+  end
+
+  @spec operator_projection_context(repo(), [WorkRequest.t()], map()) :: {:ok, map()} | {:error, dashboard_error()}
+  def operator_projection_context(repo, work_requests, inputs) do
+    safe_read(fn ->
+      work_packages = all_work_packages(work_requests, inputs.work_packages_by_request)
+      lineage = OperationalLineage.lookup(repo, Enum.map(work_packages, & &1.id))
+
+      with {:ok, _lookup} <- lineage do
+        {:ok,
+         inputs
+         |> Map.delete(:package_records)
+         |> Map.merge(%{
+           work_packages: work_packages,
+           work_package_contexts: project_work_package_contexts(repo, work_packages, inputs.package_records, lineage),
+           lineage: lineage
+         })}
       end
     end)
   end
@@ -209,16 +211,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     end)
   end
 
-  @spec local_operator_repo_identity_catalog(repo(), [WorkPackage.t()], [WorkRequest.t()]) ::
+  @spec local_operator_repo_identity_catalog(repo(), [WorkRequest.t()]) ::
           {:ok, RepoIdentity.catalog()} | {:error, dashboard_error()}
-  def local_operator_repo_identity_catalog(repo, work_packages, work_requests)
-      when is_atom(repo) and is_list(work_packages) and is_list(work_requests) do
+  def local_operator_repo_identity_catalog(repo, work_requests) do
     safe_read(fn ->
-      repo_values =
-        Enum.map(work_packages, & &1.repo) ++
-          Enum.map(work_requests, & &1.repo) ++
-          repo_values(repo, WorkRequest)
+      # Preserve the first recorded spelling of a repo alias without loading package records.
+      package_repos =
+        repo.all(from(package in WorkPackage, order_by: [asc: package.inserted_at, asc: package.id], select: package.repo))
 
+      repo_values = package_repos ++ Enum.map(work_requests, & &1.repo) ++ repo_values(repo, WorkRequest)
       {:ok, build_repo_identity_catalog(repo_values, local_operator_trusted_repo_remotes(), local_path_remotes?: true)}
     end)
   end
@@ -283,8 +284,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   @spec archived_work_requests(repo(), keyword()) :: {:ok, map()} | {:error, dashboard_error()}
   def archived_work_requests(repo, opts) when is_atom(repo) and is_list(opts) do
     safe_read(fn ->
-      with {:ok, work_requests} <- WorkRequestRepository.list(repo, %{include_archived: true}),
-           archived_work_requests = Enum.filter(work_requests, &(not is_nil(&1.archived_at))),
+      with {:ok, archived_work_requests} <- WorkRequestRepository.list(repo, %{phase: "archived"}),
            {:ok, repo_identity_catalog} <-
              repo_identity_catalog_from_repo(repo, opts, Enum.map(archived_work_requests, & &1.repo)),
            {:ok, cards} <-
@@ -1165,39 +1165,51 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
   @doc false
   @spec work_package_work_package_contexts(repo(), [WorkPackage.t()]) :: {:ok, map()}
-  def work_package_work_package_contexts(repo, work_packages) do
+  def work_package_work_package_contexts(repo, work_packages), do: work_package_work_package_contexts(repo, work_packages, nil)
+
+  @spec work_package_work_package_contexts(repo(), [WorkPackage.t()], OperationalLineage.source() | nil) :: {:ok, map()}
+  def work_package_work_package_contexts(repo, work_packages, lineage) do
     work_packages = Enum.filter(work_packages, &filled_string?(&1.id))
 
     if work_packages == [] do
       {:ok, %{}}
     else
-      {:ok, work_package_contexts(repo, work_packages)}
+      work_package_ids = Enum.map(work_packages, & &1.id)
+      lineage = lineage || OperationalLineage.lookup(repo, work_package_ids)
+      {:ok, project_work_package_contexts(repo, work_packages, package_records(repo, work_package_ids), lineage)}
     end
   end
 
   @doc false
   @spec work_package_contexts(repo(), [WorkPackage.t()]) :: map()
-  def work_package_contexts(_repo, []), do: %{}
-
   def work_package_contexts(repo, work_packages) do
-    work_package_ids = Enum.map(work_packages, & &1.id)
-    progress_events_by_id = grouped_progress_events(repo, work_package_ids)
-    plan_nodes_by_id = grouped_plan_nodes(repo, work_package_ids)
-    artifacts_by_id = grouped_artifacts(repo, work_package_ids)
-    agent_runs_by_id = grouped_agent_runs(repo, work_package_ids)
-    lineages_by_id = OperationalProjection.package_lineages(repo, work_packages)
+    {:ok, contexts} = work_package_work_package_contexts(repo, work_packages)
+    contexts
+  end
+
+  defp package_records(repo, work_package_ids) do
+    %{
+      progress_events: grouped_progress_events(repo, work_package_ids),
+      plan_nodes: grouped_plan_nodes(repo, work_package_ids),
+      artifacts: grouped_artifacts(repo, work_package_ids),
+      agent_runs: grouped_agent_runs(repo, work_package_ids)
+    }
+  end
+
+  defp project_work_package_contexts(repo, work_packages, records, lineage) do
+    lineages_by_id = OperationalProjection.package_lineages(lineage, work_packages)
 
     delivery_successors_by_id =
-      case OperationalLineage.delivery_successors(repo, work_packages) do
+      case OperationalLineage.delivery_successors(lineage, work_packages) do
         {:ok, successors} -> successors
-        {:error, _reason} -> Map.new(work_package_ids, &{&1, ["lineage_unavailable"]})
+        {:error, _reason} -> Map.new(work_packages, &{&1.id, ["lineage_unavailable"]})
       end
 
     Map.new(work_packages, fn %WorkPackage{} = work_package ->
-      progress_events = Map.get(progress_events_by_id, work_package.id, [])
-      plan_nodes = Map.get(plan_nodes_by_id, work_package.id, [])
-      artifacts = Map.get(artifacts_by_id, work_package.id, [])
-      agent_runs = Map.get(agent_runs_by_id, work_package.id, [])
+      progress_events = Map.get(records.progress_events, work_package.id, [])
+      plan_nodes = Map.get(records.plan_nodes, work_package.id, [])
+      artifacts = Map.get(records.artifacts, work_package.id, [])
+      agent_runs = Map.get(records.agent_runs, work_package.id, [])
       activity_context = WorkPackageActivity.project_context(agent_runs, progress_events, work_package)
 
       blockers = OperationalProjection.blockers(progress_events)

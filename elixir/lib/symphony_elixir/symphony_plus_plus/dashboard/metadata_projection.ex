@@ -170,11 +170,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
     end
   end
 
-  @spec package_lineages(module(), [WorkPackage.t()]) :: map()
-  def package_lineages(_repo, []), do: %{}
+  @spec package_lineages(OperationalLineage.source(), [WorkPackage.t()]) :: map()
+  def package_lineages(_source, []), do: %{}
 
-  def package_lineages(repo, work_packages) do
-    case OperationalLineage.for_work_packages(repo, work_packages) do
+  def package_lineages(source, work_packages) do
+    case OperationalLineage.for_work_packages(source, work_packages) do
       {:ok, lineages_by_id} -> lineages_by_id
       {:error, reason} -> unavailable_lineages(work_packages, reason)
     end
