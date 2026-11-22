@@ -108,6 +108,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
            "packages" => packages
          }}
 
+      {:error, :ambiguous_source_repository} ->
+        {:error, -32_009, "Move blocked",
+         %{
+           "tool" => tool,
+           "reason" => "ambiguous_source_repository",
+           "message" => "The recorded checkout and pull requests do not establish the previous repository.",
+           "next_action" => "Resolve conflicting source PRs or point the recorded checkout back to its original repository, then retry."
+         }}
+
       {:error, :work_request_scope_changed} ->
         {:error, -32_009, "Move blocked",
          %{

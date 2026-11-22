@@ -316,7 +316,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
         replayable_managed_prepare_path?(work_package, repo_root, branch, recorded_path, worktree_parent) ->
           {:ok, recorded_path}
 
-        owned_factory_worktree?(recorded_path, repo_root, opts) ->
+        relocated_worktree?(work_package, recorded_path, repo_root, opts) ->
           {:ok, recorded_path}
 
         true ->
@@ -325,18 +325,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
     end
   end
 
-  # A repaired worktree can still belong to the same checkout after the
-  # checkout has moved to a new directory under the factory repos root.
-  defp owned_factory_worktree?(recorded_path, repo_root, opts) do
-    with root when is_binary(root) <- Config.factory_repos_root(),
-         {:ok, managed_root} <- canonicalize(Path.join(root, ".worktrees")),
-         true <- inside_root?(recorded_path, managed_root),
+  # Git can keep the linked worktree in place when its checkout is relocated.
+  defp relocated_worktree?(%WorkPackage{worktree_target_repo_root: prior_root}, recorded_path, repo_root, opts)
+       when is_binary(prior_root) and prior_root != repo_root do
+    with {:ok, root} <- worktree_root(opts),
+         true <- inside_root?(recorded_path, root),
          :ok <- require_recorded_worktree_owner(repo_root, recorded_path, opts) do
       true
     else
       _no_factory_root -> false
     end
   end
+
+  defp relocated_worktree?(_package, _path, _repo_root, _opts), do: false
 
   defp maybe_replay_prepared(repo, %WorkPackage{worktree_path: recorded_path} = work_package, repo_root, base_branch, branch, worktree_path, opts)
        when is_binary(recorded_path) do

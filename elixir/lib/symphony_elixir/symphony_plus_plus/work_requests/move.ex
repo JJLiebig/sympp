@@ -34,11 +34,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
   defp move(repo, request, target, terminal) do
     with :ok <- validate_base_branch(target.base_branch),
          {:ok, packages} <- Repository.list_work_packages(repo, request.id),
-         source = move_source(request, packages),
-         {:ok, {_packages, attachments}} <- moving_packages(repo, packages, source) do
+         keys = repository_keys(request.repo, packages),
+         {:ok, source} <- move_scope(repo, request.repo, packages, keys, target.key) do
       # Resolve checkout origins and GitHub's canonical name before the write.
       # The proof covers any newer attachment from the same source repository.
-      renamed_to = confirmed_rename(repo, source.key, target.key, attachments)
+      renamed_to = confirmed_rename(repo, source.key, target.key, source.attachments)
       target = Map.put(target, :renamed_to, renamed_to)
 
       result =
@@ -70,7 +70,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
     allowed_source = if target.renamed_to, do: source.key
 
     with {:ok, current_packages} <- Repository.list_work_packages(repo, request.id),
-         {:ok, {packages, attachments}} <- moving_packages(repo, current_packages, source),
+         {:ok, current} <- move_scope(repo, source.repo, current_packages, source.keys, target.key),
+         true <- current.key == source.key,
+         %{packages: packages, attachments: attachments} = current,
          :ok <- require_portable_attachments(attachments, allowed_source, target.key),
          {:ok, updated} <- repo.update(Changeset.change(request, repo: target.repo, base_branch: base)),
          {:ok, decision} <- record_decision(repo, request, updated, target.rationale, terminal),
@@ -78,27 +80,73 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
          :ok <- move_attachments(repo, attachments, source.key, target.renamed_to, decision.id, terminal) do
       if target.renamed_to, do: carry_ci(repo, source.key, target.key)
       {:ok, result("moved", updated, packages)}
-    end
-  end
-
-  defp move_source(request, packages) do
-    repos = [request.repo | for(package <- packages, not Lifecycle.ended?(package), do: package.repo)]
-    keys = repos |> Enum.uniq() |> Map.new(&{&1, scope_key(&1)})
-    %{repo: request.repo, key: Map.fetch!(keys, request.repo), keys: keys}
-  end
-
-  defp moving_packages(repo, packages, source) do
-    open = Enum.reject(packages, &Lifecycle.ended?/1)
-
-    with true <- Enum.all?(open, &Map.has_key?(source.keys, &1.repo)),
-         packages = Enum.filter(open, &(Map.fetch!(source.keys, &1.repo) == source.key)),
-         {:ok, attachments} <- PlanningRepository.pr_attachments(repo, Enum.map(packages, & &1.id)) do
-      {:ok, {packages, attachments}}
     else
       false -> {:error, :work_request_scope_changed}
       {:error, _reason} = error -> error
     end
   end
+
+  defp repository_keys(request_repo, packages) do
+    values = [request_repo | for(package <- packages, not Lifecycle.ended?(package), do: package.repo)]
+    values |> Enum.uniq() |> Map.new(&{&1, scope_key(&1)})
+  end
+
+  defp move_scope(repo, request_repo, packages, keys, destination) do
+    open = Enum.reject(packages, &Lifecycle.ended?/1)
+
+    with true <- Enum.all?(open, &Map.has_key?(keys, &1.repo)),
+         {:ok, attachments} <- PlanningRepository.pr_attachments(repo, Enum.map(open, & &1.id)),
+         {:ok, source} <- source_key(request_repo, open, keys, attachments, destination) do
+      moving = Enum.filter(open, &moves?(&1, request_repo, source, keys, attachments[&1.id]))
+      links = Map.take(attachments, Enum.map(moving, & &1.id))
+      {:ok, %{repo: request_repo, key: source, keys: keys, packages: moving, attachments: links}}
+    else
+      false -> {:error, :work_request_scope_changed}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp source_key(request_repo, open, keys, attachments, destination) do
+    case stored_key(request_repo) do
+      {:stored, _path} -> checkout_source_key(request_repo, open, keys, attachments, destination)
+      key -> {:ok, key}
+    end
+  end
+
+  # A checkout's origin can be edited before the move. For a request scoped to
+  # that checkout, attachments on packages with the same scope are evidence of
+  # its previous repository. A conflicting origin by itself cannot settle it.
+  defp checkout_source_key(request_repo, open, keys, attachments, destination) do
+    recorded =
+      for package <- open,
+          package.repo == request_repo,
+          key = attachment_key(attachments[package.id]),
+          not is_nil(key),
+          uniq: true,
+          do: key
+
+    case recorded do
+      [key] -> require_unambiguous_source(key, open, keys, destination)
+      [] -> require_unambiguous_source(Map.fetch!(keys, request_repo), open, keys, destination)
+      _different_repos -> {:error, :ambiguous_source_repository}
+    end
+  end
+
+  defp require_unambiguous_source(source, open, keys, destination) do
+    unresolved? = source == destination or match?({:stored, _}, source)
+
+    if unresolved? and Enum.any?(open, &(Map.fetch!(keys, &1.repo) != source)),
+      do: {:error, :ambiguous_source_repository},
+      else: {:ok, source}
+  end
+
+  defp moves?(package, request_repo, source, keys, attachment) do
+    package.repo == request_repo or Map.fetch!(keys, package.repo) == source or
+      (match?({:stored, _}, stored_key(package.repo)) and attachment_key(attachment) == source)
+  end
+
+  defp attachment_key({:ok, %{ref: ref}}), do: stored_key(ref.repository)
+  defp attachment_key(_missing), do: nil
 
   defp scope_key(value) do
     case stored_key(value) do
@@ -153,8 +201,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
     if blockers == [], do: :ok, else: {:error, {:attached_pull_requests, blockers}}
   end
 
-  defp portable_attachment?({:ok, %{ref: ref}}, allowed_source, destination),
-    do: stored_key(ref.repository) in [allowed_source, destination]
+  defp portable_attachment?({:ok, _ref} = attachment, allowed_source, destination),
+    do: attachment_key(attachment) in [allowed_source, destination]
 
   defp portable_attachment?({:error, _reason}, _allowed_source, _destination), do: false
 
@@ -181,7 +229,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
 
   defp inherits_base?(package, request, destination, attachments) do
     destination.base_branch != request.base_branch and
-      not Map.has_key?(attachments, package.id) and BaseBranch.equivalent?(package.base_branch, request.base_branch)
+      is_nil(package.worktree_path) and not Map.has_key?(attachments, package.id) and
+      BaseBranch.equivalent?(package.base_branch, request.base_branch)
   end
 
   defp move_attachments(_repo, _attachments, _source, nil, _decision_id, _terminal), do: :ok
