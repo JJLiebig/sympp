@@ -584,7 +584,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   # record is retried on every sweep while the PR stays watched.
   defp merge(repo, package, attached, payload, true = _changed?) do
     work = fn ->
-      with :ok <- record(repo, package, attached, payload), do: {:ok, true}
+      with {:ok, current} <- fetch(repo, package),
+           :ok <- record(repo, current, attached, payload),
+           do: {:ok, true}
     end
 
     case in_transaction(repo, package, work) do
@@ -671,10 +673,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   defp review_state(:none, _head), do: :none
   defp review_state(review, head), do: ReviewStatus.state(review, head)
 
-  defp fetch(repo, %WorkPackage{id: id}) do
+  defp fetch(repo, %WorkPackage{id: id, repo: repository, base_branch: base}) do
     case repo.get(WorkPackage, id) do
-      %WorkPackage{} = package -> if Lifecycle.in_flight?(package), do: {:ok, package}, else: {:error, :not_in_flight}
-      nil -> {:error, :not_found}
+      %WorkPackage{repo: ^repository, base_branch: ^base} = package ->
+        if Lifecycle.in_flight?(package), do: {:ok, package}, else: {:error, :not_in_flight}
+
+      %WorkPackage{} ->
+        {:error, :delivery_scope_changed}
+
+      nil ->
+        {:error, :not_found}
     end
   end
 

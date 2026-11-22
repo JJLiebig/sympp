@@ -46,6 +46,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
+  defp tool_schema("move_work_request") do
+    schema(
+      %{
+        "work_request_id" => string_schema(),
+        "repo" => described_string_schema("Destination Git remote URL or owner/name."),
+        "base_branch" => described_string_schema("Destination base for the request and open packages on its old base that have no prepared worktree or attached PR. Defaults to the current base."),
+        "rationale" => described_string_schema("Why the WorkRequest is moving. Recorded in its decisions.")
+      },
+      ["work_request_id", "repo", "rationale"]
+    )
+    |> Map.put("additionalProperties", true)
+  end
+
   defp tool_schema("summarize_failed_mcp_calls") do
     schema(
       %{

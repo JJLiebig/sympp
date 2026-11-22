@@ -26,7 +26,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HerdrBinding do
 
     with false <- Map.get(result, "isError", false),
          %Terminal{} = terminal <- Terminal.from_params(params),
-         true <- binds?(name, arguments, response),
+         true <- binds?(name, arguments, response, terminal),
          work_request_id when is_binary(work_request_id) <- work_request_id(arguments, response, repo) do
       %{"role" => terminal.role, "work_request_id" => work_request_id, "show_inspector" => true}
     else
@@ -45,8 +45,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HerdrBinding do
     |> Base.url_encode64(padding: false)
   end
 
-  defp binds?("create_work_request", _arguments, response), do: is_map(get_in(response, ["result", "structuredContent", "worked_on"]))
-  defp binds?(name, arguments, _response), do: ToolCatalog.owner_gated_call?(name, arguments)
+  defp binds?("create_work_request", _arguments, response, _terminal), do: is_map(get_in(response, ["result", "structuredContent", "worked_on"]))
+  defp binds?(name, arguments, _response, terminal), do: ToolCatalog.owner_gated_call?(name, arguments, terminal)
 
   # A package-only call names its WorkRequest through the package.
   defp work_request_id(arguments, response, repo) do
