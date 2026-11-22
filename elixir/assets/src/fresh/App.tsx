@@ -57,7 +57,8 @@ const densityOf = (key: string | null) => DENSITIES.find((entry) => entry.key ==
 const START = {
   direction: [directionOf(LINKED.get("view")), directionOf(rememberedChoice("view")), 0].find((index) => index >= 0) ?? 0,
   density: densityOf(LINKED.get("show")) ?? densityOf(rememberedChoice("show")) ?? "active",
-  area: LINKED.has("area") ? LINKED.get("area") : rememberedChoice("area"),
+  // An empty `?area=` opens on Everything, whatever was remembered.
+  area: LINKED.has("area") ? LINKED.get("area") || null : rememberedChoice("area"),
 };
 
 // `replayable` is true on a snapshot, which carries recorded history; a backend only knows the present.
