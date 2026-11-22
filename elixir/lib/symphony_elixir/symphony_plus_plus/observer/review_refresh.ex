@@ -7,6 +7,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
   alias SymphonyElixir.TaskSupervisor
 
   @board_wait_ms 2_000
+  @pubsub SymphonyElixir.PubSub
+  @topic "sympp:review_refresh"
   @type scope :: Observer.review_scope()
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -22,20 +24,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
     end
   end
 
-  @spec watch(scope()) :: :ok
-  def watch(scope) do
-    if Process.whereis(Observer), do: GenServer.cast(__MODULE__, {:watch, self(), scope})
-    :ok
-  end
+  @spec subscribe() :: :ok | {:error, term()}
+  def subscribe, do: Phoenix.PubSub.subscribe(@pubsub, @topic)
 
-  @spec unwatch() :: :ok
-  def unwatch, do: GenServer.cast(__MODULE__, {:unwatch, self()})
+  @spec unsubscribe() :: :ok
+  def unsubscribe, do: Phoenix.PubSub.unsubscribe(@pubsub, @topic)
+
+  @spec demand(scope()) :: :ok
+  def demand(scope), do: GenServer.cast(__MODULE__, {:demand, scope})
 
   @spec advance() :: :ok
   def advance, do: GenServer.cast(__MODULE__, :advance)
 
   @impl true
-  def init(_opts), do: {:ok, %{tasks: %{}, watchers: %{}}}
+  def init(_opts), do: {:ok, %{tasks: %{}}}
 
   @impl true
   def handle_call({:request, scope}, _from, state) do
@@ -44,51 +46,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
   end
 
   @impl true
-  def handle_cast({:watch, reader, scope}, state) do
-    case {Process.alive?(reader), Map.get(state.watchers, reader)} do
-      {false, _watcher} ->
-        {:noreply, remove_reader(state, reader)}
-
-      {true, {^scope, _ref}} ->
-        {:noreply, state}
-
-      {true, _new} ->
-        state = remove_reader(state, reader)
-        {_tasks, state} = refresh(scope, state)
-        watchers = Map.put(state.watchers, reader, {scope, Process.monitor(reader)})
-        {:noreply, %{state | watchers: watchers}}
-    end
+  def handle_cast({:demand, scope}, state) do
+    {_tasks, state} = refresh(scope, state)
+    {:noreply, state}
   end
-
-  def handle_cast({:unwatch, reader}, state), do: {:noreply, remove_reader(state, reader)}
 
   def handle_cast(:advance, state) do
     # Keep the scopes of in-flight reads and any scopes they already excluded.
     active = for {scope, pid} <- state.tasks, Process.alive?(pid), do: scope
     tasks = Map.filter(state.tasks, fn {scope, _pid} -> Enum.any?(active, &covers?(&1, scope)) end)
-    scopes = for {reader, {scope, _ref}} <- state.watchers, Process.alive?(reader), do: scope
-    scopes = if :all in scopes, do: [:all], else: Enum.uniq(scopes)
-    state = Enum.reduce(scopes, %{state | tasks: tasks}, &elem(refresh(&1, &2), 1))
-    {:noreply, state}
-  end
-
-  @impl true
-  def handle_info({:DOWN, ref, :process, reader, _reason}, state) do
-    case Map.get(state.watchers, reader) do
-      {_scope, ^ref} -> {:noreply, remove_reader(state, reader)}
-      _other -> {:noreply, state}
-    end
-  end
-
-  defp remove_reader(state, reader) do
-    case Map.pop(state.watchers, reader) do
-      {nil, _watchers} ->
-        state
-
-      {{_scope, ref}, watchers} ->
-        Process.demonitor(ref, [:flush])
-        %{state | watchers: watchers}
-    end
+    # Streams renew demand after writing to their connection. A request
+    # process still waiting to detect a disconnected peer is not enough.
+    Phoenix.PubSub.broadcast(@pubsub, @topic, :review_refresh_due)
+    {:noreply, %{state | tasks: tasks}}
   end
 
   defp refresh(scope, state) do

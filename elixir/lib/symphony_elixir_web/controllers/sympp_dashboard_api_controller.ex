@@ -189,7 +189,8 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   def operator_dashboard_events(conn, _params) do
     with true <- local_operator_browser?(conn),
          :ok <- OperatorDashboardOpener.ensure_started(),
-         :ok <- DashboardPubSub.subscribe() do
+         :ok <- DashboardPubSub.subscribe(),
+         :ok <- ReviewRefresh.subscribe() do
       conn =
         conn
         |> Conn.put_resp_header("cache-control", "no-cache")
@@ -199,11 +200,12 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
         |> Conn.send_chunked(200)
 
       OperatorDashboardOpener.dashboard_connected()
+      ReviewRefresh.demand(:all)
 
       try do
         stream_dashboard_events(conn)
       after
-        ReviewRefresh.unwatch()
+        ReviewRefresh.unsubscribe()
         OperatorDashboardOpener.dashboard_disconnected()
       end
     else
@@ -306,10 +308,14 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     end
   end
 
+  defp stream_review_notifications(conn, nil), do: stream_herdr_events(conn, nil)
+
   defp stream_review_notifications(conn, scope) do
+    :ok = ReviewRefresh.subscribe()
+    :ok = ReviewRefresh.demand(scope)
     stream_herdr_events(conn, scope)
   after
-    ReviewRefresh.unwatch()
+    ReviewRefresh.unsubscribe()
   end
 
   @spec operator_config(Conn.t(), map()) :: Conn.t()
@@ -711,38 +717,34 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp maybe_broadcast_dashboard_change(_action), do: DashboardPubSub.broadcast_changed()
 
   defp stream_dashboard_events(conn) do
-    ReviewRefresh.watch(:all)
-
-    receive do
-      :operator_dashboard_changed ->
-        case Conn.chunk(conn, "event: dashboard_changed\ndata: #{Jason.encode!(%{version: System.unique_integer([:positive, :monotonic]), schema_version: 1})}\n\n") do
-          {:ok, conn} -> stream_dashboard_events(conn)
-          {:error, _reason} -> conn
-        end
-    after
-      30_000 ->
-        case Conn.chunk(conn, ": keep-alive\n\n") do
-          {:ok, conn} -> stream_dashboard_events(conn)
-          {:error, _reason} -> conn
-        end
-    end
+    stream_notifications(conn, :all, fn ->
+      "event: dashboard_changed\ndata: #{Jason.encode!(%{version: System.unique_integer([:positive, :monotonic]), schema_version: 1})}\n\n"
+    end)
   end
 
   defp stream_herdr_events(conn, review_scope) do
-    if review_scope, do: ReviewRefresh.watch(review_scope)
+    stream_notifications(conn, review_scope, fn -> "event: invalidated\ndata: {}\n\n" end)
+  end
 
-    receive do
-      :operator_dashboard_changed ->
-        case Conn.chunk(conn, "event: invalidated\ndata: {}\n\n") do
-          {:ok, conn} -> stream_herdr_events(conn, review_scope)
-          {:error, _reason} -> conn
-        end
-    after
-      30_000 ->
-        case Conn.chunk(conn, ": keep-alive\n\n") do
-          {:ok, conn} -> stream_herdr_events(conn, review_scope)
-          {:error, _reason} -> conn
-        end
+  defp stream_notifications(conn, scope, notification) do
+    result =
+      receive do
+        :operator_dashboard_changed -> Conn.chunk(conn, notification.())
+        :review_refresh_due -> review_heartbeat(conn, scope)
+      after
+        30_000 -> Conn.chunk(conn, ": keep-alive\n\n")
+      end
+
+    case result do
+      {:ok, conn} -> stream_notifications(conn, scope, notification)
+      {:error, _reason} -> conn
+    end
+  end
+
+  defp review_heartbeat(conn, scope) do
+    with {:ok, conn} <- Conn.chunk(conn, ": keep-alive\n\n"),
+         :ok <- ReviewRefresh.demand(scope) do
+      {:ok, conn}
     end
   end
 

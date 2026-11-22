@@ -267,37 +267,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     end
   end
 
-  # Share a cycle read among packages on the same route. A timeout is unknown.
-  defp review_results(_repo, [], _opts), do: %{}
-
   defp review_results(repo, packages, opts) do
+    repo
+    |> review_reads(packages, opts)
+    |> Enum.flat_map(fn {ids, result} -> Enum.map(ids, &{&1, result}) end)
+    |> Map.new()
+  end
+
+  # Share a cycle read among packages on the same route. A timeout is unknown.
+  defp review_reads(_repo, [], _opts), do: []
+
+  defp review_reads(repo, packages, opts) do
     read = Keyword.get(opts, :review, &ReviewStatus.read/2)
     workers = Ownership.workers(repo, Enum.map(packages, & &1.id))
     core = Keyword.get_lazy(opts, :core, &HerdrCore.current/0)
 
-    routes =
-      Map.new(packages, fn package ->
+    packages
+    |> Enum.group_by(
+      fn package ->
         route = Qualification.review_route(package.launch_machine, workers[package.id], core)
-        {package.id, {package.review_id, route}}
-      end)
-
-    results =
-      routes
-      |> Map.values()
-      |> Enum.uniq()
-      |> Task.async_stream(fn {review_id, route} = key -> {key, read.(review_id, route)} end,
-        max_concurrency: @review_concurrency,
-        ordered: false,
-        timeout: @review_timeout_ms,
-        on_timeout: :kill_task
-      )
-      |> Enum.flat_map(fn
-        {:ok, result} -> [result]
-        {:exit, _reason} -> []
-      end)
-      |> Map.new()
-
-    Map.new(routes, fn {id, route} -> {id, Map.get(results, route, :unknown)} end)
+        {package.review_id, route}
+      end,
+      & &1.id
+    )
+    |> Task.async_stream(fn {{review_id, route}, ids} -> {ids, read.(review_id, route)} end,
+      max_concurrency: @review_concurrency,
+      ordered: false,
+      timeout: @review_timeout_ms,
+      on_timeout: :kill_task,
+      zip_input_on_exit: true
+    )
+    |> Stream.map(fn
+      {:ok, result} -> result
+      {:exit, {{_cycle, ids}, _reason}} -> {ids, :unknown}
+    end)
   end
 
   defp reviewed?(%WorkPackage{review_mode: mode, review_id: id}), do: mode in ["fast", "normal", "deep"] and is_binary(id)
@@ -312,16 +315,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
         reviewed?(package) and is_nil(attached_pr(attachments[package.id]))
       end)
 
-    reviews = review_results(repo, Enum.map(candidates, &elem(&1, 0)), [])
+    observations = Map.new(candidates, fn {package, observation} -> {package.id, observation} end)
+    packages = Enum.map(candidates, &elem(&1, 0))
 
-    {result, _changed?} =
+    # An unrelated slow worker must not hold up progress for this reader.
+    Enum.each(review_reads(repo, packages, []), fn {ids, review} ->
       DashboardPubSub.coalesce_changed(fn ->
-        Enum.each(candidates, fn {package, observation} ->
-          store_review_progress(repo, observation, Map.fetch!(reviews, package.id))
-        end)
+        Enum.each(ids, &store_review_progress(repo, Map.fetch!(observations, &1), review))
       end)
-
-    result
+    end)
   end
 
   defp pre_pr_review_query(scope, excluded_scopes) do

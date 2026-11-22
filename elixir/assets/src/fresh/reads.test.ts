@@ -1,10 +1,11 @@
+import { coalescedRead } from "../coalesced-read";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { applyDemo, demoLedger, type DemoLedger } from "./mock";
 import { buildBoard, openAt, type Board } from "./model";
 import type { OperatorAction } from "./operator";
 import { operate, project, pendingActions } from "./pending";
-import { boardReads, coalescedRead, listen, readBoard, type Fetched, type Read } from "./reads";
+import { boardReads, listen, readBoard, type Fetched, type Read } from "./reads";
 
 afterEach(() => {
   vi.unstubAllGlobals();
