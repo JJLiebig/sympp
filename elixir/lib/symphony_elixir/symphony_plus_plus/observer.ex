@@ -411,11 +411,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
       query =
         from(current in Observation,
           where: current.work_package_id == ^observation.work_package_id,
-          where: current.observed_at == ^observation.observed_at and current.pr_absent
+          where: current.updated_at == ^observation.updated_at and current.pr_absent
         )
 
       now = DateTime.utc_now(:microsecond)
-      {count, _} = repo.update_all(query, set: Map.to_list(Map.merge(attrs, %{observed_at: now, updated_at: now})))
+      {count, _} = repo.update_all(query, set: Map.to_list(Map.put(attrs, :updated_at, now)))
       if count > 0, do: DashboardPubSub.broadcast_changed()
     end
   end
@@ -555,11 +555,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   defp act(_repo, _item, nil, _changed?, _review, _stacked_on), do: :ok
 
   defp act(repo, %{package: %WorkPackage{} = package, attached: attached}, %{} = pr, changed?, review, stacked_on) do
-    with :ok <- check_attachment(repo, package.id, attached),
-         {:ok, payload} <- payload(pr) do
+    # Only a PR merged into the package's base delivers it.
+    merged? = pr["merged"] == true and base_matches?(package, pr)
+
+    with {:ok, payload} <- payload(pr),
+         :ok <- if(merged?, do: check_attachment(repo, package.id, attached), else: :ok) do
       work = fn -> record_and_qualify(repo, package, attached, payload, changed?, pr, review, stacked_on) end
-      # A PR merged into another base doesn't deliver this package: it unqualifies instead.
-      merged? = pr["merged"] == true and base_matches?(package, pr)
       if merged?, do: merge(repo, package, attached, payload, changed?), else: in_transaction(repo, package, work)
     else
       {:error, reason} -> retry(package, reason)
@@ -584,9 +585,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   # Recording a new head and the qualification it causes commit together: the
   # candidate head is read before the new snapshot is recorded.
   defp record_and_qualify(repo, package, attached, payload, changed?, pr, review, stacked_on) do
-    with {:ok, current} <- fetch(repo, package),
+    with :ok <- check_attachment(repo, package.id, attached),
+         {:ok, current} <- fetch(repo, package),
          {:ok, candidate_head} <- Qualification.candidate_head(repo, current),
-         :ok <- if(changed?, do: record(repo, current, attached, payload), else: :ok),
+         :ok <- if(changed?, do: Qualification.record_pr(repo, Actor.observer(), current, payload), else: :ok),
          {:ok, decision} <- Qualification.decide(repo, current, facts(current, pr, review, stacked_on), candidate_head),
          {:ok, updated} <- Qualification.apply_decision(repo, Actor.observer(), current, decision, pr["head_sha"]) do
       {:ok, changed? or updated.status != current.status}
@@ -694,16 +696,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     changeset = finish_pre_pr_review(changeset, observation, attrs, review)
 
     if is_nil(observation) or changeset.changes != %{} do
-      changeset
-      |> Ecto.Changeset.put_change(:observed_at, DateTime.utc_now(:microsecond))
-      |> repo.insert_or_update()
-      |> case do
-        {:ok, _stored} -> DashboardPubSub.broadcast_changed()
-        {:error, reason} -> log_failure(%WorkPackage{id: work_package_id}, reason)
-      end
+      now = DateTime.utc_now(:microsecond)
+      attrs = Map.merge(changeset.changes, %{observed_at: now, updated_at: now})
+      {count, _} = write_observation(repo, work_package_id, observation, attrs)
+      if count > 0, do: DashboardPubSub.broadcast_changed()
     end
 
     :ok
+  end
+
+  defp write_observation(repo, id, nil, attrs) do
+    attrs = Map.merge(attrs, %{work_package_id: id, inserted_at: attrs.observed_at})
+    repo.insert_all(Observation, [attrs], on_conflict: :nothing, conflict_target: [:work_package_id])
+  end
+
+  # A manual sync can publish authoritative evidence while a sweep is still
+  # waiting for other providers. Display reads change only updated_at.
+  defp write_observation(repo, id, %Observation{observed_at: observed_at}, attrs) do
+    query = from(current in Observation, where: current.work_package_id == ^id and current.observed_at == ^observed_at)
+    repo.update_all(query, set: Map.to_list(attrs))
   end
 
   # A display refresh may have changed review fields since the sweep read the

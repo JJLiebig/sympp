@@ -37,6 +37,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
 
   @type review :: :done | :none | :pending | :unknown
   @type review_result :: Observation.review_result()
+  @type recorded_review :: review_result() | :deferred | :sweep
   @type pr_facts :: %{
           required(:pr_state) => String.t() | nil,
           required(:pr_draft?) => boolean(),
@@ -97,8 +98,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
   reports checks marks its repository as having CI.
   """
   @spec record_pr(module(), Actor.t(), WorkPackage.t(), map()) :: :ok | {:error, term()}
-  @spec record_pr(module(), Actor.t(), WorkPackage.t(), map(), review_result() | :deferred) :: :ok | {:error, term()}
-  def record_pr(repo, %Actor{} = actor, %WorkPackage{} = package, payload, review \\ :deferred) do
+  @spec record_pr(module(), Actor.t(), WorkPackage.t(), map(), recorded_review()) :: :ok | {:error, term()}
+  def record_pr(repo, %Actor{} = actor, %WorkPackage{} = package, payload, review \\ :sweep) do
     branch = %{"type" => "branch", "source_tool" => "attach_branch", "branch" => payload["branch"], "head_sha" => payload["head_sha"], "observed_at" => payload["observed_at"]}
 
     with {:ok, _branch} <- append_event(repo, actor, package.id, branch, "branch_attached"),
@@ -106,35 +107,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
          {:ok, _snapshot} <- append_event(repo, actor, package.id, Map.put(payload, "source_tool", "sync_pr"), "pr_synced"),
          {:ok, _changed?} <- PullRequestArtifact.upsert(repo, package.id, payload),
          {:ok, _package} <- clear_ci_override(repo, package, payload["head_sha"]),
-         :ok <- close_pre_pr_review(repo, package.id, review) do
+         :ok <- record_observation(repo, package.id, review) do
       note_repository_ci(repo, payload)
     end
   end
 
   # Close the write window before any pending display read can publish evidence
   # for the attached PR. The Observer publishes its current facts separately.
-  defp close_pre_pr_review(repo, id, :deferred) do
-    repo.update_all(pre_pr_observation(id), set: [pr_absent: false])
+  defp record_observation(repo, id, :sweep) do
+    query = from(observation in Observation, where: observation.work_package_id == ^id and observation.pr_absent)
+    repo.update_all(query, set: [pr_absent: false])
     :ok
   end
 
-  defp close_pre_pr_review(repo, id, review) do
-    case repo.get(Observation, id) do
-      nil ->
-        :ok
+  defp record_observation(repo, id, review) do
+    observation = repo.get(Observation, id) || %Observation{work_package_id: id}
+    review_attrs = if review == :deferred, do: %{}, else: Observation.review_attributes(observation, review)
+    attrs = Map.merge(review_attrs, %{pr_absent: false, observed_at: DateTime.utc_now(:microsecond)})
 
-      observation ->
-        attrs = Map.merge(Observation.review_attributes(observation, review), %{pr_absent: false, observed_at: DateTime.utc_now(:microsecond)})
-
-        case repo.update(Ecto.Changeset.change(observation, attrs)) do
-          {:ok, _stored} -> :ok
-          {:error, _reason} = error -> error
-        end
+    case repo.insert_or_update(Ecto.Changeset.change(observation, attrs)) do
+      {:ok, _stored} -> :ok
+      {:error, _reason} = error -> error
     end
   end
-
-  defp pre_pr_observation(id),
-    do: from(observation in Observation, where: observation.work_package_id == ^id and observation.pr_absent)
 
   @doc """
   Whether a PR snapshot recorded for this GitHub repository (`owner/name`) has

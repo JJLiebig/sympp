@@ -46,7 +46,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
 
       assert {:ok, :ok} =
                repo.transaction(fn ->
-                 Qualification.record_pr(repo, Actor.observer(), package, pr_event_payload(939, "head-a"))
+                 Qualification.record_pr(repo, Actor.observer(), package, pr_event_payload(939, "head-a"), :unknown)
                end)
 
       # Only a fresh check of the attached PR can clear the outage.
@@ -67,7 +67,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
 
       discover = fn [^branch] ->
         # A display reader records an outage after the sweep loaded its snapshot.
-        repo.update!(Ecto.Changeset.change(displayed, stale: ["review"]))
+        :ok = Observer.record_display_review(repo, [displayed], :unknown)
         %{branch => {:ok, pr(938, "head-a")}}
       end
 
@@ -75,6 +75,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
 
       assert %WorkPackage{status: "ready"} = repo.get!(WorkPackage, package.id)
       assert %Observation{pr: %{"number" => 938}, pr_absent: false, review: ^review, stale: []} = repo.get!(Observation, package.id)
+    end
+
+    test "a manual sync records current review before the first observation", %{repo: repo} do
+      package = package!(repo, "WP-OBS-REVIEW-SYNC", branch_pattern: "agent/example", review_mode: "fast", review_id: "review-sync")
+      branch = {:branch, "nextide", "repo", "agent/example", "main"}
+      review = %{"done" => true, "status" => "passed", "accepted_head" => "head-a"}
+      snapshot = pr_event_payload(940, "head-a")
+
+      sync = fn "review-sync", _route ->
+        assert {:ok, :ok} =
+                 repo.transaction(fn ->
+                   Qualification.record_pr(repo, Actor.observer(), package, snapshot, {:ok, review})
+                 end)
+
+        :unknown
+      end
+
+      :ok = Observer.sweep(repo, snapshot: fn [^branch] -> %{branch => {:ok, pr(940, "head-a")}} end, review: sync)
+      assert %Observation{pr_absent: false, review: ^review, stale: []} = repo.get!(Observation, package.id)
+
+      assert {:ok, :ok} =
+               repo.transaction(fn ->
+                 Qualification.record_pr(repo, Actor.observer(), package, snapshot, :deferred)
+               end)
+
+      assert %Observation{review: ^review, stale: []} = repo.get!(Observation, package.id)
     end
 
     test "the sweep uses each package's newest valid attachment in chronological order", %{repo: repo} do
