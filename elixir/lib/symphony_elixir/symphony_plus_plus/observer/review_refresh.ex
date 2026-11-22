@@ -7,6 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
   alias SymphonyElixir.TaskSupervisor
 
   @board_wait_ms 2_000
+  @review_concurrency 4
   @pubsub SymphonyElixir.PubSub
   @topic "sympp:review_refresh"
   @type scope :: Observer.review_scope()
@@ -36,33 +37,48 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
   def advance, do: GenServer.cast(__MODULE__, :advance)
 
   @impl true
-  def init(_opts), do: {:ok, %{tasks: %{}, scopes: %{}}}
+  def init(_opts), do: {:ok, %{reads: %{}, scopes: %{}, queued: [], running: %{}, waiters: %{}}}
 
   @impl true
-  def handle_call({:request, scope}, _from, state) do
-    {tasks, state} = refresh(scope, state)
-    {:reply, tasks, state}
+  def handle_call({:request, scope, token}, from, state) do
+    {ids, state} = select_scope(scope, state)
+    state = start_reads(state)
+
+    if complete?(ids, state.reads) do
+      {:reply, :ok, state}
+    else
+      {:noreply, %{state | waiters: Map.put(state.waiters, token, {from, ids})}}
+    end
   end
 
   @impl true
   def handle_cast({:demand, scope}, state) do
-    {_tasks, state} = refresh(scope, state)
-    {:noreply, state}
+    {_ids, state} = select_scope(scope, state)
+    {:noreply, start_reads(state)}
+  end
+
+  def handle_cast({:cancel_wait, token}, state) do
+    {:noreply, %{state | waiters: Map.delete(state.waiters, token)}}
   end
 
   def handle_cast(:advance, state) do
     # Recheck requested scopes after discovery. An older batch still covers
     # the packages it actually selected, even while its scope is reloaded.
-    tasks = Map.filter(state.tasks, fn {_id, pid} -> Process.alive?(pid) end)
+    reads = Map.filter(state.reads, fn {_id, status} -> status == :pending end)
     # Streams renew demand after writing to their connection. A request
     # process still waiting to detect a disconnected peer is not enough.
     Phoenix.PubSub.broadcast(@pubsub, @topic, :review_refresh_due)
-    {:noreply, %{tasks: tasks, scopes: %{}}}
+    {:noreply, %{state | reads: reads, scopes: %{}}}
   end
 
-  defp refresh(scope, state) do
-    {ids, state} = select_scope(scope, state)
-    {state.tasks |> Map.take(ids) |> Map.values() |> Enum.uniq(), state}
+  @impl true
+  def handle_info({ref, :ok}, state) when is_map_key(state.running, ref) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, finish_read(state, ref)}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) when is_map_key(state.running, ref) do
+    {:noreply, finish_read(state, ref)}
   end
 
   defp select_scope(scope, state) do
@@ -73,28 +89,49 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
       :error ->
         candidates = Observer.pre_pr_review_candidates(Repo, scope)
         ids = for {package, _observation} <- candidates, do: package.id
-        missing = Enum.reject(candidates, fn {package, _observation} -> Map.has_key?(state.tasks, package.id) end)
-        tasks = start_missing(missing, state.tasks)
-        {ids, %{state | tasks: tasks, scopes: Map.put(state.scopes, scope, ids)}}
+        missing = Enum.reject(candidates, fn {package, _observation} -> Map.has_key?(state.reads, package.id) end)
+        jobs = Observer.display_reviews(Repo, missing)
+        pending = for {_route, observations} <- jobs, observation <- observations, do: observation.work_package_id
+        reads = Enum.reduce(pending, state.reads, &Map.put(&2, &1, :pending))
+        queued = state.queued ++ jobs
+        {ids, %{state | reads: reads, queued: queued, scopes: Map.put(state.scopes, scope, ids)}}
     end
   end
 
-  defp start_missing([], tasks), do: tasks
-
-  defp start_missing(candidates, tasks) do
-    args = [Repo, candidates]
-    {:ok, pid} = Task.Supervisor.start_child(TaskSupervisor, Observer, :refresh_review_progress, args)
-    Enum.reduce(candidates, tasks, fn {package, _observation}, tasks -> Map.put(tasks, package.id, pid) end)
+  defp start_reads(%{queued: [{_route, observations} = job | rest], running: running} = state)
+       when map_size(running) < @review_concurrency do
+    ids = Enum.map(observations, & &1.work_package_id)
+    task = Task.Supervisor.async_nolink(TaskSupervisor, Observer, :refresh_display_review, [Repo, job])
+    start_reads(%{state | queued: rest, running: Map.put(running, task.ref, ids)})
   end
+
+  defp start_reads(state), do: state
+
+  defp finish_read(state, ref) do
+    {ids, running} = Map.pop!(state.running, ref)
+    reads = Enum.reduce(ids, state.reads, &Map.put(&2, &1, :done))
+    {ready, waiting} = Map.split_with(state.waiters, fn {_token, {_from, ids}} -> complete?(ids, reads) end)
+    Enum.each(ready, fn {_token, {from, _ids}} -> GenServer.reply(from, :ok) end)
+    start_reads(%{state | reads: reads, running: running, waiters: waiting})
+  end
+
+  defp complete?(ids, reads), do: Enum.all?(ids, &(Map.get(reads, &1) != :pending))
 
   defp request_factory(scope, false), do: demand(scope)
 
   defp request_factory(scope, true) do
-    deadline = System.monotonic_time(:millisecond) + @board_wait_ms
-    __MODULE__ |> GenServer.call({:request, scope}, @board_wait_ms) |> await_tasks(deadline)
-  catch
-    :exit, {:timeout, _call} -> :pending
-    :exit, {:noproc, _call} -> :pending
+    token = make_ref()
+
+    try do
+      GenServer.call(__MODULE__, {:request, scope, token}, @board_wait_ms)
+    catch
+      :exit, {:timeout, _call} ->
+        GenServer.cast(__MODULE__, {:cancel_wait, token})
+        :pending
+
+      :exit, {:noproc, _call} ->
+        :pending
+    end
   end
 
   defp request_local(repo, scope, wait?) do

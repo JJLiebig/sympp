@@ -6,8 +6,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   alias SymphonyElixir.SymphonyPlusPlus.Observer.Observation
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{WorkPackage, WorkPackageDelivery}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
@@ -34,6 +36,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   end
 
   describe "GitHub" do
+    test "a PR attachment closes the pre-PR display read window", %{repo: repo} do
+      package = package!(repo, "WP-OBS-REVIEW-ATTACH", branch_pattern: "agent/example", review_mode: "fast", review_id: "review-attach")
+      :ok = sweep(repo, %{{:branch, "nextide", "repo", "agent/example", "main"} => {:ok, nil}})
+      candidates = Observer.pre_pr_review_candidates(repo, {:request, package.work_request_id})
+      [job] = Observer.display_reviews(repo, candidates)
+
+      assert {:ok, :ok} =
+               repo.transaction(fn ->
+                 Qualification.record_pr(repo, Actor.observer(), package, pr_event_payload(939, "head-a"))
+               end)
+
+      # The already selected display read finishes with an unavailable host.
+      :ok = Observer.refresh_display_review(repo, job)
+
+      assert %Observation{pr_absent: false, stale: []} = repo.get!(Observation, package.id)
+    end
+
     test "PR discovery clears a review outage recorded during its sweep", %{repo: repo} do
       package = package!(repo, "WP-OBS-REVIEW-RACE", branch_pattern: "agent/example", review_mode: "fast", review_id: "review-race")
       branch = {:branch, "nextide", "repo", "agent/example", "main"}

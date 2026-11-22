@@ -57,6 +57,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   @review_timeout_ms ReviewStatus.timeout_ms() + 1_000
   @type review_scope :: :all | {:request, String.t()} | {:package, String.t(), String.t()}
   @type review_candidate :: {WorkPackage.t(), Observation.t()}
+  @type display_review :: {{String.t(), String.t() | nil}, [Observation.t()]}
 
   # The PR fields whose change is recorded as a new snapshot.
   @snapshot_fields ~w(state draft merged merged_at merge_commit_sha head_sha branch base_branch ci github_review)
@@ -97,6 +98,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   @spec refresh_review_progress(module(), [review_candidate()]) :: :ok
   def refresh_review_progress(repo, candidates) do
     unless OfflineSandbox.enabled?(), do: safely(fn -> read_pre_pr_reviews(repo, candidates) end)
+    :ok
+  end
+
+  @doc false
+  @spec display_reviews(module(), [review_candidate()]) :: [display_review()]
+  def display_reviews(_repo, []), do: []
+
+  def display_reviews(repo, candidates) do
+    safely(fn -> display_review_jobs(repo, candidates) end, [])
+  end
+
+  defp display_review_jobs(repo, candidates) do
+    observations = Map.new(candidates, fn {package, observation} -> {package.id, observation} end)
+    packages = Enum.map(candidates, &elem(&1, 0))
+
+    for {cycle, ids} <- review_groups(repo, packages, []) do
+      {cycle, Enum.map(ids, &Map.fetch!(observations, &1))}
+    end
+  end
+
+  @doc false
+  @spec refresh_display_review(module(), display_review()) :: :ok
+  def refresh_display_review(repo, {{review_id, route}, observations}) do
+    safely(fn ->
+      result = ReviewStatus.read(review_id, route)
+      publish_review_progress(repo, observations, result)
+    end)
+
     :ok
   end
 
@@ -290,17 +319,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   defp review_reads(repo, packages, opts) do
     read = Keyword.get(opts, :review, &ReviewStatus.read/2)
-    workers = Ownership.workers(repo, Enum.map(packages, & &1.id))
-    core = Keyword.get_lazy(opts, :core, &HerdrCore.current/0)
 
-    packages
-    |> Enum.group_by(
-      fn package ->
-        route = Qualification.review_route(package.launch_machine, workers[package.id], core)
-        {package.review_id, route}
-      end,
-      & &1.id
-    )
+    repo
+    |> review_groups(packages, opts)
     |> Task.async_stream(fn {{review_id, route}, ids} -> {ids, read.(review_id, route)} end,
       max_concurrency: @review_concurrency,
       ordered: false,
@@ -312,6 +333,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
       {:ok, result} -> result
       {:exit, {{_cycle, ids}, _reason}} -> {ids, :unknown}
     end)
+  end
+
+  defp review_groups(repo, packages, opts) do
+    workers = Ownership.workers(repo, Enum.map(packages, & &1.id))
+    core = Keyword.get_lazy(opts, :core, &HerdrCore.current/0)
+
+    Enum.group_by(
+      packages,
+      fn package ->
+        route = Qualification.review_route(package.launch_machine, workers[package.id], core)
+        {package.review_id, route}
+      end,
+      & &1.id
+    )
   end
 
   defp reviewed?(%WorkPackage{review_mode: mode, review_id: id}), do: mode in ["fast", "normal", "deep"] and is_binary(id)
@@ -332,9 +367,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
     # An unrelated slow worker must not hold up progress for this reader.
     Enum.each(review_reads(repo, packages, []), fn {ids, review} ->
-      DashboardPubSub.coalesce_changed(fn ->
-        Enum.each(ids, &store_review_progress(repo, Map.fetch!(observations, &1), review))
-      end)
+      publish_review_progress(repo, Enum.map(ids, &Map.fetch!(observations, &1)), review)
+    end)
+  end
+
+  defp publish_review_progress(repo, observations, review) do
+    DashboardPubSub.coalesce_changed(fn ->
+      Enum.each(observations, &store_review_progress(repo, &1, review))
     end)
   end
 

@@ -26,6 +26,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestArtifact
   alias SymphonyElixir.SymphonyPlusPlus.HerdrCore
+  alias SymphonyElixir.SymphonyPlusPlus.Observer.Observation
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
@@ -104,8 +105,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
          {:ok, _snapshot} <- append_event(repo, actor, package.id, Map.put(payload, "source_tool", "sync_pr"), "pr_synced"),
          {:ok, _changed?} <- PullRequestArtifact.upsert(repo, package.id, payload),
          {:ok, _package} <- clear_ci_override(repo, package, payload["head_sha"]) do
+      close_pre_pr_review(repo, package.id)
       note_repository_ci(repo, payload)
     end
+  end
+
+  defp close_pre_pr_review(repo, id) do
+    # A pre-PR display read started before this attachment cannot publish
+    # review or outage evidence for the attached PR.
+    query = from(observation in Observation, where: observation.work_package_id == ^id and observation.pr_absent)
+    repo.update_all(query, set: [pr_absent: false, stale: []])
   end
 
   @doc """
