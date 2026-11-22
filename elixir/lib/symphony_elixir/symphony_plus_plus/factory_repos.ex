@@ -8,10 +8,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
 
+  @owner_repo ~r/\A[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\z/
   @scp_remote ~r/\A(?:([^@:\/\s]+)@)?(\[[^\]]+\]|[^:\/\s]+):((?!\/\/).+)\z/
 
   @spec enabled?() :: boolean()
   def enabled?, do: is_binary(Config.factory_repos_root())
+
+  @doc "The stored repo scope and the identity used to match factory checkouts."
+  @spec repository_scope(String.t()) :: {:ok, String.t(), term()} | {:error, :invalid_repo_remote}
+  def repository_scope(value) when is_binary(value) do
+    value = String.trim(value)
+
+    with {:ok, remote, _name} <- remote(value),
+         key = identity(remote),
+         true <- repository_key?(key) do
+      scope = if Regex.match?(@owner_repo, value), do: String.replace_suffix(value, ".git", ""), else: remote
+      {:ok, scope, key}
+    else
+      _invalid -> {:error, :invalid_repo_remote}
+    end
+  end
 
   @spec resolve(String.t()) :: {:ok, String.t()} | {:error, atom() | {:target_repo_root_scope_mismatch, String.t()}}
   def resolve(repo) do
@@ -148,12 +164,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
 
   @spec matches?(String.t(), String.t()) :: boolean()
   def matches?(checkout, expected) do
+    case repository_scope(expected) do
+      {:ok, _scope, key} -> checkout_key(checkout) == key
+      {:error, :invalid_repo_remote} -> false
+    end
+  end
+
+  @spec checkout_key(Path.t()) :: term()
+  def checkout_key(checkout) do
+    # Git treats a slug-shaped origin as a relative filesystem path.
     with origin when is_binary(origin) <- RepoIdentity.local_git_origin_remote(checkout),
-         {:ok, left, _} <- remote(origin),
-         {:ok, right, _} <- remote(expected) do
-      identity(left) == identity(right)
+         {:ok, remote, _name} <- network_remote(origin, :checkout),
+         key = identity(remote),
+         true <- repository_key?(key) do
+      key
     else
-      _ -> false
+      _unresolved -> nil
     end
   end
 
@@ -220,9 +246,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
   end
 
   defp discovered_checkout(path) do
-    case remote(RepoIdentity.local_git_origin_remote(path)) do
-      {:ok, origin, _name} -> [{path, identity(origin)}]
-      _ -> []
+    case checkout_key(path) do
+      nil -> []
+      key -> [{path, key}]
     end
   end
 
@@ -252,6 +278,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
 
   defp github_owner(_identity), do: nil
 
+  defp repository_key?({:github, path}) do
+    case String.split(path, "/") do
+      [owner, _name] when owner not in [".", ".."] -> Regex.match?(@owner_repo, path)
+      _path -> false
+    end
+  end
+
+  defp repository_key?(_identity), do: true
+
   defp inside_root?(path, root), do: String.starts_with?(path, String.trim_trailing(root, "/") <> "/")
 
   defp checkout(remote, checkout) do
@@ -275,28 +310,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
   defp remote(value) when is_binary(value) do
     value = String.trim(value)
 
-    cond do
-      Regex.match?(~r/\A[A-Za-z]:[\\\/]/, value) ->
-        {:error, :invalid_repo_remote}
+    if Regex.match?(@owner_repo, value) do
+      network_remote("https://github.com/" <> String.replace_suffix(value, ".git", "") <> ".git")
+    else
+      network_remote(value)
+    end
+  end
 
-      Regex.match?(~r/\A[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\z/, value) ->
-        remote("https://github.com/" <> String.replace_suffix(value, ".git", "") <> ".git")
+  defp remote(_), do: {:error, :invalid_repo_remote}
 
-      true ->
-        {uri, path} = parsed_remote(value)
-        name = Path.basename(path || "") |> String.replace_suffix(".git", "")
+  defp network_remote(value, source \\ :scope) do
+    {uri, path} = parsed_remote(value)
+    name = Path.basename(path || "") |> String.replace_suffix(".git", "")
+    uri = if source == :checkout and uri.scheme in ["http", "https"], do: %{uri | userinfo: nil}, else: uri
 
-        if usable_authority?(uri) and name not in ["", ".", ".."] and not String.contains?(value, <<0>>) do
-          {:ok, clone_remote(value, uri), name}
-        else
-          {:error, :invalid_repo_remote}
-        end
+    if usable_authority?(uri) and name not in ["", ".", ".."] and not String.contains?(value, <<0>>) and
+         not Regex.match?(~r/\A[A-Za-z]:[\\\/]/, value) do
+      {:ok, clone_remote(value, uri), name}
+    else
+      {:error, :invalid_repo_remote}
     end
   rescue
     _ in [URI.Error, ArgumentError] -> {:error, :invalid_repo_remote}
   end
-
-  defp remote(_), do: {:error, :invalid_repo_remote}
 
   defp clone_remote(value, %URI{scheme: scheme}) when scheme in ["http", "https"] do
     String.replace(value, ~r{\A(https?://)[^/?#]*@}i, "\\1", global: false)

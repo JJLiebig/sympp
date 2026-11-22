@@ -87,6 +87,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
+  @doc false
+  @spec record_prepared_worktree(repo(), WorkPackage.t(), map()) ::
+          {:ok, WorkPackage.t()} | {:error, error() | :stale_contract_revision}
+  def record_prepared_worktree(repo, %WorkPackage{} = package, attrs) do
+    package
+    |> WorkPackage.update_changeset(attrs)
+    |> Changeset.optimistic_lock(:contract_revision, &Function.identity/1)
+    |> repo.update()
+    |> notify_dashboard(repo)
+  rescue
+    _error in Ecto.StaleEntryError -> {:error, :stale_contract_revision}
+    error in Ecto.ConstraintError -> normalize_constraint_error(error)
+    error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
   defp update_directly(repo, id, attrs) do
     with {:ok, work_package} <- get(repo, id) do
       work_package

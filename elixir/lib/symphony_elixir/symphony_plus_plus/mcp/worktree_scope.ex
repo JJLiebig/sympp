@@ -400,11 +400,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope do
   end
 
   defp target_repo_root_matches_repo_scope?(target_repo_root, expected_repo, %Config{} = config) when is_binary(expected_repo) do
-    origin = RepoIdentity.local_git_origin_remote(target_repo_root)
+    case FactoryRepos.repository_scope(expected_repo) do
+      {:ok, _scope, key} ->
+        FactoryRepos.checkout_key(target_repo_root) == key
 
-    same_existing_path?(target_repo_root, expected_repo) or
-      local_repo_checkout_matches_scope?(target_repo_root, expected_repo, origin, config) or
-      origin_matches_repo_scope?(origin, expected_repo, target_repo_root, config)
+      {:error, :invalid_repo_remote} ->
+        origin = RepoIdentity.local_git_origin_remote(target_repo_root)
+
+        same_existing_path?(target_repo_root, expected_repo) or
+          local_repo_checkout_matches_scope?(target_repo_root, expected_repo, origin, config) or
+          origin_matches_repo_scope?(origin, expected_repo, target_repo_root, config)
+    end
   end
 
   defp target_repo_root_matches_repo_scope?(_target_repo_root, _expected_repo, _config), do: false

@@ -321,6 +321,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
   @spec owner(repo(), String.t()) :: WorkedOn.t() | nil
   def owner(repo, work_request_id), do: live_row(repo, @subject, work_request_id)
 
+  @doc "Checks the current owner without acquiring or changing ownership."
+  @spec require_owner(repo(), String.t(), Terminal.t()) ::
+          :ok | {:error, :work_request_unowned | {:owned_by_other_terminal, owner()}}
+  def require_owner(repo, work_request_id, %Terminal{key: key}) do
+    case owner(repo, work_request_id) do
+      %WorkedOn{terminal_key: ^key} -> :ok
+      %WorkedOn{} = row -> {:error, {:owned_by_other_terminal, refusal(row)}}
+      nil -> {:error, :work_request_unowned}
+    end
+  end
+
   @doc "A row as the board and MCP show it, with live / unknown / finished liveness."
   @spec public(WorkedOn.t()) :: owner()
   def public(%WorkedOn{} = row) do

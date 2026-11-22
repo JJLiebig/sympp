@@ -7,6 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   """
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
 
   @health_tool "sympp.health"
@@ -27,6 +28,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "list_work_requests",
     "read_work_request",
     "create_work_request",
+    "move_work_request",
     "edit_plan",
     "dispatch_work_package",
     "sync_pr",
@@ -44,7 +46,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   @read_tools [@health_tool, "list_work_requests", "read_work_request", "summarize_failed_mcp_calls"]
   # Writes that take or confirm ownership of the target WorkRequest. Decisions
   # and WorkRequest creation stay open to any Herdr terminal. Only chiefs open asks.
-  @owner_gated_tools ["edit_plan", "dispatch_work_package", "sync_pr", "close_work_package", "set_blocker", "set_report"]
+  @owner_gated_tools ["move_work_request", "edit_plan", "dispatch_work_package", "sync_pr", "close_work_package", "set_blocker", "set_report"]
 
   @type tool_name :: String.t()
   @type tool_spec :: map()
@@ -76,12 +78,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   def read_call?(name, _arguments), do: tool_access(name) == :read
 
   @doc """
-  Whether one call must own the target WorkRequest. Any chief or architect may
-  close a package as `finished` without owning it.
+  Whether one call must own the target WorkRequest. A chief may move a request
+  without taking ownership. Any chief or architect may finish a package.
   """
   @spec owner_gated_call?(tool_name(), map()) :: boolean()
-  def owner_gated_call?("close_work_package", %{"outcome" => "finished"}), do: false
-  def owner_gated_call?(name, arguments) when is_map(arguments), do: name in @owner_gated_tools
+  def owner_gated_call?(name, arguments), do: owner_gated_call?(name, arguments, nil)
+
+  @spec owner_gated_call?(tool_name(), map(), Terminal.t() | nil) :: boolean()
+  def owner_gated_call?("move_work_request", _arguments, %Terminal{role: "chief"}), do: false
+  def owner_gated_call?("close_work_package", %{"outcome" => "finished"}, _terminal), do: false
+  def owner_gated_call?(name, arguments, _terminal) when is_map(arguments), do: name in @owner_gated_tools
 
   @spec input_schema(tool_name()) :: map()
   defdelegate input_schema(name), to: InputSchemas
@@ -110,6 +116,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   defp description("create_work_request"),
     do: "Create a WorkRequest. The calling terminal becomes its owner unless own is false."
+
+  defp description("move_work_request"),
+    do:
+      "Move a WorkRequest and its open packages in the source repository to another repository. The owner or a chief can move it. GitHub-confirmed renames keep attached PRs. Resolve source PRs before importing. A move to the current repository changes nothing."
 
   defp description("edit_plan"),
     do:
