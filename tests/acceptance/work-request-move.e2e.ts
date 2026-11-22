@@ -203,6 +203,13 @@ test('moving an import refuses to guess the source of a relocated or retargeted 
   await architect.reject('move_work_request', move, 'ambiguous_source_repository');
   await rename(relocated, requestCheckout.checkout);
 
+  const relativeMirror = 'mirrors/service.git';
+  await git(root, requestCheckout.checkout, 'clone', '--bare', requestCheckout.origin, relativeMirror);
+  for (const origin of [requestCheckout.origin, relativeMirror]) {
+    await git(root, requestCheckout.checkout, 'remote', 'set-url', 'origin', origin);
+    await architect.reject('move_work_request', move, 'ambiguous_source_repository');
+  }
+
   for (const checkout of [requestCheckout, packageCheckout]) await githubOrigin(root, checkout, destination);
   await architect.reject('move_work_request', move, 'ambiguous_source_repository');
   const result = await architect.call('read_work_request', { work_request_id: request, detail: 'full' });

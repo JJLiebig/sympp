@@ -173,9 +173,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
   defp scope_key(value) do
     case stored_key(value) do
       {:stored, _} = key ->
-        case RepoIdentity.local_git_origin_remote(value) do
-          nil -> key
-          origin -> stored_key(origin)
+        # An origin without a host can be a relative path shaped like owner/repo.
+        with origin when is_binary(origin) <- RepoIdentity.local_git_origin_remote(value),
+             true <- String.contains?(origin, ":"),
+             {:ok, _scope, origin_key} <- FactoryRepos.repository_scope(origin) do
+          origin_key
+        else
+          _unresolved -> key
         end
 
       key ->
