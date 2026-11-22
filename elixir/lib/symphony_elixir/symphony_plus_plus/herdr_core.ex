@@ -212,13 +212,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   defp cached_command_snapshot(command, fresh?, last_good?) do
     now = System.monotonic_time(:millisecond)
 
-    {result, good} =
+    {result, good, checked_at} =
       case :persistent_term.get(@cache_key, nil) do
         {^command, at, result, good} when not fresh? and now - at < @cache_ms ->
-          {result, good}
+          {result, good, at}
 
         cached ->
-          load_uncached_snapshot(command, now, fresh?, cached)
+          {result, good} = load_uncached_snapshot(command, now, fresh?, cached)
+          {result, good, now}
       end
 
     case {result, good} do
@@ -228,6 +229,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
 
       {{:ok, _snapshot}, _good} when last_good? ->
         DashboardCache.track_core_expiry()
+        result
+
+      {:unavailable, _good} when last_good? ->
+        DashboardCache.expire_at(checked_at + @cache_ms)
         result
 
       _current ->

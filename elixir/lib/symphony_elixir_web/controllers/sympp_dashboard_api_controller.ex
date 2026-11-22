@@ -5,6 +5,8 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   use Phoenix.Controller, formats: [:json]
 
+  require Logger
+
   alias Plug.Conn
   alias SymphonyElixir.SymphonyPlusPlus.Asks
   alias SymphonyElixir.SymphonyPlusPlus.Asks.Ask
@@ -186,21 +188,14 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   def operator_dashboard_events(conn, _params) do
     with true <- local_operator_browser?(conn),
          :ok <- OperatorDashboardOpener.ensure_started(),
-         {:ok, subscription} <- Runtime.with_dashboard_repo(&subscribe_dashboard/1) do
+         {:ok, subscription} <- Runtime.with_dashboard_repo(&subscribe_web_board/1) do
       OperatorDashboardOpener.dashboard_connected()
 
       try do
-        conn =
-          conn
-          |> Conn.put_resp_header("cache-control", "no-cache")
-          |> Conn.put_resp_header("connection", "keep-alive")
-          |> Conn.put_resp_header("x-accel-buffering", "no")
-          |> Conn.put_resp_content_type("text/event-stream")
-          |> Conn.send_chunked(200)
-
-        arm_stream_disconnect(conn)
-        stream_dashboard_events(conn, subscription)
+        :ok = DashboardPubSub.subscribe_delivery()
+        conn |> open_dashboard_stream() |> stream_dashboard_events(subscription, :board)
       after
+        DashboardPubSub.unsubscribe_delivery()
         unsubscribe_dashboard(subscription)
         OperatorDashboardOpener.dashboard_disconnected()
       end
@@ -210,20 +205,41 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     end
   end
 
-  defp subscribe_dashboard(repo) do
+  defp subscribe_web_board(repo) do
     projections = [archived: dashboard_projection(repo, :archived), hydrated: dashboard_projection(repo, :hydrated)]
+    subscribe_dashboard(repo, projections, false)
+  end
 
+  defp subscribe_dashboard(repo, projections, notifications?) do
     case DashboardCache.watch(repo, projections) do
-      {:ok, cache, ref} -> {:ok, {cache, ref, Process.monitor(cache)}}
-      :unversioned -> with :ok <- DashboardPubSub.subscribe(), do: {:ok, {nil, nil, nil}}
+      {:ok, cache, ref} ->
+        if notifications?, do: :ok = DashboardPubSub.subscribe()
+        {:ok, {cache, ref, Process.monitor(cache)}}
+
+      :unversioned ->
+        with :ok <- DashboardPubSub.subscribe(), do: {:ok, {nil, nil, nil}}
     end
   end
 
   defp unsubscribe_dashboard({nil, nil, nil}), do: DashboardPubSub.unsubscribe()
 
   defp unsubscribe_dashboard({cache, ref, monitor}) do
+    DashboardPubSub.unsubscribe()
     Process.demonitor(monitor, [:flush])
     DashboardCache.unwatch(cache, ref)
+  end
+
+  defp open_dashboard_stream(conn) do
+    conn =
+      conn
+      |> Conn.put_resp_header("cache-control", "no-cache")
+      |> Conn.put_resp_header("connection", "keep-alive")
+      |> Conn.put_resp_header("x-accel-buffering", "no")
+      |> Conn.put_resp_content_type("text/event-stream")
+      |> Conn.send_chunked(200)
+
+    arm_stream_disconnect(conn)
+    conn
   end
 
   # Bandit normally rearms HTTP/1 reads when the controller returns. An open
@@ -296,22 +312,23 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   defp notification_events(conn, authorized?) do
     with true <- authorized?,
-         :ok <- DashboardPubSub.subscribe() do
-      conn =
-        conn
-        |> Conn.put_resp_header("cache-control", "no-cache")
-        |> Conn.put_resp_header("connection", "keep-alive")
-        |> Conn.put_resp_header("x-accel-buffering", "no")
-        |> Conn.put_resp_content_type("text/event-stream")
-        |> Conn.send_chunked(200)
-
-      case Conn.chunk(conn, "event: ready\ndata: {}\n\n") do
-        {:ok, conn} -> stream_herdr_events(conn)
-        {:error, _reason} -> conn
+         {:ok, subscription} <-
+           Runtime.with_dashboard_repo(&subscribe_dashboard(&1, [herdr: :revision], true), migrate?: false) do
+      try do
+        conn |> open_dashboard_stream() |> stream_events_after_ready(subscription)
+      after
+        unsubscribe_dashboard(subscription)
       end
     else
       false -> error_response(conn, :unauthorized)
       {:error, reason} -> error_response(conn, reason)
+    end
+  end
+
+  defp stream_events_after_ready(conn, subscription) do
+    case Conn.chunk(conn, "event: ready\ndata: {}\n\n") do
+      {:ok, conn} -> stream_dashboard_events(conn, subscription, :notification)
+      {:error, _reason} -> conn
     end
   end
 
@@ -713,13 +730,16 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp maybe_broadcast_dashboard_change(:work_package_read), do: :ok
   defp maybe_broadcast_dashboard_change(_action), do: DashboardPubSub.broadcast_changed()
 
-  defp stream_dashboard_events(conn, {_cache, ref, monitor} = subscription) do
+  defp stream_dashboard_events(conn, {_cache, ref, monitor} = subscription, mode) do
     receive do
-      {:dashboard_snapshot_changed, ^ref, version} ->
-        stream_dashboard_version(conn, subscription, version)
+      {:dashboard_changed, ^ref, version} ->
+        stream_dashboard_version(conn, subscription, mode, version)
 
-      :operator_dashboard_changed when is_nil(ref) ->
-        stream_dashboard_version(conn, subscription, System.unique_integer([:positive, :monotonic]))
+      :operator_dashboard_changed when is_nil(ref) or mode == :notification ->
+        stream_dashboard_version(conn, subscription, mode, System.unique_integer([:positive, :monotonic]))
+
+      :operator_delivery_completed ->
+        stream_dashboard_version(conn, subscription, mode, System.unique_integer([:positive, :monotonic]))
 
       {:dashboard_source_closed, ^ref} ->
         conn
@@ -738,7 +758,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     after
       30_000 ->
         case Conn.chunk(conn, ": keep-alive\n\n") do
-          {:ok, conn} -> stream_dashboard_events(conn, subscription)
+          {:ok, conn} -> stream_dashboard_events(conn, subscription, mode)
           {:error, _reason} -> conn
         end
     end
@@ -749,27 +769,17 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     conn
   end
 
-  defp stream_dashboard_version(conn, subscription, version) do
-    case Conn.chunk(conn, "event: dashboard_changed\ndata: #{Jason.encode!(%{version: version, schema_version: 1})}\n\n") do
-      {:ok, conn} -> stream_dashboard_events(conn, subscription)
+  defp stream_dashboard_version(conn, subscription, mode, version) do
+    case Conn.chunk(conn, dashboard_event(mode, version)) do
+      {:ok, conn} -> stream_dashboard_events(conn, subscription, mode)
       {:error, _reason} -> conn
     end
   end
 
-  defp stream_herdr_events(conn) do
-    receive do
-      :operator_dashboard_changed ->
-        case Conn.chunk(conn, "event: invalidated\ndata: {}\n\n") do
-          {:ok, conn} -> stream_herdr_events(conn)
-          {:error, _reason} -> conn
-        end
-    after
-      30_000 ->
-        case Conn.chunk(conn, ": keep-alive\n\n") do
-          {:ok, conn} -> stream_herdr_events(conn)
-          {:error, _reason} -> conn
-        end
-    end
+  defp dashboard_event(:notification, _version), do: "event: invalidated\ndata: {}\n\n"
+
+  defp dashboard_event(:board, version) do
+    "event: dashboard_changed\ndata: #{Jason.encode!(%{version: version, schema_version: 1})}\n\n"
   end
 
   defp maybe_append_operator_audit(repo, conn, action, %Target{} = target, tool_name) do
@@ -819,7 +829,12 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   defp maybe_put_dashboard_bootstrap(config) do
-    case Runtime.with_dashboard_repo(&LocalOperatorDashboard.operator_dashboard_payload/1) do
+    build = fn repo ->
+      Logger.debug("board_build surface=priority")
+      LocalOperatorDashboard.operator_dashboard_payload(repo)
+    end
+
+    case Runtime.with_dashboard_repo(build) do
       {:ok, dashboard} -> Map.put(config, :dashboard, dashboard)
       {:error, _reason} -> config
     end

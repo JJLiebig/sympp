@@ -95,12 +95,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert read_all.() == first
       assert Enum.map(1..4, &:counters.get(builds, &1)) == [1, 1, 1, 1]
       refute_received :operator_dashboard_changed
-      refute_received {:dashboard_snapshot_changed, ^watch, _version}
+      refute_received {:dashboard_changed, ^watch, _version}
 
       changed = %{"status" => "failed", "observed_at" => "2026-11-22T02:03:00Z"}
       :ok = sweep(repo, snapshot, review: fn _, _ -> {:ok, changed} end)
       assert %{review: ^changed} = repo.get!(Observation, package.id)
-      assert_receive {:dashboard_snapshot_changed, ^watch, _version}
+      assert_receive {:dashboard_changed, ^watch, _version}
 
       for surface <- [:hydrated, :herdr] do
         assert {:ok, body, etag} = read.(surface)

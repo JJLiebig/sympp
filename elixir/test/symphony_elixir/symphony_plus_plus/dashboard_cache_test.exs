@@ -3,7 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub, Repo}
+  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub, HerdrCore, Repo}
 
   setup do
     path = Path.join(System.tmp_dir!(), "dashboard-cache-#{System.os_time(:nanosecond)}-#{System.unique_integer([:positive])}.sqlite3")
@@ -134,7 +134,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     end
 
     {_cache, ref} = watch(:time, builder)
-    assert_receive {:dashboard_snapshot_changed, ^ref, _version}
+    assert_receive {:dashboard_changed, ^ref, _version}
     assert {:ok, old, etag} = DashboardCache.json(Repo, :time, builder)
     assert Jason.decode!(old)["decision"] == "present"
 
@@ -145,7 +145,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
 
     :atomics.put(clock, 1, deadline)
     refresh_watches()
-    assert_receive {:dashboard_snapshot_changed, ^ref, _version}
+    assert_receive {:dashboard_changed, ^ref, _version}
     assert {:ok, fresh, fresh_etag} = DashboardCache.json(Repo, :time, builder)
     assert Jason.decode!(fresh)["decision"] == "elapsed"
     refute fresh_etag == etag
@@ -161,6 +161,55 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert {:ok, body, _etag} = DashboardCache.json(Repo, :discovered, &payload/0)
     assert Jason.decode!(body)["decision"] == "acknowledged"
     assert_receive :operator_dashboard_changed
+  end
+
+  test "an inspector watches other writers without constructing a board", %{path: path} do
+    {_cache, ref} = watch(:herdr, :revision)
+    assert_receive {:dashboard_changed, ^ref, _initial}
+
+    log =
+      capture_log(fn ->
+        {:ok, writer} = Exqlite.Sqlite3.open(path)
+        :ok = Exqlite.Sqlite3.execute(writer, "UPDATE probe SET value = 'acknowledged'")
+        :ok = Exqlite.Sqlite3.close(writer)
+        refresh_watches()
+        assert_receive {:dashboard_changed, ^ref, _updated}
+      end)
+
+    assert log =~ "board_revision_probe surface=herdr"
+    refute log =~ "board_build"
+  end
+
+  test "a watched board rechecks unavailable Herdr evidence at the provider deadline" do
+    clock = controlled_clock()
+    now = :atomics.get(clock, 1)
+    command = "test-hc"
+    cache_key = {HerdrCore, :snapshot}
+    previous_snapshot = :persistent_term.get(cache_key, nil)
+    previous_command = Application.get_env(:symphony_elixir, :sympp_herdr_core)
+
+    on_exit(fn ->
+      Application.put_env(:symphony_elixir, :sympp_herdr_core, previous_command)
+      if previous_snapshot, do: :persistent_term.put(cache_key, previous_snapshot), else: :persistent_term.erase(cache_key)
+    end)
+
+    Application.put_env(:symphony_elixir, :sympp_herdr_core, command)
+    :persistent_term.put(cache_key, {command, now, :unavailable, nil})
+    builder = fn -> {:ok, %{worker: HerdrCore.status_state("test-core", "t1")}} end
+    {_cache, ref} = watch(:hydrated, builder)
+    assert_receive {:dashboard_changed, ^ref, _initial}
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :hydrated, builder)
+    assert Jason.decode!(body)["worker"] == "unknown"
+
+    snapshot = {:ok, %{core_id: "test-core", terminals: %{"t1" => %{"state" => "live"}}}}
+    at = System.monotonic_time(:millisecond)
+    :persistent_term.put(cache_key, {command, at, snapshot, {at, snapshot}})
+
+    :atomics.put(clock, 1, now + 15_000)
+    refresh_watches()
+    assert_receive {:dashboard_changed, ^ref, _updated}
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :hydrated, builder)
+    assert Jason.decode!(body)["worker"] == "live"
   end
 
   test "an unprimed slow view leaves quiet cached reads available", %{pid: pid} do
@@ -250,10 +299,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     DashboardCache.invalidate([:observation])
     :sys.get_state(DashboardCache)
     release.()
-    assert_receive {:dashboard_snapshot_changed, ^ref, _version}
+    assert_receive {:dashboard_changed, ^ref, _version}
     assert {:ok, body, _etag} = DashboardCache.json(Repo, :observation, builder)
     assert Jason.decode!(body)["observation"] == 2
-    refute_received {:dashboard_snapshot_changed, ^ref, _version}
+    refute_received {:dashboard_changed, ^ref, _version}
   end
 
   test "external writes coalesce behind one background build and catch up to the latest commit", %{path: path} do
@@ -288,7 +337,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
 
     assert :atomics.get(builds, 1) == 2
     release.()
-    assert_receive {:dashboard_snapshot_changed, ^ref, _version}
+    assert_receive {:dashboard_changed, ^ref, _version}
     assert {:ok, body, _etag} = DashboardCache.json(Repo, :coalesced, builder)
     assert Jason.decode!(body)["decision"] == "latest"
     assert :atomics.get(builds, 1) == 3
@@ -309,7 +358,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     end
 
     {cache, ref} = watch(:disconnected, builder)
-    assert_receive {:dashboard_snapshot_changed, ^ref, _version}
+    assert_receive {:dashboard_changed, ^ref, _version}
     assert_receive {:build, "recorded", _worker}
     assert {:ok, _, _} = DashboardCache.json(Repo, :one_off, &payload/0)
 

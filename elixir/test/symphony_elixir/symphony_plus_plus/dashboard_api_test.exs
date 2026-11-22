@@ -8,6 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.Cards.Card
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.RetentionThrottle
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
@@ -167,7 +168,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
   end
 
-  test "closing an idle web stream releases its HTTP connection before the keepalive" do
+  test "an unchanged web board receives delivery completion and releases its connection on close" do
+    hydrated = "/api/v1/sympp/operator/dashboard/hydrated"
+    assert %{status: 200} = response = get(local_operator_conn(), hydrated)
+    assert %{status: 200} = get(local_operator_conn(), "/api/v1/sympp/operator/dashboard?surface=archived")
+    [etag] = Plug.Conn.get_resp_header(response, "etag")
     path = "/api/v1/sympp/operator/dashboard/events"
     handler = {__MODULE__, make_ref()}
 
@@ -201,9 +206,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert {:ok, "HTTP/1.1 200 " <> _} = :gen_tcp.recv(socket, 0, 1_000)
     assert_receive {:dashboard_stream, stream}
     assert Process.alive?(stream)
+    :ok = DashboardPubSub.broadcast_delivery_completed()
+    await_event(socket, "event: dashboard_changed\n")
+
+    assert %{status: 304, resp_body: ""} =
+             local_operator_conn()
+             |> put_req_header("if-none-match", etag)
+             |> get(hydrated)
+
     ref = Process.monitor(stream)
     :ok = :gen_tcp.close(socket)
     assert_receive {:DOWN, ^ref, :process, ^stream, _reason}, 1_000
+  end
+
+  defp await_event(socket, expected) do
+    assert {:ok, line} = :gen_tcp.recv(socket, 0, 1_000)
+    if line != expected, do: await_event(socket, expected)
   end
 
   test "the first operator write to a current ledger does not wait for a migration lock" do

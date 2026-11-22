@@ -27,7 +27,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   def json(_repo, surface, fun), do: project(surface, fun)
 
   @doc false
-  @spec watch(module(), [{atom(), projection()}]) :: {:ok, pid(), reference()} | :unversioned
+  @spec watch(module(), [{atom(), projection() | :revision}]) :: {:ok, pid(), reference()} | :unversioned
   def watch(Repo, projections) do
     with pid when is_pid(pid) <- Process.whereis(__MODULE__),
          {:ok, ref} <- GenServer.call(pid, {:watch, source(), projections}, :infinity) do
@@ -127,9 +127,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
 
       watches =
         Enum.reduce(projections, state.watches, fn {surface, fun}, watches ->
-          key = {source, surface}
-          {project, readers} = Map.get(watches, key, {fun, %{}})
-          Map.put(watches, key, {project, Map.put(readers, ref, pid)})
+          add_reader(watches, {source, surface}, fun, ref, pid)
         end)
 
       # Register the stream before checking any revision, including if an
@@ -138,6 +136,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     else
       {:reply, :unversioned, state}
     end
+  end
+
+  defp add_reader(watches, key, projection, ref, pid) do
+    target = if projection == :revision, do: {:revision, nil}, else: projection
+    {target, readers} = Map.get(watches, key, {target, %{}})
+
+    # A notification client may have read its detail before connecting. When a
+    # revision is already known, wake the new reader as well as tracking it.
+    if match?({:revision, generation} when not is_nil(generation), target), do: notify_readers(%{ref => pid})
+    Map.put(watches, key, {target, Map.put(readers, ref, pid)})
   end
 
   defp ensure_refresh(state, job_key, fun) do
@@ -244,7 +252,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
 
   defp finish_refresh(state, {source, surface} = key, entry) do
     case Map.get(state.watches, key) do
-      {fun, _readers} ->
+      {fun, _readers} when is_function(fun, 0) ->
         {revision, state} = probe(state, get_in(state.sources, [source, :connection]), [surface])
         latest = generation(state, revision, surface)
 
@@ -257,7 +265,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
 
         schedule(state)
 
-      nil ->
+      _no_projection_watch ->
         # A later GET rechecks this build's generation. Once demand ends,
         # completing a build requires neither a version check nor a retry.
         install(state, key, entry)
@@ -275,18 +283,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
       _changed ->
         state = put_in(state.entries[key], entry)
         DashboardPubSub.broadcast_refreshed()
-        notify_readers(Map.get(state.watches, key))
+        notify_projection_readers(Map.get(state.watches, key))
         state
     end
   end
 
   defp install(state, _key, _entry), do: state
 
-  defp notify_readers(nil), do: :ok
+  defp notify_projection_readers({fun, readers}) when is_function(fun, 0), do: notify_readers(readers)
+  defp notify_projection_readers(_other), do: :ok
 
-  defp notify_readers({_fun, readers}) do
+  defp notify_readers(readers) do
     version = System.unique_integer([:positive, :monotonic])
-    Enum.each(readers, fn {ref, pid} -> send(pid, {:dashboard_snapshot_changed, ref, version}) end)
+    Enum.each(readers, fn {ref, pid} -> send(pid, {:dashboard_changed, ref, version}) end)
   end
 
   defp close_source(state, source) do
@@ -359,12 +368,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
       surfaces = Enum.map(watches, fn {{_source, surface}, _watch} -> surface end)
       {revision, state} = probe(state, get_in(state.sources, [source, :connection]), surfaces)
 
-      Enum.reduce(watches, state, fn {{_source, surface} = key, {fun, _readers}}, state ->
-        refresh_if_stale(state, key, generation(state, revision, surface), fun)
+      Enum.reduce(watches, state, fn {{_source, surface} = key, watch}, state ->
+        refresh_watch(state, key, watch, generation(state, revision, surface))
       end)
     end)
     |> schedule()
   end
+
+  defp refresh_watch(state, key, {{:revision, previous}, readers}, generation) do
+    if generation != nil and generation != previous do
+      notify_readers(readers)
+      put_in(state.watches[key], {{:revision, generation}, readers})
+    else
+      state
+    end
+  end
+
+  defp refresh_watch(state, key, {fun, _readers}, generation), do: refresh_if_stale(state, key, generation, fun)
 
   defp refresh_if_stale(state, _key, nil, _fun), do: state
 
@@ -396,11 +416,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     now = state.clock.()
 
     next =
-      Enum.reduce(state.watches, now + @refresh_interval_ms, fn {key, _watch}, next ->
-        case expiry(Map.get(state.entries, key), now) do
-          deadline when deadline > now -> min(next, deadline)
-          _due -> next
-        end
+      Enum.reduce(state.watches, now + @refresh_interval_ms, fn
+        {key, {fun, _readers}}, next when is_function(fun, 0) ->
+          case expiry(Map.get(state.entries, key), now) do
+            deadline when deadline > now -> min(next, deadline)
+            _due -> next
+          end
+
+        _revision_watch, next ->
+          next
       end)
 
     case state.timer do

@@ -182,7 +182,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
     if Keyword.get(opts, :async, false) and is_binary(ask.asked_by_terminal) do
       OperatorDelivery.start(repo, fn delivery_repo ->
         deliver(delivery_repo, ask)
-        DashboardPubSub.broadcast_changed()
+        DashboardPubSub.broadcast_delivery_completed()
       end)
 
       {:ok, ask, %{"state" => "pending"}}

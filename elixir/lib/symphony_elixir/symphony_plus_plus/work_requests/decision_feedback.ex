@@ -155,7 +155,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback do
 
   defp mark_undelivered(repo, %DecisionLogEntry{} = decision, reason) do
     decision = repo.update!(Ecto.Changeset.change(decision, undelivered_reason: reason, updated_at: now()))
-    DashboardPubSub.broadcast_changed()
+    DashboardPubSub.broadcast_delivery_completed()
     decision
   end
 
