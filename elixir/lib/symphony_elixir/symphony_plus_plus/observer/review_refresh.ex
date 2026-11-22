@@ -3,7 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
 
   use GenServer
 
-  alias SymphonyElixir.SymphonyPlusPlus.{Observer, OfflineSandbox, Repo}
+  alias SymphonyElixir.SymphonyPlusPlus.{Observer, OfflineSandbox, Repo, ReviewStatus}
   alias SymphonyElixir.TaskSupervisor
 
   @board_wait_ms 2_000
@@ -36,8 +36,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
   @spec advance() :: :ok
   def advance, do: GenServer.cast(__MODULE__, :advance)
 
+  @doc false
+  @spec sweep(%{{String.t(), String.t() | nil} => [String.t()]}) :: [{[String.t()], ReviewStatus.result()}]
+  def sweep(groups) when map_size(groups) == 0, do: []
+  def sweep(groups), do: GenServer.call(__MODULE__, {:sweep, groups}, :infinity)
+
   @impl true
-  def init(_opts), do: {:ok, %{reads: %{}, scopes: %{}, queued: [], running: %{}, waiters: %{}}}
+  def init(_opts), do: {:ok, %{reads: %{}, scopes: %{}, queued: [], running: %{}, waiters: %{}, sweeps: %{}}}
 
   @impl true
   def handle_call({:request, scope, token}, from, state) do
@@ -49,6 +54,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
     else
       {:noreply, %{state | waiters: Map.put(state.waiters, token, {from, ids})}}
     end
+  end
+
+  def handle_call({:sweep, groups}, from, state) do
+    batch = make_ref()
+    jobs = for {cycle, ids} <- groups, do: {cycle, {:sweep, batch, ids}}
+    sweeps = Map.put(state.sweeps, batch, {from, length(jobs), []})
+    {:noreply, start_reads(%{state | sweeps: sweeps, queued: jobs ++ state.queued})}
   end
 
   @impl true
@@ -72,13 +84,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
   end
 
   @impl true
-  def handle_info({ref, :ok}, state) when is_map_key(state.running, ref) do
+  def handle_info({ref, result}, state) when is_map_key(state.running, ref) do
     Process.demonitor(ref, [:flush])
-    {:noreply, finish_read(state, ref)}
+    {:noreply, finish_read(state, ref, result)}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state) when is_map_key(state.running, ref) do
-    {:noreply, finish_read(state, ref)}
+    {:noreply, finish_read(state, ref, :unknown)}
   end
 
   defp select_scope(scope, state) do
@@ -93,26 +105,61 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
         jobs = Observer.display_reviews(Repo, missing)
         pending = for {_route, observations} <- jobs, observation <- observations, do: observation.work_package_id
         reads = Enum.reduce(pending, state.reads, &Map.put(&2, &1, :pending))
-        queued = state.queued ++ jobs
+        queued = state.queued ++ Enum.map(jobs, fn {cycle, observations} -> {cycle, {:display, observations}} end)
         {ids, %{state | reads: reads, queued: queued, scopes: Map.put(state.scopes, scope, ids)}}
     end
   end
 
-  defp start_reads(%{queued: [{_route, observations} = job | rest], running: running} = state)
-       when map_size(running) < @review_concurrency do
-    ids = Enum.map(observations, & &1.work_package_id)
-    task = Task.Supervisor.async_nolink(TaskSupervisor, Observer, :refresh_display_review, [Repo, job])
-    start_reads(%{state | queued: rest, running: Map.put(running, task.ref, ids)})
+  defp start_reads(%{queued: [_ | _], running: running} = state) when map_size(running) < @review_concurrency do
+    # Qualification needs a fresh read after any in-flight read of that cycle.
+    active = MapSet.new(Map.values(running), &elem(&1, 0))
+
+    case Enum.split_while(state.queued, fn {cycle, _job} -> MapSet.member?(active, cycle) end) do
+      {blocked, [job | rest]} ->
+        task = start_read(job)
+        start_reads(%{state | queued: blocked ++ rest, running: Map.put(running, task.ref, job)})
+
+      {_blocked, []} ->
+        state
+    end
   end
 
   defp start_reads(state), do: state
 
-  defp finish_read(state, ref) do
-    {ids, running} = Map.pop!(state.running, ref)
+  defp start_read({cycle, {:display, observations}}) do
+    Task.Supervisor.async_nolink(TaskSupervisor, Observer, :refresh_display_review, [Repo, {cycle, observations}])
+  end
+
+  defp start_read({{review_id, route}, {:sweep, _batch, _ids}}) do
+    Task.Supervisor.async_nolink(TaskSupervisor, ReviewStatus, :read, [review_id, route])
+  end
+
+  defp finish_read(state, ref, result) do
+    {{_cycle, job}, running} = Map.pop!(state.running, ref)
+    %{state | running: running} |> complete_read(job, result) |> start_reads()
+  end
+
+  defp complete_read(state, {:display, observations}, _result) do
+    ids = Enum.map(observations, & &1.work_package_id)
     reads = Enum.reduce(ids, state.reads, &Map.put(&2, &1, :done))
     {ready, waiting} = Map.split_with(state.waiters, fn {_token, {_from, ids}} -> complete?(ids, reads) end)
     Enum.each(ready, fn {_token, {from, _ids}} -> GenServer.reply(from, :ok) end)
-    start_reads(%{state | reads: reads, running: running, waiters: waiting})
+    %{state | reads: reads, waiters: waiting}
+  end
+
+  defp complete_read(state, {:sweep, batch, ids}, result) do
+    {from, remaining, results} = Map.fetch!(state.sweeps, batch)
+    results = [{ids, result} | results]
+
+    sweeps =
+      if remaining == 1 do
+        GenServer.reply(from, results)
+        Map.delete(state.sweeps, batch)
+      else
+        Map.put(state.sweeps, batch, {from, remaining - 1, results})
+      end
+
+    %{state | sweeps: sweeps}
   end
 
   defp complete?(ids, reads), do: Enum.all?(ids, &(Map.get(reads, &1) != :pending))

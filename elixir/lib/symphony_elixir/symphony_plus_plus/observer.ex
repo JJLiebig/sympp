@@ -47,7 +47,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   alias SymphonyElixir.SymphonyPlusPlus.Observer.{Observation, ReviewRefresh}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.{RepoIdentity, ReviewStatus}
+  alias SymphonyElixir.SymphonyPlusPlus.{Repo, RepoIdentity, ReviewStatus}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, Qualification, Stacking, WorkPackage}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -307,9 +307,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     end
   end
 
-  defp review_results(repo, packages, opts) do
-    repo
-    |> review_reads(packages, opts)
+  defp review_results(_repo, [], _opts), do: %{}
+
+  defp review_results(Repo, packages, []) do
+    if Process.whereis(ReviewRefresh) do
+      Repo |> review_groups(packages, []) |> ReviewRefresh.sweep() |> reviews_by_package()
+    else
+      Repo |> review_reads(packages, []) |> reviews_by_package()
+    end
+  end
+
+  defp review_results(repo, packages, opts), do: repo |> review_reads(packages, opts) |> reviews_by_package()
+
+  defp reviews_by_package(reads) do
+    reads
     |> Enum.flat_map(fn {ids, result} -> Enum.map(ids, &{&1, result}) end)
     |> Map.new()
   end
