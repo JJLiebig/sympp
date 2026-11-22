@@ -1,3 +1,4 @@
+import { coalescedRead } from "../coalesced-read";
 import { executionFrontierProjection } from "./execution-graph/frontier";
 import { workRequestExecutionGraphModel } from "./execution-graph/adapter";
 import type { WorkRequestDetail as DashboardWorkRequestDetail } from "./work-request";
@@ -23,7 +24,15 @@ export async function runInspector(env = process.env) {
   let detailAbort = new AbortController();
   let transition = Promise.resolve();
   const serialize = (action: () => Promise<void>) => transition = transition.then(action, action);
-  const watch = () => void watchSympp(state, () => refreshDetail(state, detailAbort.signal).then(() => draw(state)), detailAbort.signal);
+  const watch = () => {
+    const signal = detailAbort.signal;
+    const detail = coalescedRead(
+      () => refreshDetail(state, signal),
+      () => { if (!signal.aborted) draw(state); },
+      () => {},
+    );
+    void watchSympp(state, detail.changed, signal);
+  };
   const rebind = async (next: typeof initial) => {
     state.binding = next;
     detailAbort.abort();
@@ -97,12 +106,14 @@ function initialBinding(snapshot: HerdrSnapshot, env: NodeJS.ProcessEnv) {
 }
 
 async function refreshDetail(state: InspectorState, signal: AbortSignal) {
+  if (signal.aborted) return;
   try {
     const response = await fetch(`${state.binding.endpoint}/api/v1/sympp/herdr/work-requests/${encodeURIComponent(state.binding.workRequestId)}`, {
       signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const detail = await response.json() as WorkRequestDetail;
+    if (signal.aborted) return;
     state.detail = {
       ...detail,
       execution_graph: workRequestExecutionGraphModel(detail as unknown as DashboardWorkRequestDetail, { includeHistorical: true }),
@@ -111,7 +122,7 @@ async function refreshDetail(state: InspectorState, signal: AbortSignal) {
     if (!state.selectedId || !ids.includes(state.selectedId)) state.selectedId = ids[0];
     state.error = undefined;
   } catch (error) {
-    if ((error as Error).name !== "AbortError") state.error = "Ledger unavailable";
+    if (!signal.aborted && (error as Error).name !== "AbortError") state.error = "Ledger unavailable";
   }
 }
 
@@ -119,7 +130,7 @@ async function watchSympp(state: InspectorState, invalidate: () => void, signal:
   while (!signal.aborted) {
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
-      const response = await fetch(`${state.binding.endpoint}/api/v1/sympp/herdr/events`, { signal });
+      const response = await fetch(`${state.binding.endpoint}/api/v1/sympp/herdr/events?work_request_id=${encodeURIComponent(state.binding.workRequestId)}`, { signal });
       if (!response.ok || !response.body) throw new Error("event stream unavailable");
       reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -130,7 +141,7 @@ async function watchSympp(state: InspectorState, invalidate: () => void, signal:
         buffer += decoder.decode(value, { stream: true });
         const events = buffer.split("\n\n");
         buffer = events.pop() ?? "";
-        if (events.some((event) => event.includes("event: invalidated"))) invalidate();
+        if (events.some((event) => event.includes("event: ready") || event.includes("event: invalidated"))) invalidate();
       }
     } catch (error) {
       if ((error as Error).name === "AbortError") return;

@@ -2,6 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardCache
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
     BlockerProjection,
@@ -50,7 +51,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   @spec stale_agent_run?(AgentRun.t(), DateTime.t(), non_neg_integer()) :: boolean()
   def stale_agent_run?(%AgentRun{status: status, last_seen_at: %DateTime{} = last_seen_at}, %DateTime{} = now, threshold_seconds)
       when status in ["starting", "running", "retrying"] and is_integer(threshold_seconds) and threshold_seconds >= 0 do
-    DateTime.diff(now, last_seen_at, :second) >= threshold_seconds
+    stale? = DateTime.diff(now, last_seen_at, :second) >= threshold_seconds
+    unless stale?, do: DashboardCache.expire_at(DateTime.add(last_seen_at, threshold_seconds, :second))
+    stale?
   end
 
   def stale_agent_run?(%AgentRun{}, %DateTime{}, _threshold_seconds), do: false

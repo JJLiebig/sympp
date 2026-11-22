@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { contract } from '../support/factory.js';
-import { close, head, installReviewSuite, pr, prUrl, progress, row, sync, test } from '../support/delivery.js';
+import { board, close, head, installReviewSuite, pr, prUrl, progress, row, sync, test } from '../support/delivery.js';
 import { git, repository, githubCheckout } from '../support/worktree-git.js';
 
 test('deployment observations cover every delivered revision and preserve completion through rollback and unavailable history', async ({ delivery: { factory, provider } }) => {
@@ -750,18 +750,61 @@ test('the watcher and manual sync read reviews locally for workers on the factor
 
   const successor = 'rvw_local_successor';
   const review = await installReviewSuite(factory.home);
+  const localProgress = { review: localReview, branch: localBranch, done: false, status: 'running', progress: '1/2' };
+  await review.cycles({ [localReview]: localProgress });
+  for (let sweep = 0; sweep < 2; sweep += 1) await factory.tick('sweep');
+  expect(provider.graphql).toHaveLength(2);
+  expect(await review.calls()).toEqual([]);
+  expect(provider.execRoutes).toEqual([]);
+
+  const before = (await board(architect, request)).work_packages;
+  expect(before.find((item: any) => item.id === local)).toMatchObject({
+    raw_status: 'dispatched',
+    work_package: { review_signal: { evidence_id: localReview, current: 1, total: 2, status: 'in_progress' } },
+  });
+  expect(before.find((item: any) => item.id === remote)).toMatchObject({
+    raw_status: 'dispatched',
+    work_package: { observation_stale: ['review'], review_signal: { observation_state: 'unknown' } },
+  });
+  const localCalls = async () => (await review.calls()).filter((argv) => argv[1] === localReview).length;
+  expect(await localCalls()).toBe(1);
+  expect(provider.execRoutes).toEqual([desktopRoute]);
+
+  // A failed discovery does not mean the branch has no PR. The usual sweep
+  // still checks reviews and a consumer can use the result it recorded.
+  provider.github = 'down';
+  await review.cycles({ [localReview]: { ...localProgress, progress: '2/2' }, [manualReview]: {} });
+  await factory.tick('sweep');
+  expect(await row(architect, request, local)).toMatchObject({
+    raw_status: 'dispatched',
+    work_package: { observation_stale: ['github'], review_signal: { current: 2 } },
+  });
+  expect(await localCalls()).toBe(2);
+  expect(provider.execRoutes).toEqual([desktopRoute, desktopRoute]);
+  provider.github = 'up';
+  await factory.tick('sweep');
+  expect(await localCalls()).toBe(2);
+  expect(provider.execRoutes).toEqual([desktopRoute, desktopRoute]);
+
   await review.cycles({
     [localReview]: { review: localReview, branch: localBranch, done: false, status: 'replan', superseded_by: { review: successor } },
     [successor]: { review: successor, branch: localBranch, done: true, status: 'done', accepted_head: head('a') },
     [remoteReview]: { review: remoteReview, branch: remoteBranch, done: true, status: 'done', accepted_head: head('b') },
-    [manualReview]: { review: manualReview, branch: noCiPr.headRefName, done: true, status: 'done', accepted_head: noCiPr.headRefOid },
+    [manualReview]: {},
   });
   provider.set(913, pr(913, head('a')));
   provider.set(914, pr(914, head('b')));
-  provider.set(915, noCiPr);
 
   await factory.tick('sweep');
   const manualBeforeSync = await row(architect, request, manual);
+  expect(manualBeforeSync).toMatchObject({
+    raw_status: 'dispatched',
+    work_package: { observation_stale: ['review'] },
+  });
+  await review.cycles({
+    [manualReview]: { review: manualReview, branch: noCiPr.headRefName, done: true, status: 'done', accepted_head: noCiPr.headRefOid },
+  });
+  provider.set(915, noCiPr);
   const synced = await architect.call('sync_pr', { work_package_id: manual, url: noCiPr.url });
 
   expect(new Set([factoryCore.name, hostname(), desktopRoute]).size).toBe(3);
@@ -774,9 +817,12 @@ test('the watcher and manual sync read reviews locally for workers on the factor
     work_package: { observation_stale: ['review'], review_signal: { observation_state: 'unknown' } },
     merge_eligibility: { eligible: false, reason_codes: expect.arrayContaining(['observation_stale']) },
   });
-  expect(manualBeforeSync.raw_status).toBe('dispatched');
   expect(synced.work_package.status).toBe('ready');
-  expect(provider.execRoutes).toEqual([desktopRoute]);
+  expect(await row(architect, request, manual)).toMatchObject({
+    raw_status: 'ready',
+    work_package: { observation_stale: [], review_signal: { accepted_head: noCiPr.headRefOid, status: 'passed' } },
+  });
+  expect(provider.execRoutes).toEqual([desktopRoute, desktopRoute, desktopRoute]);
 });
 
 test('a manual sync needs known CI once the repository has CI, unless the architect records an override for that head', async ({ watched: { factory, provider } }) => {

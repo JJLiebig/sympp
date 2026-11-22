@@ -16,11 +16,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorConfig do
   end
 
   @doc false
-  @spec revision() :: binary() | nil
-  def revision do
-    case File.read(config_path()) do
-      {:ok, contents} -> :crypto.hash(:sha256, contents)
-      _unavailable -> nil
+  @spec revision({tuple() | nil, binary() | nil}) :: {tuple() | nil, binary() | nil}
+  def revision({previous_stamp, previous_hash}) do
+    path = config_path()
+
+    case File.stat(path, time: :posix) do
+      {:ok, stat} ->
+        stamp = {path, stat.inode, stat.size, stat.mtime, stat.ctime}
+        now = System.system_time(:second)
+        # File.stat timestamps have second precision. Recheck the contents
+        # until both timestamps have settled to catch same-size overwrites.
+        verified_stamp = if stat.mtime < now and stat.ctime < now, do: stamp
+
+        if verified_stamp != nil and verified_stamp == previous_stamp do
+          {previous_stamp, previous_hash}
+        else
+          read_revision(path, verified_stamp)
+        end
+
+      _unavailable ->
+        {nil, nil}
+    end
+  end
+
+  defp read_revision(path, stamp) do
+    case File.read(path) do
+      {:ok, contents} -> {stamp, :crypto.hash(:sha256, contents)}
+      _unavailable -> {nil, nil}
     end
   end
 

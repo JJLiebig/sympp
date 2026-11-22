@@ -43,10 +43,9 @@ The hydrated dashboard returns:
 - `work_request_details[].work_packages[].session_location` as
   `{"label":"Build Desk","kind":"desktop"}` when known.
 
-The priority and deferred dashboard reads use the same labels. The config is
-read once per request, before the hydrated database transaction. Edits appear
-on the next read. Missing, unreadable or malformed files return no labels;
-unknown fields are ignored. Reads never create or repair the file.
+The priority and deferred dashboard reads use the same labels. Edits appear
+on the next read. Missing, unreadable or malformed files return no labels.
+Unknown fields are ignored. Reads never create or repair the file.
 
 ## Set up the file
 

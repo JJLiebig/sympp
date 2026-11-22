@@ -6,8 +6,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   alias SymphonyElixir.SymphonyPlusPlus.Observer.Observation
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{WorkPackage, WorkPackageDelivery}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
@@ -34,6 +36,73 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   end
 
   describe "GitHub" do
+    test "a PR attachment closes the pre-PR display read window", %{repo: repo} do
+      package = package!(repo, "WP-OBS-REVIEW-ATTACH", branch_pattern: "agent/example", review_mode: "fast", review_id: "review-attach")
+      :ok = sweep(repo, %{{:branch, "nextide", "repo", "agent/example", "main"} => {:ok, nil}})
+      observed = repo.get!(Observation, package.id)
+      :ok = Observer.record_display_review(repo, [observed], :unknown)
+      [{_package, displayed}] = Observer.pre_pr_review_candidates(repo, {:request, package.work_request_id})
+      assert displayed.stale == ["review"]
+
+      assert {:ok, :ok} =
+               repo.transaction(fn ->
+                 Qualification.record_pr(repo, Actor.observer(), package, pr_event_payload(939, "head-a"), :unknown)
+               end)
+
+      # Only a fresh check of the attached PR can clear the outage.
+      :ok = Observer.record_display_review(repo, [displayed], :not_started)
+
+      assert %Observation{pr_absent: false, stale: ["review"]} = repo.get!(Observation, package.id)
+    end
+
+    test "PR discovery clears a review outage recorded during its sweep", %{repo: repo} do
+      package = package!(repo, "WP-OBS-REVIEW-RACE", branch_pattern: "agent/example", review_mode: "fast", review_id: "review-race")
+      branch = {:branch, "nextide", "repo", "agent/example", "main"}
+      :ok = sweep(repo, %{branch => {:ok, nil}})
+
+      review = %{"done" => true, "status" => "passed", "accepted_head" => "head-a"}
+      absent = repo.get!(Observation, package.id)
+      assert absent.pr_absent
+      displayed = repo.update!(Ecto.Changeset.change(absent, review: review))
+
+      discover = fn [^branch] ->
+        # A display reader records an outage after the sweep loaded its snapshot.
+        :ok = Observer.record_display_review(repo, [displayed], :unknown)
+        %{branch => {:ok, pr(938, "head-a")}}
+      end
+
+      :ok = Observer.sweep(repo, snapshot: discover, review: fn "review-race", _route -> {:ok, review} end)
+
+      assert %WorkPackage{status: "ready"} = repo.get!(WorkPackage, package.id)
+      assert %Observation{pr: %{"number" => 938}, pr_absent: false, review: ^review, stale: []} = repo.get!(Observation, package.id)
+    end
+
+    test "a manual sync records current review before the first observation", %{repo: repo} do
+      package = package!(repo, "WP-OBS-REVIEW-SYNC", branch_pattern: "agent/example", review_mode: "fast", review_id: "review-sync")
+      branch = {:branch, "nextide", "repo", "agent/example", "main"}
+      review = %{"done" => true, "status" => "passed", "accepted_head" => "head-a"}
+      snapshot = pr_event_payload(940, "head-a")
+
+      sync = fn "review-sync", _route ->
+        assert {:ok, :ok} =
+                 repo.transaction(fn ->
+                   Qualification.record_pr(repo, Actor.observer(), package, snapshot, {:ok, review})
+                 end)
+
+        :unknown
+      end
+
+      :ok = Observer.sweep(repo, snapshot: fn [^branch] -> %{branch => {:ok, pr(940, "head-a")}} end, review: sync)
+      assert %Observation{pr_absent: false, review: ^review, stale: []} = repo.get!(Observation, package.id)
+
+      assert {:ok, :ok} =
+               repo.transaction(fn ->
+                 Qualification.record_pr(repo, Actor.observer(), package, snapshot, :deferred)
+               end)
+
+      assert %Observation{review: ^review, stale: []} = repo.get!(Observation, package.id)
+    end
+
     test "the sweep uses each package's newest valid attachment in chronological order", %{repo: repo} do
       legacy = package!(repo, "WP-OBS-LEGACY-ATTACHMENT", status: "ready")
       repaired = package!(repo, "WP-OBS-REPAIRED-ATTACHMENT")
@@ -101,12 +170,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
             load.()
           end
 
-          {surface, fn -> DashboardCache.json(repo, surface, build) end}
+          {surface, build}
         end)
 
-      first = Map.new(boards, fn {surface, get} -> {surface, get.()} end)
+      read = fn surface -> DashboardCache.json(repo, surface, Map.fetch!(boards, surface)) end
+      read_all = fn -> Map.new(Map.keys(boards), &{&1, read.(&1)}) end
+      first = read_all.()
       assert Enum.all?(Map.values(first), &match?({:ok, _, _}, &1))
       assert Enum.map(1..4, &:counters.get(builds, &1)) == [1, 1, 1, 1]
+      {:ok, cache, watch} = DashboardCache.watch(repo, Map.to_list(Map.take(boards, [:hydrated, :archived])))
+      on_exit(fn -> DashboardCache.unwatch(cache, watch) end)
       :ok = DashboardPubSub.subscribe()
       {:ok, reader} = Exqlite.Sqlite3.open(database_path, mode: :readonly)
       on_exit(fn -> Exqlite.Sqlite3.close(reader) end)
@@ -122,23 +195,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert {:row, ^before} = Exqlite.Sqlite3.step(reader, version)
       :ok = Exqlite.Sqlite3.reset(version)
       assert repo.get!(Observation, package.id) == stored
-      send(DashboardCache, :refresh_tick)
-      assert Map.new(boards, fn {surface, get} -> {surface, get.()} end) == first
+      send(cache, :refresh_watched)
+      assert read_all.() == first
       assert Enum.map(1..4, &:counters.get(builds, &1)) == [1, 1, 1, 1]
       refute_received :operator_dashboard_changed
+      refute_received {:dashboard_changed, ^watch, _version}
 
       changed = %{"status" => "failed", "observed_at" => "2026-11-22T02:03:00Z"}
       :ok = sweep(repo, snapshot, review: fn _, _ -> {:ok, changed} end)
       assert %{review: ^changed} = repo.get!(Observation, package.id)
+      assert_receive {:dashboard_changed, ^watch, _version}
 
       for surface <- [:hydrated, :herdr] do
-        assert {:ok, body, etag} = boards[surface].()
+        assert {:ok, body, etag} = read.(surface)
         assert etag != elem(first[surface], 2)
         assert %{"work_request_details" => [%{"work_packages" => [%{"review_signal" => %{"status" => "failed"}}]}]} = Jason.decode!(body)
       end
 
-      assert boards.priority.() == first.priority
-      assert boards.archived.() == first.archived
+      assert read.(:priority) == first.priority
+      assert read.(:archived) == first.archived
       assert Enum.map(1..4, &:counters.get(builds, &1)) == [1, 1, 2, 2]
     end
 

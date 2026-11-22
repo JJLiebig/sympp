@@ -26,6 +26,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestArtifact
   alias SymphonyElixir.SymphonyPlusPlus.HerdrCore
+  alias SymphonyElixir.SymphonyPlusPlus.Observer.Observation
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
@@ -35,6 +36,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, WorkPackage}
 
   @type review :: :done | :none | :pending | :unknown
+  @type review_result :: Observation.review_result()
+  @type recorded_review :: review_result() | :deferred | :sweep
   @type pr_facts :: %{
           required(:pr_state) => String.t() | nil,
           required(:pr_draft?) => boolean(),
@@ -48,19 +51,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
   @type decision :: :qualify | {:unqualify, [String.t()]} | {:hold, [String.t()]}
 
   @doc """
-  The review predicate for a package and PR head: `:none` when the package
-  reviews in mode `none`, else the latest linked Review Suite state starting
-  at the dispatch `review_id`.
+  Reads the latest linked Review Suite state starting at the dispatch `review_id`,
+  or returns `:none` for a package without a review cycle.
   """
-  @spec review(module(), WorkPackage.t(), String.t() | nil) :: review()
-  def review(repo, %WorkPackage{id: id, review_mode: mode, review_id: review_id, launch_machine: route}, head_sha)
+  @spec read_review(module(), WorkPackage.t()) :: review_result()
+  def read_review(repo, %WorkPackage{id: id, review_mode: mode, review_id: review_id, launch_machine: route})
       when mode in ["fast", "normal", "deep"] and is_binary(review_id) do
     worker = repo |> Ownership.workers([id]) |> Map.get(id)
     machine = review_route(route, worker, HerdrCore.current())
-    review_id |> ReviewStatus.read(machine) |> ReviewStatus.state(head_sha)
+    ReviewStatus.read(review_id, machine)
   end
 
-  def review(_repo, %WorkPackage{}, _head_sha), do: :none
+  def read_review(_repo, %WorkPackage{}), do: :none
 
   @doc "Uses a local review read for a worker bound to the factory core, or returns the stored route."
   @spec review_route(String.t() | nil, WorkedOn.t() | nil, {:ok, HerdrCore.snapshot()} | :unavailable) ::
@@ -96,15 +98,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
   reports checks marks its repository as having CI.
   """
   @spec record_pr(module(), Actor.t(), WorkPackage.t(), map()) :: :ok | {:error, term()}
-  def record_pr(repo, %Actor{} = actor, %WorkPackage{} = package, payload) do
+  @spec record_pr(module(), Actor.t(), WorkPackage.t(), map(), recorded_review()) :: :ok | {:error, term()}
+  def record_pr(repo, %Actor{} = actor, %WorkPackage{} = package, payload, review \\ :sweep) do
     branch = %{"type" => "branch", "source_tool" => "attach_branch", "branch" => payload["branch"], "head_sha" => payload["head_sha"], "observed_at" => payload["observed_at"]}
 
     with {:ok, _branch} <- append_event(repo, actor, package.id, branch, "branch_attached"),
          {:ok, _attachment} <- append_event(repo, actor, package.id, Map.put(payload, "source_tool", "attach_pr"), "pr_attached"),
          {:ok, _snapshot} <- append_event(repo, actor, package.id, Map.put(payload, "source_tool", "sync_pr"), "pr_synced"),
          {:ok, _changed?} <- PullRequestArtifact.upsert(repo, package.id, payload),
-         {:ok, _package} <- clear_ci_override(repo, package, payload["head_sha"]) do
+         {:ok, _package} <- clear_ci_override(repo, package, payload["head_sha"]),
+         :ok <- record_observation(repo, package.id, review) do
       note_repository_ci(repo, payload)
+    end
+  end
+
+  # Close the write window before any pending display read can publish evidence
+  # for the attached PR. The Observer publishes its current facts separately.
+  defp record_observation(repo, id, :sweep) do
+    query = from(observation in Observation, where: observation.work_package_id == ^id and observation.pr_absent)
+    repo.update_all(query, set: [pr_absent: false])
+    :ok
+  end
+
+  defp record_observation(repo, id, review) do
+    observation = repo.get(Observation, id) || %Observation{work_package_id: id}
+    review_attrs = if review == :deferred, do: %{}, else: Observation.review_attributes(observation, review)
+    attrs = Map.merge(review_attrs, %{pr_absent: false, observed_at: DateTime.utc_now(:microsecond)})
+
+    case repo.insert_or_update(Ecto.Changeset.change(observation, attrs)) do
+      {:ok, _stored} -> :ok
+      {:error, _reason} = error -> error
     end
   end
 

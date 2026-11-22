@@ -83,11 +83,12 @@ defmodule SymphonyElixir.Application do
       [
         {Repo, Repo.child_options()},
         {WorktreeCleanupQueue, repo: Repo},
+        SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh,
         {Observer, repo: Repo},
         {Retention, repo: Repo},
         SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore,
         SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases,
-        {SymphonyElixir.HttpServer, host: "127.0.0.1", prime_dashboard: true}
+        {SymphonyElixir.HttpServer, host: "127.0.0.1", migrate_ledger: true}
       ]
     else
       [

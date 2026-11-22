@@ -2,33 +2,82 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   @moduledoc false
   use GenServer
 
+  require Logger
+
   alias Exqlite.Sqlite3
   alias SymphonyElixir.SymphonyPlusPlus.{DashboardPubSub, HerdrCore, OperatorConfig, Repo}
 
-  # The ledger version doesn't cover run age, card expiry, or local repository
-  # identity changes. A surface can recheck just its external inputs on expiry.
-  @ttl_ms 15_000
   @refresh_interval_ms 250
+  @deadline_key {__MODULE__, :deadline}
 
-  @type result :: {:ok, term()} | {:error, term()}
-  @type projection :: (-> result()) | {(-> result()), (term() -> result())}
+  @type projection :: (-> {:ok, map()} | {:error, term()})
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
-  @spec json(module(), term(), projection()) :: {:ok, binary(), binary()} | {:error, term()}
+  @spec json(module(), atom(), projection()) :: {:ok, binary(), binary()} | {:error, term()}
   def json(Repo, surface, fun) do
-    source = Repo.get_dynamic_repo()
-    source = if is_atom(source), do: Process.whereis(source), else: source
-
     if Process.whereis(__MODULE__) do
-      GenServer.call(__MODULE__, {:json, source, surface, fun}, :infinity)
+      GenServer.call(__MODULE__, {:json, source(), surface, fun}, :infinity)
     else
-      render(fun, nil, surface) |> elem(0)
+      project(surface, fun)
     end
   end
 
-  def json(_repo, surface, fun), do: render(fun, nil, surface) |> elem(0)
+  def json(_repo, surface, fun), do: project(surface, fun)
+
+  @doc false
+  @spec watch(module(), [{atom(), projection() | :revision}]) :: {:ok, pid(), reference()} | :unversioned
+  def watch(Repo, projections) do
+    with pid when is_pid(pid) <- Process.whereis(__MODULE__),
+         {:ok, ref} <- GenServer.call(pid, {:watch, source(), projections}, :infinity) do
+      {:ok, pid, ref}
+    else
+      _unversioned -> :unversioned
+    end
+  end
+
+  def watch(_repo, _projections), do: :unversioned
+
+  @doc false
+  @spec unwatch(pid(), reference()) :: :ok
+  def unwatch(server, ref), do: GenServer.cast(server, {:unwatch, ref})
+
+  @doc false
+  @spec expire_at(DateTime.t() | integer()) :: :ok
+  def expire_at(deadline) do
+    case Process.get(@deadline_key) do
+      {expires, core?} -> Process.put(@deadline_key, {min(expires, monotonic_deadline(deadline)), core?})
+      nil -> :ok
+    end
+
+    :ok
+  end
+
+  @doc false
+  @spec track_core_expiry() :: :ok
+  def track_core_expiry do
+    case Process.get(@deadline_key) do
+      {expires, false} -> Process.put(@deadline_key, {expires, true})
+      _other -> :ok
+    end
+
+    :ok
+  end
+
+  defp monotonic_deadline(%DateTime{} = deadline) do
+    remaining = DateTime.to_unix(deadline, :microsecond) - System.system_time(:microsecond)
+    System.convert_time_unit(System.monotonic_time(:microsecond) + remaining + 999, :microsecond, :millisecond)
+  end
+
+  defp monotonic_deadline(deadline), do: deadline
+
+  defp source do
+    case Repo.get_dynamic_repo() do
+      name when is_atom(name) -> Process.whereis(name)
+      source -> source
+    end
+  end
 
   @doc false
   @spec invalidate([atom()]) :: :ok
@@ -37,17 +86,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   @impl true
   def init(_opts) do
     :ok = DashboardPubSub.subscribe()
-    Process.send_after(self(), :refresh_tick, @refresh_interval_ms)
 
     {:ok,
      %{
        sources: %{},
-       databases: %{},
        entries: %{},
-       builders: %{},
+       watches: %{},
        refreshing: %{},
-       waiters: %{},
        epochs: %{},
+       config_revision: {nil, nil},
+       timer: nil,
        refresh_pending?: false,
        clock: fn -> System.monotonic_time(:millisecond) end
      }}
@@ -55,123 +103,108 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
 
   @impl true
   def handle_call({:json, source, surface, fun}, from, state) do
-    previous = Repo.put_dynamic_repo(source)
+    {connection, state} = connection(source, state)
+    {revision, state} = probe(state, connection, [surface])
+    # Unversioned reads cannot join a projection that might predate their write.
+    generation = generation(state, revision, surface) || make_ref()
+    key = {source, surface}
+    entry = Map.get(state.entries, key)
 
-    try do
-      {connection, state} = connection(source, state)
-      # Without a file version (for example an in-memory ledger), reads must
-      # build independently rather than join a snapshot predating their write.
-      version = cache_version(connection, surface) || make_ref()
-      key = {source, surface}
-      state = remember_builder(state, key, source, fun, connection)
-      now = state.clock.()
-      epoch = epoch(state, key)
-
-      case Map.get(state.entries, key) do
-        {^version, ^epoch, expires, {result, _inputs}} when expires > now ->
-          {:reply, result, state}
-
-        {^version, _epoch, _expires, {result, _inputs}} ->
-          # Ledger data is still current. Refresh time-derived observations
-          # without making a quiet board's next poll rebuild the projection.
-          {:reply, result, refresh(state, key, version, source, fun)}
-
-        _missing ->
-          cache_miss(state, key, version, source, fun, from)
-      end
-    after
-      Repo.put_dynamic_repo(previous)
+    if current?(state, entry, generation) do
+      {:reply, entry.response, state}
+    else
+      job_key = {key, generation}
+      state = ensure_refresh(state, job_key, fun)
+      {:noreply, update_in(state.refreshing[job_key].waiters, &[from | &1])}
     end
   end
 
-  defp cache_miss(state, key, version, source, fun, from) do
-    state =
-      if Map.has_key?(state.refreshing, {key, version}),
-        do: state,
-        else: start_refresh(state, key, version, source, fun)
+  def handle_call({:watch, source, projections}, {pid, _tag}, state) do
+    {connection, state} = connection(source, state)
 
-    {_pid, ref, _epoch, _monitor} = Map.fetch!(state.refreshing, {key, version})
-    waiters = Map.update(state.waiters, ref, [from], &[from | &1])
-    {:noreply, %{state | waiters: waiters}}
+    if connection do
+      ref = Process.monitor(pid)
+
+      watches =
+        Enum.reduce(projections, state.watches, fn {surface, fun}, watches ->
+          add_reader(watches, {source, surface}, fun, ref, pid)
+        end)
+
+      # Register the stream before checking any revision, including if an
+      # on-demand build for this surface is already in flight.
+      {:reply, {:ok, ref}, queue_refresh(%{state | watches: watches})}
+    else
+      {:reply, :unversioned, state}
+    end
   end
 
-  defp remember_builder(state, _key, _source, _fun, nil), do: state
+  defp add_reader(watches, key, projection, ref, pid) do
+    target = if projection == :revision, do: {:revision, nil}, else: projection
+    {target, readers} = Map.get(watches, key, {target, %{}})
 
-  defp remember_builder(state, key, source, fun, _connection),
-    do: %{state | builders: Map.put(state.builders, key, {source, fun})}
-
-  defp refresh(state, key, version, source, fun) do
-    # Idle subscribers need only the latest state. Never accumulate builds for
-    # intervening versions while a projection for this surface is still running.
-    if Enum.any?(state.refreshing, fn {{active_key, _version}, _job} -> active_key == key end),
-      do: state,
-      else: start_refresh(state, key, version, source, fun)
+    # A notification client may have read its detail before connecting. When a
+    # revision is already known, wake the new reader as well as tracking it.
+    if match?({:revision, generation} when not is_nil(generation), target), do: notify_readers(%{ref => pid})
+    Map.put(watches, key, {target, Map.put(readers, ref, pid)})
   end
 
-  defp start_refresh(state, {_source, surface} = key, version, source, fun) do
+  defp ensure_refresh(state, job_key, fun) do
+    if Map.has_key?(state.refreshing, job_key), do: state, else: start_refresh(state, job_key, fun)
+  end
+
+  defp start_refresh(state, {{source, surface}, _generation} = job_key, fun) do
     owner = self()
-    ref = make_ref()
-    database = Map.get(state.databases, source)
-    epoch = epoch(state, key)
-
-    previous =
-      case Map.get(state.entries, key) do
-        {^version, ^epoch, _expires, snapshot} -> snapshot
-        _changed -> nil
-      end
+    sequence = System.unique_integer([:positive, :monotonic])
+    database = get_in(state.sources, [source, :database])
 
     {:ok, pid} =
       Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
         Process.flag(:priority, :low)
-        send(owner, {:refreshed, key, ref, version, build_on_ledger(source, database, fun, previous, surface)})
+        send(owner, {:refreshed, job_key, sequence, build_on_ledger(source, database, surface, fun)})
       end)
 
-    %{state | refreshing: Map.put(state.refreshing, {key, version}, {pid, ref, epoch, Process.monitor(pid)})}
+    job = %{pid: pid, sequence: sequence, monitor: Process.monitor(pid), waiters: []}
+    put_in(state.refreshing[job_key], job)
   end
 
-  defp build_on_ledger(source, nil, fun, previous, surface) do
+  defp build_on_ledger(source, nil, surface, fun) do
     Repo.put_dynamic_repo(source)
-    build(fun, previous, surface)
+    build(surface, fun)
   end
 
-  defp build_on_ledger(_source, database, fun, previous, surface) do
+  defp build_on_ledger(_source, database, surface, fun) do
     # Projection snapshots may hold a checkout while doing CPU work. Give each
     # file-backed build its own connection so it cannot exhaust the write pool.
     {:ok, reader} = Repo.start_link(database: database, name: nil, pool_size: 1, log: false)
     Repo.put_dynamic_repo(reader)
 
     try do
-      build(fun, previous, surface)
+      build(surface, fun)
     after
       GenServer.stop(reader)
     end
   end
 
-  defp build(fun, previous, surface) do
-    HerdrCore.with_cached_reads(fn -> render(fun, previous, surface) end)
+  defp build(surface, fun) do
+    Process.put(@deadline_key, {:infinity, false})
+    response = HerdrCore.with_cached_reads(fn -> project(surface, fun) end)
+    {response, Process.get(@deadline_key)}
   rescue
     error in Exqlite.Error ->
       message = Exception.message(error)
 
-      if String.contains?(String.downcase(message), ["busy", "locked"]),
-        do: {{:error, :database_busy}, nil},
-        else: {{:error, {:storage_failed, message}}, nil}
+      reason =
+        if String.contains?(String.downcase(message), ["busy", "locked"]),
+          do: :database_busy,
+          else: {:storage_failed, message}
+
+      {{:error, reason}, {:infinity, false}}
   end
 
-  defp render({read_inputs, project}, previous, surface) do
-    case read_inputs.() do
-      {:ok, inputs} ->
-        case previous do
-          {_result, ^inputs} -> previous
-          _changed -> {encode(project.(inputs), surface), inputs}
-        end
-
-      {:error, _} = error ->
-        {error, nil}
-    end
+  defp project(surface, fun) do
+    Logger.debug("board_build surface=#{surface}")
+    encode(fun.(), surface)
   end
-
-  defp render(project, _previous, surface), do: {encode(project.(), surface), nil}
 
   @impl true
   def handle_cast({:invalidate, surfaces}, state) do
@@ -179,35 +212,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     {:noreply, queue_refresh(%{state | epochs: epochs})}
   end
 
+  def handle_cast({:unwatch, ref}, state), do: {:noreply, remove_watch(state, ref)}
+
   @impl true
   def handle_info(:operator_dashboard_changed, state) do
     {:noreply, queue_refresh(state)}
   end
 
-  def handle_info(:refresh_tick, state) do
-    Process.send_after(self(), :refresh_tick, @refresh_interval_ms)
-    {:noreply, refresh_registered(state)}
+  def handle_info({:refresh_tick, token}, %{timer: {_, _, token}} = state) do
+    {:noreply, refresh_watched(%{state | timer: nil})}
   end
 
-  def handle_info(:refresh_registered, state) do
-    {:noreply, refresh_registered(%{state | refresh_pending?: false})}
+  def handle_info({:refresh_tick, _stale}, state), do: {:noreply, state}
+
+  def handle_info(:refresh_watched, state) do
+    {:noreply, refresh_watched(%{state | refresh_pending?: false})}
   end
 
-  def handle_info({:refreshed, {source, surface} = key, ref, version, {result, _inputs} = snapshot}, state) do
-    job_key = {key, version}
-
+  def handle_info({:refreshed, {key, generation} = job_key, sequence, {response, deadlines}}, state) do
     case Map.get(state.refreshing, job_key) do
-      {_pid, ^ref, epoch, monitor} ->
-        Process.demonitor(monitor, [:flush])
-        latest = cache_version(Map.get(state.sources, source), surface)
-        entries = refreshed_entries(state, key, version == latest, {version, epoch}, snapshot)
-        state = reply_waiters(state, ref, result)
-        state = %{state | entries: entries, refreshing: Map.delete(state.refreshing, job_key)}
-        # Publish completed snapshots for liveness, then catch up if a signal
-        # arrived while building. Continuous signals must not starve readers.
-        changed? = epoch != epoch(state, key) or latest != version
-        state = if changed?, do: refresh_key(state, key, latest), else: state
-        {:noreply, state}
+      %{sequence: ^sequence} = job ->
+        reply_waiters(job, response)
+        state = %{state | refreshing: Map.delete(state.refreshing, job_key)}
+        entry = %{generation: generation, sequence: sequence, response: response, deadlines: deadlines}
+        {:noreply, finish_refresh(state, key, entry)}
 
       _superseded ->
         {:noreply, state}
@@ -215,41 +243,94 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   end
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
-    if Map.has_key?(state.sources, pid) do
+    if get_in(state.sources, [pid, :monitor]) == ref do
       {:noreply, close_source(state, pid)}
     else
-      {:noreply, failed_refresh(state, ref)}
+      {:noreply, state |> failed_refresh(ref) |> remove_watch(ref)}
     end
   end
 
+  defp finish_refresh(state, {source, surface} = key, entry) do
+    case Map.get(state.watches, key) do
+      {fun, _readers} when is_function(fun, 0) ->
+        {revision, state} = probe(state, get_in(state.sources, [source, :connection]), [surface])
+        latest = generation(state, revision, surface)
+
+        state =
+          if entry.generation == latest do
+            install(state, key, entry)
+          else
+            refresh_if_stale(state, key, latest, fun)
+          end
+
+        schedule(state)
+
+      _no_projection_watch ->
+        # A later GET rechecks this build's generation. Once demand ends,
+        # completing a build requires neither a version check nor a retry.
+        install(state, key, entry)
+    end
+  end
+
+  defp install(state, key, %{response: {:ok, _body, etag}, generation: generation} = entry) when not is_reference(generation) do
+    case Map.get(state.entries, key) do
+      %{sequence: sequence} when sequence > entry.sequence ->
+        state
+
+      %{response: {:ok, _body, ^etag}} ->
+        put_in(state.entries[key], entry)
+
+      _changed ->
+        state = put_in(state.entries[key], entry)
+        DashboardPubSub.broadcast_refreshed()
+        notify_projection_readers(Map.get(state.watches, key))
+        state
+    end
+  end
+
+  defp install(state, _key, _entry), do: state
+
+  defp notify_projection_readers({fun, readers}) when is_function(fun, 0), do: notify_readers(readers)
+  defp notify_projection_readers(_other), do: :ok
+
+  defp notify_readers(readers) do
+    version = System.unique_integer([:positive, :monotonic])
+    Enum.each(readers, fn {ref, pid} -> send(pid, {:dashboard_changed, ref, version}) end)
+  end
+
   defp close_source(state, source) do
-    Sqlite3.close(Map.get(state.sources, source))
-    {owned, other} = Enum.split_with(state.refreshing, fn {{{owner, _surface}, _version}, _job} -> owner == source end)
+    Sqlite3.close(get_in(state.sources, [source, :connection]))
 
-    state =
-      Enum.reduce(owned, state, fn {_key, {pid, ref, _epoch, monitor}}, state ->
-        Process.demonitor(monitor, [:flush])
-        Process.exit(pid, :shutdown)
-        reply_waiters(state, ref, {:error, {:storage_failed, "Dashboard ledger closed"}})
+    {owned, other} =
+      Enum.split_with(state.refreshing, fn {{{owner, _surface}, _generation}, _job} -> owner == source end)
+
+    Enum.each(owned, fn {_key, job} ->
+      Process.exit(job.pid, :shutdown)
+      reply_waiters(job, {:error, {:storage_failed, "Dashboard ledger closed"}})
+    end)
+
+    {closed, watches} = Enum.split_with(state.watches, fn {{owner, _surface}, _watch} -> owner == source end)
+
+    Enum.each(closed, fn {_key, {_fun, readers}} ->
+      Enum.each(readers, fn {ref, pid} ->
+        Process.demonitor(ref, [:flush])
+        send(pid, {:dashboard_source_closed, ref})
       end)
+    end)
 
-    entries = Map.reject(state.entries, fn {{owner, _surface}, _entry} -> owner == source end)
-    builders = Map.reject(state.builders, fn {{owner, _surface}, _builder} -> owner == source end)
-
-    %{
+    schedule(%{
       state
       | sources: Map.delete(state.sources, source),
-        databases: Map.delete(state.databases, source),
-        entries: entries,
+        entries: Map.reject(state.entries, fn {{owner, _surface}, _entry} -> owner == source end),
         refreshing: Map.new(other),
-        builders: builders
-    }
+        watches: Map.new(watches)
+    })
   end
 
   defp failed_refresh(state, monitor) do
-    case Enum.find(state.refreshing, fn {_key, {_pid, _ref, _epoch, ref}} -> ref == monitor end) do
-      {key, {_pid, ref, _epoch, _monitor}} ->
-        state = reply_waiters(state, ref, {:error, {:storage_failed, "Dashboard refresh interrupted"}})
+    case Enum.find(state.refreshing, fn {_key, job} -> job.monitor == monitor end) do
+      {key, job} ->
+        reply_waiters(job, {:error, {:storage_failed, "Dashboard refresh interrupted"}})
         %{state | refreshing: Map.delete(state.refreshing, key)}
 
       nil ->
@@ -257,98 +338,146 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     end
   end
 
-  defp reply_waiters(state, ref, result) do
-    {waiters, remaining} = Map.pop(state.waiters, ref, [])
-    Enum.each(waiters, &GenServer.reply(&1, result))
-    %{state | waiters: remaining}
+  defp reply_waiters(job, result) do
+    Process.demonitor(job.monitor, [:flush])
+    Enum.each(job.waiters, &GenServer.reply(&1, result))
   end
 
-  defp refreshed_entries(state, key, current?, {version, epoch}, {result, _inputs} = snapshot) do
-    # Never label a snapshot with a newer commit that raced its construction.
-    if current? and match?({:ok, _, _}, result) do
-      entry = {version, epoch, state.clock.() + @ttl_ms, snapshot}
+  defp remove_watch(state, ref) do
+    Process.demonitor(ref, [:flush])
 
-      case Map.get(state.entries, key) do
-        {_old_version, _epoch, _expires, {{:ok, _body, etag}, _inputs}} when elem(result, 2) != etag ->
-          DashboardPubSub.broadcast_refreshed()
-          Map.put(state.entries, key, entry)
+    watches =
+      Map.new(state.watches, fn {key, {fun, readers}} -> {key, {fun, Map.delete(readers, ref)}} end)
+      |> Map.reject(fn {_key, {_fun, readers}} -> map_size(readers) == 0 end)
 
-        nil ->
-          DashboardPubSub.broadcast_refreshed()
-          Map.put(state.entries, key, entry)
-
-        _unchanged ->
-          Map.put(state.entries, key, entry)
-      end
-    else
-      state.entries
-    end
+    schedule(%{state | watches: watches})
   end
 
   defp queue_refresh(%{refresh_pending?: true} = state), do: state
+  defp queue_refresh(%{watches: watches} = state) when map_size(watches) == 0, do: state
 
   defp queue_refresh(state) do
-    send(self(), :refresh_registered)
+    send(self(), :refresh_watched)
     %{state | refresh_pending?: true}
   end
 
-  defp refresh_registered(%{builders: builders} = state) when map_size(builders) == 0, do: state
+  defp refresh_watched(state) do
+    state.watches
+    |> Enum.group_by(fn {{source, _surface}, _watch} -> source end)
+    |> Enum.reduce(state, fn {source, watches}, state ->
+      surfaces = Enum.map(watches, fn {{_source, surface}, _watch} -> surface end)
+      {revision, state} = probe(state, get_in(state.sources, [source, :connection]), surfaces)
 
-  defp refresh_registered(state) do
-    versions = Map.new(state.sources, fn {source, connection} -> {source, ledger_versions(connection)} end)
-    config = OperatorConfig.revision()
-
-    Enum.reduce(state.builders, state, fn {{source, surface} = key, _builder}, state ->
-      version = surface_version(Map.get(versions, source), surface, config)
-      refresh_key(state, key, version)
+      Enum.reduce(watches, state, fn {{_source, surface} = key, watch}, state ->
+        refresh_watch(state, key, watch, generation(state, revision, surface))
+      end)
     end)
+    |> schedule()
   end
 
-  defp refresh_key(state, {source, _surface} = key, version) do
-    with {^source, fun} <- Map.get(state.builders, key),
-         false <- is_nil(version),
-         false <- current?(state, key, version) do
-      refresh(state, key, version, source, fun)
+  defp refresh_watch(state, key, {{:revision, previous}, readers}, generation) do
+    if generation != nil and generation != previous do
+      notify_readers(readers)
+      put_in(state.watches[key], {{:revision, generation}, readers})
     else
-      _closed -> state
+      state
     end
   end
 
-  defp current?(state, key, version) do
-    epoch = epoch(state, key)
+  defp refresh_watch(state, key, {fun, _readers}, generation), do: refresh_if_stale(state, key, generation, fun)
+
+  defp refresh_if_stale(state, _key, nil, _fun), do: state
+
+  defp refresh_if_stale(state, key, generation, fun) do
+    # Watchers need only the latest snapshot. GETs can still read a new
+    # generation while an older build is held on a different connection.
+    if current?(state, Map.get(state.entries, key), generation) or
+         Enum.any?(state.refreshing, fn {{active_key, _generation}, _job} -> active_key == key end) do
+      state
+    else
+      start_refresh(state, {key, generation}, fun)
+    end
+  end
+
+  defp current?(state, %{generation: generation, deadlines: {_expires, core?}} = entry, generation) do
+    if core?, do: HerdrCore.refresh_on_demand()
+    now = state.clock.()
+    expiry(entry, now) > now
+  end
+
+  defp current?(_state, _entry, _generation), do: false
+
+  defp expiry(%{deadlines: {expires, true}}, now), do: min(expires, HerdrCore.last_good_deadline() || now)
+  defp expiry(%{deadlines: {expires, false}}, _now), do: expires
+  defp expiry(nil, _now), do: :infinity
+
+  defp schedule(%{watches: watches} = state) when map_size(watches) == 0, do: cancel_timer(state)
+
+  defp schedule(state) do
     now = state.clock.()
 
-    case Map.get(state.entries, key) do
-      {^version, ^epoch, expires, _result} when expires > now -> true
-      _stale -> false
+    next =
+      Enum.reduce(state.watches, now + @refresh_interval_ms, fn
+        {key, {fun, _readers}}, next when is_function(fun, 0) ->
+          case expiry(Map.get(state.entries, key), now) do
+            deadline when deadline > now -> min(next, deadline)
+            _due -> next
+          end
+
+        _revision_watch, next ->
+          next
+      end)
+
+    case state.timer do
+      {scheduled, _ref, _token} when scheduled <= next ->
+        state
+
+      _later_or_missing ->
+        state = cancel_timer(state)
+        token = make_ref()
+        ref = Process.send_after(self(), {:refresh_tick, token}, next - now)
+        %{state | timer: {next, ref, token}}
     end
   end
 
-  defp epoch(state, {_source, surface}), do: Map.get(state.epochs, surface, 0)
+  defp cancel_timer(%{timer: nil} = state), do: state
 
-  defp cache_version(connection, surface) do
-    surface_version(ledger_versions(connection), surface, OperatorConfig.revision())
+  defp cancel_timer(%{timer: {_scheduled, ref, _token}} = state) do
+    Process.cancel_timer(ref)
+    %{state | timer: nil}
   end
 
-  defp surface_version(nil, _surface, _config), do: nil
+  defp generation(_state, nil, _surface), do: nil
+
+  defp generation(state, revision, surface) do
+    {_stamp, config} = state.config_revision
+    {surface_version(revision, surface, config), Map.get(state.epochs, surface, 0)}
+  end
+
   defp surface_version({:revisions, [_priority, archived, _live, _native]}, :archived, _config), do: archived
   defp surface_version({:revisions, [priority, _archived, _live, _native]}, :priority, config), do: {priority, config}
   defp surface_version({:revisions, [_priority, _archived, live, _native]}, surface, config) when surface in [:deferred, :hydrated], do: {live, config}
   defp surface_version({:revisions, [_priority, _archived, _live, native]}, _surface, config), do: {native, config}
   defp surface_version({:data_version, version}, _surface, config), do: {version, config}
 
-  defp ledger_versions(nil), do: nil
+  defp probe(state, nil, _surfaces), do: {nil, state}
 
-  defp ledger_versions(connection) do
-    case query_row(connection, "SELECT priority, archived, live, native FROM sympp_dashboard_revisions") do
-      [_, _, _, _] = revisions -> {:revisions, revisions}
-      _unavailable -> data_version(connection)
-    end
+  defp probe(state, connection, surfaces) do
+    Logger.debug("board_revision_probe surface=#{surfaces |> Enum.sort() |> Enum.join(",")}")
+
+    revision =
+      case query_row(connection, "SELECT priority, archived, live, native FROM sympp_dashboard_revisions") do
+        [_, _, _, _] = revisions -> {:revisions, revisions}
+        _unavailable -> data_version(connection)
+      end
+
+    config = if surfaces == [:archived], do: state.config_revision, else: OperatorConfig.revision(state.config_revision)
+    {revision, %{state | config_revision: config}}
   end
 
   defp connection(source, state) do
     case Map.fetch(state.sources, source) do
-      {:ok, connection} -> {connection, state}
+      {:ok, %{connection: connection}} -> {connection, state}
       :error -> open_connection(source, state)
     end
   end
@@ -356,13 +485,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   defp open_connection(source, state) do
     # A dedicated reader observes committed versions from every writer,
     # including other factory processes, without using the write pool.
-    with {:ok, %{rows: rows}} <- Repo.query("PRAGMA database_list"),
-         [_, "main", path] when path != "" <- Enum.find(rows, &(Enum.at(&1, 1) == "main")),
-         {:ok, connection} <- Sqlite3.open(path, mode: :readonly) do
-      if is_pid(source), do: Process.monitor(source)
-      {connection, %{state | sources: Map.put(state.sources, source, connection), databases: Map.put(state.databases, source, path)}}
-    else
-      _unavailable -> {nil, state}
+    previous = Repo.put_dynamic_repo(source)
+
+    try do
+      with {:ok, %{rows: rows}} <- Repo.query("PRAGMA database_list"),
+           [_, "main", path] when path != "" <- Enum.find(rows, &(Enum.at(&1, 1) == "main")),
+           {:ok, connection} <- Sqlite3.open(path, mode: :readonly) do
+        monitor = if is_pid(source), do: Process.monitor(source)
+        ledger = %{connection: connection, database: path, monitor: monitor}
+        {connection, put_in(state.sources[source], ledger)}
+      else
+        _unavailable -> {nil, state}
+      end
+    after
+      Repo.put_dynamic_repo(previous)
     end
   end
 

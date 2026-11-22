@@ -93,23 +93,20 @@ response sees the committed state, including an acknowledged decision leaving
 `decisions_to_review`. An earlier in-flight read may describe an older snapshot;
 clients must discard reads started before their successful mutation.
 
-Factory startup prepares the first hydrated browser and Herdr reads before
-opening its listener. The backend then maintains encoded projections for
-registered views. A dedicated read-only SQLite connection checks commits from
-every writer before reuse and every 250 ms while clients are idle. Runtime
-notifications refresh observations without evicting other usable views;
-time-derived signals refresh every 15 seconds independently of client reads.
-Reads may join a projection already building for their exact ledger version.
-A committed write always requires a projection containing that commit.
+A plain dashboard `GET` checks the latest revision and reuses the prepared
+board and its ETag when the data is still current. The first read may build the
+board from scratch, and overlapping reads for the same version can share work
+already underway.
 
-The full response fields are preserved. GitHub deployment/default-branch
-observations and Herdr terminal refreshes run in the background at their
-existing provider cadence. Unavailable evidence stays unknown, then a
-notification makes the prepared observation available to clients. The extra
-work happens during startup or background refresh rather than quiet HTTP reads.
+An open SSE stream watches the hydrated and archived boards and checks every
+250 ms for changes from other writers. It notifies clients when an updated
+view is ready to read, and background board checks stop after the last stream
+disconnects. Time-sensitive items, such as card retention or a stale heartbeat,
+become due at their own deadlines, and a watched view refreshes when its
+deadline arrives.
 
 The browser stream is `GET /api/v1/sympp/operator/dashboard/events`, under the
-same board authority as browser reads. It uses Phoenix PubSub and SSE:
+same board authority as browser reads.
 
 ```text
 event: dashboard_changed
@@ -124,7 +121,12 @@ and refetch the displayed route with its ETag. Subscribe before the first read;
 refetch on every reconnect because events are not replayed. The stream sends a
 comment heartbeat every 30 seconds and disables proxy buffering. Herdr keeps its
 existing `/api/v1/sympp/herdr/events` contract (`event: invalidated`, `data: {}`).
-Plain reads remain the fallback if streaming fails. Clients must tolerate extra
+The Herdr notification stream accepts a `work_request_id` query parameter to
+request pre-PR review progress for that WorkRequest while connected.
+
+Plain dashboard GETs share the current review refresh. If progress is still
+being read, the response remains usable and includes a `Retry-After` header so
+polling clients can check again. Clients must tolerate extra
 event and response fields. This backend contract supports immediate invalidation;
 UI refresh coordination remains the client's responsibility.
 
@@ -261,7 +263,7 @@ response. Existing fields retain their meaning. Read each entry of
 | `review_signal.steps` | Optional ordered ladder of `{index, name, state}` entries (`done`, `current`, or `pending`). |
 | `review_signal.round_history` | Optional oldest-first list of the latest 20 provider rounds. |
 | `worker_terminal` | The package's worker terminal as the Observer last saw it, `{address, state, status}`: `state` is `live` or `finished`; for a live terminal `status` is the core's agent state (such as `working` or `idle`), `live` when the core reports none, or `unknown` when the factory's core can't see it; for a finished one it is `finished`. `null` when no worker terminal was seen. |
-| `observation_stale` | Inputs the Observer couldn't read on its last sweep (`github`, `review`, `stacking`); `[]` when none. |
+| `observation_stale` | Inputs the factory couldn't read on their last check (`github`, `review`, `stacking`). Empty when all checked inputs are available. |
 | `stacked_on` | Packages whose unmerged commits the PR carries; it keeps the PR from qualifying. `[]` when none. |
 | `progress` | For a `dispatched` package: `launching`, `implementing`, `worker_exited` or `review_ci` (an open PR). `null` otherwise. |
 
@@ -288,8 +290,12 @@ at 240 characters; steps are capped at 20 entries. Round timestamps must be ISO
 omitted when unavailable. Older Review Suite versions that omit `steps` or
 `round_history` leave those fields absent from the signal.
 
-Review observations come from the factory's Observer, which reads each
-package's Review Suite cycle starting at the `review_id` dispatch minted, on the worker's
+When GitHub confirms a dispatched package has no PR, the factory reads Review
+Suite progress for board or detail readers. Once discovery finds a PR, the
+same sweep reads current review evidence before deciding readiness.
+
+The factory reads each package's Review Suite cycle starting at the
+`review_id` dispatch minted, on the worker's
 machine (directly on the factory host, else through `hc exec --on`). It runs the
 portable skills bundle's `~/.agents/skills/review-suite/plugins/review-suite/scripts/review.py`,
 else the Codex marketplace plugin under `$CODEX_HOME/plugins/cache/review-suite`;
@@ -352,9 +358,8 @@ are hints, not durable history; compare saved client-side timestamps and heads
 for best-effort "since last looked" indicators.
 
 The packaged board subscribes to `GET /api/v1/sympp/operator/dashboard/events`
-instead. That stream emits `dashboard_changed` after the same changes and
-registers the open board, so the backend does not open a second one when a
-client attaches.
+instead. That stream registers the open board so the backend does not open a
+second one when a client attaches.
 
 ## Finished goal retention and operator actions
 
