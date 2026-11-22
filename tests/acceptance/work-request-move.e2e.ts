@@ -1,4 +1,6 @@
 import { expect } from 'e2e';
+import { rename } from 'node:fs/promises';
+import { join } from 'node:path';
 import { contract } from '../support/factory.js';
 import { head, pr, prUrl, progress, row, sync, test } from '../support/delivery.js';
 import { git, githubOrigin, repository } from '../support/worktree-git.js';
@@ -184,7 +186,7 @@ test('moving imported work waits for source PRs and dispatches inherited scope f
   expect(await git(root, dispatch.worktree.path, 'rev-parse', 'HEAD')).toBe(await git(root, checkout.checkout, 'rev-parse', 'origin/integration'));
 });
 
-test('moving an import refuses to guess the source of a retargeted checkout with a PR', async ({ delivery: { factory, provider, root } }) => {
+test('moving an import refuses to guess the source of a relocated or retargeted checkout with a PR', async ({ delivery: { factory, provider, root } }) => {
   const architect = await factory.client();
   const requestCheckout = await repository(root, 'request-source');
   const packageCheckout = await repository(root, 'package-source');
@@ -195,10 +197,14 @@ test('moving an import refuses to guess the source of a retargeted checkout with
   provider.set(835, pr(835, head('a')));
   await sync(architect, wp, 835, head('a'));
 
+  const move = { work_request_id: request, repo: destination, rationale: 'Import the old repository.' };
+  const relocated = join(root, 'relocated');
+  await rename(requestCheckout.checkout, relocated);
+  await architect.reject('move_work_request', move, 'ambiguous_source_repository');
+  await rename(relocated, requestCheckout.checkout);
+
   for (const checkout of [requestCheckout, packageCheckout]) await githubOrigin(root, checkout, destination);
-  await architect.reject('move_work_request', {
-    work_request_id: request, repo: destination, rationale: 'Import the old repository.',
-  }, 'ambiguous_source_repository');
+  await architect.reject('move_work_request', move, 'ambiguous_source_repository');
   const result = await architect.call('read_work_request', { work_request_id: request, detail: 'full' });
   expect(result.work_request.repo).toBe(requestCheckout.checkout);
   expect(result.work_packages[0].repo).toBe(packageCheckout.checkout);

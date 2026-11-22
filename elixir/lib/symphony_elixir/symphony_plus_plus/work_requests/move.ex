@@ -144,19 +144,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Move do
   defp source_key(key, _request_repo, _open, _destination), do: {:ok, key}
 
   defp infer_checkout_source(request_repo, open, destination) do
+    stored = {:stored, request_repo}
+
     case Map.fetch!(open.keys, request_repo) do
-      ^destination ->
-        if Enum.any?(open.packages, &unresolved_source?(&1, open, destination)),
+      origin when origin in [stored, destination] ->
+        if Enum.any?(open.packages, &unresolved_source?(&1, open, origin, destination)),
           do: {:error, :ambiguous_source_repository},
-          else: {:ok, {:stored, request_repo}}
+          else: {:ok, stored}
 
       origin ->
         {:ok, origin}
     end
   end
 
-  defp unresolved_source?(package, open, destination) do
-    Map.fetch!(open.keys, package.repo) != destination or
+  defp unresolved_source?(package, open, origin, destination) do
+    Map.fetch!(open.keys, package.repo) not in [origin, destination] or
       attachment_key(open.attachments[package.id]) not in [nil, destination]
   end
 
