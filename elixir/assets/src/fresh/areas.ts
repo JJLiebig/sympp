@@ -31,3 +31,9 @@ export function areaFor(repo: string, slug = githubSlug(repo)): string[] {
 export function areaLabel(area: string[]) {
   return area.join(" › ");
 }
+
+// The areas an area filter offers. A chosen area stays offered after its last goal leaves, so the way back to
+// Everything stays.
+export function areasWith(areas: string[], area: string | null) {
+  return area === null || areas.includes(area) ? areas : [...areas, area];
+}

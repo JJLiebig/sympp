@@ -27,6 +27,9 @@ Each goal shows a verdict, the architect's brief and ETA, and its packages as
 Done, Now and Up next along Build, PR, Checks, Review and Merge. Outline,
 Briefing and Phases (keys `1` to `3`) show the same goals in different shapes;
 Show sets how much each goal opens. Choose an area to narrow the board.
+This browser remembers your view, Show setting and area across reloads and new
+tabs; a `view`, `show` or `area` query parameter in a link overrides what is
+saved.
 
 The header says whether you are needed and names each open question; the tab
 title and icon repeat it. A line under the header sums up what changed since

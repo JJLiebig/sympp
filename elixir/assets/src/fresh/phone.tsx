@@ -4,7 +4,7 @@
 import { Check, ChevronRight, X } from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 
-import { areaLabel } from "./areas";
+import { areaLabel, areasWith } from "./areas";
 import type { Lanes } from "./board";
 import type { visibleCards } from "./cards";
 import type { Unarrived } from "./delivery";
@@ -307,9 +307,9 @@ function GoalsTab({ area, areas, at, changes, lanes, onArea, onOpen, onSeen, sho
   );
 }
 
-// The area filter. A chosen area stays offered after its last goal leaves, so the way back to Everything stays.
+// The area filter.
 function AreaChips({ area, areas, onArea }: { area: string | null; areas: string[]; onArea: (area: string | null) => void }) {
-  const names = area === null || areas.includes(area) ? areas : [...areas, area];
+  const names = areasWith(areas, area);
   if (names.length < 2 && area === null) return null;
   return (
     <nav className={`mt-2 flex gap-1.5 overflow-x-auto [scrollbar-width:none] ${INSET}`}>
