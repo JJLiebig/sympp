@@ -3,6 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
 
   alias SymphonyElixir.Config
   alias SymphonyElixir.PathSafety
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.Inputs
   alias SymphonyElixir.SymphonyPlusPlus.GitCheckout
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
@@ -31,32 +32,68 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
   def repo_signal(repo, opts \\ []) do
     with {:ok, remote, _name} <- remote(repo),
          root when is_binary(root) <- Config.factory_repos_root() do
-      table = signal_cache()
-      key = root
-      now = Keyword.get(opts, :now_ms, System.monotonic_time(:millisecond))
-
-      case :ets.lookup(table, key) do
-        [{^key, recorded_at, signals}] when now - recorded_at < 30_000 ->
-          Map.get(signals, identity(remote), %{})
-
-        _ ->
-          signals = local_repo_signals(root)
-          :ets.insert(table, {key, now, signals})
-          Map.get(signals, identity(remote), %{})
-      end
+      identity = identity(remote)
+      Inputs.observe({:repo_workflows, root, identity}, fn -> workflow_signal(root, identity, opts) end)
     else
       _ -> %{}
     end
   end
 
-  defp local_repo_signals(root) do
+  defp workflow_signal(root, identity, opts) do
+    checkouts = checkouts_for_signal(root, opts)
+
+    with path when is_binary(path) <- Map.get(checkouts, identity),
+         true <- current_checkout?(path, identity) do
+      %{has_ci: has_workflows?(path)}
+    else
+      _no_checkout -> %{}
+    end
+  end
+
+  defp current_checkout?(path, expected) do
+    if Inputs.active?() do
+      case remote(RepoIdentity.cached_git_origin_remote(path)) do
+        {:ok, origin, _name} -> identity(origin) == expected
+        _unavailable -> false
+      end
+    else
+      true
+    end
+  end
+
+  defp checkouts_for_signal(root, opts) do
+    period = fn -> div(System.monotonic_time(:millisecond), 30_000) end
+
+    if Inputs.active?() do
+      Inputs.shared({:factory_checkouts, root}, period, fn -> local_checkouts(root) end, :background)
+    else
+      cached_checkouts(root, opts)
+    end
+  end
+
+  defp cached_checkouts(root, opts) do
+    table = signal_cache()
+    now = Keyword.get(opts, :now_ms, System.monotonic_time(:millisecond))
+
+    case :ets.lookup(table, root) do
+      [{^root, recorded_at, checkouts}] when now - recorded_at < 30_000 ->
+        checkouts
+
+      _missing_or_due ->
+        checkouts = local_checkouts(root)
+        :ets.insert(table, {root, now, checkouts})
+        checkouts
+    end
+  end
+
+  defp local_checkouts(root) do
     case PathSafety.canonicalize(root) do
       {:ok, root} ->
         root
         |> discover(root, 3)
         |> Enum.group_by(fn {_path, repo_identity} -> repo_identity end)
         |> Map.new(fn {repo_identity, checkouts} ->
-          {repo_identity, checkout_signal(checkouts, repo_identity, root)}
+          {repo_identity, unambiguous_checkout(checkouts, repo_identity, root)}
         end)
 
       _ ->
@@ -64,10 +101,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
     end
   end
 
-  defp checkout_signal(checkouts, repo_identity, root) do
+  defp unambiguous_checkout(checkouts, repo_identity, root) do
     case checkout_matches(checkouts, repo_identity, root) do
-      {_depth, [{checkout, _identity}]} -> %{has_ci: has_workflows?(checkout)}
-      _ -> %{}
+      {_depth, [{checkout, _identity}]} -> checkout
+      _ -> nil
     end
   end
 

@@ -42,19 +42,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCoreTest do
     worker = %WorkedOn{terminal_key: "test-core/t1", display_address: "test-host/t1", state: "live"}
     :ok = DashboardPubSub.subscribe()
 
-    for {url, state, expected} <- [
-          {nil, "live", nil},
-          {"http://dev-host:3000/design?mode=demo", "live", "http://dev-host:3000/design?mode=demo"},
-          {"https://dev-host/other", "live", "https://dev-host/other"},
-          {nil, "live", nil},
-          {"javascript:alert(1)", "live", nil},
-          {"http://dev-host:3000", "finished", nil}
+    for {url, state, expected, changed?} <- [
+          {nil, "live", nil, true},
+          {"http://dev-host:3000/design?mode=demo", "live", "http://dev-host:3000/design?mode=demo", true},
+          {"https://dev-host/other", "live", "https://dev-host/other", true},
+          {nil, "live", nil, true},
+          {"javascript:alert(1)", "live", nil, false},
+          {"http://dev-host:3000", "finished", nil, true}
         ] do
       labels = %{"sympp.role" => "worker"}
       labels = if url, do: Map.put(labels, "sympp.preview_url", url), else: labels
-      File.write!(data, Jason.encode!(%{terminals: [%{address: "t1", state: state, labels: labels}]}))
+      File.write!(data, Jason.encode!(%{terminals: [%{address: "t1", state: state, labels: labels, heartbeat: System.unique_integer()}]}))
       assert {:ok, _snapshot} = HerdrCore.refresh()
-      assert_receive :operator_dashboard_changed
+      if changed?, do: assert_receive(:operator_dashboard_changed), else: refute_received(:operator_dashboard_changed)
       assert Signals.worker_terminal(worker).preview_url == expected
     end
 

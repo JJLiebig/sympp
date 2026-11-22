@@ -1,19 +1,39 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub}
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.Inputs
+  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, OperatorConfig}
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.DefaultClient
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
 
   @cache_table __MODULE__
+  @refreshes {__MODULE__, :refreshes}
   @ttl_ms 60_000
   @timeout_ms 5_000
   @request_limit 30
 
   @spec enrich(map(), map(), keyword()) :: map()
   def enrich(payload, config, opts \\ []) do
-    if OfflineSandbox.enabled?(), do: payload, else: enrich_online(payload, config, opts)
+    cond do
+      OfflineSandbox.enabled?() -> payload
+      Keyword.get(opts, :async, false) -> refresh_after(fn -> enrich_online(payload, config, opts) end)
+      true -> enrich_online(payload, config, opts)
+    end
+  end
+
+  @doc false
+  @spec refresh_after((-> result)) :: result when result: var
+  def refresh_after(fun) do
+    Process.put(@refreshes, %{})
+
+    try do
+      result = fun.()
+      start_refreshes(Process.get(@refreshes))
+      result
+    after
+      Process.delete(@refreshes)
+    end
   end
 
   defp enrich_online(payload, config, opts) do
@@ -26,14 +46,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
       fetch: Keyword.get(opts, :fetch, &DefaultClient.get_json/2),
       deadline: now_ms() + Keyword.get(opts, :timeout_ms, @timeout_ms),
       remaining: Keyword.get(opts, :request_limit, @request_limit),
-      memo: %{}
+      memo: %{},
+      exhausted?: false,
+      signals: %{}
     }
 
-    {details, _state} =
+    {details, state} =
       Enum.map_reduce(payload.work_request_details, state, fn detail, state ->
         enrich_detail(detail, config, state)
       end)
 
+    track_signals(state.signals)
     observations = Map.new(details, &{&1.work_request.id, Map.take(&1.work_request, [:deployments, :default_branch])})
 
     payload
@@ -94,13 +117,78 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
         {pending(workflow, "missing_merge_evidence"), state}
 
       true ->
-        {runs, observed_at, complete?, state} = workflow_runs(repo, workflow, 1, [], nil, nil, state)
+        revisions = revisions |> Enum.uniq() |> Enum.sort()
 
-        if complete? do
-          select_observation(runs, repo, Enum.uniq(revisions), workflow, observed_at, state)
-        else
-          {pending(workflow, "unavailable", observed_at), state}
-        end
+        read_signal(
+          {:deployment, repo, workflow, revisions},
+          pending(workflow, "unavailable"),
+          state,
+          &deployment(repo, workflow, revisions, &1)
+        )
+    end
+  end
+
+  defp deployment(repo, workflow, revisions, state) do
+    {runs, observed_at, complete?, state} = workflow_runs(repo, workflow, 1, [], nil, nil, state)
+
+    if complete? do
+      select_observation(runs, repo, revisions, workflow, observed_at, state)
+    else
+      {pending(workflow, "unavailable", observed_at), state}
+    end
+  end
+
+  defp read_signal(key, empty, %{async?: true} = state, read) do
+    slot = {:signal, key}
+    %{table: table, fetch: fetch} = state
+    lookup = fn -> cached_signal(table, slot, empty, fetch, read) end
+    {value, _fresh?} = Inputs.memo(slot, lookup)
+    {value, put_in(state.signals[slot], {signal_value(value), lookup})}
+  end
+
+  defp read_signal(_key, _empty, state, read), do: read.(state)
+
+  defp track_signals(signals) when map_size(signals) == 0, do: :ok
+
+  defp track_signals(signals) do
+    Inputs.record({:deployments, make_ref()}, true, fn ->
+      {unchanged?, fresh?} =
+        Enum.reduce(signals, {true, true}, fn {slot, {previous, read}}, {unchanged?, fresh?} ->
+          {value, fresh_signal?} = Inputs.memo(slot, read)
+          {unchanged? and signal_value(value) == previous, fresh? and fresh_signal?}
+        end)
+
+      # A native read may also need archived badges after the web reader's
+      # refresh. Wait for its complete set before exposing a provider change.
+      unchanged? or not fresh?
+    end)
+  end
+
+  defp signal_value(value) when is_map(value), do: Map.delete(value, :observed_at)
+  defp signal_value(value), do: value
+
+  @doc false
+  @spec change_identity(map()) :: map()
+  def change_identity(payload) do
+    payload
+    |> rewrite_if_present(:work_request_details, fn details ->
+      Enum.map(details, &Map.update!(&1, :work_request, fn request -> without_observation_times(request) end))
+    end)
+    |> rewrite_if_present(:work_requests, fn section ->
+      Map.update!(section, :work_requests, &Enum.map(&1, fn request -> without_observation_times(request) end))
+    end)
+  end
+
+  defp without_observation_times(request) do
+    rewrite_if_present(request, :deployments, fn deployments ->
+      Map.new(deployments, fn {repo, envs} -> {repo, Map.new(envs, fn {env, badge} -> {env, signal_value(badge)} end)} end)
+    end)
+  end
+
+  defp rewrite_if_present(map, key, rewrite) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> Map.put(map, key, rewrite.(value))
+      :error -> map
     end
   end
 
@@ -232,19 +320,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
     if workflows(config, repo) == [] do
       {request, state}
     else
-      {result, _observed_at, state} = fetch("repos/#{repo}", state)
-
-      case result do
-        {:ok, %{"default_branch" => branch}} when is_binary(branch) and branch != "" ->
-          {Map.put(request, :default_branch, branch), state}
-
-        _unavailable ->
-          {request, state}
-      end
+      {branch, state} = read_signal({:default_branch, repo}, nil, state, &default_branch(repo, &1))
+      request = if branch, do: Map.put(request, :default_branch, branch), else: request
+      {request, state}
     end
   end
 
+  defp default_branch(repo, state) do
+    {result, _observed_at, state} = fetch("repos/#{repo}", state)
+
+    case result do
+      {:ok, %{"default_branch" => branch}} when is_binary(branch) and branch != "" -> {branch, state}
+      _unavailable -> {nil, state}
+    end
+  end
+
+  defp workflows(_config, nil), do: []
+
   defp workflows(config, repo) do
+    Inputs.record({:deploy_workflows, repo}, configured_workflows(config, repo), fn ->
+      configured_workflows(OperatorConfig.load(), repo)
+    end)
+  end
+
+  defp configured_workflows(config, repo) do
     repository_config = Map.get(Map.get(config, "repos", %{}), repo)
 
     case value(repository_config, :deploy_workflows) do
@@ -284,63 +383,135 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
   end
 
   defp fetch_cached(path, state) do
+    case fresh(state.table, path) do
+      {:ok, result, observed_at} -> remember(state, path, result, observed_at)
+      :stale -> fetch_missing(path, state)
+    end
+  end
+
+  defp fetch_missing(path, %{budget: _budget} = state) do
+    # Several badges may need the same page or comparison. Even in parallel
+    # the refresh batch fetches that path just once.
+    :global.trans({{__MODULE__, state.table, path}, self()}, fn ->
+      case fresh(state.table, path) do
+        {:ok, result, observed_at} -> remember(state, path, result, observed_at)
+        :stale -> fetch_remote(path, state)
+      end
+    end)
+  end
+
+  defp fetch_missing(path, state), do: fetch_remote(path, state)
+
+  defp remember(state, path, result, observed_at) do
+    {result, observed_at, %{state | memo: Map.put(state.memo, path, {result, observed_at})}}
+  end
+
+  defp fresh(table, key) do
     now = now_ms()
 
-    case :ets.lookup(state.table, path) do
-      [{^path, recorded_at, result, observed_at}] when now - recorded_at < @ttl_ms ->
-        if state.async?, do: DashboardCache.expire_at(recorded_at + @ttl_ms)
-        {result, observed_at, %{state | memo: Map.put(state.memo, path, {result, observed_at})}}
-
-      _missing ->
-        if state.async?, do: fetch_async(path, state, now), else: fetch_remote(path, state, now)
+    case :ets.lookup(table, key) do
+      [{^key, recorded_at, value, timestamp}] when now - recorded_at < @ttl_ms -> {:ok, value, timestamp}
+      _missing_or_expired -> :stale
     end
   end
 
-  defp fetch_async(path, state, now) do
-    pending_key = {:pending, path}
+  defp cached_signal(table, key, fallback, fetch, read) do
+    now = now_ms()
 
-    state =
-      if state.remaining > 0 and :ets.insert_new(state.table, {pending_key, now, nil, nil}) do
-        Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-          try do
-            fetch_remote(path, state, now_ms())
-            DashboardCache.invalidate([:hydrated, :herdr])
-            DashboardPubSub.broadcast_changed()
-          after
-            :ets.delete(state.table, pending_key)
-          end
-        end)
+    case :ets.lookup(table, key) do
+      [{^key, recorded_at, value, _}] when now - recorded_at < @ttl_ms ->
+        {value, true}
 
-        %{state | remaining: state.remaining - 1}
-      else
-        state
+      rows ->
+        refreshes = Process.get(@refreshes)
+        Process.put(@refreshes, Map.update(refreshes, table, %{key => {fetch, read}}, &Map.put(&1, key, {fetch, read})))
+
+        case rows do
+          [{^key, _at, value, _}] -> {value, false}
+          [] -> {fallback, false}
+        end
+    end
+  end
+
+  defp start_refreshes(refreshes) do
+    for {table, signals} <- refreshes, :ets.insert_new(table, {:refreshing, nil}) do
+      job = fn -> refresh_batch(table, signals) end
+
+      case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, job) do
+        {:ok, _pid} -> :ok
+        {:error, _reason} -> :ets.delete(table, :refreshing)
+      end
+    end
+  end
+
+  defp refresh_batch(table, signals) do
+    :ets.update_element(table, :refreshing, {2, self()})
+    budget = :atomics.new(1, signed: true)
+    :atomics.put(budget, 1, @request_limit)
+    state = %{table: table, budget: budget, deadline: now_ms() + @timeout_ms, memo: %{}, exhausted?: false}
+
+    # Refresh complete badge observations before publishing them. An outage
+    # or a new run can change which comparison or pagination calls are needed.
+    # Publishing each provider response would expose partial badge updates.
+    observations =
+      signals
+      |> Task.async_stream(&refresh_signal(&1, state), max_concurrency: @request_limit, timeout: :infinity)
+      |> Enum.flat_map(fn
+        {:ok, {key, value}} -> [{key, value}]
+        {:ok, :skip} -> []
+      end)
+
+    at = now_ms()
+
+    changed? =
+      Enum.any?(observations, fn {key, value} ->
+        signal_value(:ets.lookup_element(table, key, 3, nil)) != signal_value(value)
+      end)
+
+    :ets.insert(table, Enum.map(observations, fn {key, value} -> {key, at, value, nil} end))
+    if changed?, do: DashboardCache.inputs_changed()
+  after
+    :ets.delete(table, :refreshing)
+  end
+
+  defp refresh_signal({key, {fetch, read}}, state) do
+    case fresh(state.table, key) do
+      {:ok, _, _} ->
+        :skip
+
+      :stale ->
+        {value, state} = read.(Map.put(state, :fetch, fetch))
+        if state.exhausted?, do: :skip, else: {key, value}
+    end
+  end
+
+  defp fetch_remote(path, state) do
+    timeout = state.deadline - now_ms()
+
+    with true <- timeout > 0,
+         {:ok, state} <- reserve_request(state) do
+      {_path, _at, result, observed_at} = row = remote_row(path, state.fetch, timeout)
+      :ets.insert(state.table, row)
+      remember(state, path, result, observed_at)
+    else
+      _exhausted -> {{:error, :budget}, nil, %{state | exhausted?: true}}
+    end
+  end
+
+  defp reserve_request(%{budget: budget} = state), do: if(:atomics.sub_get(budget, 1, 1) >= 0, do: {:ok, state}, else: :exhausted)
+  defp reserve_request(%{remaining: remaining} = state) when remaining > 0, do: {:ok, %{state | remaining: remaining - 1}}
+  defp reserve_request(_state), do: :exhausted
+
+  defp remote_row(path, fetch, timeout) do
+    task = Task.async(fn -> fetch.(path, timeout: timeout, receive_timeout: timeout) end)
+
+    result =
+      case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
+        {:ok, result} -> result
+        _unavailable -> {:error, :timeout}
       end
 
-    case :ets.lookup(state.table, path) do
-      [{^path, _at, result, observed_at}] -> {result, observed_at, state}
-      _missing -> {{:error, :pending}, nil, state}
-    end
-  end
-
-  defp fetch_remote(path, state, now) do
-    remaining_ms = state.deadline - now
-
-    if state.remaining > 0 and remaining_ms > 0 do
-      opts = [timeout: remaining_ms, receive_timeout: remaining_ms]
-      task = Task.async(fn -> state.fetch.(path, opts) end)
-
-      result =
-        case Task.yield(task, remaining_ms) || Task.shutdown(task, :brutal_kill) do
-          {:ok, result} -> result
-          _unavailable -> {:error, :timeout}
-        end
-
-      observed_at = DateTime.utc_now() |> DateTime.to_iso8601()
-      :ets.insert(state.table, {path, now_ms(), result, observed_at})
-      {result, observed_at, %{state | remaining: state.remaining - 1, memo: Map.put(state.memo, path, {result, observed_at})}}
-    else
-      {{:error, :budget}, nil, state}
-    end
+    {path, now_ms(), result, DateTime.utc_now() |> DateTime.to_iso8601()}
   end
 
   defp ensure_table(table) when is_reference(table), do: table

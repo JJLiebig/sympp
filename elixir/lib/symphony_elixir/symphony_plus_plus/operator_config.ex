@@ -1,48 +1,23 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.OperatorConfig do
   @moduledoc false
 
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.Inputs
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
 
   @spec load() :: map()
   def load do
-    with {:ok, contents} <- File.read(config_path()),
+    path = config_path()
+    Inputs.shared({:operator_config, path}, fn -> Inputs.file_stamp(path) end, fn -> read_config(path) end)
+  end
+
+  defp read_config(path) do
+    with {:ok, contents} <- File.read(path),
          {:ok, config} when is_map(config) <- Jason.decode(contents) do
       config
       |> Map.take(["repos", "machines"])
       |> Map.update("repos", %{}, &normalize_repos/1)
     else
       _result -> %{}
-    end
-  end
-
-  @doc false
-  @spec revision({tuple() | nil, binary() | nil}) :: {tuple() | nil, binary() | nil}
-  def revision({previous_stamp, previous_hash}) do
-    path = config_path()
-
-    case File.stat(path, time: :posix) do
-      {:ok, stat} ->
-        stamp = {path, stat.inode, stat.size, stat.mtime, stat.ctime}
-        now = System.system_time(:second)
-        # File.stat timestamps have second precision. Recheck the contents
-        # until both timestamps have settled to catch same-size overwrites.
-        verified_stamp = if stat.mtime < now and stat.ctime < now, do: stamp
-
-        if verified_stamp != nil and verified_stamp == previous_stamp do
-          {previous_stamp, previous_hash}
-        else
-          read_revision(path, verified_stamp)
-        end
-
-      _unavailable ->
-        {nil, nil}
-    end
-  end
-
-  defp read_revision(path, stamp) do
-    case File.read(path) do
-      {:ok, contents} -> {stamp, :crypto.hash(:sha256, contents)}
-      _unavailable -> {nil, nil}
     end
   end
 
@@ -53,8 +28,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorConfig do
   def area_path(config, repo_identity) do
     with remote when is_binary(remote) <- Map.get(repo_identity, :repo_remote),
          identity <- RepoIdentity.fields(%{}, remote),
-         repo_key when is_binary(repo_key) <- identity.repo_key,
-         %{"area" => area} when is_list(area) <- entry(config, "repos", repo_key),
+         repo_key when is_binary(repo_key) <- identity.repo_key do
+      Inputs.record({:area, repo_key}, configured_area(config, repo_key), fn -> configured_area(load(), repo_key) end)
+    else
+      _result -> nil
+    end
+  end
+
+  defp configured_area(config, repo_key) do
+    with %{"area" => area} when is_list(area) <- entry(config, "repos", repo_key),
          true <- length(area) in 1..3 and Enum.all?(area, &filled_string?/1) do
       area
     else
@@ -64,16 +46,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorConfig do
 
   @spec session_location(map(), map() | nil) :: map() | nil
   def session_location(config, %{worker_host: host, session_id: session_id}) do
-    with true <- filled_string?(host) and filled_string?(session_id),
-         %{"label" => label, "kind" => kind} <- entry(config, "machines", host),
+    if filled_string?(host) and filled_string?(session_id) do
+      Inputs.record({:worker_location, host}, configured_location(config, host), fn -> configured_location(load(), host) end)
+    end
+  end
+
+  def session_location(_config, _session), do: nil
+
+  defp configured_location(config, host) do
+    with %{"label" => label, "kind" => kind} <- entry(config, "machines", host),
          true <- filled_string?(label) and kind in ["desktop", "laptop", "server"] do
       %{label: label, kind: kind}
     else
       _result -> nil
     end
   end
-
-  def session_location(_config, _session), do: nil
 
   @spec machine(map(), String.t() | nil, String.t() | nil) :: map()
   def machine(config, machine_id, fallback_label) do

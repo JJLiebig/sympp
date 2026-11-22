@@ -13,7 +13,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
 
   use GenServer
 
-  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub, OperatorDashboardOpener}
+  alias SymphonyElixir.SymphonyPlusPlus.{DashboardPubSub, OperatorDashboardOpener}
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
 
   @default_ttl_ms 3 * 60 * 1_000
@@ -84,7 +84,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
   defp live_until?(server, terminal_key) do
     case lease_call(server, {:terminal_deadline, terminal_key}) do
       deadline when is_integer(deadline) ->
-        DashboardCache.expire_at(deadline)
         true
 
       _missing ->
@@ -354,7 +353,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
 
   defp notify_terminal_changes(previous, current) do
     if leased_terminals(previous) != leased_terminals(current) do
-      DashboardCache.invalidate([:archived, :deferred, :hydrated, :herdr])
       DashboardPubSub.broadcast_changed()
     end
   end

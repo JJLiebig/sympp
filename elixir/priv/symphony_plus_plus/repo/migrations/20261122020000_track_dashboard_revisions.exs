@@ -18,6 +18,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.TrackDashboardRevision
 
     execute("INSERT INTO sympp_dashboard_revisions VALUES (0, 0, 0, 0)")
 
+    install_triggers()
+  end
+
+  def down do
+    drop_triggers()
+    execute("DROP TABLE sympp_dashboard_revisions")
+  end
+
+  def install_triggers do
     for table <- @tables, {event, rows} <- @events do
       updates =
         Enum.map_join(~w(priority archived live native), ", ", fn surface ->
@@ -34,12 +43,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.TrackDashboardRevision
     end
   end
 
-  def down do
+  def drop_triggers do
     for table <- @tables, {event, _rows} <- @events do
       execute("DROP TRIGGER sympp_dashboard_#{table}_#{event}")
     end
-
-    execute("DROP TABLE sympp_dashboard_revisions")
   end
 
   defp affects(_table, "native", _row), do: "1"

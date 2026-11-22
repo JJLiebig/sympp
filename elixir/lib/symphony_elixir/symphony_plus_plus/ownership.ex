@@ -20,6 +20,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
 
   import Ecto.Query, only: [from: 2]
 
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.Inputs
   alias SymphonyElixir.SymphonyPlusPlus.{DashboardPubSub, HerdrCore, Id}
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
@@ -343,8 +344,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
 
   def liveness(%WorkedOn{terminal_key: key}) do
     case Terminal.split_key(key) do
-      {core_id, address} -> core_liveness(HerdrCore.view(core_id, address), key)
-      :error -> "unknown"
+      {core_id, address} ->
+        Inputs.observe({:terminal_liveness, key}, fn -> core_liveness(HerdrCore.board_view(core_id, address), key) end)
+
+      :error ->
+        "unknown"
     end
   end
 

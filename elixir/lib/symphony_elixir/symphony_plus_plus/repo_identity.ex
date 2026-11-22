@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.RepoIdentity do
   @moduledoc false
 
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.Inputs
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
 
   @git_origin_timeout_ms 5_000
@@ -13,18 +14,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.RepoIdentity do
           repo_aliases: [String.t()]
         }
 
-  @type catalog :: %{optional(String.t()) => identity()}
-  @type catalog_opts :: [trusted_remotes: [String.t()], local_path_remotes?: boolean()]
+  @type catalog :: %{optional(String.t()) => identity(), optional(:board_inputs) => {reference(), (-> map())}}
+  @type catalog_opts :: [
+          trusted_remotes: [String.t()],
+          local_path_remotes?: boolean(),
+          local_origin: (Path.t() -> term())
+        ]
 
   @spec catalog([term()]) :: catalog()
   @spec catalog([term()], catalog_opts()) :: catalog()
   def catalog(repo_values, opts \\ []) do
-    local_path_remotes? = Keyword.get(opts, :local_path_remotes?, false)
+    local_origin =
+      if Keyword.get(opts, :local_path_remotes?, false) do
+        Keyword.get(opts, :local_origin, &local_git_origin_remote/1)
+      end
 
     infos =
       repo_values
       |> Enum.uniq_by(&repo_value_key/1)
-      |> Enum.flat_map(&parse_repo_infos(&1, local_path_remotes?))
+      |> Enum.flat_map(&parse_repo_infos(&1, local_origin))
 
     groups = Enum.group_by(infos, & &1.group_key)
 
@@ -39,12 +47,55 @@ defmodule SymphonyElixir.SymphonyPlusPlus.RepoIdentity do
     end)
   end
 
+  @doc false
+  @spec board_catalog([term()], [String.t()], Path.t() | nil) :: catalog()
+  def board_catalog(repos, trusted, root) do
+    if Inputs.active?() do
+      {source, surface} = Inputs.ledger_surface()
+      fresh = fn -> current_board_catalog({:ledger, source, {:repo_catalog, surface}}, repos, trusted, root) end
+      Map.put(fresh.(), :board_inputs, {make_ref(), fresh})
+    else
+      catalog(repos, trusted_remotes: trusted ++ List.wrap(local_git_origin_remote(root)), local_path_remotes?: true)
+    end
+  end
+
+  defp current_board_catalog(key, repos, trusted, root) do
+    origin = cached_git_origin_remote(root)
+
+    origins =
+      for value <- Enum.uniq(repos), is_binary(value), path = String.trim(value), local_absolute_path?(path), into: %{} do
+        {path, cached_git_origin_remote(path)}
+      end
+
+    Inputs.shared(key, fn -> {repos, trusted, origin, origins} end, fn ->
+      catalog(repos,
+        trusted_remotes: trusted ++ List.wrap(origin),
+        local_path_remotes?: true,
+        local_origin: &Map.get(origins, &1)
+      )
+    end)
+  end
+
   @spec fields(catalog(), term()) :: identity()
   def fields(catalog, raw_repo) when is_map(catalog) and is_binary(raw_repo) do
-    Map.get(catalog, raw_repo) || fallback_fields(raw_repo)
+    value = catalog_fields(catalog, raw_repo)
+
+    case Map.get(catalog, :board_inputs) do
+      {id, fresh} ->
+        Inputs.record({:repo_fields, id, raw_repo}, value, fn ->
+          {:repo_catalog, id} |> Inputs.memo(fresh) |> catalog_fields(raw_repo)
+        end)
+
+      nil ->
+        value
+    end
   end
 
   def fields(_catalog, _raw_repo), do: empty_identity()
+
+  defp catalog_fields(catalog, raw_repo) do
+    Map.get(catalog, raw_repo) || fallback_fields(raw_repo)
+  end
 
   @spec scope_match?(term(), term()) :: boolean()
   def scope_match?(expected_repo, actual_repo), do: scope_match?(expected_repo, actual_repo, [])
@@ -90,6 +141,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.RepoIdentity do
   end
 
   def local_git_origin_remote(_repo_path), do: nil
+
+  @doc false
+  @spec cached_git_origin_remote(term()) :: String.t() | nil
+  def cached_git_origin_remote(path) when is_binary(path) do
+    Inputs.shared({:git_origin, path}, fn -> origin_stamp(path) end, fn -> local_git_origin_remote(path) end)
+  end
+
+  def cached_git_origin_remote(_path), do: nil
+
+  defp origin_stamp(path) do
+    git_path = Path.join(path, ".git")
+    config = if File.dir?(git_path), do: Path.join(git_path, "config"), else: Path.join(path, "config")
+
+    # A linked worktree can use a config outside its own directory. A
+    # bounded recheck also covers included and global Git configuration.
+    interval = if File.regular?(git_path), do: 1_000, else: 30_000
+    {Inputs.file_stamp(config), div(System.monotonic_time(:millisecond), interval)}
+  end
 
   defp fallback_fields(raw_repo) do
     [raw_repo]
@@ -297,9 +366,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.RepoIdentity do
     end
   end
 
-  defp local_path_repo_infos(raw, repo_path, true) do
-    with true <- local_git_repo_path?(repo_path),
-         origin when is_binary(origin) <- local_git_origin_remote(repo_path),
+  defp local_path_repo_infos(raw, repo_path, lookup) when is_function(lookup, 1) do
+    with true <- local_absolute_path?(repo_path),
+         origin when is_binary(origin) <- lookup.(repo_path),
          %{kind: :remote} = remote <- parse_repo(origin) do
       group_key = {:local_path, key(raw)}
 
@@ -321,7 +390,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.RepoIdentity do
     end
   end
 
-  defp local_path_repo_infos(_raw, _repo_path, false), do: []
+  defp local_path_repo_infos(_raw, _repo_path, nil), do: []
 
   defp local_git_repo_path?(repo_path) when is_binary(repo_path) do
     local_absolute_path?(repo_path) and File.dir?(repo_path) and

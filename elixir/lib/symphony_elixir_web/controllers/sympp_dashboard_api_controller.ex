@@ -313,7 +313,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp notification_events(conn, authorized?) do
     with true <- authorized?,
          {:ok, subscription} <-
-           Runtime.with_dashboard_repo(&subscribe_dashboard(&1, [herdr: :revision], true), migrate?: false) do
+           Runtime.with_dashboard_repo(&subscribe_dashboard(&1, [detail: :revision], true), migrate?: false) do
       try do
         conn |> open_dashboard_stream() |> stream_events_after_ready(subscription)
       after
