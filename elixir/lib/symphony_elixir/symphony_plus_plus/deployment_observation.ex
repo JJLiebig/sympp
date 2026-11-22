@@ -2,7 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.Inputs
-  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, OperatorConfig}
+  alias SymphonyElixir.SymphonyPlusPlus.{DashboardPubSub, OperatorConfig}
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.DefaultClient
   alias SymphonyElixir.SymphonyPlusPlus.OfflineSandbox
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
@@ -56,7 +56,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
         enrich_detail(detail, config, state)
       end)
 
-    track_signals(state.signals)
+    track_signals(state.table, state.signals)
     observations = Map.new(details, &{&1.work_request.id, Map.take(&1.work_request, [:deployments, :default_branch])})
 
     payload
@@ -148,20 +148,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
 
   defp read_signal(_key, _empty, state, read), do: read.(state)
 
-  defp track_signals(signals) when map_size(signals) == 0, do: :ok
+  defp track_signals(table, signals) do
+    signals
+    |> Enum.group_by(fn {slot, _value} -> signal_repo(slot) end)
+    |> Enum.each(fn {repo, group} -> track_repo_signals(table, repo, group) end)
+  end
 
-  defp track_signals(signals) do
-    Inputs.record({:deployments, make_ref()}, true, fn ->
-      {unchanged?, fresh?} =
-        Enum.reduce(signals, {true, true}, fn {slot, {previous, read}}, {unchanged?, fresh?} ->
-          {value, fresh_signal?} = Inputs.memo(slot, read)
-          {unchanged? and signal_value(value) == previous, fresh? and fresh_signal?}
-        end)
+  defp track_repo_signals(table, repo, signals) do
+    Inputs.record({:deployments, make_ref()}, true, fn -> repo_signals_current?(table, repo, signals) end)
+  end
 
-      # A native read may also need archived badges after the web reader's
-      # refresh. Wait for its complete set before exposing a provider change.
-      unchanged? or not fresh?
-    end)
+  defp repo_signals_current?(table, repo, signals) do
+    {unchanged?, outstanding} =
+      Enum.reduce(signals, {true, []}, fn {slot, {previous, read}}, {unchanged?, outstanding} ->
+        {value, fresh?} = Inputs.memo(slot, read)
+        outstanding = if fresh?, do: outstanding, else: [slot | outstanding]
+        {unchanged? and signal_value(value) == previous, outstanding}
+      end)
+
+    case {unchanged?, outstanding} do
+      {false, [_ | _]} ->
+        # A native read can need more badges for this repo than the web
+        # batch did. Request one more wakeup when those badges are ready.
+        :ets.insert(table, {{:deferred_change, repo}, outstanding})
+        true
+
+      _ready_or_unchanged ->
+        unchanged?
+    end
   end
 
   defp signal_value(value) when is_map(value), do: Map.delete(value, :observed_at)
@@ -424,7 +438,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
 
       rows ->
         refreshes = Process.get(@refreshes)
-        Process.put(@refreshes, Map.update(refreshes, table, %{key => {fetch, read}}, &Map.put(&1, key, {fetch, read})))
+        group = {table, signal_repo(key)}
+        Process.put(@refreshes, Map.update(refreshes, group, %{key => {fetch, read}}, &Map.put(&1, key, {fetch, read})))
 
         case rows do
           [{^key, _at, value, _}] -> {value, false}
@@ -433,26 +448,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
     end
   end
 
+  defp signal_repo({:signal, key}), do: elem(key, 1)
+
+  defp start_refreshes(refreshes) when map_size(refreshes) == 0, do: :ok
+
   defp start_refreshes(refreshes) do
-    for {table, signals} <- refreshes, :ets.insert_new(table, {:refreshing, nil}) do
-      job = fn -> refresh_batch(table, signals) end
+    budget = :atomics.new(1, signed: true)
+    :atomics.put(budget, 1, @request_limit)
+
+    for {{table, repo}, signals} <- refreshes, :ets.insert_new(table, {{:refreshing, repo}, nil}) do
+      job = fn -> refresh_batch(table, repo, signals, budget) end
 
       case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, job) do
         {:ok, _pid} -> :ok
-        {:error, _reason} -> :ets.delete(table, :refreshing)
+        {:error, _reason} -> :ets.delete(table, {:refreshing, repo})
       end
     end
   end
 
-  defp refresh_batch(table, signals) do
-    :ets.update_element(table, :refreshing, {2, self()})
-    budget = :atomics.new(1, signed: true)
-    :atomics.put(budget, 1, @request_limit)
+  defp refresh_batch(table, repo, signals, budget) do
+    :ets.update_element(table, {:refreshing, repo}, {2, self()})
     state = %{table: table, budget: budget, deadline: now_ms() + @timeout_ms, memo: %{}, exhausted?: false}
 
-    # Refresh complete badge observations before publishing them. An outage
-    # or a new run can change which comparison or pagination calls are needed.
-    # Publishing each provider response would expose partial badge updates.
+    # Publish complete observations together for this repository. A slow
+    # provider read on a different repository can't hold this batch up.
     observations =
       signals
       |> Task.async_stream(&refresh_signal(&1, state), max_concurrency: @request_limit, timeout: :infinity)
@@ -469,9 +488,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DeploymentObservation do
       end)
 
     :ets.insert(table, Enum.map(observations, fn {key, value} -> {key, at, value, nil} end))
-    if changed?, do: DashboardCache.inputs_changed()
+    ready? = deferred_change_ready?(table, repo)
+    if changed? or ready?, do: DashboardPubSub.broadcast_changed()
   after
-    :ets.delete(table, :refreshing)
+    :ets.delete(table, {:refreshing, repo})
+  end
+
+  defp deferred_change_ready?(table, repo) do
+    key = {:deferred_change, repo}
+
+    with [{^key, slots}] <- :ets.lookup(table, key),
+         true <- Enum.all?(slots, &match?({:ok, _, _}, fresh(table, &1))) do
+      :ets.delete_object(table, {key, slots})
+      true
+    else
+      _waiting_or_unchanged -> false
+    end
   end
 
   defp refresh_signal({key, {fetch, read}}, state) do

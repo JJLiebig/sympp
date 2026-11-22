@@ -4,7 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.TrackVisibleDashboardI
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.TrackDashboardRevisions
 
-  @surfaces ~w(priority archived live native deferred detail)
+  @surfaces ~w(priority archived live native deferred detail live_inputs)
   @web_execution ~w(live deferred)
   @execution ~w(archived live native deferred)
 
@@ -46,6 +46,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.TrackVisibleDashboardI
     TrackDashboardRevisions.drop_triggers()
     execute("ALTER TABLE sympp_dashboard_revisions ADD COLUMN deferred INTEGER NOT NULL DEFAULT 0")
     execute("ALTER TABLE sympp_dashboard_revisions ADD COLUMN detail INTEGER NOT NULL DEFAULT 0")
+    execute("ALTER TABLE sympp_dashboard_revisions ADD COLUMN live_inputs INTEGER NOT NULL DEFAULT 0")
 
     for table <- @tables, event <- @events do
       signals = for surface <- @surfaces, do: {surface, signal(table, surface, event)}
@@ -67,6 +68,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.TrackVisibleDashboardI
     end
 
     TrackDashboardRevisions.drop_triggers()
+    execute("ALTER TABLE sympp_dashboard_revisions DROP COLUMN live_inputs")
     execute("ALTER TABLE sympp_dashboard_revisions DROP COLUMN detail")
     execute("ALTER TABLE sympp_dashboard_revisions DROP COLUMN deferred")
     TrackDashboardRevisions.install_triggers()
@@ -88,6 +90,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.TrackVisibleDashboardI
   defp condition({_fields, matches}, :delete), do: matches.("OLD")
 
   defp changed(fields), do: Enum.map_join(fields, " OR ", &~s(OLD."#{&1}" IS NOT NEW."#{&1}"))
+
+  # Shared package, progress and graph records depend on live request
+  # membership. Editing a request's title or report cannot change those rows.
+  defp rules("work_requests", "live_inputs"), do: [{~w(id archived_at), &in_scope("live", &1 <> ".archived_at")}]
+  defp rules("progress_events", "live_inputs"), do: [package_progress_rule("live")]
+
+  defp rules(table, "live_inputs")
+       when (is_map_key(@package_details, table) and table != "work_package_observations") or
+              is_map_key(@graphs, table) or table in ~w(work_packages work_package_deliveries),
+       do: rules(table, "live")
+
+  defp rules(_table, "live_inputs"), do: []
 
   defp rules("work_requests", surface) do
     fields =
@@ -118,12 +132,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.TrackVisibleDashboardI
 
   defp rules("progress_events", "priority"), do: [lineage_rule("priority")]
 
-  defp rules("progress_events", surface) do
-    [
-      lineage_rule(surface),
-      {~w(id work_package_id summary body status sequence created_at inserted_at actor_id actor_type agent_run_id payload), &package_scope(surface, "#{&1}.work_package_id")}
-    ]
-  end
+  defp rules("progress_events", surface), do: [lineage_rule(surface), package_progress_rule(surface)]
 
   defp rules("asks", surface) when surface in ~w(priority archived) do
     [{~w(work_request_id state), &"#{&1}.state IS 'open' AND #{request_scope(surface, "#{&1}.work_request_id")}"}]
@@ -159,7 +168,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.TrackVisibleDashboardI
   defp rules("operator_settings", _surface), do: [{@settings, fn _row -> "1" end}]
 
   defp rules("cards", surface) when surface in ~w(live native deferred) do
-    [{~w(id state title repository base_branch branch pr review stale ended_at inserted_at updated_at), &visible_card/1}]
+    [{~w(id state title repository base_branch branch pr review_id review stale ended_at inserted_at updated_at), &visible_card/1}]
   end
 
   defp rules("worked_on", surface) when surface in @execution do
@@ -185,6 +194,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.TrackVisibleDashboardI
   end
 
   defp rules(_table, _surface), do: []
+
+  defp package_progress_rule(surface) do
+    {~w(id work_package_id summary body status sequence created_at inserted_at actor_id actor_type agent_run_id payload), &package_scope(surface, "#{&1}.work_package_id")}
+  end
 
   # A lineage record can link to a displayed package from outside its request.
   defp lineage_rule(surface) do

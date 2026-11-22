@@ -115,22 +115,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   @doc false
   @spec live_projection_inputs(repo()) :: {:ok, [WorkRequest.t()], map()} | {:error, dashboard_error()}
   def live_projection_inputs(repo) do
-    read = fn ->
-      with {:ok, requests} <- WorkRequestRepository.list(repo),
-           {:ok, inputs} <- operator_projection_inputs(repo, requests) do
-        {:ok, requests, inputs}
-      end
-    end
-
-    # Read the version in the transaction that will consume the shared rows.
-    # If an external writer commits during the build, later transactions get
-    # the new version and cannot reuse the earlier rows.
     with source when is_pid(source) <- Inputs.ledger(),
          true <- repo.in_transaction?(),
-         {:ok, %{rows: [[version]]}} <- repo.query("SELECT live FROM sympp_dashboard_revisions", []) do
-      Inputs.shared({:ledger, source, :live}, fn -> version end, read)
+         {:ok, %{rows: [[revision, rows_revision]]}} <- repo.query("SELECT live, live_inputs FROM sympp_dashboard_revisions", []) do
+      shared_live_projection_inputs(repo, source, revision, rows_revision)
     else
-      _not_cacheable -> read.()
+      _not_cacheable ->
+        with {:ok, requests} <- WorkRequestRepository.list(repo),
+             {:ok, inputs} <- operator_projection_inputs(repo, requests) do
+          {:ok, requests, inputs}
+        end
+    end
+  end
+
+  defp shared_live_projection_inputs(repo, source, revision, rows_revision) do
+    # Both versions come from the transaction that will consume the rows.
+    requests = Inputs.shared({:ledger, source, :live_requests}, fn -> revision end, fn -> WorkRequestRepository.list(repo) end)
+
+    with {:ok, requests} <- requests,
+         read_inputs = fn -> operator_projection_inputs(repo, requests) end,
+         {:ok, inputs} <- Inputs.shared({:ledger, source, :live_inputs}, fn -> rows_revision end, read_inputs) do
+      {:ok, requests, inputs}
     end
   end
 

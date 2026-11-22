@@ -145,7 +145,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.RepoIdentity do
   @doc false
   @spec cached_git_origin_remote(term()) :: String.t() | nil
   def cached_git_origin_remote(path) when is_binary(path) do
-    Inputs.shared({:git_origin, path}, fn -> origin_stamp(path) end, fn -> local_git_origin_remote(path) end)
+    if not OfflineSandbox.enabled?() do
+      Inputs.shared({:git_origin, path}, fn -> origin_stamp(path) end, fn -> local_git_origin_remote(path) end, :background)
+    end
   end
 
   def cached_git_origin_remote(_path), do: nil

@@ -233,6 +233,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert {:ok, body, _etag} = DashboardCache.json(Repo, :hydrated, builder)
     assert %{"cards" => [%{"id" => "ended"}], "stale" => false} = Jason.decode!(body)
 
+    Repo.query!("UPDATE sympp_cards SET review_id = 'cycle-2' WHERE id = 'ended'")
+    refresh_watches()
+    assert_receive {:dashboard_changed, ^ref, _card_review}
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :hydrated, builder)
+    assert %{"cards" => [%{"review" => %{"id" => "cycle-2"}}]} = Jason.decode!(body)
+
     :atomics.put(clock, 1, start + 60_010)
     refresh_watches()
     assert_receive {:dashboard_changed, ^ref, _retention}
@@ -246,12 +252,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert %{"cards" => [], "stale" => true} = Jason.decode!(body)
   end
 
-  test "an unchanged deployment refetch leaves the watched response and build count alone", %{path: path} do
+  test "deployment changes wake readers independently and unchanged refetches leave the board alone", %{path: path} do
     caller = self()
     table = :ets.new(:board_deployment_test, [:public])
     builds = :atomics.new(1, [])
-    payload = %{work_request_details: [%{work_request: %{id: "request", repo: "acme/example", completed_at: nil}, work_packages: []}]}
-    config = %{"repos" => %{"acme/example" => %{"deploy_workflows" => %{"dev" => "deploy.yml"}}}}
+    repos = ["acme/example", "acme/slow"]
+    details = Enum.map(repos, &%{work_request: %{id: &1, repo: &1, completed_at: nil}, work_packages: []})
+    payload = %{work_request_details: details}
+    config = %{"repos" => Map.new(repos, &{&1, %{"deploy_workflows" => %{"dev" => "deploy.yml"}}})}
     config_path = path <> ".json"
     previous = System.get_env("SYMPP_OPERATOR_CONFIG")
     File.write!(config_path, Jason.encode!(config))
@@ -262,8 +270,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
       File.rm(config_path)
     end)
 
-    fetch = fn "repos/acme/example", _options ->
-      send(caller, {:deployment_fetch, self()})
+    fetch = fn "repos/" <> repo, _options ->
+      send(caller, {:deployment_fetch, repo, self()})
       receive do: ({:reply, result} -> result)
     end
 
@@ -273,26 +281,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     end
 
     {_cache, ref} = watch(:hydrated, builder)
-    assert_receive {:deployment_fetch, request}, 2_000
+    assert_receive {:deployment_fetch, "acme/example", request}, 2_000
+    assert_receive {:deployment_fetch, "acme/slow", slow_request}, 2_000
     assert_receive {:dashboard_changed, ^ref, _cold}
-    finish_deployment_fetch(table, request, {:ok, %{"default_branch" => "main"}})
-    assert_receive {:dashboard_changed, ^ref, _warm}
+    finish_deployment_fetch(table, "acme/example", request, {:ok, %{"default_branch" => "main"}})
+    assert_receive {:dashboard_changed, ^ref, _fast}
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :hydrated, builder)
+    assert [%{"work_request" => %{"default_branch" => "main"}}, %{"work_request" => slow}] = Jason.decode!(body)["work_request_details"]
+    refute Map.has_key?(slow, "default_branch")
+
+    finish_deployment_fetch(table, "acme/slow", slow_request, {:ok, %{"default_branch" => "main"}})
+    assert_receive {:dashboard_changed, ^ref, _slow}
     assert {:ok, body, etag} = DashboardCache.json(Repo, :hydrated, builder)
-    assert [%{"work_request" => %{"default_branch" => "main"}}] = Jason.decode!(body)["work_request_details"]
     built = :atomics.get(builds, 1)
 
     old = System.monotonic_time(:millisecond) - 60_001
-    for {key, _at, _result, _timestamp} <- :ets.tab2list(table), do: :ets.update_element(table, key, {2, old})
+
+    for key <- ["repos/acme/example", {:signal, {:default_branch, "acme/example"}}] do
+      :ets.update_element(table, key, {2, old})
+    end
+
     refresh_watches()
-    assert_receive {:deployment_fetch, request}, 2_000
-    finish_deployment_fetch(table, request, {:ok, %{"default_branch" => "main", "description" => "Only the provider response changed"}})
+    assert_receive {:deployment_fetch, "acme/example", request}, 2_000
+    finish_deployment_fetch(table, "acme/example", request, {:ok, %{"default_branch" => "main", "description" => "Only the provider response changed"}})
     refresh_watches()
     assert {:ok, ^body, ^etag} = DashboardCache.json(Repo, :hydrated, builder)
     assert :atomics.get(builds, 1) == built
   end
 
-  defp finish_deployment_fetch(table, request, reply) do
-    refresh = :ets.lookup_element(table, :refreshing, 2)
+  defp finish_deployment_fetch(table, repo, request, reply) do
+    refresh = :ets.lookup_element(table, {:refreshing, repo}, 2)
     monitor = Process.monitor(refresh)
     send(request, {:reply, reply})
     assert_receive {:DOWN, ^monitor, :process, ^refresh, :normal}, 2_000

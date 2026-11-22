@@ -128,14 +128,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.Inputs do
   @spec file_stamp(Path.t()) :: term()
   def file_stamp(path) do
     case File.stat(path, time: :posix) do
-      {:ok, stat} ->
+      {:ok, %File.Stat{type: :regular} = stat} ->
         # File.stat has second precision. Within the current second, verify
         # contents as well so a same-size in-place edit cannot be missed.
         now = System.system_time(:second)
         recent = if max(stat.mtime, stat.ctime) >= now, do: file_digest(path)
         {stat.inode, stat.size, stat.mtime, stat.ctime, recent}
 
-      {:error, _reason} ->
+      _not_a_file ->
         nil
     end
   end
