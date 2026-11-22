@@ -203,6 +203,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       try do
         stream_dashboard_events(conn)
       after
+        ReviewRefresh.unwatch()
         OperatorDashboardOpener.dashboard_disconnected()
       end
     else
@@ -296,13 +297,19 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
         |> Conn.send_chunked(200)
 
       case Conn.chunk(conn, "event: ready\ndata: {}\n\n") do
-        {:ok, conn} -> stream_herdr_events(conn, review_scope)
+        {:ok, conn} -> stream_review_notifications(conn, review_scope)
         {:error, _reason} -> conn
       end
     else
       false -> error_response(conn, :unauthorized)
       {:error, reason} -> error_response(conn, reason)
     end
+  end
+
+  defp stream_review_notifications(conn, scope) do
+    stream_herdr_events(conn, scope)
+  after
+    ReviewRefresh.unwatch()
   end
 
   @spec operator_config(Conn.t(), map()) :: Conn.t()

@@ -55,7 +55,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   @sweep_interval_ms 60_000
   @review_concurrency 4
   @review_timeout_ms ReviewStatus.timeout_ms() + 1_000
-  @type review_scope :: :all | {:request, String.t()} | {:package, String.t()}
+  @type review_scope :: :all | {:request, String.t()} | {:package, String.t(), String.t()}
 
   # The PR fields whose change is recorded as a new snapshot.
   @snapshot_fields ~w(state draft merged merged_at merge_commit_sha head_sha branch base_branch ci github_review)
@@ -86,10 +86,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     {:noreply, state}
   end
 
-  @doc "Refreshes pre-PR review evidence for a one-shot read."
-  @spec refresh_review_progress(module(), review_scope(), [String.t()]) :: :ok
-  def refresh_review_progress(repo, scope, excluded_requests \\ []) do
-    unless OfflineSandbox.enabled?(), do: safely(fn -> read_pre_pr_reviews(repo, scope, excluded_requests) end)
+  @doc "Refreshes review progress for packages whose branches have no PR."
+  @spec refresh_review_progress(module(), review_scope(), [review_scope()]) :: :ok
+  def refresh_review_progress(repo, scope, excluded_scopes \\ []) do
+    unless OfflineSandbox.enabled?(), do: safely(fn -> read_pre_pr_reviews(repo, scope, excluded_scopes) end)
     :ok
   end
 
@@ -302,25 +302,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   defp reviewed?(%WorkPackage{review_mode: mode, review_id: id}), do: mode in ["fast", "normal", "deep"] and is_binary(id)
 
-  defp read_pre_pr_reviews(repo, scope, excluded_requests) do
-    query =
-      from(package in WorkPackage,
-        join: request in WorkRequest,
-        on: request.id == package.work_request_id,
-        join: observation in Observation,
-        on: observation.work_package_id == package.id,
-        where: package.status in ^Lifecycle.in_flight_statuses() and is_nil(request.archived_at) and observation.pr_absent,
-        select: {package, observation}
-      )
-
-    query =
-      case scope do
-        {:request, id} -> from(package in query, where: package.work_request_id == ^id)
-        {:package, id} -> from(package in query, where: package.id == ^id)
-        :all -> from(package in query, where: package.work_request_id not in ^excluded_requests)
-      end
-
-    candidates = repo.all(query)
+  defp read_pre_pr_reviews(repo, scope, excluded_scopes) do
+    candidates = repo.all(pre_pr_review_query(scope, excluded_scopes))
     package_ids = for {package, _observation} <- candidates, do: package.id
     {:ok, attachments} = PlanningRepository.pr_attachments(repo, package_ids)
 
@@ -340,6 +323,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
     result
   end
+
+  defp pre_pr_review_query(scope, excluded_scopes) do
+    excluded_requests = for {:request, id} <- excluded_scopes, do: id
+    excluded_packages = for {:package, _request_id, id} <- excluded_scopes, do: id
+
+    from(package in WorkPackage,
+      join: request in WorkRequest,
+      on: request.id == package.work_request_id,
+      join: observation in Observation,
+      on: observation.work_package_id == package.id,
+      where: package.status in ^Lifecycle.in_flight_statuses() and is_nil(request.archived_at) and observation.pr_absent,
+      where: package.work_request_id not in ^excluded_requests and package.id not in ^excluded_packages,
+      select: {package, observation}
+    )
+    |> scope_review_query(scope)
+  end
+
+  defp scope_review_query(query, :all), do: query
+  defp scope_review_query(query, {:request, id}), do: from(package in query, where: package.work_request_id == ^id)
+
+  defp scope_review_query(query, {:package, request_id, id}),
+    do: from(package in query, where: package.id == ^id and package.work_request_id == ^request_id)
 
   defp store_review_progress(repo, observation, review) do
     attrs = %{review: review_payload(review, observation), stale: stale({:ok, nil}, review, [], observation)}

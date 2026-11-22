@@ -7,7 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
   alias SymphonyElixir.TaskSupervisor
 
   @board_wait_ms 2_000
-  @type scope :: :all | {:request, String.t()}
+  @type scope :: Observer.review_scope()
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -24,15 +24,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
 
   @spec watch(scope()) :: :ok
   def watch(scope) do
-    if Process.whereis(Observer), do: GenServer.cast(__MODULE__, {:watch, scope})
+    if Process.whereis(Observer), do: GenServer.cast(__MODULE__, {:watch, self(), scope})
     :ok
   end
+
+  @spec unwatch() :: :ok
+  def unwatch, do: GenServer.cast(__MODULE__, {:unwatch, self()})
 
   @spec advance() :: :ok
   def advance, do: GenServer.cast(__MODULE__, :advance)
 
   @impl true
-  def init(_opts), do: {:ok, %{tasks: %{}, watched: MapSet.new()}}
+  def init(_opts), do: {:ok, %{tasks: %{}, watchers: %{}}}
 
   @impl true
   def handle_call({:request, scope}, _from, state) do
@@ -41,38 +44,72 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
   end
 
   @impl true
-  def handle_cast({:watch, scope}, state) do
-    {_tasks, state} = refresh(scope, state)
-    {:noreply, %{state | watched: MapSet.put(state.watched, scope)}}
+  def handle_cast({:watch, reader, scope}, state) do
+    case {Process.alive?(reader), Map.get(state.watchers, reader)} do
+      {false, _watcher} ->
+        {:noreply, remove_reader(state, reader)}
+
+      {true, {^scope, _ref}} ->
+        {:noreply, state}
+
+      {true, _new} ->
+        state = remove_reader(state, reader)
+        {_tasks, state} = refresh(scope, state)
+        watchers = Map.put(state.watchers, reader, {scope, Process.monitor(reader)})
+        {:noreply, %{state | watchers: watchers}}
+    end
   end
 
+  def handle_cast({:unwatch, reader}, state), do: {:noreply, remove_reader(state, reader)}
+
   def handle_cast(:advance, state) do
-    # Retain in-flight reads so a slow worker is never read twice at once.
-    # Event streams renew demand through their existing notifications and heartbeat.
-    active = Map.filter(state.tasks, fn {_scope, pid} -> Process.alive?(pid) end)
-    scopes = if :all in state.watched, do: [:all], else: state.watched
-    state = Enum.reduce(scopes, %{tasks: active, watched: MapSet.new()}, &elem(refresh(&1, &2), 1))
+    # Keep the scopes of in-flight reads and any scopes they already excluded.
+    active = for {scope, pid} <- state.tasks, Process.alive?(pid), do: scope
+    tasks = Map.filter(state.tasks, fn {scope, _pid} -> Enum.any?(active, &covers?(&1, scope)) end)
+    scopes = for {reader, {scope, _ref}} <- state.watchers, Process.alive?(reader), do: scope
+    scopes = if :all in scopes, do: [:all], else: Enum.uniq(scopes)
+    state = Enum.reduce(scopes, %{state | tasks: tasks}, &elem(refresh(&1, &2), 1))
     {:noreply, state}
   end
 
-  defp refresh(:all, %{tasks: %{all: _pid} = tasks} = state), do: {Map.values(tasks), state}
-
-  defp refresh(:all, state) do
-    excluded = for {{:request, id}, _pid} <- state.tasks, do: id
-    tasks = Map.put(state.tasks, :all, start_factory(:all, excluded))
-    {Map.values(tasks), %{state | tasks: tasks}}
-  end
-
-  defp refresh({:request, _id} = scope, state) do
-    case Map.get(state.tasks, scope) || Map.get(state.tasks, :all) do
-      nil ->
-        pid = start_factory(scope, [])
-        {[pid], %{state | tasks: Map.put(state.tasks, scope, pid)}}
-
-      pid ->
-        {[pid], state}
+  @impl true
+  def handle_info({:DOWN, ref, :process, reader, _reason}, state) do
+    case Map.get(state.watchers, reader) do
+      {_scope, ^ref} -> {:noreply, remove_reader(state, reader)}
+      _other -> {:noreply, state}
     end
   end
+
+  defp remove_reader(state, reader) do
+    case Map.pop(state.watchers, reader) do
+      {nil, _watchers} ->
+        state
+
+      {{_scope, ref}, watchers} ->
+        Process.demonitor(ref, [:flush])
+        %{state | watchers: watchers}
+    end
+  end
+
+  defp refresh(scope, state) do
+    active_scopes = Map.keys(state.tasks)
+
+    tasks =
+      if Enum.any?(active_scopes, &covers?(&1, scope)) do
+        state.tasks
+      else
+        excluded = Enum.filter(active_scopes, &covers?(scope, &1))
+        Map.put(state.tasks, scope, start_factory(scope, excluded))
+      end
+
+    joined = for {read, pid} <- tasks, covers?(read, scope) or covers?(scope, read), do: pid
+    {joined, %{state | tasks: tasks}}
+  end
+
+  defp covers?(:all, _scope), do: true
+  defp covers?({:request, id}, {:package, id, _package_id}), do: true
+  defp covers?(scope, scope), do: true
+  defp covers?(_outer, _inner), do: false
 
   defp start_factory(scope, excluded) do
     args = [Repo, scope, excluded]
@@ -84,7 +121,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
     source = if function_exported?(repo, :get_dynamic_repo, 0), do: repo.get_dynamic_repo()
 
     {:ok, pid} =
-      Task.Supervisor.start_child(TaskSupervisor, fn ->
+      Task.start(fn ->
         if source, do: repo.put_dynamic_repo(source)
         Observer.refresh_review_progress(repo, scope)
       end)

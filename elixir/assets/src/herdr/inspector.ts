@@ -130,7 +130,7 @@ async function watchSympp(state: InspectorState, invalidate: () => void, signal:
         buffer += decoder.decode(value, { stream: true });
         const events = buffer.split("\n\n");
         buffer = events.pop() ?? "";
-        if (events.some((event) => event.includes("event: invalidated"))) invalidate();
+        if (events.some((event) => event.includes("event: ready") || event.includes("event: invalidated"))) invalidate();
       }
     } catch (error) {
       if ((error as Error).name === "AbortError") return;
