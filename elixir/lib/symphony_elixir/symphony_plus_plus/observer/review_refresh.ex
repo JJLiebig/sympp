@@ -4,9 +4,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
   use GenServer
 
   alias SymphonyElixir.SymphonyPlusPlus.{Observer, OfflineSandbox, Repo, ReviewStatus}
-  alias SymphonyElixir.TaskSupervisor
-
   @board_wait_ms 2_000
+  @standalone_refresh_ms 60_000
   @review_concurrency 4
   @review_timeout_ms ReviewStatus.timeout_ms() + 1_000
   @pubsub SymphonyElixir.PubSub
@@ -14,14 +13,42 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
   @type scope :: Observer.review_scope()
 
   @spec start_link(keyword()) :: GenServer.on_start()
-  def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
+
+  @doc false
+  @spec with_stdio_session((-> result)) :: result when result: var
+  def with_stdio_session(run) do
+    if OfflineSandbox.enabled?() do
+      run.()
+    else
+      source = Repo.get_dynamic_repo()
+
+      case start_link(name: {:global, stdio_name(source)}, repo_source: source, standalone: true) do
+        {:ok, pid} ->
+          try do
+            run.()
+          after
+            GenServer.stop(pid)
+          end
+
+        {:error, {:already_started, _pid}} ->
+          run.()
+
+        {:error, reason} ->
+          raise "sympp MCP review refresh start failed: #{inspect(reason)}"
+      end
+    end
+  end
 
   @spec request(module(), scope(), boolean()) :: :ok | :pending
   def request(repo, scope, wait?) do
-    cond do
-      OfflineSandbox.enabled?() -> :ok
-      coordinated_source?(repo) -> request_shared(scope, wait?)
-      true -> request_local(repo, scope, wait?)
+    if OfflineSandbox.enabled?() do
+      :ok
+    else
+      case coordinator(repo) do
+        nil -> request_local(repo, scope, wait?)
+        pid -> request_shared(pid, scope, wait?)
+      end
     end
   end
 
@@ -44,6 +71,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
 
   @impl true
   def init(opts) do
+    Process.flag(:trap_exit, true)
     Repo.put_dynamic_repo(Keyword.get(opts, :repo_source, Repo))
 
     {:ok,
@@ -54,7 +82,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
        running: %{},
        waiters: %{},
        sweeps: %{},
-       refresh_interval: Keyword.get(opts, :refresh_interval),
+       standalone?: Keyword.get(opts, :standalone, false),
        refresh_timer: nil
      }}
   end
@@ -111,13 +139,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
 
   def handle_info(_finished_read, state), do: {:noreply, state}
 
+  @impl true
+  def terminate(_reason, state) do
+    Enum.each(state.running, fn {_ref, {_job, pid, _timer}} -> Process.exit(pid, :kill) end)
+  end
+
   defp next_refresh(state) do
     # Recheck requested scopes after discovery. An older batch still covers
     # the packages it actually selected, even while its scope is reloaded.
     reads = Map.filter(state.reads, fn {_id, status} -> status == :pending end)
     # Streams renew demand after writing to their connection. A request
     # process still waiting to detect a disconnected peer is not enough.
-    Phoenix.PubSub.broadcast(@pubsub, @topic, :review_refresh_due)
+    if Process.whereis(@pubsub), do: Phoenix.PubSub.broadcast(@pubsub, @topic, :review_refresh_due)
     %{state | reads: reads, scopes: %{}}
   end
 
@@ -140,8 +173,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
     end
   end
 
-  defp ensure_refresh_timer(%{refresh_interval: interval, refresh_timer: nil} = state) when is_integer(interval),
-    do: %{state | refresh_timer: Process.send_after(self(), :advance, interval)}
+  defp ensure_refresh_timer(%{standalone?: true, refresh_timer: nil} = state),
+    do: %{state | refresh_timer: Process.send_after(self(), :advance, @standalone_refresh_ms)}
 
   defp ensure_refresh_timer(state), do: state
 
@@ -151,7 +184,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
 
     case Enum.split_while(state.queued, fn {cycle, _job} -> MapSet.member?(active, cycle) end) do
       {blocked, [{{review_id, route}, _kind} = job | rest]} ->
-        task = Task.Supervisor.async_nolink(TaskSupervisor, ReviewStatus, :read, [review_id, route])
+        task = Task.async(ReviewStatus, :read, [review_id, route])
         timer = Process.send_after(self(), {:read_timeout, task.ref}, @review_timeout_ms)
         start_reads(%{state | queued: blocked ++ rest, running: Map.put(running, task.ref, {job, task.pid, timer})})
 
@@ -194,16 +227,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
 
   defp complete?(ids, reads), do: Enum.all?(ids, &(Map.get(reads, &1) != :pending))
 
-  defp request_shared(scope, false), do: demand(scope)
+  defp request_shared(pid, scope, false), do: GenServer.cast(pid, {:demand, scope})
 
-  defp request_shared(scope, true) do
+  defp request_shared(pid, scope, true) do
     token = make_ref()
 
     try do
-      GenServer.call(__MODULE__, {:request, scope, token}, @board_wait_ms)
+      GenServer.call(pid, {:request, scope, token}, @board_wait_ms)
     catch
       :exit, {:timeout, _call} ->
-        GenServer.cast(__MODULE__, {:cancel_wait, token})
+        GenServer.cast(pid, {:cancel_wait, token})
         :pending
 
       :exit, {:noproc, _call} ->
@@ -228,8 +261,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh do
     pid
   end
 
-  defp coordinated_source?(Repo), do: Process.whereis(__MODULE__) != nil and configured_repo?(Repo.get_dynamic_repo())
-  defp coordinated_source?(_repo), do: false
+  defp coordinator(Repo) do
+    source = Repo.get_dynamic_repo()
+
+    case :global.whereis_name(stdio_name(source)) do
+      pid when is_pid(pid) -> pid
+      :undefined -> if configured_repo?(source), do: Process.whereis(__MODULE__)
+    end
+  end
+
+  defp coordinator(_repo), do: nil
+
+  defp stdio_name(source), do: {__MODULE__, :stdio, source}
 
   defp configured_repo?(Repo), do: true
 

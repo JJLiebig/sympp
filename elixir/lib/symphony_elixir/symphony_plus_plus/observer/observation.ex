@@ -16,11 +16,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.Observation do
 
   use Ecto.Schema
 
+  alias SymphonyElixir.SymphonyPlusPlus.ReviewStatus
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.StringList
 
   @primary_key {:work_package_id, :string, autogenerate: false}
 
   @type t :: %__MODULE__{}
+  @type review_result :: ReviewStatus.result() | :none
 
   schema "sympp_work_package_observations" do
     field(:pr, :map)
@@ -31,4 +33,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.Observation do
     field(:observed_at, :utc_datetime_usec)
     timestamps(type: :utc_datetime_usec)
   end
+
+  @doc false
+  @spec review_attributes(t(), review_result()) :: %{review: map() | nil, stale: [String.t()]}
+  def review_attributes(%__MODULE__{} = observation, result) do
+    stale =
+      if result == :unknown,
+        do: Enum.uniq(observation.stale ++ ["review"]),
+        else: List.delete(observation.stale, "review")
+
+    %{review: review_payload(result, observation), stale: stale}
+  end
+
+  @doc false
+  @spec review_payload(review_result() | :deferred, t() | nil) :: map() | nil
+  def review_payload({:ok, review}, observation), do: ReviewStatus.snapshot(review, observation && observation.review)
+  def review_payload(:not_started, _observation), do: %{"status" => "not_started"}
+  def review_payload(:none, _observation), do: nil
+  def review_payload(result, observation) when result in [:unknown, :deferred], do: observation && observation.review
 end

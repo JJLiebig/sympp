@@ -365,7 +365,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
 
   defp ensure_review_refresh_started do
     unless OfflineSandbox.enabled?() do
-      case ReviewRefresh.start_link(repo_source: Repo.get_dynamic_repo(), refresh_interval: 60_000) do
+      case ReviewRefresh.start_link(repo_source: Repo.get_dynamic_repo(), standalone: true) do
         {:ok, pid} -> Process.put(:sympp_cockpit_review_refresh_pid, pid)
         {:error, {:already_started, _pid}} -> :ok
         {:error, reason} -> Mix.raise("sympp cockpit review refresh start failed: #{inspect(reason)}")

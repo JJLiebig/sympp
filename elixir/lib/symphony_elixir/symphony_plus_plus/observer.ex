@@ -403,7 +403,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     do: from(package in query, where: package.id == ^id and package.work_request_id == ^request_id)
 
   defp store_review_progress(repo, observation, review) do
-    attrs = %{review: review_payload(review, observation), stale: stale({:ok, nil}, review, [], observation)}
+    attrs = Observation.review_attributes(observation, review)
 
     if Ecto.Changeset.change(observation, attrs).changes != %{} do
       # A one-shot reader can run in another VM. A newer sweep owns its PR
@@ -435,7 +435,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     attrs = %{
       pr: stored_pr,
       pr_absent: pre_pr?(item),
-      review: review_payload(review, observation),
+      review: Observation.review_payload(review, observation),
       stale: stale,
       stacked_on: stored_stacking
     }
@@ -688,12 +688,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
       PullRequest.metadata(metadata, ref, nil)
     end
   end
-
-  defp review_payload({:ok, review}, observation), do: ReviewStatus.snapshot(review, observation && observation.review)
-  defp review_payload(:not_started, _observation), do: %{"status" => "not_started"}
-  defp review_payload(:none, _observation), do: nil
-  # A deferred read or an unreachable host keeps the last reported review.
-  defp review_payload(state, observation) when state in [:unknown, :deferred], do: observation && observation.review
 
   defp store(repo, work_package_id, observation, attrs, review) do
     changeset = Ecto.Changeset.change(observation || %Observation{work_package_id: work_package_id}, attrs)

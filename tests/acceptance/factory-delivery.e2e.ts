@@ -773,7 +773,7 @@ test('the watcher and manual sync read reviews locally for workers on the factor
   // A failed discovery does not mean the branch has no PR. The usual sweep
   // still checks reviews and a consumer can use the result it recorded.
   provider.github = 'down';
-  await review.cycles({ [localReview]: { ...localProgress, progress: '2/2' } });
+  await review.cycles({ [localReview]: { ...localProgress, progress: '2/2' }, [manualReview]: {} });
   await factory.tick('sweep');
   expect(await row(architect, request, local)).toMatchObject({
     raw_status: 'dispatched',
@@ -790,14 +790,21 @@ test('the watcher and manual sync read reviews locally for workers on the factor
     [localReview]: { review: localReview, branch: localBranch, done: false, status: 'replan', superseded_by: { review: successor } },
     [successor]: { review: successor, branch: localBranch, done: true, status: 'done', accepted_head: head('a') },
     [remoteReview]: { review: remoteReview, branch: remoteBranch, done: true, status: 'done', accepted_head: head('b') },
-    [manualReview]: { review: manualReview, branch: noCiPr.headRefName, done: true, status: 'done', accepted_head: noCiPr.headRefOid },
+    [manualReview]: {},
   });
   provider.set(913, pr(913, head('a')));
   provider.set(914, pr(914, head('b')));
-  provider.set(915, noCiPr);
 
   await factory.tick('sweep');
   const manualBeforeSync = await row(architect, request, manual);
+  expect(manualBeforeSync).toMatchObject({
+    raw_status: 'dispatched',
+    work_package: { observation_stale: ['review'] },
+  });
+  await review.cycles({
+    [manualReview]: { review: manualReview, branch: noCiPr.headRefName, done: true, status: 'done', accepted_head: noCiPr.headRefOid },
+  });
+  provider.set(915, noCiPr);
   const synced = await architect.call('sync_pr', { work_package_id: manual, url: noCiPr.url });
 
   expect(new Set([factoryCore.name, hostname(), desktopRoute]).size).toBe(3);
@@ -810,8 +817,11 @@ test('the watcher and manual sync read reviews locally for workers on the factor
     work_package: { observation_stale: ['review'], review_signal: { observation_state: 'unknown' } },
     merge_eligibility: { eligible: false, reason_codes: expect.arrayContaining(['observation_stale']) },
   });
-  expect(manualBeforeSync.raw_status).toBe('dispatched');
   expect(synced.work_package.status).toBe('ready');
+  expect(await row(architect, request, manual)).toMatchObject({
+    raw_status: 'ready',
+    work_package: { observation_stale: [], review_signal: { accepted_head: noCiPr.headRefOid, status: 'passed' } },
+  });
   expect(provider.execRoutes).toEqual([desktopRoute, desktopRoute, desktopRoute]);
 });
 
