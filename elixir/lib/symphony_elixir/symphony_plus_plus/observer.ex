@@ -44,10 +44,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{Api, DryClient, MergeReconciler, PullRequest}
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{RateGovernor, Snapshot}
   alias SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope
-  alias SymphonyElixir.SymphonyPlusPlus.Observer.Observation
+  alias SymphonyElixir.SymphonyPlusPlus.Observer.{Observation, ReviewRefresh}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.{Repo, RepoIdentity, ReviewStatus}
+  alias SymphonyElixir.SymphonyPlusPlus.{RepoIdentity, ReviewStatus}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, Qualification, Stacking, WorkPackage}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -69,7 +69,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     Api.create_table()
     Process.send_after(self(), :terminals, 1_000)
     Process.send_after(self(), :sweep, 5_000)
-    {:ok, %{repo: Keyword.fetch!(opts, :repo), board_demand?: false, board_reviews_read?: false, board_refresh: nil}}
+    {:ok, %{repo: Keyword.fetch!(opts, :repo)}}
   end
 
   @impl true
@@ -80,66 +80,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   end
 
   def handle_info(:sweep, state) do
-    read_pre_pr_reviews? = state.board_demand? and not board_refresh_running?(state)
-    safely(fn -> sweep(state.repo, read_pre_pr_reviews?: read_pre_pr_reviews?) end)
+    safely(fn -> sweep(state.repo) end)
+    ReviewRefresh.advance()
     Process.send_after(self(), :sweep, @sweep_interval_ms)
-    {:noreply, %{state | board_demand?: false, board_reviews_read?: state.board_demand?}}
+    {:noreply, state}
   end
-
-  @doc "Requests review progress for a board read."
-  @spec request_board_reviews(module()) :: :ok
-  def request_board_reviews(repo) do
-    cond do
-      OfflineSandbox.enabled?() -> :ok
-      factory_observer?(repo) -> watch_board_reviews()
-      true -> refresh_review_progress(repo, :all)
-    end
-  end
-
-  @doc "Renews review demand while a board's event stream is connected."
-  @spec watch_board_reviews() :: :ok
-  def watch_board_reviews, do: GenServer.cast(__MODULE__, :board_reviews)
 
   @doc "Refreshes pre-PR review evidence for a one-shot read."
-  @spec refresh_review_progress(module(), review_scope()) :: :ok
-  def refresh_review_progress(repo, scope) do
-    unless OfflineSandbox.enabled?(), do: safely(fn -> read_pre_pr_reviews(repo, scope) end)
+  @spec refresh_review_progress(module(), review_scope(), [String.t()]) :: :ok
+  def refresh_review_progress(repo, scope, excluded_requests \\ []) do
+    unless OfflineSandbox.enabled?(), do: safely(fn -> read_pre_pr_reviews(repo, scope, excluded_requests) end)
     :ok
   end
-
-  defp factory_observer?(Repo), do: Process.whereis(__MODULE__) != nil and factory_repo?(Repo.get_dynamic_repo())
-  defp factory_observer?(_repo), do: false
-
-  defp factory_repo?(Repo), do: true
-
-  defp factory_repo?(pid) when is_pid(pid) do
-    # With an explicit database the API can use a separate pool for the same ledger.
-    database = Repo.database_path_without_side_effects()
-    pid == Process.whereis(Repo) or pid == :global.whereis_name(Repo.process_key(database))
-  end
-
-  defp factory_repo?(_source), do: false
-
-  @impl true
-  def handle_cast(:board_reviews, state) do
-    # Serve a newly opened board once, then let the sweep refresh active boards.
-    # The display read cannot hold up GitHub discovery or the terminal pass.
-    board_refresh =
-      if state.board_reviews_read? or board_refresh_running?(state) do
-        state.board_refresh
-      else
-        repo = state.repo
-
-        {:ok, pid} =
-          Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, __MODULE__, :refresh_review_progress, [repo, :all])
-
-        pid
-      end
-
-    {:noreply, %{state | board_demand?: true, board_reviews_read?: true, board_refresh: board_refresh}}
-  end
-
-  defp board_refresh_running?(state), do: is_pid(state.board_refresh) and Process.alive?(state.board_refresh)
 
   # A failed pass is retried on the next tick; the Observer keeps running.
   defp safely(fun) do
@@ -190,7 +142,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   replaces `GitHub.Snapshot.failing_checks/3`, `:commits` replaces
   `GitHub.Snapshot.commits/2`, `:review` replaces `ReviewStatus.read/2`.
   `:core` replaces `HerdrCore.current/0` for reviews and cards.
-  `:read_pre_pr_reviews?` tells the sweep to refresh review progress for a board.
   """
   @spec sweep(module(), keyword()) :: :ok
   def sweep(repo, opts \\ []) do
@@ -210,11 +161,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
         Map.merge(item, %{github: result, fresh?: fresh?, pr: current_pr(item, result, item.observation && item.observation.pr, opts)})
       end)
 
-    to_read =
-      for %{package: package} = item <- watched,
-          reviewed?(package) and (opts[:read_pre_pr_reviews?] == true or not pre_pr?(item)),
-          do: package
-
+    to_read = for %{package: package} = item <- watched, reviewed?(package) and not pre_pr?(item), do: package
     reviews = review_results(repo, to_read, opts)
     views = Enum.flat_map(watched, &view/1)
 
@@ -355,7 +302,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   defp reviewed?(%WorkPackage{review_mode: mode, review_id: id}), do: mode in ["fast", "normal", "deep"] and is_binary(id)
 
-  defp read_pre_pr_reviews(repo, scope) do
+  defp read_pre_pr_reviews(repo, scope, excluded_requests) do
     query =
       from(package in WorkPackage,
         join: request in WorkRequest,
@@ -370,7 +317,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
       case scope do
         {:request, id} -> from(package in query, where: package.work_request_id == ^id)
         {:package, id} -> from(package in query, where: package.id == ^id)
-        :all -> query
+        :all -> from(package in query, where: package.work_request_id not in ^excluded_requests)
       end
 
     candidates = repo.all(query)
@@ -424,13 +371,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     stored_pr = if outcome == :retry, do: previous_pr, else: pr
     stored_stacking = if is_list(stacked_on), do: stacked_on, else: (observation && observation.stacked_on) || []
 
-    store(repo, package.id, observation, %{
+    attrs = %{
       pr: stored_pr,
       pr_absent: pre_pr?(item),
       review: review_payload(review, observation),
       stale: stale,
       stacked_on: stored_stacking
-    })
+    }
+
+    store(repo, package.id, observation, attrs, review)
   end
 
   # What this sweep read of each watched package's current PR. A PR that
@@ -685,8 +634,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   # A deferred read or an unreachable host keeps the last reported review.
   defp review_payload(state, observation) when state in [:unknown, :deferred], do: observation && observation.review
 
-  defp store(repo, work_package_id, observation, attrs) do
+  defp store(repo, work_package_id, observation, attrs, review) do
     changeset = Ecto.Changeset.change(observation || %Observation{work_package_id: work_package_id}, attrs)
+    changeset = finish_pre_pr_review(changeset, observation, attrs, review)
 
     if is_nil(observation) or changeset.changes != %{} do
       changeset
@@ -700,6 +650,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
     :ok
   end
+
+  # A display refresh may have changed review fields since the sweep read the
+  # row. Closing its pre-PR window publishes the sweep's current review facts.
+  defp finish_pre_pr_review(changeset, %Observation{pr_absent: true}, %{pr_absent: false} = attrs, review) do
+    changeset = Ecto.Changeset.force_change(changeset, :stale, attrs.stale)
+    if review == :unknown, do: changeset, else: Ecto.Changeset.force_change(changeset, :review, attrs.review)
+  end
+
+  defp finish_pre_pr_review(changeset, _observation, _attrs, _review), do: changeset
 
   defp repository(%WorkPackage{repo: repo} = package) do
     [repo, RepoIdentity.local_git_origin_remote(repo), RepoIdentity.local_git_origin_remote(package.worktree_path)]

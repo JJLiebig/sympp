@@ -124,7 +124,12 @@ and refetch the displayed route with its ETag. Subscribe before the first read;
 refetch on every reconnect because events are not replayed. The stream sends a
 comment heartbeat every 30 seconds and disables proxy buffering. Herdr keeps its
 existing `/api/v1/sympp/herdr/events` contract (`event: invalidated`, `data: {}`).
-Plain reads remain the fallback if streaming fails. Clients must tolerate extra
+The Herdr notification stream accepts a `work_request_id` query parameter to
+request pre-PR review progress for that WorkRequest while connected.
+
+Plain dashboard GETs share the current review refresh. If progress is still
+being read, the response remains usable and includes a `Retry-After` header so
+polling clients can check again. Clients must tolerate extra
 event and response fields. This backend contract supports immediate invalidation;
 UI refresh coordination remains the client's responsibility.
 

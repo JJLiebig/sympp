@@ -12,7 +12,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.DashboardCache
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
-  alias SymphonyElixir.SymphonyPlusPlus.Observer
+  alias SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit.Target
   alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
@@ -229,7 +229,12 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   defp dashboard_json(conn, repo, surface, fun) do
-    if surface in [:deferred, :hydrated, :herdr], do: Observer.request_board_reviews(repo)
+    conn =
+      if surface in [:deferred, :hydrated, :herdr] and ReviewRefresh.request(repo, :all, true) == :pending do
+        put_resp_header(conn, "retry-after", "1")
+      else
+        conn
+      end
 
     with {:ok, body, etag} <- DashboardCache.json(repo, surface, fun) do
       conn = conn |> put_resp_header("etag", etag) |> put_resp_header("cache-control", "private, no-cache")
@@ -256,7 +261,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   defp herdr_work_request_detail_response(repo, conn, work_request_id) do
-    :ok = Observer.refresh_review_progress(repo, {:request, work_request_id})
+    :ok = ReviewRefresh.request(repo, {:request, work_request_id}, false)
 
     with {:ok, payload} <- LocalOperatorDashboard.herdr_work_request_detail_payload(repo, work_request_id) do
       json(conn, payload)
@@ -264,16 +269,22 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   @spec herdr_events(Conn.t(), map()) :: Conn.t()
-  def herdr_events(conn, _params) do
-    notification_events(conn, herdr_consumer?(conn))
+  def herdr_events(conn, params) do
+    scope =
+      case params do
+        %{"work_request_id" => id} when is_binary(id) -> {:request, id}
+        _params -> nil
+      end
+
+    notification_events(conn, herdr_consumer?(conn), scope)
   end
 
   @spec operator_events(Conn.t(), map()) :: Conn.t()
   def operator_events(conn, _params) do
-    notification_events(conn, local_operator_browser?(conn))
+    notification_events(conn, local_operator_browser?(conn), nil)
   end
 
-  defp notification_events(conn, authorized?) do
+  defp notification_events(conn, authorized?, review_scope) do
     with true <- authorized?,
          :ok <- DashboardPubSub.subscribe() do
       conn =
@@ -285,7 +296,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
         |> Conn.send_chunked(200)
 
       case Conn.chunk(conn, "event: ready\ndata: {}\n\n") do
-        {:ok, conn} -> stream_herdr_events(conn)
+        {:ok, conn} -> stream_herdr_events(conn, review_scope)
         {:error, _reason} -> conn
       end
     else
@@ -693,7 +704,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp maybe_broadcast_dashboard_change(_action), do: DashboardPubSub.broadcast_changed()
 
   defp stream_dashboard_events(conn) do
-    Observer.watch_board_reviews()
+    ReviewRefresh.watch(:all)
 
     receive do
       :operator_dashboard_changed ->
@@ -710,19 +721,19 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     end
   end
 
-  defp stream_herdr_events(conn) do
-    Observer.watch_board_reviews()
+  defp stream_herdr_events(conn, review_scope) do
+    if review_scope, do: ReviewRefresh.watch(review_scope)
 
     receive do
       :operator_dashboard_changed ->
         case Conn.chunk(conn, "event: invalidated\ndata: {}\n\n") do
-          {:ok, conn} -> stream_herdr_events(conn)
+          {:ok, conn} -> stream_herdr_events(conn, review_scope)
           {:error, _reason} -> conn
         end
     after
       30_000 ->
         case Conn.chunk(conn, ": keep-alive\n\n") do
-          {:ok, conn} -> stream_herdr_events(conn)
+          {:ok, conn} -> stream_herdr_events(conn, review_scope)
           {:error, _reason} -> conn
         end
     end

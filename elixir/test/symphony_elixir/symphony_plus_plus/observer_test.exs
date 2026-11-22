@@ -34,6 +34,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   end
 
   describe "GitHub" do
+    test "PR discovery clears a review outage recorded during its sweep", %{repo: repo} do
+      package = package!(repo, "WP-OBS-REVIEW-RACE", branch_pattern: "agent/example", review_mode: "fast", review_id: "review-race")
+      branch = {:branch, "nextide", "repo", "agent/example", "main"}
+      :ok = sweep(repo, %{branch => {:ok, nil}})
+
+      review = %{"done" => true, "status" => "passed", "accepted_head" => "head-a"}
+      absent = repo.get!(Observation, package.id)
+      assert absent.pr_absent
+      displayed = repo.update!(Ecto.Changeset.change(absent, review: review))
+
+      discover = fn [^branch] ->
+        # A display reader records an outage after the sweep loaded its snapshot.
+        repo.update!(Ecto.Changeset.change(displayed, stale: ["review"]))
+        %{branch => {:ok, pr(938, "head-a")}}
+      end
+
+      :ok = Observer.sweep(repo, snapshot: discover, review: fn "review-race", _route -> {:ok, review} end)
+
+      assert %WorkPackage{status: "ready"} = repo.get!(WorkPackage, package.id)
+      assert %Observation{pr: %{"number" => 938}, pr_absent: false, review: ^review, stale: []} = repo.get!(Observation, package.id)
+    end
+
     test "the sweep uses each package's newest valid attachment in chronological order", %{repo: repo} do
       legacy = package!(repo, "WP-OBS-LEGACY-ATTACHMENT", status: "ready")
       repaired = package!(repo, "WP-OBS-REPAIRED-ATTACHMENT")

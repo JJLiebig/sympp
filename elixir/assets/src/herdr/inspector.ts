@@ -119,7 +119,7 @@ async function watchSympp(state: InspectorState, invalidate: () => void, signal:
   while (!signal.aborted) {
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
-      const response = await fetch(`${state.binding.endpoint}/api/v1/sympp/herdr/events`, { signal });
+      const response = await fetch(`${state.binding.endpoint}/api/v1/sympp/herdr/events?work_request_id=${encodeURIComponent(state.binding.workRequestId)}`, { signal });
       if (!response.ok || !response.body) throw new Error("event stream unavailable");
       reader = response.body.getReader();
       const decoder = new TextDecoder();
