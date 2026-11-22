@@ -142,8 +142,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     if current?(state, entry, generation) do
       {:reply, entry.response, state}
     else
-      job_key = job_key(key, generation)
-      state = ensure_refresh(state, job_key, fun)
+      {job_key, _config} = request = build_request(key, generation)
+      state = ensure_refresh(state, request, fun)
       {:noreply, update_in(state.refreshing[job_key].waiters, &[from | &1])}
     end
   end
@@ -158,24 +158,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     Map.put(watches, key, {target, Map.put(readers, ref, pid)})
   end
 
-  defp ensure_refresh(state, job_key, fun) do
-    if Map.has_key?(state.refreshing, job_key), do: state, else: start_refresh(state, job_key, fun)
+  defp ensure_refresh(state, {job_key, _config} = request, fun) do
+    if Map.has_key?(state.refreshing, job_key), do: state, else: start_refresh(state, request, fun)
   end
 
-  # A request arriving after a config replacement can use a newer job even
-  # while the previous job is still projecting the same ledger revision.
-  defp job_key({_source, :archived} = key, generation), do: {key, generation, nil}
-  defp job_key(key, generation), do: {key, generation, OperatorConfig.board_revision()}
+  defp build_request({_source, :archived} = key, generation), do: {{key, generation, nil}, nil}
 
-  defp start_refresh(state, {{source, surface}, _generation, _config} = job_key, fun) do
+  defp build_request(key, generation) do
+    # The key and projection must use the same config, even if the file is
+    # edited and restored while the worker is waiting to read the ledger.
+    config = OperatorConfig.load()
+    {{key, generation, OperatorConfig.board_revision()}, config}
+  end
+
+  defp start_refresh(state, {{{source, surface}, _generation, _revision} = job_key, config}, fun) do
     owner = self()
     sequence = System.unique_integer([:positive, :monotonic])
     database = get_in(state.sources, [source, :database])
 
+    project = fn ->
+      OperatorConfig.use_board_snapshot(config)
+      fun.()
+    end
+
     {:ok, pid} =
       Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
         Process.flag(:priority, :low)
-        send(owner, {:refreshed, job_key, sequence, build_on_ledger(source, database, surface, fun)})
+        send(owner, {:refreshed, job_key, sequence, build_on_ledger(source, database, surface, project)})
       end)
 
     job = %{pid: pid, sequence: sequence, monitor: Process.monitor(pid), waiters: []}
@@ -452,7 +461,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
          Enum.any?(state.refreshing, fn {{active_key, _generation, _config}, _job} -> active_key == key end) do
       state
     else
-      start_refresh(state, job_key(key, generation), fun)
+      start_refresh(state, build_request(key, generation), fun)
     end
   end
 

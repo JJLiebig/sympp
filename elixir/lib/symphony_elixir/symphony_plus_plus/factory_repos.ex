@@ -67,14 +67,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
   end
 
   defp current_checkout?(path, expected) do
-    if Inputs.active?() do
-      case remote(RepoIdentity.cached_git_origin_remote(path)) do
-        {:ok, origin, _name} -> identity(origin) == expected
-        _unavailable -> false
-      end
-    else
-      true
-    end
+    not Inputs.active?() or checkout_origin_key(RepoIdentity.cached_git_origin_remote(path)) == expected
   end
 
   defp checkouts_for_signal(root, opts) do
@@ -172,9 +165,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
 
   @spec checkout_key(Path.t()) :: term()
   def checkout_key(checkout) do
+    checkout_origin_key(RepoIdentity.local_git_origin_remote(checkout))
+  end
+
+  defp checkout_origin_key(origin) when is_binary(origin) do
     # Git treats a slug-shaped origin as a relative filesystem path.
-    with origin when is_binary(origin) <- RepoIdentity.local_git_origin_remote(checkout),
-         {:ok, remote, _name} <- network_remote(origin, :checkout),
+    with {:ok, remote, _name} <- network_remote(origin, :checkout),
          key = identity(remote),
          true <- repository_key?(key) do
       key
@@ -182,6 +178,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.FactoryRepos do
       _unresolved -> nil
     end
   end
+
+  defp checkout_origin_key(_origin), do: nil
 
   # Search three levels below the root, stopping at checkouts.
   defp resolve_checkout(root, remote, name) do

@@ -95,15 +95,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert {:ok, ^fresh, ^etag} = DashboardCache.json(Repo, :racing, &payload/0)
   end
 
-  test "a read after config replacement does not join an older projection", %{pid: pid, path: path} do
+  test "overlapping reads use the requested config through an edit and revert", %{pid: pid, path: path} do
     before = %{"repos" => %{"acme/example" => %{"area" => ["Before"]}}}
     config = operator_config_file(path, before)
     caller = self()
+    first = :atomics.new(1, [])
 
     builder = fn ->
+      first? = :atomics.exchange(first, 1, 1) == 0
+
+      if first? do
+        send(caller, {:building_config, self()})
+        receive do: (:read_config -> :ok)
+      end
+
       area = OperatorConfig.area_path(OperatorConfig.load(), %{repo_remote: "acme/example"})
 
-      if area == ["Before"] do
+      if first? do
         send(caller, {:config_captured, self()})
         receive do: (:continue -> :ok)
       end
@@ -112,18 +120,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     end
 
     old_read = :gen_server.send_request(DashboardCache, {:json, pid, :hydrated, builder})
-    assert_receive {:config_captured, worker}
+    assert_receive {:building_config, worker}
     release = release_on_exit(worker)
+    on_exit(fn -> send(worker, :read_config) end)
 
     File.write!(config, Jason.encode!(put_in(before, ["repos", "acme/example", "area"], ["After"])))
+    send(worker, :read_config)
+    assert_receive {:config_captured, ^worker}
     new_read = :gen_server.send_request(DashboardCache, {:json, pid, :hydrated, builder})
     assert {:reply, {:ok, fresh, etag}} = :gen_server.wait_response(new_read, 2_000)
     assert Jason.decode!(fresh)["area"] == ["After"]
 
+    File.write!(config, Jason.encode!(before))
+    restored_read = :gen_server.send_request(DashboardCache, {:json, pid, :hydrated, builder})
+    :sys.get_state(DashboardCache)
     release.()
-    assert {:reply, {:ok, old, _etag}} = :gen_server.wait_response(old_read, 1_000)
+    assert {:reply, {:ok, old, restored_etag}} = :gen_server.wait_response(restored_read, 1_000)
     assert Jason.decode!(old)["area"] == ["Before"]
-    assert {:ok, ^fresh, ^etag} = DashboardCache.json(Repo, :hydrated, builder)
+    assert {:reply, {:ok, ^old, ^restored_etag}} = :gen_server.wait_response(old_read, 1_000)
+    refute restored_etag == etag
+    assert {:ok, _, ^restored_etag} = DashboardCache.json(Repo, :hydrated, builder)
   end
 
   test "committed edits invalidate only the surfaces that show the changed fields", %{path: path} do

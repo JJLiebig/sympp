@@ -6,8 +6,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorConfig do
 
   @spec load() :: map()
   def load do
-    path = config_path()
-    Inputs.shared({:operator_config, path}, fn -> Inputs.file_stamp(path) end, fn -> read_config(path) end)
+    Inputs.memo(__MODULE__, fn ->
+      path = config_path()
+      Inputs.shared({:operator_config, path}, fn -> Inputs.file_stamp(path) end, fn -> read_config(path) end)
+    end)
+  end
+
+  @doc false
+  @spec use_board_snapshot(map() | nil) :: :ok
+  def use_board_snapshot(nil), do: :ok
+
+  def use_board_snapshot(config) do
+    Inputs.memo(__MODULE__, fn -> config end)
+    :ok
   end
 
   defp read_config(path) do
