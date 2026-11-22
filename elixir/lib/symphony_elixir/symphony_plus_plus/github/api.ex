@@ -93,14 +93,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Api do
   end
 
   @doc "Compares two commit SHAs. Successful immutable results need no revalidation."
-  @spec compare(String.t(), String.t(), String.t()) :: {:ok, comparison()} | {:error, error()}
-  def compare(repository, left, right) when is_binary(repository) and is_binary(left) and is_binary(right) do
+  @spec compare(String.t(), String.t(), String.t(), :fetch | :cached_only) :: {:ok, comparison()} | {:error, error()}
+  def compare(repository, left, right, mode) when is_binary(repository) and is_binary(left) and is_binary(right) do
     with true <- commit_sha?(left) and commit_sha?(right),
          {:ok, token} <- credential() do
       {first, second} = if left <= right, do: {left, right}, else: {right, left}
       key = {fingerprint(token), String.downcase(repository), first, second}
 
-      with {:ok, comparison} <- comparison(token, key) do
+      with {:ok, comparison} <- comparison(token, key, mode) do
         {:ok, if(left == first, do: comparison, else: %{comparison | ahead: comparison.behind, behind: comparison.ahead})}
       end
     else
@@ -109,14 +109,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Api do
     end
   end
 
-  def compare(_repository, _left, _right), do: {:error, :request_failed}
+  def compare(_repository, _left, _right, _mode), do: {:error, :request_failed}
 
-  defp comparison(_token, {_credential, _repository, same, same}), do: {:ok, %{merge_base: same, ahead: 0, behind: 0}}
+  defp comparison(_token, {_credential, _repository, same, same}, _mode), do: {:ok, %{merge_base: same, ahead: 0, behind: 0}}
 
-  defp comparison(token, {credential, repository, first, second} = key) do
+  defp comparison(token, {credential, repository, first, second} = key, mode) do
     case comparison_cache(key) do
       {:ok, _summary} = cached ->
         cached
+
+      :miss when mode == :cached_only ->
+        {:error, :request_failed}
 
       :miss ->
         # GitHub includes changed files only on page one. We need the summary.

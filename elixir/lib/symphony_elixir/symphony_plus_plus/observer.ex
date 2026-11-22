@@ -198,11 +198,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
     to_read = for %{package: package} = item <- watched, reviewed?(package) and not pre_pr?(item), do: package
     reviews = review_results(repo, to_read, opts)
-    views = Enum.flat_map(watched, &view/1)
+    stacks = watched |> Enum.flat_map(&view/1) |> Stacking.observed()
 
     {result, _changed?} =
       DashboardPubSub.coalesce_changed(fn ->
-        Enum.each(watched, &observe_package(repo, &1, package_review(&1.package, reviews), views))
+        Enum.each(watched, &observe_package(repo, &1, package_review(&1.package, reviews), stacks))
         guarded(fn -> Cards.apply(repo, cards, results, opts) end, :ok)
       end)
 
@@ -419,10 +419,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     end
   end
 
-  defp observe_package(repo, %{package: package, observation: observation, github: github, pr: pr} = item, review, views) do
+  defp observe_package(repo, %{package: package, observation: observation, github: github, pr: pr} = item, review, stacks) do
     previous_pr = observation && observation.pr
     changed? = match?({:ok, %{}}, github) and pr != previous_pr and snapshot_changed?(previous_pr, pr)
-    stacked_on = stacking(item, views)
+
+    stacked_on = Map.get(stacks, package.id, [])
     stale = stale(github, review, stacked_on, observation)
 
     # A stale GitHub read changes nothing; a stale review host or stacking
@@ -467,17 +468,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
       fresh?: true
     }
   end
-
-  # The packages an open PR read in this sweep is stacked on, or `:unknown`;
-  # every view is this sweep's read.
-  defp stacking(%{package: package, fresh?: true, pr: %{"state" => "open"} = pr}, views) do
-    case Stacking.check(stack_view(package, pr), views) do
-      {:ok, ids} -> ids
-      :unknown -> :unknown
-    end
-  end
-
-  defp stacking(_item, _views), do: []
 
   # Commit lists are read only where the stacking check needs them (a
   # repository with two or more open watched PRs), when GitHub can return a full

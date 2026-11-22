@@ -19,6 +19,7 @@ export class Provider {
   readonly replies = new Map<number, Reply>();
   readonly apiReplies = new Map<string, Reply>();
   private readonly pausedApiReplies = new Map<string, () => Promise<void>>();
+  private readonly pausedHttpReplies = new Map<string, () => Promise<void>>();
   readonly calls: { argv: string[]; reply: Reply }[] = [];
   // GitHub's HTTP API: down answers 503; unreadable PRs and branch lookups resolve to nothing.
   github: 'up' | 'down' = 'up';
@@ -56,7 +57,13 @@ export class Provider {
       await appendFile(this.receipt, `${JSON.stringify({ program, argv, rpc, reply: answer })}\n`);
       reply = answer;
     } else {
-      [status, reply] = this.http(request.method ?? 'GET', request.url ?? '/', body);
+      const url = request.url ?? '/';
+      const paused = this.pausedHttpReplies.get(url);
+      if (paused) {
+        this.pausedHttpReplies.delete(url);
+        await paused();
+      }
+      [status, reply] = this.http(request.method ?? 'GET', url, body);
       await appendFile(this.receipt, `${JSON.stringify({ http: `${request.method} ${request.url}`, status })}\n`);
     }
     response.writeHead(status, { 'content-type': 'application/json' });
@@ -69,11 +76,19 @@ export class Provider {
   }
 
   pauseApiReply(path: string) {
+    return this.pauseReply(this.pausedApiReplies, path);
+  }
+
+  pauseHttpReply(path: string) {
+    return this.pauseReply(this.pausedHttpReplies, path);
+  }
+
+  private pauseReply(replies: Map<string, () => Promise<void>>, path: string) {
     let markStarted!: () => void;
     let release!: () => void;
     const started = new Promise<void>((resolve) => { markStarted = resolve; });
     const released = new Promise<void>((resolve) => { release = resolve; });
-    this.pausedApiReplies.set(path, () => { markStarted(); return released; });
+    replies.set(path, () => { markStarted(); return released; });
     return { started, release };
   }
 
