@@ -399,7 +399,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     end
   end
 
-  defp current?(state, %{generation: generation} = entry, generation) do
+  defp current?(state, %{generation: generation, deadlines: {_expires, core?}} = entry, generation) do
+    if core?, do: HerdrCore.refresh_on_demand()
     now = state.clock.()
     expiry(entry, now) > now
   end

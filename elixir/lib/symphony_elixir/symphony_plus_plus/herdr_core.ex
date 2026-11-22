@@ -16,7 +16,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   `{:ok, %{core_id: id, terminals: %{address => record}}}` (tests).
   """
 
-  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub}
+  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub, Observer}
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
 
   @cache_key {__MODULE__, :snapshot}
@@ -79,6 +79,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
       {at, _snapshot} -> at + @last_good_ms
       nil -> nil
     end
+  end
+
+  @doc false
+  @spec refresh_on_demand() :: :ok
+  def refresh_on_demand do
+    # The installed factory already checks Herdr through its Observer.
+    with nil <- Process.whereis(Observer),
+         command when is_binary(command) <- Application.get_env(:symphony_elixir, :sympp_herdr_core, "hc") do
+      now = System.monotonic_time(:millisecond)
+
+      case :persistent_term.get(@cache_key, nil) do
+        {^command, at, _result, _good} when now - at < @cache_ms -> :ok
+        cached -> refresh_background(command, last_good(cached, command), now)
+      end
+    end
+
+    :ok
   end
 
   @doc false

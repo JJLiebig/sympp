@@ -4,6 +4,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
   import ExUnit.CaptureLog
 
   alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub, HerdrCore, Repo}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{DecisionFeedback, DecisionLogEntry}
 
   setup do
     path = Path.join(System.tmp_dir!(), "dashboard-cache-#{System.os_time(:nanosecond)}-#{System.unique_integer([:positive])}.sqlite3")
@@ -116,40 +118,64 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     :sys.get_state(DashboardCache)
   end
 
-  test "a watched snapshot changes at its deadline without writes or reads" do
+  test "pending feedback reaches its interruption deadline without writes or reads" do
     clock = controlled_clock()
     initial = :atomics.get(clock, 1)
-    deadline = initial + 60_000
+    reviewed_at = DateTime.add(DateTime.utc_now(), -30_000, :millisecond)
     builds = :atomics.new(1, [])
 
     builder = fn ->
       :atomics.add(builds, 1, 1)
-
-      if :atomics.get(clock, 1) < deadline do
-        DashboardCache.expire_at(deadline)
-        {:ok, %{decision: "present"}}
-      else
-        {:ok, %{decision: "elapsed"}}
-      end
+      shifted = DateTime.add(reviewed_at, initial - :atomics.get(clock, 1), :millisecond)
+      entry = %DecisionLogEntry{reviewed_at: shifted, undelivered_reason: "delivering"}
+      {:ok, %{delivery: DecisionFeedback.undelivered_reason(entry)}}
     end
 
     {_cache, ref} = watch(:time, builder)
     assert_receive {:dashboard_changed, ^ref, _version}
     assert {:ok, old, etag} = DashboardCache.json(Repo, :time, builder)
-    assert Jason.decode!(old)["decision"] == "present"
+    assert Jason.decode!(old)["delivery"] == "delivering"
 
     :atomics.put(clock, 1, initial + 15_001)
     refresh_watches()
     assert {:ok, ^old, ^etag} = DashboardCache.json(Repo, :time, builder)
     assert :atomics.get(builds, 1) == 1
 
-    :atomics.put(clock, 1, deadline)
+    :atomics.put(clock, 1, initial + 61_000)
     refresh_watches()
     assert_receive {:dashboard_changed, ^ref, _version}
     assert {:ok, fresh, fresh_etag} = DashboardCache.json(Repo, :time, builder)
-    assert Jason.decode!(fresh)["decision"] == "elapsed"
+    assert Jason.decode!(fresh)["delivery"] == "delivery_interrupted"
     refute fresh_etag == etag
     assert :atomics.get(builds, 1) == 2
+  end
+
+  test "a remote owner becomes unknown when its lease expires and live after a fresh heartbeat" do
+    clock = controlled_clock()
+    ttl = 60_000
+    terminal = "remote-core/t1"
+    leases = start_supervised!({ClientLeases, name: :dashboard_test_leases, ttl_ms: ttl, sweep_ms: 120_000})
+    assert {:ok, _} = ClientLeases.attach("bridge", leases, terminal)
+    builder = fn -> {:ok, %{live: ClientLeases.terminal_live?(terminal, leases)}} end
+
+    {_cache, ref} = watch(:hydrated, builder)
+    assert_receive {:dashboard_changed, ^ref, _version}
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :hydrated, builder)
+    assert Jason.decode!(body)["live"]
+
+    now = System.monotonic_time(:millisecond)
+    :sys.replace_state(leases, &put_in(&1.leases["bridge"].last_seen_ms, now - ttl - 1))
+    :atomics.put(clock, 1, now + ttl + 1)
+    refresh_watches()
+    assert_receive {:dashboard_changed, ^ref, _version}
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :hydrated, builder)
+    refute Jason.decode!(body)["live"]
+
+    :atomics.put(clock, 1, System.monotonic_time(:millisecond))
+    assert {:ok, _} = ClientLeases.heartbeat("bridge", leases, terminal)
+    assert_receive {:dashboard_changed, ^ref, _version}
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :hydrated, builder)
+    assert Jason.decode!(body)["live"]
   end
 
   test "a read that discovers an external commit also notifies other subscribers", %{path: path} do
