@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   use ExUnit.Case, async: false
 
+  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub, Observer}
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
-  alias SymphonyElixir.SymphonyPlusPlus.Observer
   alias SymphonyElixir.SymphonyPlusPlus.Observer.Observation
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
@@ -12,6 +12,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{WorkPackage, WorkPackageDelivery}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.WorkPackageFactory
+  alias SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard
 
   @repo_name "nextide/repo"
 
@@ -20,7 +21,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
     start_supervised!({Repo, database: database_path, pool_size: 1})
     assert :ok = WorkPackageRepository.migrate(Repo)
     on_exit(fn -> File.rm(database_path) end)
-    {:ok, repo: Repo}
+    {:ok, repo: Repo, database_path: database_path}
   end
 
   setup %{repo: repo} do
@@ -33,6 +34,79 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   end
 
   describe "GitHub" do
+    test "equivalent sweeps leave cached boards alone and changed review evidence appears on the live boards", %{
+      repo: repo,
+      database_path: database_path
+    } do
+      package = package!(repo, "WP-OBS-EQUIVALENT", review_mode: "fast", review_id: "review-13")
+      attach!(repo, package, 13)
+      snapshot = %{{:pr, "nextide", "repo", 13} => {:ok, pr(13, "head-a")}}
+      review = %{"status" => "in_progress", "observed_at" => "2026-11-22T02:00:00Z"}
+      :ok = sweep(repo, snapshot, review: fn _, _ -> {:ok, review} end)
+      stored = repo.get!(Observation, package.id)
+
+      clock = System.monotonic_time(:millisecond)
+      original_clock = :sys.get_state(DashboardCache).clock
+      :sys.replace_state(DashboardCache, &%{&1 | clock: fn -> clock end})
+      on_exit(fn -> :sys.replace_state(DashboardCache, &%{&1 | clock: original_clock}) end)
+
+      builds = :counters.new(4, [])
+
+      boards =
+        [
+          priority: fn -> LocalOperatorDashboard.operator_dashboard_payload(repo) end,
+          archived: fn -> LocalOperatorDashboard.operator_dashboard_surface_payload(repo, "archived") end,
+          hydrated: fn -> LocalOperatorDashboard.operator_dashboard_hydrated_payload(repo) end,
+          herdr: fn -> LocalOperatorDashboard.herdr_dashboard_payload(repo) end
+        ]
+        |> Enum.with_index(1)
+        |> Map.new(fn {{surface, load}, index} ->
+          build = fn ->
+            :counters.add(builds, index, 1)
+            load.()
+          end
+
+          {surface, fn -> DashboardCache.json(repo, surface, build) end}
+        end)
+
+      first = Map.new(boards, fn {surface, get} -> {surface, get.()} end)
+      assert Enum.all?(Map.values(first), &match?({:ok, _, _}, &1))
+      assert Enum.map(1..4, &:counters.get(builds, &1)) == [1, 1, 1, 1]
+      :ok = DashboardPubSub.subscribe()
+      {:ok, reader} = Exqlite.Sqlite3.open(database_path, mode: :readonly)
+      on_exit(fn -> Exqlite.Sqlite3.close(reader) end)
+      {:ok, version} = Exqlite.Sqlite3.prepare(reader, "PRAGMA data_version")
+      on_exit(fn -> Exqlite.Sqlite3.release(reader, version) end)
+      {:row, before} = Exqlite.Sqlite3.step(reader, version)
+      :ok = Exqlite.Sqlite3.reset(version)
+
+      for stamp <- ["2026-11-22T02:01:00Z", "2026-11-22T02:02:00Z"] do
+        :ok = sweep(repo, snapshot, review: fn _, _ -> {:ok, Map.put(review, "observed_at", stamp)} end)
+      end
+
+      assert {:row, ^before} = Exqlite.Sqlite3.step(reader, version)
+      :ok = Exqlite.Sqlite3.reset(version)
+      assert repo.get!(Observation, package.id) == stored
+      send(DashboardCache, :refresh_tick)
+      assert Map.new(boards, fn {surface, get} -> {surface, get.()} end) == first
+      assert Enum.map(1..4, &:counters.get(builds, &1)) == [1, 1, 1, 1]
+      refute_received :operator_dashboard_changed
+
+      changed = %{"status" => "failed", "observed_at" => "2026-11-22T02:03:00Z"}
+      :ok = sweep(repo, snapshot, review: fn _, _ -> {:ok, changed} end)
+      assert %{review: ^changed} = repo.get!(Observation, package.id)
+
+      for surface <- [:hydrated, :herdr] do
+        assert {:ok, body, etag} = boards[surface].()
+        assert etag != elem(first[surface], 2)
+        assert %{"work_request_details" => [%{"work_packages" => [%{"review_signal" => %{"status" => "failed"}}]}]} = Jason.decode!(body)
+      end
+
+      assert boards.priority.() == first.priority
+      assert boards.archived.() == first.archived
+      assert Enum.map(1..4, &:counters.get(builds, &1)) == [1, 1, 2, 2]
+    end
+
     test "a merge whose evidence can't be recorded changes nothing", %{repo: repo} do
       package = package!(repo, "WP-OBS-MERGE-CONFLICT", status: "ready")
       attach!(repo, package, 9)

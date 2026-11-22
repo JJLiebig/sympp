@@ -163,7 +163,10 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   def operator_dashboard(conn, _params) do
     send_local_operator_response(conn, :dashboard_read, Target.new(:dashboard), :operator_dashboard, fn repo ->
-      dashboard_json(conn, repo, :priority, fn -> LocalOperatorDashboard.operator_dashboard_payload(repo) end)
+      dashboard_json(conn, repo, :priority, {
+        fn -> Dashboard.local_operator_repo_identity_catalog(repo) end,
+        fn catalog -> LocalOperatorDashboard.operator_dashboard_payload(repo, catalog) end
+      })
     end)
   end
 

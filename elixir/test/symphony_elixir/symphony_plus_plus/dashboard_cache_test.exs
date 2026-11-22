@@ -154,6 +154,45 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert Jason.decode!(fresh)["decision"] == "elapsed"
   end
 
+  test "a timed input check only rebuilds the projection when its input changes" do
+    clock = controlled_clock()
+    values = :atomics.new(2, [])
+    caller = self()
+
+    inputs = fn ->
+      value = :atomics.get(values, 1)
+      send(caller, {:inputs_read, self(), value})
+      {:ok, value}
+    end
+
+    project = fn input ->
+      :atomics.add(values, 2, 1)
+      {:ok, %{decision: input}}
+    end
+
+    read = fn -> DashboardCache.json(Repo, :timed_inputs, {inputs, project}) end
+    assert {:ok, body, etag} = read.()
+    assert Jason.decode!(body)["decision"] == 0
+    assert_receive {:inputs_read, _initial, 0}
+
+    :atomics.add(clock, 1, 15_001)
+    assert {:ok, ^body, ^etag} = read.()
+    assert_receive {:inputs_read, worker, 0}
+    ref = Process.monitor(worker)
+    assert_receive {:DOWN, ^ref, :process, ^worker, _reason}
+    :sys.get_state(DashboardCache)
+    assert :atomics.get(values, 2) == 1
+
+    :ok = DashboardPubSub.subscribe()
+    :atomics.put(values, 1, 1)
+    :atomics.add(clock, 1, 15_001)
+    send(DashboardCache, :refresh_tick)
+    assert_receive :operator_dashboard_changed
+    assert {:ok, fresh, fresh_etag} = read.()
+    assert Jason.decode!(fresh)["decision"] == 1
+    assert fresh_etag != etag
+  end
+
   test "external commits notify subscribers without a client read", %{path: path} do
     assert {:ok, _body, _etag} = DashboardCache.json(Repo, :external, &payload/0)
     :ok = DashboardPubSub.subscribe()
@@ -240,7 +279,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     Enum.each(builds, &Task.await/1)
   end
 
-  test "observation invalidations keep reads available and overlapping signals catch up" do
+  test "external input invalidations keep reads available and overlapping signals catch up" do
     value = :atomics.new(1, [])
     caller = self()
 
@@ -258,13 +297,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert {:ok, old, etag} = DashboardCache.json(Repo, :observation, builder)
     :ok = DashboardPubSub.subscribe()
     :atomics.put(value, 1, 1)
-    DashboardPubSub.broadcast_changed()
-    assert_receive :operator_dashboard_changed
+    DashboardCache.invalidate([:observation])
     assert_receive {:observation_refresh, worker}
     assert {:ok, ^old, ^etag} = DashboardCache.json(Repo, :observation, builder)
     :atomics.put(value, 1, 2)
-    DashboardPubSub.broadcast_changed()
-    assert_receive :operator_dashboard_changed
+    DashboardCache.invalidate([:observation])
     send(worker, :continue)
     assert_receive :operator_dashboard_changed
     assert_receive :operator_dashboard_changed

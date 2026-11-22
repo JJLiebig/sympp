@@ -16,7 +16,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   `{:ok, %{core_id: id, terminals: %{address => record}}}` (tests).
   """
 
-  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
+  alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub}
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
 
   @cache_key {__MODULE__, :snapshot}
@@ -288,8 +288,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
     fallback = usable_good(previous_good, now)
     current = if result == :unavailable, do: fallback, else: result
 
-    if current != previous or (fallback == :unavailable and result != :unavailable),
-      do: DashboardPubSub.broadcast_changed()
+    if current != previous or (fallback == :unavailable and result != :unavailable) do
+      DashboardCache.invalidate([:archived, :deferred, :hydrated, :herdr])
+      DashboardPubSub.broadcast_changed()
+    end
 
     result
   end
