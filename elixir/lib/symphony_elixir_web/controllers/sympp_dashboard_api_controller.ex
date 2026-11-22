@@ -321,18 +321,19 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
         _params -> nil
       end
 
-    notification_events(conn, herdr_consumer?(conn), scope)
+    surface = if scope, do: :detail, else: :herdr_events
+    notification_events(conn, herdr_consumer?(conn), scope, surface)
   end
 
   @spec operator_events(Conn.t(), map()) :: Conn.t()
   def operator_events(conn, _params) do
-    notification_events(conn, local_operator_browser?(conn), nil)
+    notification_events(conn, local_operator_browser?(conn), nil, :operator_events)
   end
 
-  defp notification_events(conn, authorized?, scope) do
+  defp notification_events(conn, authorized?, scope, surface) do
     with true <- authorized?,
          {:ok, subscription} <-
-           Runtime.with_dashboard_repo(&subscribe_dashboard(&1, [detail: :revision], true), migrate?: false) do
+           Runtime.with_dashboard_repo(&subscribe_dashboard(&1, [{surface, :revision}], true), migrate?: false) do
       try do
         conn |> open_dashboard_stream() |> stream_events_after_ready(subscription, scope)
       after

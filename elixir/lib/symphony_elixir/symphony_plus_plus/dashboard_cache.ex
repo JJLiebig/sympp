@@ -142,19 +142,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     if current?(state, entry, generation) do
       {:reply, entry.response, state}
     else
-      job_key = {key, generation}
+      job_key = job_key(key, generation)
       state = ensure_refresh(state, job_key, fun)
       {:noreply, update_in(state.refreshing[job_key].waiters, &[from | &1])}
     end
   end
 
   defp add_reader(watches, key, projection, ref, pid) do
-    target = if projection == :revision, do: {:revision, nil}, else: projection
+    target = if projection == :revision, do: {:revision, nil, MapSet.new()}, else: projection
     {target, readers} = Map.get(watches, key, {target, %{}})
 
     # A notification client may have read its detail before connecting. When a
     # revision is already known, wake the new reader as well as tracking it.
-    if match?({:revision, generation} when not is_nil(generation), target), do: notify_readers(%{ref => pid})
+    if match?({:revision, generation, _stale} when not is_nil(generation), target), do: notify_readers(%{ref => pid})
     Map.put(watches, key, {target, Map.put(readers, ref, pid)})
   end
 
@@ -162,7 +162,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     if Map.has_key?(state.refreshing, job_key), do: state, else: start_refresh(state, job_key, fun)
   end
 
-  defp start_refresh(state, {{source, surface}, _generation} = job_key, fun) do
+  # A request arriving after a config replacement can use a newer job even
+  # while the previous job is still projecting the same ledger revision.
+  defp job_key({_source, :archived} = key, generation), do: {key, generation, nil}
+  defp job_key(key, generation), do: {key, generation, OperatorConfig.board_revision()}
+
+  defp start_refresh(state, {{source, surface}, _generation, _config} = job_key, fun) do
     owner = self()
     sequence = System.unique_integer([:positive, :monotonic])
     database = get_in(state.sources, [source, :database])
@@ -253,7 +258,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
 
   def handle_info({:publish_deployments, _stale}, state), do: {:noreply, state}
 
-  def handle_info({:refreshed, {key, generation} = job_key, sequence, {response, deadlines, inputs}}, state) do
+  def handle_info({:refreshed, {key, generation, _config} = job_key, sequence, {response, deadlines, inputs}}, state) do
     case Map.get(state.refreshing, job_key) do
       %{sequence: ^sequence} = job ->
         reply_waiters(job, response)
@@ -330,7 +335,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     Sqlite3.close(get_in(state.sources, [source, :connection]))
 
     {owned, other} =
-      Enum.split_with(state.refreshing, fn {{{owner, _surface}, _generation}, _job} -> owner == source end)
+      Enum.split_with(state.refreshing, fn {{{owner, _surface}, _generation, _config}, _job} -> owner == source end)
 
     Enum.each(owned, fn {_key, job} ->
       Process.exit(job.pid, :shutdown)
@@ -411,18 +416,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     |> schedule()
   end
 
-  defp refresh_watch(state, key, {{:revision, previous}, readers}, generation) do
+  defp refresh_watch(state, key, {{:revision, previous, notified}, readers}, generation) when not is_nil(generation) do
     revision = {generation, OperatorConfig.board_revision()}
+    stale = stale_notification_entries(state, key)
 
-    if generation != nil and revision != previous do
+    if revision != previous or not MapSet.subset?(stale, notified) do
       notify_readers(readers)
-      put_in(state.watches[key], {{:revision, revision}, readers})
-    else
-      state
     end
+
+    put_in(state.watches[key], {{:revision, revision, stale}, readers})
   end
 
   defp refresh_watch(state, key, {fun, _readers}, generation), do: refresh_if_stale(state, key, generation, fun)
+
+  defp stale_notification_entries(state, {source, watch}) do
+    # An events client that reads the board keeps the inputs of its last
+    # response watched. A request inspector never schedules board work.
+    for surface <- notification_surfaces(watch),
+        entry = Map.get(state.entries, {source, surface}),
+        entry != nil and not current?(state, entry, entry.generation),
+        into: MapSet.new(),
+        do: {surface, entry.sequence}
+  end
+
+  defp notification_surfaces(:herdr_events), do: [:herdr]
+  defp notification_surfaces(:operator_events), do: [:priority, :deferred, :hydrated, :archived]
+  defp notification_surfaces(_detail), do: []
 
   defp refresh_if_stale(state, _key, nil, _fun), do: state
 
@@ -430,10 +449,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     # Watchers need only the latest snapshot. GETs can still read a new
     # generation while an older build is held on a different connection.
     if current?(state, Map.get(state.entries, key), generation) or
-         Enum.any?(state.refreshing, fn {{active_key, _generation}, _job} -> active_key == key end) do
+         Enum.any?(state.refreshing, fn {{active_key, _generation, _config}, _job} -> active_key == key end) do
       state
     else
-      start_refresh(state, {key, generation}, fun)
+      start_refresh(state, job_key(key, generation), fun)
     end
   end
 

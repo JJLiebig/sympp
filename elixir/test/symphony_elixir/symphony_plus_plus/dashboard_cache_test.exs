@@ -9,7 +9,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{Inputs, OperationalProjection}
   alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub, DeploymentObservation, HerdrCore}
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases
-  alias SymphonyElixir.SymphonyPlusPlus.{OperatorConfig, Repo}
+  alias SymphonyElixir.SymphonyPlusPlus.{OperatorConfig, Ownership, Repo}
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{DecisionFeedback, DecisionLogEntry, Repository}
   alias SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard
 
@@ -92,6 +93,37 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert {:ok, old, _etag} = Task.await(read)
     assert Jason.decode!(old)["decision"] == "recorded"
     assert {:ok, ^fresh, ^etag} = DashboardCache.json(Repo, :racing, &payload/0)
+  end
+
+  test "a read after config replacement does not join an older projection", %{pid: pid, path: path} do
+    before = %{"repos" => %{"acme/example" => %{"area" => ["Before"]}}}
+    config = operator_config_file(path, before)
+    caller = self()
+
+    builder = fn ->
+      area = OperatorConfig.area_path(OperatorConfig.load(), %{repo_remote: "acme/example"})
+
+      if area == ["Before"] do
+        send(caller, {:config_captured, self()})
+        receive do: (:continue -> :ok)
+      end
+
+      {:ok, %{area: area}}
+    end
+
+    old_read = :gen_server.send_request(DashboardCache, {:json, pid, :hydrated, builder})
+    assert_receive {:config_captured, worker}
+    release = release_on_exit(worker)
+
+    File.write!(config, Jason.encode!(put_in(before, ["repos", "acme/example", "area"], ["After"])))
+    new_read = :gen_server.send_request(DashboardCache, {:json, pid, :hydrated, builder})
+    assert {:reply, {:ok, fresh, etag}} = :gen_server.wait_response(new_read, 2_000)
+    assert Jason.decode!(fresh)["area"] == ["After"]
+
+    release.()
+    assert {:reply, {:ok, old, _etag}} = :gen_server.wait_response(old_read, 1_000)
+    assert Jason.decode!(old)["area"] == ["Before"]
+    assert {:ok, ^fresh, ^etag} = DashboardCache.json(Repo, :hydrated, builder)
   end
 
   test "committed edits invalidate only the surfaces that show the changed fields", %{path: path} do
@@ -272,7 +304,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
       {:ok, DeploymentObservation.enrich(payload, OperatorConfig.load(), async: true, cache_table: table, fetch: fetch)}
     end
 
-    {_cache, ref} = watch(:hydrated, builder)
+    {cache, ref} = watch(:hydrated, builder)
     assert_receive {:deployment_fetch, "acme/example", request}, 2_000
     assert_receive {:deployment_fetch, "acme/slow", slow_request}, 2_000
     assert_receive {:dashboard_changed, ^ref, _cold}
@@ -287,18 +319,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert {:ok, body, etag} = DashboardCache.json(Repo, :hydrated, builder)
     built = :atomics.get(builds, 1)
 
-    old = System.monotonic_time(:millisecond) - 60_001
-
-    for key <- ["repos/acme/example", {:signal, {:default_branch, "acme/example"}}] do
-      :ets.update_element(table, key, {2, old})
-    end
-
+    age_default_branch(table, "acme/example")
     refresh_watches()
     assert_receive {:deployment_fetch, "acme/example", request}, 2_000
     finish_deployment_fetch(table, "acme/example", request, {:ok, %{"default_branch" => "main", "description" => "Only the provider response changed"}})
     refresh_watches()
     assert {:ok, ^body, ^etag} = DashboardCache.json(Repo, :hydrated, builder)
     assert :atomics.get(builds, 1) == built
+
+    :ok = DashboardCache.unwatch(cache, ref)
+    assert {:ok, native, ^etag} = DashboardCache.json(Repo, :herdr, builder)
+    assert Map.delete(Jason.decode!(native), "etag") == Jason.decode!(body)
+    built = :atomics.get(builds, 1)
+    {_cache, events} = watch(:herdr_events, :revision)
+    assert_receive {:dashboard_changed, ^events, _initial}
+
+    age_default_branch(table, "acme/example")
+    refresh_watches()
+    assert_receive {:deployment_fetch, "acme/example", request}, 2_000
+    finish_deployment_fetch(table, "acme/example", request, {:ok, %{"default_branch" => "release"}})
+    assert_receive {:dashboard_changed, ^events, _branch_changed}
+    assert :atomics.get(builds, 1) == built
+
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :herdr, builder)
+    assert [%{"work_request" => %{"default_branch" => "release"}}, _slow] = Jason.decode!(body)["work_request_details"]
+  end
+
+  defp age_default_branch(table, repo) do
+    old = System.monotonic_time(:millisecond) - 60_001
+    :ets.update_element(table, "repos/" <> repo, {2, old})
+    :ets.update_element(table, {:signal, {:default_branch, repo}}, {2, old})
   end
 
   defp operator_config_file(path, config) do
@@ -362,6 +412,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert_receive {:dashboard_changed, ^ref, _version}
     assert {:ok, body, _etag} = DashboardCache.json(Repo, :hydrated, builder)
     assert Jason.decode!(body)["live"]
+  end
+
+  test "the board can read live ownership while the lease server is busy", %{pid: pid} do
+    terminal = "remote-core/live-owner"
+    assert {:ok, _} = ClientLeases.attach(terminal, ClientLeases, terminal)
+
+    builder = fn ->
+      {:ok, %{liveness: Ownership.liveness(%WorkedOn{terminal_key: terminal, state: "live"})}}
+    end
+
+    :ok = :sys.suspend(ClientLeases)
+
+    try do
+      initial = :gen_server.send_request(DashboardCache, {:json, pid, :herdr, builder})
+      assert {:reply, {:ok, body, etag}} = :gen_server.wait_response(initial, 2_000)
+      assert Jason.decode!(body)["liveness"] == "live"
+
+      repeated = :gen_server.send_request(DashboardCache, {:json, pid, :herdr, builder})
+      assert {:reply, {:ok, ^body, ^etag}} = :gen_server.wait_response(repeated, 2_000)
+    after
+      :sys.resume(ClientLeases)
+      ClientLeases.detach(terminal)
+    end
   end
 
   test "a read that discovers an external commit also notifies other subscribers", %{path: path} do

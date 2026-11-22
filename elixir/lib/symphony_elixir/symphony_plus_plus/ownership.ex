@@ -354,7 +354,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
 
   defp core_liveness({:live, _record}, _key), do: "live"
   defp core_liveness(:finished, _key), do: "finished"
-  defp core_liveness(_unseen_or_unknown, key), do: if(ClientLeases.terminal_live?(key), do: "live", else: "unknown")
+  defp core_liveness(_unseen_or_unknown, key), do: if(lease_live?(key), do: "live", else: "unknown")
+
+  defp lease_live?(key) do
+    if Inputs.active?() do
+      deadlines = Inputs.memo(:lease_deadlines, &ClientLeases.dashboard_deadlines/0)
+      now = System.monotonic_time(:millisecond)
+      Map.get(deadlines, key, now) > now
+    else
+      ClientLeases.terminal_live?(key)
+    end
+  end
 
   defp refusal(%WorkedOn{} = row) do
     status =
