@@ -4,6 +4,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress do
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
 
+  @type attachment :: %{
+          ref: PullRequest.ref(),
+          sequence: integer(),
+          actor_id: String.t() | nil,
+          head_sha: term()
+        }
+  @type attachment_result :: {:ok, attachment()} | {:error, atom()}
+
   @spec stamp_observation(map(), map() | nil, DateTime.t()) :: map()
   def stamp_observation(payload, previous, recorded_at) do
     same_pr = is_map(previous) and same_observed_pr?(previous, payload)
@@ -69,6 +77,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress do
       nil -> {:error, :missing_attached_pr}
       result -> result
     end
+  end
+
+  @spec current_attachment([ProgressEvent.t()]) :: attachment_result()
+  def current_attachment(events) do
+    events
+    |> chronological_events()
+    |> Enum.reverse()
+    |> Enum.reduce_while({:error, :missing_attached_pr}, fn event, previous_error ->
+      case pr_state_from_event(event, ["attach_pr"]) do
+        {:ok, %{payload: payload, ref: ref, sequence: sequence}} ->
+          {:halt, {:ok, %{ref: ref, sequence: sequence, actor_id: event.actor_id, head_sha: payload["head_sha"]}}}
+
+        {:error, _reason} = error when previous_error == {:error, :missing_attached_pr} ->
+          {:cont, error}
+
+        _unusable ->
+          {:cont, previous_error}
+      end
+    end)
   end
 
   @spec expected_head_sha([ProgressEvent.t()], map()) :: String.t() | nil

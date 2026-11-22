@@ -59,10 +59,6 @@ export function initialFetch() {
   return { data: null, receivedAt: null, attemptAt: null, error: null, failures: 0 };
 }
 
-export function fetchStarted(state, now) {
-  return { ...state, attemptAt: now };
-}
-
 export function fetchSucceeded(state, data, now) {
   return { data, receivedAt: now, attemptAt: now, error: null, failures: 0 };
 }
@@ -78,7 +74,7 @@ export function httpError(status) {
   return `sympp answered ${status}.`;
 }
 
-export function networkError(endpoint, caught) {
+export function networkError(endpoint) {
   const host = (normalizeEndpoint(endpoint) ?? "").replace(/^https?:\/\//i, "");
   return `Can't reach sympp at ${host || "the configured endpoint"}. Check the connection and retry.`;
 }
@@ -452,6 +448,18 @@ function laneOf(job, now) {
   if (job.state === "settled") return job.deployFailed ? "moving" : now - job.lastMoveAt < DAY ? "landed" : "settled";
   if (job.counts.done === 0) return "backlog";
   return now - job.lastMoveAt < DORMANT_AFTER ? "moving" : "dormant";
+}
+
+// A freshly drawn board ages on the view's clock even when the parsed response is reused.
+export function withCurrentLanes(board, now) {
+  let jobs = null;
+  for (const [index, job] of board.jobs.entries()) {
+    const lane = laneOf(job, now);
+    if (lane === job.lane) continue;
+    jobs ??= board.jobs.slice();
+    jobs[index] = { ...job, lane };
+  }
+  return jobs ? { ...board, jobs } : board;
 }
 
 function draftBrief(job) {

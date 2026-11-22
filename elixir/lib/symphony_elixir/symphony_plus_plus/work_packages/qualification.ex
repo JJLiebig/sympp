@@ -24,7 +24,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
   import Ecto.Query, only: [from: 2]
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection
-  alias SymphonyElixir.SymphonyPlusPlus.GitHub.{PullRequestArtifact, PullRequestProgress}
+  alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestArtifact
   alias SymphonyElixir.SymphonyPlusPlus.HerdrCore
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.{Terminal, WorkedOn}
@@ -81,11 +81,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification do
   end
 
   defp attached_head(repo, %WorkPackage{} = package) do
-    with {:ok, state} <- PlanningRepository.get_state(repo, package.id) do
-      case PullRequestProgress.current_pr_state(state.progress_events) do
-        {:ok, current} -> {:ok, current.payload["head_sha"]}
-        {:error, :missing_attached_pr} -> {:ok, nil}
-        {:error, reason} -> {:error, reason}
+    with {:ok, attachments} <- PlanningRepository.pr_attachments(repo, [package.id]) do
+      case attachments[package.id] do
+        {:ok, %{head_sha: head_sha}} -> {:ok, head_sha}
+        nil -> {:ok, nil}
+        {:error, _reason} = error -> error
       end
     end
   end

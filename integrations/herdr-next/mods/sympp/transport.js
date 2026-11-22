@@ -14,13 +14,19 @@ export async function request(url, options = {}) {
   return response;
 }
 
-// Bind authentication to one configured origin; never send it to a navigation target.
-export function remoteRequest(endpoint, loadConfig) {
+export async function remoteAuthorization(endpoint, loadConfig) {
+  const config = await loadConfig();
+  if (config.endpoint !== endpoint) throw failure("sympp server changed. Reinstall the panel connection.");
+  return config.token ? `Bearer ${config.token}` : null;
+}
+
+// Bind authentication to one configured origin and, for a board action, the credentials that read it.
+export function remoteRequest(endpoint, loadConfig, boardAuthorization) {
   return async (url, options = {}) => {
     if (new URL(url).origin !== endpoint) throw failure("sympp request does not match the configured server.");
-    const config = await loadConfig();
-    if (config.endpoint !== endpoint) throw failure("sympp server changed. Reinstall the panel connection.");
-    return request(url, { ...options, headers: { ...options.headers,
-      ...(config.token ? { Authorization: `Bearer ${config.token}` } : {}) } });
+    const expected = boardAuthorization?.();
+    const authorization = await remoteAuthorization(endpoint, loadConfig);
+    if (boardAuthorization && expected !== authorization) throw failure("Refresh the board before trying again.");
+    return request(url, { ...options, headers: { ...options.headers, ...(authorization ? { Authorization: authorization } : {}) } });
   };
 }

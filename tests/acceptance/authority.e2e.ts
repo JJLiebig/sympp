@@ -498,8 +498,12 @@ test('any Herdr terminal flags a decision, redacted, and the operator reviews it
   });
   const warm = await nativeRead();
   expect(warm.status).toBe(200);
-  const etag = warm.headers.get('etag')!;
-  expect((await nativeRead(etag)).status).toBe(304);
+  const { etag } = await warm.json();
+  expect(etag).toMatch(/^"[a-f0-9]{64}"$/);
+  expect(etag).toBe(warm.headers.get('etag'));
+  const unchanged = await nativeRead(etag);
+  expect(unchanged.status).toBe(304);
+  expect(await unchanged.text()).toBe('');
   const stop = new AbortController();
   const events = await fetch(`${origin}/api/v1/sympp/operator/dashboard/events`, { headers: { origin }, signal: stop.signal });
   expect(events.status).toBe(200);
@@ -514,7 +518,10 @@ test('any Herdr terminal flags a decision, redacted, and the operator reviews it
   stop.abort();
   const fresh = await nativeRead(etag);
   expect(fresh.status).toBe(200);
-  const decisions = (await fresh.json()).work_request_details.find((detail: any) => detail.work_request.id === request).decisions_to_review;
+  const freshBoard = await fresh.json();
+  expect(freshBoard.etag).toBe(fresh.headers.get('etag'));
+  expect(freshBoard.etag).not.toBe(etag);
+  const decisions = freshBoard.work_request_details.find((detail: any) => detail.work_request.id === request).decisions_to_review;
   expect(decisions.map((entry: any) => entry.id)).toEqual([flagged.decision_log_entry.id]);
   expect((await toReview()).map((entry: any) => entry.id)).toEqual([flagged.decision_log_entry.id]);
 
