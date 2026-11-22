@@ -4,6 +4,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.Observation do
 
     * `pr` - the GitHub snapshot of the PR it watches (state, head, merge
       evidence, CI rollup, failing check names, Codex receipt);
+    * `pr_absent` - branch discovery found no PR on the last sweep and the
+      package has a review cycle to read on demand;
     * `review` - the last Review Suite status read by `review_id`;
     * `stale` - inputs that could not be read on the last sweep (`github`,
       `review`, `stacking`). A stale input blocks qualification and merge
@@ -22,6 +24,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer.Observation do
 
   schema "sympp_work_package_observations" do
     field(:pr, :map)
+    field(:pr_absent, :boolean, default: false)
     field(:review, :map)
     field(:stale, StringList, default: [])
     field(:stacked_on, StringList, default: [])

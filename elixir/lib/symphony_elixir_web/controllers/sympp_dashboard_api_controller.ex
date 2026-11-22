@@ -12,6 +12,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.DashboardCache
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
+  alias SymphonyElixir.SymphonyPlusPlus.Observer
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit.Target
   alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
@@ -228,6 +229,8 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   defp dashboard_json(conn, repo, surface, fun) do
+    if surface in [:deferred, :hydrated, :herdr], do: Observer.request_board_reviews(repo)
+
     with {:ok, body, etag} <- DashboardCache.json(repo, surface, fun) do
       conn = conn |> put_resp_header("etag", etag) |> put_resp_header("cache-control", "private, no-cache")
 
@@ -253,6 +256,8 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   defp herdr_work_request_detail_response(repo, conn, work_request_id) do
+    :ok = Observer.refresh_review_progress(repo, {:request, work_request_id})
+
     with {:ok, payload} <- LocalOperatorDashboard.herdr_work_request_detail_payload(repo, work_request_id) do
       json(conn, payload)
     end
@@ -688,6 +693,8 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp maybe_broadcast_dashboard_change(_action), do: DashboardPubSub.broadcast_changed()
 
   defp stream_dashboard_events(conn) do
+    Observer.watch_board_reviews()
+
     receive do
       :operator_dashboard_changed ->
         case Conn.chunk(conn, "event: dashboard_changed\ndata: #{Jason.encode!(%{version: System.unique_integer([:positive, :monotonic]), schema_version: 1})}\n\n") do
@@ -704,6 +711,8 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   defp stream_herdr_events(conn) do
+    Observer.watch_board_reviews()
+
     receive do
       :operator_dashboard_changed ->
         case Conn.chunk(conn, "event: invalidated\ndata: {}\n\n") do

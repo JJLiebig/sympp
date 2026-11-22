@@ -261,7 +261,7 @@ response. Existing fields retain their meaning. Read each entry of
 | `review_signal.steps` | Optional ordered ladder of `{index, name, state}` entries (`done`, `current`, or `pending`). |
 | `review_signal.round_history` | Optional oldest-first list of the latest 20 provider rounds. |
 | `worker_terminal` | The package's worker terminal as the Observer last saw it, `{address, state, status}`: `state` is `live` or `finished`; for a live terminal `status` is the core's agent state (such as `working` or `idle`), `live` when the core reports none, or `unknown` when the factory's core can't see it; for a finished one it is `finished`. `null` when no worker terminal was seen. |
-| `observation_stale` | Inputs the Observer couldn't read on its last sweep (`github`, `review`, `stacking`); `[]` when none. |
+| `observation_stale` | Inputs the factory couldn't read on their last check (`github`, `review`, `stacking`). Empty when all checked inputs are available. |
 | `stacked_on` | Packages whose unmerged commits the PR carries; it keeps the PR from qualifying. `[]` when none. |
 | `progress` | For a `dispatched` package: `launching`, `implementing`, `worker_exited` or `review_ci` (an open PR). `null` otherwise. |
 
@@ -288,8 +288,12 @@ at 240 characters; steps are capped at 20 entries. Round timestamps must be ISO
 omitted when unavailable. Older Review Suite versions that omit `steps` or
 `round_history` leave those fields absent from the signal.
 
-Review observations come from the factory's Observer, which reads each
-package's Review Suite cycle starting at the `review_id` dispatch minted, on the worker's
+When GitHub confirms a dispatched package has no PR, the factory reads Review
+Suite progress for board or detail readers. Once discovery finds a PR, the
+same sweep reads current review evidence before deciding readiness.
+
+The factory reads each package's Review Suite cycle starting at the
+`review_id` dispatch minted, on the worker's
 machine (directly on the factory host, else through `hc exec --on`). It runs the
 portable skills bundle's `~/.agents/skills/review-suite/plugins/review-suite/scripts/review.py`,
 else the Codex marketplace plugin under `$CODEX_HOME/plugins/cache/review-suite`;
