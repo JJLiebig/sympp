@@ -296,7 +296,7 @@ function PkgDetail({ at, view }: { at: number; view: PkgView }) {
       {view.untimed ? null : <p className="font-mono text-[11px] text-dim">In {LIFECYCLE[now].label} for {span(at - view.since)}</p>}
       <p className="flex flex-wrap items-center gap-x-4 gap-y-1">
         <PrLink className={PR_TAP} pr={pkg.pr} repos={pkg.goalRepos} waits={waitsOnOthers(pkg)} />
-        <ReviewCell review={pkg.review} />
+        <ReviewCell review={pkg.review} spelled />
       </p>
       <Who terminal={pkg.owner} />
       {waitsOnOthers(pkg) ? <Tap action={{ kind: "finish", pkgId: pkg.id }} className="items-start" confirm="Finish?" label="Finish" /> : null}

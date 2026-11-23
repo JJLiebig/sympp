@@ -5,7 +5,7 @@ import { PkgActions } from "./actions";
 import { span, waitsOnOthers, type Goal, type Phase as GoalPhase, type GoalView, type Pkg, type PkgView, type Stage } from "./model";
 import { focusAsk, GLOW, Presence, useFlash, useOpenWhenBrought, useScramble, useSwap } from "./motion";
 import { Owner } from "./owner";
-import { CiCell, Lifecycle, NARROW_HIDDEN, slotOf, NARROW_STATUS, NARROW_UNDER, NARROW_WRAP, OUTCOME, Pip, PKG_GRID, PKG_TITLE, PrLink, StageStatus } from "./parts";
+import { CiCell, Lifecycle, NARROW_HIDDEN, slotOf, NARROW_STATUS, NARROW_UNDER, NARROW_WRAP, OUTCOME, Pip, PKG_GRID, PKG_TITLE, PR_AND_CI, PrLink, StageStatus } from "./parts";
 import { Reveal } from "./reveal";
 import { sampleReport } from "./samples";
 
@@ -395,7 +395,7 @@ export function NeedsYouFlag({ view }: { view: GoalView }) {
   );
 }
 
-// Status on the left, then the lifecycle and time in it, the PR with its checks, who works on it, and a menu to finish it where the PR waits on others.
+// Status on the left, then the lifecycle and time in it, the PR and its checks, who works on it, and a menu to finish it where the PR waits on others.
 // The row glows whenever its place in the lifecycle changes.
 export function PkgLine({ at, ref, view }: { at: number; ref?: (node: HTMLElement | null) => void; view: PkgView }) {
   const flash = useFlash(`${slotOf(view)}${view.failed ? ":failed" : ""}`, GLOW, 1400);
@@ -418,7 +418,7 @@ export function PkgLine({ at, ref, view }: { at: number; ref?: (node: HTMLElemen
       <span className={`grid ${NARROW_STATUS}`}>
         <StageStatus at={at} view={view} />
       </span>
-      <span className={`flex min-w-0 flex-wrap items-center gap-x-2 min-[1000px]:flex-nowrap ${NARROW_UNDER}`}>
+      <span className={PR_AND_CI}>
         <PrLink className={NARROW_WRAP} pr={pkg.pr} repos={pkg.goalRepos} waits={waitsOnOthers(pkg)} />
         <CiCell ci={pkg.ci} stale={pkg.stale.includes("github")} />
       </span>
@@ -439,6 +439,7 @@ function RestLine({ pkg, ref }: { pkg: Pkg; ref?: (node: HTMLElement | null) => 
       {/* The outcome starts where the lifecycle would and takes its status column too; narrow, it sits right of the title. */}
       <span className={`truncate font-mono text-[11px] min-[1000px]:col-span-2 ${outcome?.tone ?? "text-faint"}`}>{outcome?.label ?? "Planned"}</span>
       <PrLink className={`${NARROW_WRAP} ${NARROW_UNDER}`} pr={pkg.pr} repos={pkg.goalRepos} />
+      <span className={NARROW_HIDDEN} />
       <span className={NARROW_HIDDEN} />
       <span className={NARROW_HIDDEN} />
     </div>
