@@ -85,19 +85,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     schema(
       %{
         "work_request_id" => string_schema(),
-        "view" =>
-          ToolCatalog.work_request_views()
-          |> string_enum_schema()
-          |> Map.merge(%{
-            "default" => "overview",
-            "description" =>
-              "overview: request, packages and next actions; plan: packages by group, dependencies and the execution graph; board: delivery state and evidence; package: one package's contract, dependencies and task plan."
-          }),
-        "work_package_id" => described_string_schema("Required for view: package."),
-        "detail" => payload_detail_schema()
+        "view" => ToolCatalog.work_request_views() |> string_enum_schema() |> Map.put("default", "overview"),
+        "work_package_id" => described_string_schema("For package."),
+        "ask_id" => described_string_schema("For ask."),
+        "decision_id" => described_string_schema("For decision."),
+        "cursor" => described_string_schema("Pass next_cursor with the same view and IDs.")
       },
       ["work_request_id"]
     )
+    |> Map.put("additionalProperties", true)
   end
 
   defp tool_schema("sync_pr") do
@@ -406,12 +402,5 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
 
   defp task_title_schema do
     described_string_schema("Title is the short name: 2–5 words, max 40 characters after trimming, e.g. Board read access. Put detail in the description.")
-  end
-
-  defp payload_detail_schema do
-    ["summary", "full"]
-    |> string_enum_schema()
-    |> Map.put("default", "summary")
-    |> Map.put("description", "Summary by default; full includes the complete payload.")
   end
 end

@@ -6,13 +6,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -166,157 +163,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     }
   end
 
-  @spec work_request_detail(repo(), WorkRequest.t(), keyword()) :: {:ok, map()} | {:error, dashboard_error()}
-  def work_request_detail(repo, %WorkRequest{} = work_request, _opts) do
-    asks = Map.get(Asks.by_work_request(repo, [work_request.id]), work_request.id, [])
-
-    with {:ok, decisions} <- WorkRequestService.list_decisions(repo, work_request.id),
-         {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request.id),
-         {:ok, slice_visibility} <- DeliveryBoard.work_package_visibility(repo, work_request.id, work_packages),
-         {:ok, operator_reports} <- OperatorReport.load_many(repo, [work_request]),
-         {:ok, work_request_payload} <- put_phase(work_request(work_request), repo, work_request) do
-      visible_work_packages = Map.fetch!(slice_visibility, :visible_work_packages)
-
-      {:ok,
-       %{
-         "work_request" => Map.put(work_request_payload, "operator_report", Map.fetch!(operator_reports, work_request.id)),
-         "asks" => Enum.map(asks, &Asks.public/1),
-         "decision_log_entries" => Enum.map(decisions, &decision_log_entry/1),
-         "work_packages" => Enum.map(visible_work_packages, &work_package/1),
-         "summary" => work_request_summary(asks, decisions, visible_work_packages)
-       }}
-    end
-  end
-
-  @spec work_request_read(repo(), WorkRequest.t(), String.t()) :: {:ok, map()} | {:error, dashboard_error()}
-  def work_request_read(repo, work_request, "full"), do: work_request_detail(repo, work_request, [])
-
-  def work_request_read(repo, work_request, "summary") do
-    with {:ok, payload} <- work_request_detail(repo, work_request, []),
-         {:ok, board} <- DeliveryBoard.project(repo, work_request.id) do
-      decisions = payload["decision_log_entries"]
-      asks = payload["asks"]
-
-      {:ok,
-       %{
-         "work_request" => Map.take(payload["work_request"], ~w(id title repo base_branch phase next_action human_description constraints operator_report)),
-         "asks" => Enum.filter(asks, &(&1["state"] == "open")),
-         "decision_log_entries" => decisions |> Enum.take(-5) |> Enum.map(&Map.take(&1, ~w(id sequence decision))) |> Enum.map(&Map.update!(&1, "decision", fn text -> one_line(text, 160) end)),
-         "work_packages" => board |> delivery_board() |> Map.fetch!("work_packages") |> Enum.map(&work_package_read_summary/1),
-         "summary" => payload["summary"],
-         "omitted" => %{
-           "package_contracts" => length(payload["work_packages"]),
-           "resolved_asks" => Enum.count(asks, &(&1["state"] != "open")),
-           "older_decisions" => max(length(decisions) - 5, 0),
-           "decision_details" => length(decisions)
-         },
-         "help" => "Use read_work_request with detail: full for all contracts, asks and decisions; view: plan for dependencies."
-       }}
-    end
-  end
-
-  @doc """
-  One package of a WorkRequest: its contract, group path, revision, status,
-  next action, what it depends on and what depends on it. Summary keeps the
-  contract to title and goal; full adds the whole contract and board state.
-  """
-  @spec work_package_read(repo(), WorkRequest.t(), WorkPackage.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def work_package_read(repo, %WorkRequest{} = work_request, %WorkPackage{} = package, detail) do
-    with {:ok, work_request_payload} <- put_phase(work_request(work_request), repo, work_request),
-         {:ok, board} <- DeliveryBoard.project(repo, work_request.id),
-         {:ok, graph} <- ProductTree.execution_graph(repo, work_request.id) do
-      row = board |> delivery_board() |> Map.fetch!("work_packages") |> Enum.find(%{}, &(&1["id"] == package.id))
-
-      read =
-        if row == %{},
-          do: %{"next_action" => Lifecycle.next_action(package).action || "none"},
-          else: work_package_read_summary(row)
-
-      contract =
-        if detail == "full",
-          do: package |> work_package() |> Map.merge(plan_operational_work_package_fields(row)),
-          else: %{"id" => package.id, "title" => Redactor.redact_text(package.title), "goal" => Redactor.redact_text(package.goal)}
-
-      {:ok,
-       %{
-         "work_request" => Map.take(work_request_payload, ~w(id title phase next_action)),
-         "work_package" =>
-           contract
-           |> Map.merge(%{"group" => Redactor.redact_text(package.group), "status" => package.status, "revision" => package.contract_revision})
-           |> Map.merge(Map.take(read, ["next_action", "pr_url"]))
-           |> Map.merge(%{
-             "depends_on" => for(edge <- graph.effective_edges, edge.dependent_work_package_id == package.id, do: edge.prerequisite_work_package_id),
-             "dependents" => for(edge <- graph.effective_edges, edge.prerequisite_work_package_id == package.id, do: edge.dependent_work_package_id)
-           })
-       }}
-    end
-  end
-
-  defp work_package_read_summary(package) do
-    activity = get_in(package, ["operational_state", "activity_signal"]) || %{}
-    state = get_in(package, ["operational_state", "key"])
-
-    %{
-      "id" => package["id"],
-      "title" => package["title"],
-      "status" => package["raw_status"],
-      "pr_url" => get_in(package, ["work_package", "pr", "url"]) || get_in(package, ["delivery", "pr_url"]),
-      "next_action" => activity["next_action"] || package_next_action(state, package["raw_status"])
-    }
-  end
-
-  # A merged PR the Observer could not record as delivered (its evidence is
-  # incomplete or doesn't match the package) needs the architect.
-  defp package_next_action("needs_closeout", _status), do: "sync_pr"
-  defp package_next_action(_state, status), do: Lifecycle.next_action(status).action || "none"
-
-  @spec plan_summary(map()) :: map()
-  def plan_summary(payload) do
-    plan = Map.update!(payload["plan"], "work_packages", &Enum.map(&1, fn package -> plan_package_summary(package) end))
-
-    payload
-    |> Map.put("work_request", Map.take(payload["work_request"], ~w(id title phase next_action)))
-    |> Map.put("plan", plan)
-    |> Map.put("omitted", %{"package_details" => length(plan["work_packages"])})
-    |> Map.put("help", "Use read_work_request with view: plan and detail: full for complete package contracts.")
-  end
-
-  defp plan_package_summary(package) do
-    package
-    |> Map.take(~w(id title group sequence status attention_reason_codes))
-    |> Map.put("state", get_in(package, ["operational_state", "key"]))
-  end
-
-  defp one_line(text, limit) do
-    text = text |> String.split() |> Enum.join(" ")
-    if String.length(text) > limit, do: String.slice(text, 0, limit - 1) <> "…", else: text
-  end
-
-  @doc """
-  The plan of a WorkRequest: its visible packages with their group paths and
-  operational state, dependency intents and the effective execution graph.
-  """
-  @spec work_request_plan(repo(), WorkRequest.t(), [WorkPackage.t()], map()) :: {:ok, map()} | {:error, term()}
-  def work_request_plan(repo, %WorkRequest{} = work_request, work_packages, delivery_board) do
-    projection_work_package_payloads =
-      delivery_board
-      |> Map.fetch!(:work_packages)
-      |> json_safe_payload()
-      |> Enum.filter(&is_binary(get_in(&1, ["operational_state", "work_package_status"])))
-
-    visible_work_packages = visible_work_packages_from_projection(work_packages, projection_work_package_payloads)
-
-    plan =
-      repo
-      |> ProductTree.project(work_request.id, projection_work_package_payloads, visible_only?: true)
-      |> public_plan()
-      |> Map.put("work_packages", plan_work_package_payloads(visible_work_packages, projection_work_package_payloads))
-
-    with {:ok, work_request_payload} <- put_phase(work_request(work_request), repo, work_request) do
-      {:ok, %{"work_request" => work_request_payload, "plan" => plan}}
-    end
-  end
-
   @spec work_request(WorkRequest.t()) :: map()
   def work_request(%WorkRequest{} = work_request) do
     scope = redacted_work_request_scope(work_request)
@@ -446,57 +292,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     }
   end
 
-  @spec delivery_board(map()) :: map()
-  def delivery_board(delivery_board) do
-    delivery_board
-    |> json_safe_payload()
-    |> Redactor.redact_output()
-  end
-
-  @spec delivery_board(map(), String.t()) :: map()
-  def delivery_board(board, "full"), do: delivery_board(board)
-
-  def delivery_board(board, "summary") do
-    board
-    |> delivery_board()
-    |> Map.update!("work_packages", fn work_packages ->
-      Enum.map(work_packages, fn work_package ->
-        work_package
-        |> Map.take(["id", "title", "raw_status", "delivery_outcome", "attention_reason_codes", "merge_eligibility"])
-        |> Map.put("state", get_in(work_package, ["operational_state", "key"]))
-        |> Map.put("pr_url", get_in(work_package, ["work_package", "pr", "url"]) || get_in(work_package, ["delivery", "pr_url"]))
-      end)
-    end)
-  end
-
-  defp visible_work_packages_from_projection(work_packages, projection_work_package_payloads) do
-    visible_work_package_ids =
-      projection_work_package_payloads
-      |> Enum.map(&map_get(&1, :id))
-      |> Enum.reject(&is_nil/1)
-      |> MapSet.new()
-
-    Enum.filter(work_packages, &MapSet.member?(visible_work_package_ids, &1.id))
-  end
-
-  defp plan_work_package_payloads(visible_work_packages, projection_work_package_payloads) do
-    projection_work_package_payloads_by_id = Map.new(projection_work_package_payloads, &{map_get(&1, :id), &1})
-
-    Enum.map(visible_work_packages, fn %WorkPackage{} = work_package ->
-      work_package
-      |> work_package()
-      |> Map.merge(plan_operational_work_package_fields(Map.get(projection_work_package_payloads_by_id, work_package.id, %{})))
-    end)
-  end
-
-  defp plan_operational_work_package_fields(projection_work_package_payload) when is_map(projection_work_package_payload) do
-    projection_work_package_payload
-    |> Map.take(["raw_status", "delivery_outcome", "operational_state", "attention_reason_codes"])
-    |> Map.put("status", map_get(projection_work_package_payload, :raw_status))
-    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-    |> Map.new()
-  end
-
   defp work_request_creator(%WorkRequest{} = work_request) do
     %{
       "kind" => work_request.creator_kind,
@@ -504,20 +299,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
       "via" => work_request.created_via
     }
   end
-
-  defp work_request_summary(asks, decisions, work_packages) do
-    %{
-      "open_ask_count" => Enum.count(asks, &(&1.state == "open")),
-      "decision_count" => length(decisions),
-      "work_package_count" => length(work_packages),
-      "planned_work_package_count" => Enum.count(work_packages, &(&1.status == "planned")),
-      "dispatched_work_package_count" => Enum.count(work_packages, &(not is_nil(&1.dispatched_at))),
-      "ended_work_package_count" => Enum.count(work_packages, &Lifecycle.ended?/1)
-    }
-  end
-
-  defp map_get(map, key) when is_map(map) and is_atom(key), do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
-  defp map_get(_value, _key), do: nil
 
   defp worker_completion do
     %{"completion" => %{"next_owner" => "architect", "next_action" => "return_pr_or_evidence"}}

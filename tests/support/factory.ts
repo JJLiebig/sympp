@@ -178,8 +178,20 @@ export class Client {
     return edited.applied.map((op: any) => op.work_package_id);
   }
 
-  async board(workRequest = this.workRequest, detail = 'summary') {
-    return (await this.call('read_work_request', { work_request_id: workRequest, view: 'board', detail })).delivery_board;
+  async board(work_request_id = this.workRequest) {
+    return (await this.call('read_work_request', { work_request_id, view: 'board' })).delivery_board;
+  }
+
+  async readPackage(work_request_id: string, work_package_id: string) {
+    return (await this.call('read_work_request', { work_request_id, view: 'package', work_package_id })).work_package;
+  }
+
+  async readAsk(work_request_id: string, ask_id: string) {
+    return (await this.call('read_work_request', { work_request_id, view: 'ask', ask_id })).ask;
+  }
+
+  async readDecision(work_request_id: string, decision_id: string) {
+    return (await this.call('read_work_request', { work_request_id, view: 'decision', decision_id })).decision;
   }
 
   async tool(name: string, args: object = {}) {
@@ -215,12 +227,11 @@ export class Client {
       work_type: 'feature',
     });
     expect(created.status).toBe('created');
-    // Creating a WorkRequest makes this terminal its owner and its creator.
+    // Creating a WorkRequest makes this terminal its owner.
     expect(created.worked_on.address).toBe(this.address);
     const id = created.work_request.id;
-    const read = await this.call('read_work_request', { detail: 'full', work_request_id: id });
+    const read = await this.call('read_work_request', { work_request_id: id });
     expect(read.work_request.phase).toBe('intake');
-    expect(read.work_request.creator).toEqual({ kind: 'agent', name: this.address, via: 'mcp' });
     this.workRequest = id;
     return id;
   }

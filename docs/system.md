@@ -198,9 +198,9 @@ package again reuses its worktree and review id. If the worktree can't be
 prepared, the package stays dispatched and the response carries the error and
 next action. In a worker terminal the sympp bridge serves no tools. See the
 [architect procedure](../packages/sympp/skills/symphony-architect/SKILL.md#dispatch).
-The board view of `read_work_request` defaults to compact summaries; `detail: "full"`
-restores all nested package and delivery evidence. Structured results remain JSON
-and agent text uses TOON.
+Every `read_work_request` view has the same fields in JSON and TOON. The
+`board` view shows the current PR head, checks, review, and merge eligibility
+for live packages.
 The factory's Observer watches dispatched packages: worker terminals through the
 factory host's herdr-core, PRs, CI and merges through one batched GitHub GraphQL
 read per minute, and the Review Suite cycle by its review id on the worker's

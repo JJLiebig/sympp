@@ -1,7 +1,7 @@
 import { expect } from 'e2e';
 import { test } from '../support/browser-candidate.js';
 import { contract } from '../support/factory.js';
-import { close, head, pr, prUrl, row, sync } from '../support/delivery.js';
+import { blockerActive, close, head, pr, prUrl, row, sync } from '../support/delivery.js';
 import { repository } from '../support/worktree-git.js';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -45,9 +45,9 @@ test('operator sees dependency ordering, pending qualification and actual delive
   await browser.reload();
   await screen.getByRole('button', 'Expanded', { exact: true }).tap();
   await expect(goal).toContainText('Stage: Checks');
-  expect((await row(client, request, first)).delivery_outcome).toBeNull();
+  expect((await row(client, request, first)).delivery).toBeNull();
   expect((await client.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.completed_at).toBeNull();
-  expect((await row(client, request, first)).work_package.runtime_state['active?']).toBe(false);
+  expect((await row(client, request, first)).operational_state.has_active_worker).toBe(false);
   provider!.set(401, pr(401, head('a')));
   await sync(client, first, 401, head('a'));
   await candidate.capture('qualified');
@@ -59,7 +59,7 @@ test('operator sees dependency ordering, pending qualification and actual delive
   provider!.set(401, pr(401, head('a'), { state: 'MERGED', mergedAt: new Date().toISOString(), mergeCommit: { oid: head('f') } }));
   await client.call('sync_pr', { work_package_id: first });
   await candidate.capture('pr-delivered');
-  expect((await row(client, request, first)).delivery_outcome).toBe('pr_merged');
+  expect((await row(client, request, first)).delivery.outcome).toBe('pr_merged');
   await client.call('dispatch_work_package', { work_package_id: second });
   await close(client, second);
   await candidate.capture('finished');
@@ -79,7 +79,7 @@ test('operator sees dependency ordering, pending qualification and actual delive
       .run(reviewWp, JSON.stringify({ evidence_id: prepared.work_package.review_id, status: 'in_progress', provider_status: 'running', current: 1, total: 2, step: 'correctness' }), '[]', ...Array(3).fill(new Date().toISOString()));
   } finally { db.close(); }
   await candidate.capture('provider-review-wait');
-  expect((await row(reviewClient, reviewing, reviewWp)).delivery_outcome).toBeNull();
+  expect((await row(reviewClient, reviewing, reviewWp)).delivery).toBeNull();
 });
 
 test('operator attention differs from explicit blockers and settings/archive actions persist', async ({ candidate, app, screen, browser }) => {
@@ -95,13 +95,13 @@ test('operator attention differs from explicit blockers and settings/archive act
   await candidate.capture('operator-needed');
   await app.open('/sympp/board');
   await expect(browser.locator('title')).toHaveText(/^\(1\)\s/);
-  expect((await row(client, request, wp)).work_package.blocker_state['active?']).toBe(false);
+  expect(await blockerActive(client, wp)).toBe(false);
   await client.call('set_blocker', { work_package_id: wp, blocker_id: 'schema', active: true, summary: 'Required schema missing.' });
   await client.call('resolve_ask', { ask_id: ask, to: 'withdrawn' });
   await candidate.capture('blocker-without-escalation');
   await browser.reload();
   await expect(browser.locator('title')).toHaveText(/^(?!\(\d+\))\S/);
-  expect((await row(client, request, wp)).work_package.blocker_state['active?']).toBe(true);
+  expect(await blockerActive(client, wp)).toBe(true);
 
   await screen.getByRole('button', 'sympp settings', { exact: true }).tap();
   await screen.getByLabel('Finished goals are archived after', { exact: false }).fill('30');
@@ -150,9 +150,8 @@ test('the person answers a question, reviews flagged decisions and releases a go
   const feedbackOn = await flag('Use regional prices.');
   await candidate.capture('question-and-decision');
   await app.open('/sympp/board');
-  const full = () => client.call('read_work_request', { detail: 'full', work_request_id: request });
-  const answer = async () => (await full()).asks.find((entry: any) => entry.id === ask);
-  const decision = async (id: string) => (await full()).decision_log_entries.find((entry: any) => entry.id === id);
+  const answer = () => client.readAsk(request, ask);
+  const decision = (id: string) => client.readDecision(request, id);
 
   // On a phone the question comes first, folded to an Answer button. Its goal opens on a screen of its own,
   // and back returns to the question with what was picked still there.
