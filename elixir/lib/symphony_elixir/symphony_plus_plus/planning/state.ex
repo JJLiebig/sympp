@@ -11,7 +11,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.State do
           plan_nodes: [PlanNode.t()] | nil,
           progress_events: [ProgressEvent.t()] | nil,
           artifacts: [Artifact.t()] | nil,
-          plan_version_material: [PlanNode.t() | map()] | nil,
           plan_nodes_omitted_count: non_neg_integer() | nil,
           progress_events_omitted_count: non_neg_integer() | nil,
           artifacts_omitted_count: non_neg_integer() | nil
@@ -21,7 +20,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.State do
             plan_nodes: [],
             progress_events: [],
             artifacts: [],
-            plan_version_material: [],
             plan_nodes_omitted_count: nil,
             progress_events_omitted_count: nil,
             artifacts_omitted_count: nil

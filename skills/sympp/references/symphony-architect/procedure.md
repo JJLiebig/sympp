@@ -18,15 +18,22 @@ can't see, tell your chief.
 
 ## Read
 
-`read_work_request(work_request_id, view)`: `overview` (default), `plan`
-(packages, groups, dependencies), `board` (delivery state, next actions, merge
-eligibility) or `package` (one contract; pass `work_package_id`). Use
-`detail: "full"` before editing a contract or relying on a whole decision.
+Read the WorkRequest with its `work_request_id`. Use `request` for the brief
+and constraints before slicing, `plan` for live package IDs, groups,
+revisions and dependencies, and `board` for delivery evidence and next
+actions. Use `package` with the `work_package_id` before editing its contract.
+For a specific ask or decision, use `ask` with `ask_id` or `decision` with
+`decision_id`.
+
+Keep the same view and IDs when passing `next_cursor` as `cursor`. If a
+document returns `chunk` strings, concatenate them in page order and parse
+the JSON. In a code cell, print the fields needed for the step from
+`structuredContent`, or print the TOON text.
 
 The factory submits operator feedback to the recording terminal. The `<sympp>`
 message includes the WorkRequest, decision ID, full decision and feedback. Read
 XML entities as their original characters in URLs and commands. If delivery
-can't reach your terminal, read the WorkRequest with `detail: "full"`.
+can't reach your terminal, read the decision by its ID.
 
 Use `resolve_ask(to: "answered")` only for an answer the operator gave in your
 conversation. A board answer already resolves the ask.
@@ -55,8 +62,7 @@ to escalate.
 - `set_dependency` and `remove_dependency`, where `from` depends on `to`.
 
 Use `applied` for the receipt of each operation in order. Add and update
-receipts include the package ID and revision. Call `read_work_request` with
-`view: "plan"` when you need the current plan and dependencies.
+receipts include the package ID and revision.
 
 In a Codex code cell, use `structuredContent.applied` for follow-up calls.
 Show the TOON text when you need to read the receipt in the conversation.
@@ -64,6 +70,14 @@ Show the TOON text when you need to read the receipt in the conversation.
 ```js
 const receipt = await tools.mcp__sympp__edit_plan({ work_request_id, ops });
 text(receipt.content[0].text);
+```
+
+When you need the current groups, revisions or dependencies, read the plan.
+In code, use `structuredContent.plan` from this read.
+
+```js
+const plan = await tools.mcp__sympp__read_work_request({ work_request_id, view: "plan" });
+text(plan.content[0].text);
 ```
 
 A ready contract is frozen; add a successor.
@@ -153,7 +167,7 @@ option is clearly best, decide, flag it and keep going; when none is, tell your 
 - Write the decision as one plain product sentence. Record it before
   dispatching work that depends on it.
 - If any calls were flagged, include one line in the final handoff:
-  `N product calls flagged; read them with read_work_request(work_request_id: ..., detail: "full")`.
+  `N product calls flagged; read them with read_work_request(work_request_id: ..., view: "flagged_decisions")`.
   Count all flagged decisions, including acknowledged ones. Record a chief's
   correction as a new decision without `flag`.
 - Declining a reviewer's request, such as over-engineering, is your job: never
@@ -180,7 +194,7 @@ material correction or a new caller-requested action.
 - Only the chief can use `ask`; send your chief the question directly instead.
 - Record other durable decisions with `record_decision`, unflagged.
 - Act on decision feedback when it arrives in your terminal. Off the factory's
-  machine, read it with `detail: "full"`.
+  machine, read the decision by its ID.
 - Use `set_report` at milestones or road bumps (`brief`, `eta`, `parking`;
   `null` clears a field) and `set_blocker` for a real package blocker. Asks and
   waits aren't blockers.

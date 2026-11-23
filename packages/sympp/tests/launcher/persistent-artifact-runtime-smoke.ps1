@@ -225,7 +225,16 @@ function Send-BridgeRequest($Process, $Request) {
   return $response
 }
 
-function Invoke-McpBridge([string]$FilePath, [string[]]$Arguments, [hashtable]$Environment, [switch]$CreateMarker, [string]$MarkerWorkRequestId, [scriptblock]$OnAttached, [switch]$RecoverBackend) {
+function Assert-PersistenceMarker($Process, [string]$WorkRequestId, [string]$DecisionId, [int]$RequestId) {
+  $marker = Send-BridgeRequest $Process @{ jsonrpc = '2.0'; id = $RequestId; method = 'tools/call'; params = @{ name = 'read_work_request'; arguments = @{ work_request_id = $WorkRequestId; view = 'decision'; decision_id = $DecisionId } } }
+  $decision = $marker.result.structuredContent.decision
+  if ($decision.id -ne $DecisionId -or $decision.decision -ne 'packaged database persistence marker') { throw 'MCP persistence marker was missing.' }
+  $overview = Send-BridgeRequest $Process @{ jsonrpc = '2.0'; id = ($RequestId + 1); method = 'tools/call'; params = @{ name = 'read_work_request'; arguments = @{ work_request_id = $WorkRequestId } } }
+  $payload = $overview.result.structuredContent
+  if (@($payload.decisions).Count -ne 1 -or $payload.older_decision_count -ne 0) { throw 'MCP persistence marker was duplicated.' }
+}
+
+function Invoke-McpBridge([string]$FilePath, [string[]]$Arguments, [hashtable]$Environment, [switch]$CreateMarker, [string]$MarkerWorkRequestId, [string]$MarkerDecisionId, [scriptblock]$OnAttached, [switch]$RecoverBackend) {
   Write-Host "MCP fixture: state=$($Environment.SYMPP_RUNTIME_FILE) create=$CreateMarker recover=$RecoverBackend"
   $process = Start-IsolatedProcess $FilePath $Arguments $Environment
   try {
@@ -253,7 +262,9 @@ function Invoke-McpBridge([string]$FilePath, [string[]]$Arguments, [hashtable]$E
       $created = Send-BridgeRequest $process @{ jsonrpc = "2.0"; id = 3; method = "tools/call"; params = @{ name = "create_work_request"; arguments = @{ repo = "fixture/packaged-ledger"; base_branch = "beta"; title = "Disposable persistence marker"; work_type = "feature"; description = "Packaged ledger persistence marker." }; _meta = $terminal } }
       $MarkerWorkRequestId = [string]$created.result.structuredContent.work_request.id
       if (-not $MarkerWorkRequestId) { throw "Missing marker WorkRequest identity." }
-      [void](Send-BridgeRequest $process @{ jsonrpc = "2.0"; id = 4; method = "tools/call"; params = @{ name = "record_decision"; arguments = @{ work_request_id = $MarkerWorkRequestId; source_type = "operator"; decision = "packaged database persistence marker"; rationale = "Persistence"; scope_impact = "None"; created_by = "artifact-smoke" }; _meta = $terminal } })
+      $recorded = Send-BridgeRequest $process @{ jsonrpc = "2.0"; id = 4; method = "tools/call"; params = @{ name = "record_decision"; arguments = @{ work_request_id = $MarkerWorkRequestId; source_type = "operator"; decision = "packaged database persistence marker"; rationale = "Persistence"; scope_impact = "None"; created_by = "artifact-smoke" }; _meta = $terminal } }
+      $MarkerDecisionId = [string]$recorded.result.structuredContent.decision_log_entry.id
+      if (-not $MarkerDecisionId) { throw 'Missing marker decision identity.' }
     }
     if ($RecoverBackend) {
       $ownedState = Get-Content -LiteralPath $Environment.SYMPP_RUNTIME_FILE -Raw | ConvertFrom-Json
@@ -261,15 +272,14 @@ function Invoke-McpBridge([string]$FilePath, [string[]]$Arguments, [hashtable]$E
       [void](Send-BridgeRequest $process @{ jsonrpc = "2.0"; id = 6; method = "tools/list"; params = @{} })
     }
     if ($MarkerWorkRequestId) {
-      $marker = Send-BridgeRequest $process @{ jsonrpc = "2.0"; id = 5; method = "tools/call"; params = @{ name = "read_work_request"; arguments = @{ work_request_id = $MarkerWorkRequestId; detail = "full" } } }
-      if (@($marker.result.structuredContent.decision_log_entries | Where-Object { $_.decision -eq "packaged database persistence marker" }).Count -ne 1) { throw "MCP persistence marker was missing or duplicated." }
+      Assert-PersistenceMarker $process $MarkerWorkRequestId $MarkerDecisionId 7
     }
     $activeState = Get-Content -LiteralPath $Environment.SYMPP_RUNTIME_FILE -Raw | ConvertFrom-Json
     $activeBackend = Get-Process -Id ([int]$activeState.backend.pid) -ErrorAction Stop
     $activeBackendStartTicks = $activeBackend.StartTime.ToUniversalTime().Ticks
     $script:backendProcessId = $activeBackend.Id
     $script:backendStartTicks = $activeBackendStartTicks
-    if ($OnAttached) { & $OnAttached $activeState $MarkerWorkRequestId }
+    if ($OnAttached) { & $OnAttached $activeState $MarkerWorkRequestId $MarkerDecisionId }
     $activeState = Get-Content -LiteralPath $Environment.SYMPP_RUNTIME_FILE -Raw | ConvertFrom-Json
     $activeBackend = Get-Process -Id ([int]$activeState.backend.pid) -ErrorAction Stop
     $activeBackendStartTicks = $activeBackend.StartTime.ToUniversalTime().Ticks
@@ -289,6 +299,7 @@ function Invoke-McpBridge([string]$FilePath, [string[]]$Arguments, [hashtable]$E
       runtime_mode = [string]$activeState.runtime_mode
       artifact_root = [string]$activeState.artifact.root
       marker_work_request_id = $MarkerWorkRequestId
+      marker_decision_id = $MarkerDecisionId
     }
   } catch {
     $failure = $_.Exception.Message
@@ -449,9 +460,9 @@ try {
       if ($SkillsInstall -and ($activeState.plugin_root -ne $installedRoot -or (Test-Path (Join-Path $environment.USERPROFILE ".codex")))) { throw "Portable launch depended on a Codex cache or the source checkout." }
     }
     $first = Invoke-McpBridge $cmd $commandArgs $environment -CreateMarker -OnAttached {
-      param($activeState, $markerId)
+      param($activeState, $markerId, $decisionId)
       & $assertLedger $activeState $markerId
-      $second = Invoke-McpBridge $cmd $commandArgs $environment -MarkerWorkRequestId $markerId -OnAttached $assertLedger
+      $second = Invoke-McpBridge $cmd $commandArgs $environment -MarkerWorkRequestId $markerId -MarkerDecisionId $decisionId -OnAttached $assertLedger
       if ($second.backend_pid -ne $activeState.backend.pid) { throw "Warm client did not share the packaged backend." }
       if ($SkillsInstall) {
         $foreign = $environment.Clone()
@@ -490,15 +501,12 @@ try {
       $manifest = $candidateManifest
       $candidateManifest | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $floatingManifest
     }
-    $secondWave = Invoke-McpBridge $cmd $commandArgs $environment -MarkerWorkRequestId $first.marker_work_request_id -RecoverBackend -OnAttached {
-      param($activeState, $markerId)
+    $secondWave = Invoke-McpBridge $cmd $commandArgs $environment -MarkerWorkRequestId $first.marker_work_request_id -MarkerDecisionId $first.marker_decision_id -RecoverBackend -OnAttached {
+      param($activeState, $markerId, $decisionId)
       & $assertLedger $activeState $markerId
       if ($SkillsInstall) {
         Invoke-CheckoutInstallQualification $environment $process $candidateManifest
-        $persisted = Send-BridgeRequest $process @{ jsonrpc = '2.0'; id = 82; method = 'tools/call'; params = @{ name = 'read_work_request'; arguments = @{ work_request_id = $markerId; detail = 'full' } } }
-        if (@($persisted.result.structuredContent.decision_log_entries | Where-Object decision -eq 'packaged database persistence marker').Count -ne 1) {
-          throw 'Checkout install or rollback lost or duplicated the existing ledger marker.'
-        }
+        Assert-PersistenceMarker $process $markerId $decisionId 82
       }
     }
     Wait-ManagedRuntimeStopped $secondWave.backend_pid $secondWave.backend_port

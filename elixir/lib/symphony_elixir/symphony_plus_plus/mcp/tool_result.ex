@@ -1,7 +1,6 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext
   alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext
 
   @summary_fields ~w(action id outcome reachable status summary title uri work_package_id work_request_id)
@@ -31,8 +30,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
     agent_tool_result(payload, fn -> WorkerContext.encode_tool_payload(payload) end)
   end
 
-  @spec read_tool_result(term()) :: map()
-  def read_tool_result(payload), do: agent_tool_result(payload, fn -> WorkerContext.encode_tool_payload(payload) end)
+  @spec read_tool_result(map(), String.t()) :: map()
+  def read_tool_result(payload, text), do: result(payload, text)
 
   @spec receipt_result(map()) :: map()
   def receipt_result(payload), do: result(payload, WorkerContext.encode_tool_payload(payload))
@@ -43,11 +42,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
 
   def agent_tool_result(payload, encoder) when is_function(encoder, 0),
     do: result(payload, text_for_profile(payload, encoder))
-
-  @spec architect_agent_tool_result(term(), atom()) :: map()
-  def architect_agent_tool_result(payload, kind) do
-    agent_tool_result(payload, fn -> ArchitectContext.encode_tool_payload(payload, kind) end)
-  end
 
   @spec canonical_agent_result(map()) :: map()
   def canonical_agent_result(%{"structuredContent" => %{"assignment" => %{}, "local_claim" => %{}}, "content" => [_text]} = result), do: result

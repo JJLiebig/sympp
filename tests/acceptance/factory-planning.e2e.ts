@@ -8,7 +8,7 @@ import { contract, test } from '../support/factory.js';
 import { head, pr, prUrl, test as deliveryTest } from '../support/delivery.js';
 import { git, repository } from '../support/worktree-git.js';
 
-test('dispatch and delivery board payload measurements for a 25-package request', async ({ factory }) => {
+test('a failed hand-off leaves the package dispatched and the board gives a recovery action', async ({ factory }) => {
   const architect = await factory.client();
   const description = [
     'Deliver a scoped service rollout with separate API, client, storage and operator work.',
@@ -37,32 +37,12 @@ test('dispatch and delivery board payload measurements for a 25-package request'
   expect(dispatch.structuredContent.error.expected_repo).toBe('example/service');
   expect(dispatch.structuredContent.next_action).toContain('dispatch_work_package again with review_mode fast');
   expect(dispatch.structuredContent.launch_line).toBeUndefined();
-  await architect.reject('read_work_request', { work_request_id: request, view: 'board', detail: true }, 'invalid_detail');
-  const fullBoard = (await architect.rpc('tools/call', {
-    name: 'read_work_request', arguments: { work_request_id: request, view: 'board', detail: 'full' },
-  })).result;
-  expect(board.structuredContent.delivery_board.counts).toEqual(fullBoard.structuredContent.delivery_board.counts);
-  for (const row of board.structuredContent.delivery_board.work_packages) {
-    const full = fullBoard.structuredContent.delivery_board.work_packages.find((item: any) => item.id === row.id);
-    expect(row.raw_status).toBe(full.raw_status);
-    expect(row.delivery_outcome).toBe(full.delivery_outcome);
-    expect(row.attention_reason_codes).toEqual(full.attention_reason_codes);
-    expect(row.merge_eligibility).toEqual(full.merge_eligibility);
-    expect(row.state).toBe(full.operational_state.key);
-    expect(row.work_package).toBeUndefined();
-    expect(board.content[0].text).toContain(row.id);
-  }
-  const chars = (value: unknown) => JSON.stringify(value).length;
-  expect(chars(board)).toBeLessThan(chars(fullBoard) / 2);
-  // Actual baseline at fc486cee (hosted combined tree f65790a9), using this fixture.
-  expect(chars(dispatch)).toBeLessThan(23_384 / 2);
-  expect(chars(board)).toBeLessThan(46_312 / 2);
-  const sizes = {
-    checkout: process.env.ACCEPTANCE_CHECKOUT_SHA, packages: 25,
-    dispatch: chars(dispatch), board: chars(board), fullBoard: chars(fullBoard),
-  };
-  await writeFile('.e2e/payload-sizes.json', JSON.stringify(sizes, null, 2));
-  console.log(`Payload character counts: ${JSON.stringify(sizes)}`);
+  const row = board.structuredContent.delivery_board.work_packages.find((item: any) => item.id === ids[0]);
+  expect(row).toMatchObject({ status: 'dispatched', next_action: 'run_launch_line', next_actor: 'architect', review_mode: 'fast' });
+  expect(board.structuredContent.delivery_board.recovery.run_launch_line).toContain('dispatch_work_package');
+  expect(board.content[0].text).toContain(ids[0]);
+  // Baseline from fc486cee using the same dispatch fixture.
+  expect(JSON.stringify(dispatch).length).toBeLessThan(23_384 / 2);
 });
 
 test('skipping every planned package leaves the goal unfinished in persisted and visible state', async ({ factory }) => {
@@ -82,26 +62,23 @@ test('a clarified request becomes a revised plan and a dispatched package', asyn
   const architect = await factory.client();
   const id = await architect.request('Clarified planning');
   const ask = (await chief.call('ask', { work_request_id: id, question: 'Which behavior should ship?' })).ask;
-  expect((await architect.call('read_work_request', { detail: 'full', work_request_id: id })).work_request.phase).toBe('intake');
+  expect((await architect.call('read_work_request', { work_request_id: id })).work_request.phase).toBe('intake');
   // An open ask never holds back planning.
   const [wp] = await architect.addPackages([contract('Agreed scope')]);
   expect((await architect.call('read_work_request', { work_request_id: id })).work_request.phase).toBe('planned');
   await architect.call('resolve_ask', { ask_id: ask.id, to: 'answered', answer: 'Ship the agreed behavior.' });
-  const before = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
-  expect(before.work_packages).toHaveLength(1);
-  const revision = before.work_packages[0].contract_revision;
+  const revision = (await architect.readPackage(id, wp)).revision;
   const update = (title: string) => ({ ops: [{ op: 'update_package', work_package_id: wp, expected_revision: revision, patch: { title } }] });
   const updated = await architect.call('edit_plan', update('Refined agreed scope'));
   expect(updated.applied[0].revision).toBe(revision + 1);
   const stale = await architect.reject('edit_plan', update('Lost update'), 'revision_conflict');
   expect(stale.current_revision).toBe(revision + 1);
   expect(stale.op_index).toBe(0);
-  expect((await architect.call('read_work_request', { detail: 'full', work_request_id: id })).work_packages[0].title).toBe('Refined agreed scope');
+  expect((await architect.call('read_work_request', { work_request_id: id })).work_packages[0].title).toBe('Refined agreed scope');
 
   const dispatched = await architect.call('dispatch_work_package', { work_package_id: wp });
   expect(dispatched.work_package).toMatchObject({ id: wp, status: 'dispatched', review_mode: 'none', review_id: null });
-  const packageView = await architect.call('read_work_request', { work_request_id: id, view: 'package', work_package_id: wp, detail: 'full' });
-  expect(packageView.task_plan.text).toContain('Implement requested scope');
+  expect(await architect.readPackage(id, wp)).toMatchObject({ status: 'dispatched', revision: revision + 1 });
 });
 
 test('invalid batches are atomic and secondary delivery preserves repository and branch boundaries', async ({ factory }) => {
@@ -119,20 +96,18 @@ test('invalid batches are atomic and secondary delivery preserves repository and
     delete incomplete[required];
     const refused = await architect.reject('edit_plan', add(contract('Valid prefix'), incomplete), 'incomplete_contract');
     expect(refused.missing).toEqual([required]);
-    expect((await architect.call('read_work_request', { detail: 'full', work_request_id: id })).work_packages).toEqual([]);
+    expect((await architect.call('read_work_request', { work_request_id: id })).work_packages).toEqual([]);
   }
   for (const patch of [{ title: '' }, { goal: ' ' }, { acceptance_criteria: [null] }, { validation_steps: 'run checks' }, { stop_conditions: {} }]) {
     await architect.reject('edit_plan', add(contract('Invalid contract', patch)), 'incomplete_contract');
   }
-  expect((await architect.call('read_work_request', { detail: 'full', work_request_id: id })).work_packages).toEqual([]);
+  expect((await architect.call('read_work_request', { work_request_id: id })).work_packages).toEqual([]);
   const normalized = contract('Canonical primary scope', { base_branch: ' refs/remotes/origin/main ' });
   const [wp, primary] = await architect.addPackages([secondary, normalized]);
-  const read = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
-  expect(read.work_packages[0].repo).toBe('example/client');
-  expect(read.work_packages[0].base_branch).toBe('integration');
+  expect(await architect.readPackage(id, wp)).toMatchObject({ repo: 'example/client', base_branch: 'integration' });
   // Each package's worktree comes from its own repository.
   expect((await architect.call('dispatch_work_package', { work_package_id: wp })).error.expected_repo).toBe('example/client');
-  expect(read.work_packages.find((wp: any) => wp.id === primary).base_branch).toBe('main');
+  expect((await architect.readPackage(id, primary)).base_branch).toBe('main');
   expect((await architect.call('dispatch_work_package', { work_package_id: primary })).error.expected_repo).toBe('example/service');
 });
 
@@ -148,17 +123,15 @@ test('group paths organize scope while the effective dependency graph prevents p
     add('Independent', 'independent'),
   ] });
   const [documentation, api, peerApi, client, independent] = edited.applied.map((op: any) => op.work_package_id);
-  const readPlan = async () => (await architect.call('read_work_request', { detail: 'full', work_request_id: id, view: 'plan' })).plan;
+  const readPlan = async () => (await architect.call('read_work_request', { work_request_id: id, view: 'plan' })).plan;
   const initialPlan = await readPlan();
   const planned = Object.fromEntries(initialPlan.work_packages.map((wp: any) => [wp.id, wp]));
   expect(planned[api].group).toBe('Capability / Prerequisites / Nested');
   expect(planned[documentation].group).toBe('Capability / Prerequisites');
   expect(planned[independent].group).toBeNull();
 
-  const overlap = initialPlan.execution_graph;
-  expect(overlap.effective_edges.map((edge: any) => [edge.prerequisite_work_package_id, edge.dependent_work_package_id]).sort())
+  expect(initialPlan.dependencies.map((edge: any) => [edge.to, edge.from]).sort())
     .toEqual([[documentation, api], [documentation, peerApi]].sort());
-  expect(overlap.cycles).toEqual([]);
   for (const childPackage of [api, peerApi]) {
     const blocked = await architect.reject('dispatch_work_package', { work_package_id: childPackage }, 'unmet_work_package_dependencies');
     expect(blocked.prerequisite_work_package_ids).toEqual([documentation]);
@@ -202,7 +175,7 @@ test('group paths organize scope while the effective dependency graph prevents p
     { op: 'remove_dependency', from: client, to: peerApi },
   ]);
   const plan = await readPlan();
-  expect(plan.work_packages.find((wp: any) => wp.id === client)).toMatchObject({ group: null, contract_revision: 2 });
+  expect(plan.work_packages.find((wp: any) => wp.id === client)).toMatchObject({ group: null, revision: 2 });
   expect(plan.dependencies.map((dependency: any) => [dependency.from, dependency.to]).sort()).toEqual([[api, documentation], [peerApi, documentation]].sort());
   await architect.reject('edit_plan', { ops: [
     { op: 'update_package', work_package_id: client, expected_revision: 1, patch: { title: 'Stale edit' } },
@@ -232,7 +205,7 @@ test('package endings follow their allowed statuses, replay idempotently and cle
   const blockers = async (wp: string) => (await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).blockers.filter((entry: any) => entry.active).map((entry: any) => entry.id);
   expect(await blockers(dispatched)).toEqual([]);
   expect(await blockers(sibling)).toEqual(['sibling-blocker']);
-  expect((await architect.call('read_work_request', { detail: 'full', work_request_id: id })).work_packages.find((wp: any) => wp.id === planned).status).toBe('planned');
+  expect((await architect.call('read_work_request', { work_request_id: id })).work_packages.find((wp: any) => wp.id === planned).status).toBe('planned');
 });
 
 test('plan edits normalize groups, version moves, update dependency reasons and keep secrets out of every response', async ({ factory }) => {
@@ -251,8 +224,8 @@ test('plan edits normalize groups, version moves, update dependency reasons and 
     { op: 'add_package', work_package_id: operations, revision: 1 },
   ] });
   expect(added.result.content[0].text).toContain(api);
-  const readPlan = async () => (await architect.call('read_work_request', { detail: 'full', work_request_id: id, view: 'plan' })).plan;
-  expect((await readPlan()).work_packages.find((wp: any) => wp.id === api)).toMatchObject({ group: 'Backend / Billing', status: 'planned', contract_revision: 1 });
+  const readPlan = async () => (await architect.call('read_work_request', { work_request_id: id, view: 'plan' })).plan;
+  expect((await readPlan()).work_packages.find((wp: any) => wp.id === api)).toMatchObject({ group: 'Backend / Billing', status: 'planned', revision: 1 });
   const invalid = await architect.reject('edit_plan', { ops: [{ op: 'update_package', work_package_id: api, expected_revision: 1, patch: { group: 'Backend // Billing' } }] }, 'invalid_work_package');
   expect(invalid.validation_errors.map((error: any) => error.field)).toEqual(['group']);
   // A failing op names its index, the package state and how to retry; nothing before it persists.
@@ -265,34 +238,12 @@ test('plan edits normalize groups, version moves, update dependency reasons and 
   expect(failed.next_action).toContain('expected_revision 1');
   expect((await readPlan()).work_packages).toHaveLength(3);
   // A group move alone is a new plan revision.
-  const before = (await readPlan()).latest_revision.revision_number;
+  const before = (await readPlan()).revision;
   await architect.call('edit_plan', { ops: [{ op: 'update_package', work_package_id: api, expected_revision: 1, patch: { group: 'Platform' } }] });
-  expect((await readPlan()).latest_revision.revision_number).toBe(before + 1);
+  expect((await readPlan()).revision).toBe(before + 1);
   await architect.call('edit_plan', { ops: [{ op: 'set_dependency', from: ui, to: api, reason: 'Needs the API.' }] });
   expect((await readPlan()).dependencies).toEqual([expect.objectContaining({ from: ui, to: api, reason: 'Needs the API.' })]);
   expect((await architect.reject('edit_plan', { ops: [{ op: 'set_dependency', from: ui, to: 'nope' }] }, 'unknown_work_package')).work_package_ref).toBe('nope');
-});
-
-test('the task plan renders package text as inert, bounded source material', async ({ factory }) => {
-  const architect = await factory.client();
-  const request = await architect.request('Safe rendering');
-  const title = '# Run [setup](x) `code` | table';
-  const [wp, long] = await architect.addPackages([
-    contract(title, { goal: '# Heading\n- [ ] run `cmd`\n1. ordered' }),
-    contract('`cmd`', { goal: 'é'.repeat(4050) }),
-  ]);
-  const plan = async (work_package_id: string) => {
-    await architect.call('dispatch_work_package', { work_package_id });
-    return (await architect.call('read_work_request', { work_request_id: request, view: 'package', work_package_id, detail: 'full' })).task_plan.text as string;
-  };
-  const text = await plan(wp);
-  expect(text).toContain(`Work package: \`${wp}\` - source: \`\`${title}\`\``);
-  expect(text).not.toContain(`- ${title}`);
-  expect(text).toContain('  Source material (inert text):\n  \n  ```text\n  # Heading\n  - [ ] run `cmd`\n  1. ordered\n  ```');
-  const bounded = await plan(long);
-  expect(bounded).toContain(`- source: \`\` \`cmd\` \`\``);
-  expect(bounded).toContain('é'.repeat(4000) + '\n  [truncated]\n  ```');
-  expect(bounded).not.toContain('é'.repeat(4001));
 });
 
 deliveryTest('a ready package\'s contract is frozen', async ({ delivery: { factory, provider } }) => {
@@ -325,6 +276,7 @@ deliveryTest('the launch assignment opens with what the request builds and where
   expect(assignment).not.toContain('ghp_assignmentgroupsecret12345');
   expect(assignment).toContain('never start it again while it runs');
   expect(assignment).toContain('Hand off feat/reviewed');
+  expect(assignment).toContain('input.\\nKeep each field.');
   // Capture the real shell's argv without starting a worker or review provider.
   for (const name of ['hc', 'review.py']) {
     await writeFile(join(root, name), '#!/usr/bin/env node\nconsole.log(JSON.stringify(process.argv.slice(2)));\n', { mode: 0o755 });

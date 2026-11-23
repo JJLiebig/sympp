@@ -38,8 +38,9 @@ test('moving a renamed repository keeps its attached PR and records the merge un
     work_request_id: request, source_type: 'architect', decision: 'Keep the current plan',
     rationale: 'The rename changes repository scope.', scope_impact: 'Delivery', created_by: architect.address,
   });
-  const read = () => architect.call('read_work_request', { work_request_id: request, detail: 'full' });
+  const read = () => architect.inspect(`/api/v1/sympp/herdr/work-requests/${request}`);
   const original = await read();
+  const endedContract = await architect.readPackage(request, ended);
   const endedDelivery = (await row(architect, request, ended)).delivery;
   const endedProgress = await progress(architect, ended);
   const openProgress = await progress(architect, open);
@@ -77,11 +78,11 @@ test('moving a renamed repository keeps its attached PR and records the merge un
     status: 'unchanged', base_branch: 'integration', moved_work_package_count: 0,
   });
   expect(await read()).toEqual(moved);
-  expect(moved.decision_log_entries).toEqual([...original.decision_log_entries, expect.objectContaining({
+  expect(moved.decision_logs).toEqual([expect.objectContaining({
     source_id: 'move_work_request', decision: expect.stringContaining(`from ${checkout.checkout}`),
     rationale: move.rationale, created_by: chief.address,
-  })]);
-  expect(moved.decision_log_entries.at(-1).decision).toContain(destination);
+  }), ...original.decision_logs]);
+  expect(moved.decision_logs[0].decision).toContain(destination);
 
   const inScope = async (repo: string) => (await architect.call('list_work_requests', { repo })).work_requests.map((work: any) => work.id);
   expect(await inScope(checkout.checkout)).not.toContain(request);
@@ -94,7 +95,7 @@ test('moving a renamed repository keeps its attached PR and records the merge un
   expect(moved.work_packages.find((work: any) => work.id === planned)).toMatchObject({
     repo: 'git@github.com:example/client.git', base_branch: 'integration',
   });
-  expect(moved.work_packages.find((work: any) => work.id === ended)).toEqual(original.work_packages.find((work: any) => work.id === ended));
+  expect(await architect.readPackage(request, ended)).toEqual(endedContract);
   expect((await row(architect, request, ended)).delivery).toEqual(endedDelivery);
   expect(await progress(architect, ended)).toEqual(endedProgress);
   expect(await progress(architect, open)).toEqual(expect.arrayContaining(openProgress));
@@ -129,7 +130,7 @@ test('moving a checkout scope preserves packages already scoped explicitly to th
     expect(await architect.call('move_work_request', {
       work_request_id: request, repo: destination, base_branch: 'integration', rationale: 'Publish the work in its hosted repository.',
     })).toMatchObject({ status: 'moved', moved_work_package_count: 1 });
-    const read = await architect.call('read_work_request', { work_request_id: request, detail: 'full' });
+    const read = await architect.inspect(`/api/v1/sympp/herdr/work-requests/${request}`);
     const scopes = Object.fromEntries(read.work_packages.map((work: any) => [work.id, [work.repo, work.base_branch]]));
     expect(scopes).toEqual({ [inherited]: [destination, 'integration'], [independent]: [destination, 'beta'] });
   }
@@ -155,7 +156,7 @@ test('moving imported work waits for source PRs and dispatches inherited scope f
   provider.apiReplies.set(`repos/${source}`, { stdout: JSON.stringify({ id: 7301, full_name: source }), exitCode: 0 });
   await githubOrigin(root, attachedCheckout, destination);
 
-  const read = () => architect.call('read_work_request', { work_request_id: request, detail: 'full' });
+  const read = () => architect.inspect(`/api/v1/sympp/herdr/work-requests/${request}`);
   const before = await read();
   const move = { work_request_id: request, repo: destination, base_branch: 'integration', rationale: 'The service moved into the shared repository.' };
   await architect.reject('move_work_request', { ...move, base_branch: 'release candidate' }, 'invalid_base_branch');
@@ -212,7 +213,7 @@ test('moving an import refuses to guess the source of a relocated or retargeted 
 
   for (const checkout of [requestCheckout, packageCheckout]) await githubOrigin(root, checkout, destination);
   await architect.reject('move_work_request', move, 'ambiguous_source_repository');
-  const result = await architect.call('read_work_request', { work_request_id: request, detail: 'full' });
+  const result = await architect.inspect(`/api/v1/sympp/herdr/work-requests/${request}`);
   expect(result.work_request.repo).toBe(requestCheckout.checkout);
   expect(result.work_packages[0].repo).toBe(packageCheckout.checkout);
 });

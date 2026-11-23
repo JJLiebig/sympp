@@ -1,9 +1,12 @@
 import { expect } from 'e2e';
 import { contract, type Client } from '../support/factory.js';
-import { close, head, pr, prUrl, row, sync, test } from '../support/delivery.js';
+import { blockerActive, board, close, head, pr, prUrl, row, sync, test } from '../support/delivery.js';
 
-const plan = async (client: Client, request: string) => (await client.call('read_work_request', { detail: 'full', work_request_id: request, view: 'plan' })).plan;
-const graph = async (client: Client, request: string) => (await plan(client, request)).execution_graph;
+const plan = async (client: Client, request: string) => (await client.call('read_work_request', { work_request_id: request, view: 'plan' })).plan;
+const graph = async (client: Client, request: string) =>
+  (await client.inspect(`/api/v1/sympp/herdr/work-requests/${request}`)).execution_graph;
+const stacking = async (client: Client, request: string, id: string): Promise<string[]> =>
+  (await client.board(request)).work_packages.find((entry: any) => entry.id === id).waiting_for ?? [];
 const depend = (client: Client, from: string, to: string, extra: object = {}) =>
   client.call('edit_plan', { ops: [{ op: 'set_dependency', from, to, ...extra }] });
 const add = (title: string, key: string, patch: object = {}) => ({ op: 'add_package', key, ...contract(title, patch) });
@@ -22,7 +25,7 @@ test('all dependency endpoint combinations dispatch only after canonical deliver
   ] });
   const [direct, next, a, b, c, d, e, consumer, successor, final, cancelled, parked, later] = edited.applied.map((op: any) => op.work_package_id);
   const delivered = 'wait for delivered closure (merged PR or completed without a PR) of';
-  expect((await graph(architect, request)).effective_edges.map((edge: any) => [edge.prerequisite_work_package_id, edge.dependent_work_package_id]).sort())
+  expect((await plan(architect, request)).dependencies.map((edge: any) => [edge.to, edge.from]).sort())
     .toEqual([[direct, next], [a, consumer], [b, consumer], [next, c], [next, d], [c, e], [d, e], [parked, later]].sort());
   expect((await architect.reject('dispatch_work_package', { work_package_id: next }, 'unmet_work_package_dependencies')).next_action)
     .toBe(`${delivered} ${direct}, then dispatch`);
@@ -42,20 +45,26 @@ test('all dependency endpoint combinations dispatch only after canonical deliver
   await close(architect, parked, 'finished', {});
   expect((await architect.reject('dispatch_work_package', { work_package_id: later }, 'unmet_work_package_dependencies')).next_action)
     .toBe(`${parked} ended finished and never delivers: remove the dependency or depend on a package that delivers it`);
+  expect((await plan(architect, request)).dependencies.find((edge: any) => edge.from === later))
+    .toMatchObject({ to: parked, outcome: 'finished', delivered: false });
   await architect.call('edit_plan', { ops: [{ op: 'remove_dependency', from: later, to: parked }] });
-  expect((await row(architect, request, cancelled)).raw_status).toBe('ended');
-  expect((await row(architect, request, cancelled)).delivery_outcome).toBe('skipped');
+  expect((await row(architect, request, cancelled)).status).toBe('ended');
+  expect((await row(architect, request, cancelled)).delivery?.outcome).toBe('skipped');
   await architect.call('edit_plan', { ops: [{ op: 'remove_dependency', from: next, to: cancelled }] });
   // Retiring scope is not completion; only the delivered end of the chain satisfies it.
   await architect.call('set_blocker', { work_package_id: direct, blocker_id: 'old-attempt', active: true, summary: 'This attempt is blocked.' });
   await close(architect, direct, 'superseded', { successor_work_package_id: successor, rationale: 'A replacement owns the same scope.' });
-  expect((await row(architect, request, direct)).work_package.blocker_state['active?']).toBe(false);
+  expect(await blockerActive(architect, direct)).toBe(false);
   await close(architect, successor, 'superseded', { successor_work_package_id: final, rationale: 'The final attempt owns the same scope.' });
   expect((await architect.reject('dispatch_work_package', { work_package_id: next }, 'unmet_work_package_dependencies')).next_action)
     .toBe(`${delivered} ${final} (successor of ${successor}), then dispatch`);
   expect((await row(architect, request, direct)).successor.work_package_id).toBe(successor);
   expect((await row(architect, request, successor)).successor.work_package_id).toBe(final);
+  expect((await plan(architect, request)).dependencies.find((edge: any) => edge.from === next))
+    .toMatchObject({ to: direct, outcome: 'superseded', waiting_for: [final], delivered: false });
   await close(architect, final);
+  expect((await plan(architect, request)).dependencies.find((edge: any) => edge.from === next))
+    .toMatchObject({ to: direct, outcome: 'superseded', delivered: true });
   expect((await architect.call('dispatch_work_package', { work_package_id: next })).work_package.id).toBe(next);
   for (const wp of [a, b, next, c, d, consumer, e, later]) {
     if (wp !== next) await architect.call('dispatch_work_package', { work_package_id: wp });
@@ -63,8 +72,8 @@ test('all dependency endpoint combinations dispatch only after canonical deliver
   }
   expect((await graph(architect, request)).unmet_dependencies).toEqual([]);
   expect((await architect.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.completed_at).toBeTruthy();
-  expect((await row(architect, request, direct)).delivery_outcome).toBe('superseded');
-  expect((await row(architect, request, successor)).delivery_outcome).toBe('superseded');
+  expect((await row(architect, request, direct)).delivery?.outcome).toBe('superseded');
+  expect((await row(architect, request, successor)).delivery?.outcome).toBe('superseded');
   const archived = await architect.operator(`/api/v1/sympp/operator/work-requests/${request}/archive`, {});
   expect(archived.status).toBe(200);
   expect((await architect.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.archived_at).toBeTruthy();
@@ -86,7 +95,7 @@ test('a PR carrying another package\'s unmerged commits does not qualify until t
   // Once the fix is squash-merged, its commits no longer belong to an open PR.
   provider.set(301, pr(301, head('a'), { state: 'MERGED', mergedAt: new Date().toISOString(), mergeCommit: { oid: head('e') }, commits: [{ oid: head('a') }] }));
   await architect.call('sync_pr', { work_package_id: fix });
-  expect((await row(architect, request, fix)).delivery_outcome).toBe('pr_merged');
+  expect((await row(architect, request, fix)).delivery?.outcome).toBe('pr_merged');
   const qualified = (await sync(architect, feature, 302, head('b'))).pr_sync;
   expect(qualified.readiness_reasons).toEqual([]);
   expect(qualified.status).toBe('ready');
@@ -115,12 +124,12 @@ test('out-of-order automatic and manual closeout retain order violations through
       expect((await row(architect, request, wp)).delivery).toEqual(recorded);
     }
   }
-  expect((await row(architect, request, ui)).delivery_outcome).toBe('pr_merged');
-  expect((await row(architect, request, replay)).work_package.blocker_state['active?']).toBe(false);
+  expect((await row(architect, request, ui)).delivery?.outcome).toBe('pr_merged');
+  expect(await blockerActive(architect, replay)).toBe(false);
   const merged = await row(architect, request, ui);
-  expect(merged.raw_status).toBe('ended');
-  expect(merged.delivery_outcome).toBe('pr_merged');
-  expect(merged.work_package.blocker_state['active?']).toBe(false);
+  expect(merged.status).toBe('ended');
+  expect(merged.delivery?.outcome).toBe('pr_merged');
+  expect(await blockerActive(architect, ui)).toBe(false);
   expect(merged.attention_reason_codes).toContain('delivery_order_violation');
   expect(Date.parse(merged.delivery.pr_merged_at)).toBe(Date.parse(mergeTime));
   expect((await architect.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.completed_at).toBeNull();
@@ -138,7 +147,7 @@ test('the watcher holds a PR stacked on another package\'s unmerged work until t
   const [fix, feature, later, retired] = await architect.addPackages(['CI fix', 'Feature', 'Later sibling', 'Retired attempt']
     .map((title, index) => contract(title, { branch_pattern: `feature/delivery-${311 + index}` })));
   for (const wp of [fix, feature, later, retired]) await architect.call('dispatch_work_package', { work_package_id: wp });
-  const status = async (wp: string) => (await row(architect, request, wp)).raw_status;
+  const status = async (wp: string) => (await row(architect, request, wp)).status;
   const commitReads = () => provider.graphql.filter(({ query }) => query.includes('commits(first: 100)')).length;
   const open = (number: number, sha: string, commits: string[], patch: object = {}) =>
     provider.set(number, pr(number, sha, { commits: commits.map((oid) => ({ oid })), ...patch }));
@@ -158,27 +167,27 @@ test('the watcher holds a PR stacked on another package\'s unmerged work until t
   provider.unreadable.add(311);
   await factory.tick('sweep');
   expect(await status(feature)).toBe('ready');
-  expect((await row(architect, request, feature)).work_package.observation_stale).toEqual(['stacking']);
+  expect((await row(architect, request, feature)).observation_stale).toEqual(['stacking']);
   provider.unreadable.delete(311);
   // The feature branch merged the unmerged CI fix: its ready PR unqualifies.
   open(312, head('c'), [head('9'), head('b'), head('a'), head('c')]);
   await factory.tick('sweep');
   const stacked = await row(architect, request, feature);
-  expect(stacked.raw_status).toBe('dispatched');
-  expect(stacked.work_package.stacked_on).toEqual([fix]);
-  expect(stacked.operational_state.activity_signal.next_action).toBe(`remove ${fix}'s unmerged commits, or wait for its PR to merge`);
+  expect(stacked.status).toBe('dispatched');
+  expect(await stacking(architect, request, feature)).toEqual([fix]);
+  expect(stacked.activity_signal.next_action).toBe(`remove ${fix}'s unmerged commits, or wait for its PR to merge`);
   expect(await status(fix)).toBe('ready');
   // Of two PRs sharing unmerged work that neither fully contains, the later one holds.
   open(313, head('d'), [head('a'), head('d')]);
   await factory.tick('sweep');
-  expect((await row(architect, request, later)).work_package.stacked_on.sort()).toEqual([fix, feature].sort());
+  expect((await stacking(architect, request, later)).sort()).toEqual([fix, feature].sort());
   // Squash-merged: the fix's commits no longer belong to an open PR.
   open(311, head('a'), [head('a')], { state: 'MERGED', mergedAt: new Date().toISOString(), mergeCommit: { oid: head('e') } });
   await factory.tick('sweep');
-  expect((await row(architect, request, fix)).delivery_outcome).toBe('pr_merged');
+  expect((await row(architect, request, fix)).delivery?.outcome).toBe('pr_merged');
   expect(await status(feature)).toBe('ready');
-  expect((await row(architect, request, feature)).work_package.stacked_on).toEqual([]);
-  expect((await row(architect, request, later)).work_package.stacked_on).toEqual([feature]);
+  expect((await stacking(architect, request, feature))).toEqual([]);
+  expect((await stacking(architect, request, later))).toEqual([feature]);
   // A package's own earlier PR never counts against its replacement.
   const [own, hidden] = await architect.addPackages([
     contract('Own replacement', { branch_pattern: 'feature/delivery-317' }), contract('Hidden PR', { branch_pattern: 'feature/delivery-319' }),
@@ -194,12 +203,12 @@ test('the watcher holds a PR stacked on another package\'s unmerged work until t
   provider.unreadableBranches.add('feature/delivery-319');
   await factory.tick('sweep');
   expect(await status(own)).toBe('dispatched');
-  expect((await row(architect, request, own)).work_package.observation_stale).toEqual(['stacking']);
+  expect((await row(architect, request, own)).observation_stale).toEqual(['stacking']);
   provider.unreadableBranches.delete('feature/delivery-319');
   await factory.tick('sweep');
   const replaced = await row(architect, request, own);
-  expect(replaced.raw_status).toBe('ready');
-  expect(replaced.work_package.stacked_on).toEqual([]);
+  expect(replaced.status).toBe('ready');
+  expect(await stacking(architect, request, own)).toEqual([]);
 });
 
 test('independent PRs qualify alongside history imports whose commit lists are truncated', async ({ watched: { factory, provider } }) => {
@@ -245,7 +254,7 @@ test('independent PRs qualify alongside history imports whose commit lists are t
   const cold = factory.tick('sweep');
   try {
     await Promise.all([first.started, second.started]);
-    expect((await row(otherArchitect, otherRequest, unrelated)).raw_status).toBe('ready');
+    expect((await row(otherArchitect, otherRequest, unrelated)).status).toBe('ready');
   } finally {
     first.release();
     second.release();
@@ -254,8 +263,8 @@ test('independent PRs qualify alongside history imports whose commit lists are t
   const [candidate, imported] = packages;
   const [candidateNumber, importNumber] = numbers;
   const candidateHead = oid(candidateNumber, 3);
-  expect((await row(architect, request, candidate)).raw_status).toBe('ready');
-  expect((await row(architect, request, imported)).raw_status).toBe('ready');
+  expect((await row(architect, request, candidate)).status).toBe('ready');
+  expect((await row(architect, request, imported)).status).toBe('ready');
   // A cold sweep reads one snapshot, one short-list batch, each long-PR pair
   // once, and at most one common-history proof read per pair.
   expect(provider.graphql.length).toBe(2);
@@ -277,13 +286,13 @@ test('independent PRs qualify alongside history imports whose commit lists are t
   const beforeFailure = provider.rest.length;
   await factory.tick('sweep');
   expect(provider.rest.slice(beforeFailure).filter((path) => path === comparePath(candidateHead, importHead))).toHaveLength(1);
-  const stale = (await architect.board(request, 'full')).work_packages
-    .filter((item: any) => item.work_package.observation_stale.includes('stacking')).map((item: any) => item.id);
+  const stale = (await board(architect, request)).work_packages
+    .filter((item: any) => item.observation_stale.includes('stacking')).map((item: any) => item.id);
   expect(stale.sort()).toEqual([candidate, imported].sort());
   expect((await sync(architect, candidate, candidateNumber, candidateHead)).pr_sync.readiness_reasons).toEqual(['stacking_unknown']);
   provider.unreadableComparisons.delete(unavailable);
   await factory.tick('sweep');
-  expect((await row(architect, request, candidate)).work_package.observation_stale).toEqual([]);
+  expect((await row(architect, request, candidate)).observation_stale).toEqual([]);
 
   // The older PR picked up the entire history import. Containment wins over
   // PR creation order, including when neither commit list is complete.
@@ -292,8 +301,8 @@ test('independent PRs qualify alongside history imports whose commit lists are t
   open(candidateNumber, [...importCommits, ...stackedCommits]);
   await factory.tick('sweep');
   const stacked = await row(architect, request, candidate);
-  expect(stacked.raw_status).toBe('dispatched');
-  expect(stacked.work_package.stacked_on).toEqual([imported]);
+  expect(stacked.status).toBe('dispatched');
+  expect(await stacking(architect, request, candidate)).toEqual([imported]);
   const synced = (await sync(architect, candidate, candidateNumber, stackedHead)).pr_sync;
   expect(synced.readiness_reasons).toEqual(['stacked_on_unmerged_work']);
   expect(synced.next_action).toBe(`remove ${imported}'s unmerged commits, or wait for its PR to merge`);
@@ -305,8 +314,8 @@ test('independent PRs qualify alongside history imports whose commit lists are t
   open(importNumber, [], importHead);
   await factory.tick('sweep');
   const qualified = await row(architect, request, candidate);
-  expect(qualified.raw_status).toBe('ready');
-  expect(qualified.work_package.stacked_on).toEqual([]);
+  expect(qualified.status).toBe('ready');
+  expect(await stacking(architect, request, candidate)).toEqual([]);
 });
 
 test('a reachable merge base cannot clear a comparison with additional common history', async ({ watched: { factory, provider } }) => {
@@ -332,8 +341,8 @@ test('a reachable merge base cannot clear a comparison with additional common hi
   await factory.tick('sweep');
   // The compare endpoint returns `merged`, but both heads also contain `unmerged`.
   const observed = await row(architect, request, later);
-  expect(observed.raw_status).toBe('dispatched');
-  expect(observed.work_package.observation_stale).toEqual(['stacking']);
+  expect(observed.status).toBe('dispatched');
+  expect(observed.observation_stale).toEqual(['stacking']);
 });
 
 test('a long PR on an older target can be stacked on a newer PR targeting another branch', async ({ watched: { factory, provider } }) => {
@@ -363,8 +372,8 @@ test('a long PR on an older target can be stacked on a newer PR targeting anothe
   provider.set(582, pr(582, featureHead, { baseRefOid: beta }));
 
   await factory.tick('sweep');
-  expect((await row(main, mainRequest, feature)).raw_status).toBe('ready');
-  expect((await row(release, releaseRequest, backport)).work_package.stacked_on).toEqual([feature]);
+  expect((await row(main, mainRequest, feature)).status).toBe('ready');
+  expect((await stacking(release, releaseRequest, backport))).toEqual([feature]);
   expect((await sync(release, backport, 581, backportHead)).pr_sync.next_action).toBe(`remove ${feature}'s unmerged commits, or wait for its PR to merge`);
 
   // Both PRs now submit the same long head. The newer base absorbs one of the
@@ -372,8 +381,8 @@ test('a long PR on an older target can be stacked on a newer PR targeting anothe
   provider.set(582, pr(582, backportHead, { baseRefOid: beta, commits: commits.slice(1).map((oid) => ({ oid })) }));
   await factory.tick('sweep');
   const sameHead = await row(main, mainRequest, feature);
-  expect(sameHead.raw_status).toBe('ready');
-  expect(sameHead.work_package.observation_stale).toEqual([]);
+  expect(sameHead.status).toBe('ready');
+  expect(sameHead.observation_stale).toEqual([]);
   const held = (await sync(release, backport, 581, backportHead)).pr_sync;
   expect(held.readiness_reasons).toEqual(['stacked_on_unmerged_work']);
   expect(held.next_action).toBe(`remove ${feature}'s unmerged commits, or wait for its PR to merge`);

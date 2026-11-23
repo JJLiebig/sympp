@@ -17,10 +17,10 @@ test('competing terminals end with one owner, Release hands over and ownership s
   const request = created.work_request.id;
   expect(created.worked_on).toBeUndefined();
   expect(created.next_action).toContain(request);
-  expect((await chief.call('read_work_request', { detail: 'full', work_request_id: request })).work_request.dispatched_by).toEqual({ kind: 'chief', domain: 'Acceptance' });
+  expect((await chief.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.dispatched_by).toEqual({ kind: 'chief', domain: 'Acceptance' });
   // Reads never take ownership.
   const contenders = await Promise.all([factory.client(), factory.client()]);
-  for (const contender of contenders) await contender.call('read_work_request', { detail: 'full', work_request_id: request });
+  for (const contender of contenders) await contender.call('read_work_request', { work_request_id: request });
   for (const contender of contenders) expect((await contender.call('sympp.health')).caller.owns).toEqual([]);
   const results = await Promise.all(contenders.map((contender, index) => contender.tool('set_report', { work_request_id: request, brief: `Contender ${index}` })));
   const won = results.findIndex((result) => result.result);
@@ -31,7 +31,7 @@ test('competing terminals end with one owner, Release hands over and ownership s
   expect(refused.code).toBe('owned_by_other_terminal');
   expect(refused.owner.address).toBe(winner.address);
   expect(refused.next_action).toBe(`ask ${winner.address}, or wait until it finishes`);
-  expect((await winner.call('read_work_request', { detail: 'full', work_request_id: request })).work_request.operator_report.brief.text).toBe(`Contender ${won}`);
+  expect((await winner.call('read_work_request', { work_request_id: request })).work_request.operator_report.brief.text).toBe(`Contender ${won}`);
   // The pane label follows the owner-gated write, never a read.
   const write = await winner.raw({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: winner.toolParams('set_report', { work_request_id: request, eta: 'Soon' }) });
   expect(decodeBinding(write.binding)).toEqual({ role: 'architect', work_request_id: request, show_inspector: true });
@@ -53,7 +53,7 @@ test('competing terminals end with one owner, Release hands over and ownership s
   // A caller outside Herdr reads but cannot write.
   const outside = await factory.client(null);
   expect((await outside.call('sympp.health')).caller.access).toBe('read_only');
-  expect((await outside.call('read_work_request', { detail: 'full', work_request_id: request })).work_request.id).toBe(request);
+  expect((await outside.call('read_work_request', { work_request_id: request })).work_request.id).toBe(request);
   await outside.reject('set_report', { work_request_id: request, brief: 'Outside' }, 'read_only_outside_herdr');
   await outside.reject('create_work_request', { repo: 'example/service', base_branch: 'beta', title: 'Outside goal', description, work_type: 'feature' }, 'read_only_outside_herdr');
 
@@ -100,8 +100,8 @@ test('a supported disposable offline snapshot denies MCP and dispatch without ch
   }
   const restarted = processes.factory();
   const original = await restarted.client(architect.terminal);
-  expect((await original.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages[0].status).toBe('dispatched');
-  expect((await original.call('read_work_request', { detail: 'full', work_request_id: request })).decision_log_entries).toEqual([]);
+  expect((await original.call('read_work_request', { work_request_id: request })).work_packages[0].status).toBe('dispatched');
+  expect((await original.call('read_work_request', { work_request_id: request })).decisions).toEqual([]);
 });
 
 test('backend restart keeps the ledger and its owner but a different ledger refuses the old session', async ({ processes }) => {
@@ -119,7 +119,7 @@ test('backend restart keeps the ledger and its owner but a different ledger refu
   expect((await recovered.call('sympp.health')).ledger.identity).toEqual(health.ledger.identity);
   expect(await realpath(restarted.database)).toBe(ledgerPath);
   expect((await recovered.call('set_blocker', mutation)).changed).toBe(false);
-  expect((await recovered.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages[0].status).toBe('dispatched');
+  expect((await recovered.call('read_work_request', { work_request_id: request })).work_packages[0].status).toBe('dispatched');
   const outsider = processes.factory('foreign-ledger');
   const wrongLedger = recovered.reconnect(await outsider.endpoint);
   const denied = await wrongLedger.raw(tool('set_blocker', mutation));
@@ -127,7 +127,7 @@ test('backend restart keeps the ledger and its owner but a different ledger refu
   expect(denied.body.error.data.reason).toBe('unknown_state_key');
   const fresh = await outsider.client();
   expect(await realpath(outsider.database)).not.toBe(ledgerPath);
-  expect((await fresh.rpc('tools/call', { name: 'read_work_request', arguments: { detail: 'full', work_request_id: request } })).error.data.code).toBe('not_found');
+  expect((await fresh.rpc('tools/call', { name: 'read_work_request', arguments: { work_request_id: request } })).error.data.code).toBe('not_found');
   expect((await fresh.call('sympp.health')).caller.owns).toEqual([]);
   expect((await recovered.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).blockers.filter((entry: any) => entry.id === 'restart-once' && entry.active)).toHaveLength(1);
 });
@@ -177,7 +177,7 @@ test('STDIO initialization serves trusted local reads, refuses writes outside He
   const createArgs = { repo: 'example/service', base_branch: 'beta', title: 'STDIO goal', work_type: 'feature', description: 'Created over STDIO.' };
   expect((await peer.rawRequest('tools/call', { name: 'create_work_request', arguments: createArgs })).error.data.reason).toBe('server_not_initialized');
   await peer.request('initialize', initialize);
-  expect((await peer.request('tools/call', { name: 'read_work_request', arguments: { detail: 'full', work_request_id: request } })).structuredContent.work_request.id).toBe(request);
+  expect((await peer.request('tools/call', { name: 'read_work_request', arguments: { work_request_id: request } })).structuredContent.work_request.id).toBe(request);
   const packageView = await peer.request('tools/call', { name: 'read_work_request', arguments: { work_request_id: request, view: 'package', work_package_id: wp } });
   expect(packageView.structuredContent.work_package.id).toBe(wp);
   expect((await peer.rawRequest('tools/call', { name: 'create_work_request', arguments: createArgs })).error.data.code).toBe('read_only_outside_herdr');
@@ -191,7 +191,7 @@ test('STDIO initialization serves trusted local reads, refuses writes outside He
     work_request_id: request, source_type: 'operator', decision: 'Untrusted operator', rationale: 'STDIO', scope_impact: 'None', created_by: 'stdio-worker',
   } });
   expect(note.error.data.code).toBe('read_only_outside_herdr');
-  expect((await architect.call('read_work_request', { detail: 'full', work_request_id: request })).decision_log_entries).toEqual([]);
+  expect((await architect.call('read_work_request', { work_request_id: request })).decisions).toEqual([]);
   expect((await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).progress.map((entry: any) => entry.summary)).not.toContain('Not the owner');
 });
 
