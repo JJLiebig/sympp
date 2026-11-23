@@ -5,6 +5,8 @@ import * as L from './mods/sympp/levels.js';
 import { canResume, chiefSession, resumeArgv } from './mods/sympp/chief.js';
 import { NOW, chiefTerminals, deskFixture } from './fixture.mjs';
 
+const topicChief = (topic, last, list, now = NOW) => L.chiefEntries([topic], { [topic.id]: last }, list, null, now)[0];
+
 test('a chief is Live only after a helper check of the chief session in its own terminal, else unknown', () => {
   const [herdr, live] = M.chiefsOf(chiefTerminals());
   const labels = {
@@ -28,9 +30,9 @@ test('a chief is Live only after a helper check of the chief session in its own 
 
 test('a newly started chief has a 30-second grace while its terminal is live', () => {
   const term = { address: 'build/t9', state: 'live', program: { key: 'shell', agent: false }, labels: { 'sympp.role': 'chief', 'sympp.domain': 'Herdr' } };
-  const topic = { kind: 'topic', name: 'Herdr' };
+  const topic = { id: 'herdr', kind: 'topic', name: 'Herdr' };
   const last = { terminal: term.address, agent: 'codex', started: NOW };
-  const entries = (list, at) => L.chiefEntries(topic, last, M.chiefsOf(list), list, [topic], null, at).entries;
+  const entries = (list, at) => topicChief(topic, last, list, at).entries;
   assert.deepEqual(entries([term], NOW + 29_999), [{ domain: topic.name, terminal: term.address }]);
   assert.deepEqual(entries([term], NOW + 30_000), [{ domain: topic.name, terminal: null }]);
   assert.deepEqual(entries([{ ...term, state: 'finished' }], NOW), []);
@@ -50,7 +52,7 @@ for (const [name, domain, recorded, running] of [
       argv: ['codex', 'resume', oldSession], foreground: { pid: 20, argv: ['claude', '--model', 'opus', '--resume', currentSession], cwd: '/src' } };
     const list = [{ ...live, address: 'build/t4', labels: { ...labels, 'sympp.domain': 'Other' } }, live];
     if (recorded !== running) list.push({ address: recorded, state: 'finished', labels });
-    const { entries, terminal } = L.chiefEntries(topic, last, M.chiefsOf(list), list, [topic], null, NOW);
+    const { entries, terminal } = topicChief(topic, last, list);
     assert.deepEqual(entries, [{ domain, terminal: running }]);
 
     const saved = chiefSession(terminal, last);
@@ -66,9 +68,21 @@ test('a recorded chief keeps its topic after a rename or failure to apply labels
   const term = { address: 't1', state: 'live', program: { key: 'codex', agent: false } };
   for (const labels of [{ 'sympp.role': 'chief', 'sympp.domain': 'Old name' }, {}]) {
     const list = [{ ...term, labels }];
-    const { entries } = L.chiefEntries(topic, last, M.chiefsOf(list), list, [topic], null, NOW);
+    const { entries } = topicChief(topic, last, list);
     assert.deepEqual(entries, [{ domain: topic.name, terminal: term.address }]);
   }
+});
+
+test('reusing a renamed topic’s former name leaves its chief with the original topic', () => {
+  const renamed = { id: 'original-tools', kind: 'topic', name: 'Platform' };
+  const tools = { id: 'new-tools', kind: 'topic', name: 'Tools' };
+  const term = { address: 't1', state: 'live', program: { key: 'codex', agent: false },
+    labels: { 'sympp.role': 'chief', 'sympp.domain': 'Tools' } };
+  const saved = { [renamed.id]: { terminal: term.address, agent: 'codex' } };
+  const [fresh, original] = L.chiefEntries([tools, renamed], saved, [term], null, NOW);
+  assert.deepEqual(fresh.entries, []);
+  assert.equal(fresh.terminal, null);
+  assert.deepEqual(original.entries, [{ domain: 'Platform', terminal: term.address }]);
 });
 
 test('a stopped chief with an exact domain cannot hide the running chief with a shorter domain', () => {
@@ -78,7 +92,7 @@ test('a stopped chief with an exact domain cannot hide the running chief with a 
   const live = { address: 't2', state: 'live', program: { key: 'codex', agent: false },
     labels: { 'sympp.role': 'chief', 'sympp.domain': 'Kraken' } };
   const list = [shell, live];
-  const { entries } = L.chiefEntries(topic, { terminal: shell.address, agent: 'claude' }, M.chiefsOf(list), list, [topic], null, NOW);
+  const { entries } = topicChief(topic, { terminal: shell.address, agent: 'claude' }, list);
   assert.deepEqual(entries, [{ domain: 'Kraken', terminal: live.address }, { domain: 'Nextide-Kraken', terminal: null }]);
 });
 

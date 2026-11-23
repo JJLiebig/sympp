@@ -62,18 +62,49 @@ export function recordedChief(last, terminalList, now) {
 
 const uuid = (value) => typeof value === "string" && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value) ? value : null;
 
+const CODEX_VALUES = new Set(["-a", "-c", "-C", "-m", "-p", "-s", "--add-dir", "--ask-for-approval", "--cd",
+  "--config", "--disable", "--enable", "--local-provider", "--model", "--profile", "--remote", "--remote-auth-token-env", "--sandbox"]);
+const CODEX_SWITCHES = new Set(["--all", "--approve-for-me", "--auto-account", "--dangerously-bypass-approvals-and-sandbox",
+  "--dangerously-bypass-hook-trust", "--include-non-interactive", "--no-alt-screen", "--no-daemon", "--oss", "--search", "--strict-config", "--worktree"]);
+
+// Codex accepts options before and after resume. A UUID in a prompt or an option value is not
+// the SESSION_ID positional, and --last can reinterpret that positional as a prompt.
+function codexSession(args) {
+  let resume = false, options = true, session = null;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (options && arg === "--") {
+      if (!resume) return null;
+      options = false;
+    } else if (options && arg.startsWith("-")) {
+      if (arg === "--last") return null;
+      if (arg.startsWith("-i") || arg === "--image" || arg.startsWith("--image=")) {
+        while (args[i + 1] && !args[i + 1].startsWith("-")) i++;
+      } else if (CODEX_VALUES.has(arg)) {
+        i++;
+      } else if (!CODEX_SWITCHES.has(arg) && !arg.includes("=") && !CODEX_VALUES.has(arg.slice(0, 2))) {
+        return null;
+      }
+    } else if (!resume) {
+      if (arg !== "resume") return null;
+      resume = true;
+    } else if (!session) {
+      session = uuid(arg);
+      if (!session) return null;
+    }
+  }
+  return session;
+}
+
 // A CLI can name its conversation explicitly. Use the actual agent's arguments so a shell
 // wrapping a different launch, a prompt, or a sympp bridge ID cannot supply the session.
 function launchSession(term, agent) {
   const argv = term.foreground?.argv?.length ? term.foreground.argv : term.argv ?? [];
   const command = argv[0]?.split(/[\\/]/).at(-1).toLowerCase().replace(/\.exe$/, "");
   if (command !== agent && !(agent === "claude" && command === "claude-code")) return null;
+  if (agent === "codex") return codexSession(argv.slice(1));
   const end = argv.indexOf("--", 1);
   const args = argv.slice(1, end < 0 ? argv.length : end);
-  if (agent === "codex") {
-    const at = args[0] === "--no-daemon" ? 1 : 0;
-    return args[at] === "resume" ? uuid(args[at + 1]) : null;
-  }
   const fork = args.includes("--fork-session");
   for (const [at, arg] of args.entries()) {
     const [name, value] = arg.split("=", 2);

@@ -12,7 +12,6 @@ import { h_flex, v_flex, InputState, Input, Button } from "gpui-base";
 import { theme, props, closeOverlay, openOverlay, knownAgents, machines, spaces, terminals, panes, shared, setShared, exec, hc, home, layout, run, settings } from "herdr";
 import { chiefBrief, chiefArgv, chiefLabelArgs, chiefSpaceName, chiefTerminalName, factoryMachine, chiefCheckouts, chiefFolders, intoTopic, isChiefSpace, CHIEF_SPACES, chiefMenu,
   CHIEF_SESSIONS, canResume, machineOf, resumeArgv } from "./chief.js";
-import { chiefsOf } from "./model.js";
 import { chiefEntries, deskOf } from "./levels.js";
 
 const W = 560;
@@ -73,12 +72,11 @@ export class ChiefStart {
     this.input = InputState.new({ placeholder: `Start ${this.name} chief…` });
     this.input.on("submit", (_e, cx) => this.start(cx));
     this.handle = cx.focus_handle();
-    const previous = own.fresh ? null : shared(CHIEF_SESSIONS)?.[this.topic];
+    const sessions = shared(CHIEF_SESSIONS) ?? {};
+    const previous = own.fresh ? null : sessions[this.topic];
     if (!own.fresh) {
-      const list = terminals();
       const desk = deskOf(shared("desk.topics"), []);
-      const topic = desk.find((entry) => entry.id === this.topic) ?? { name: this.name };
-      const { terminal } = chiefEntries(topic, previous, chiefsOf(list), list, desk);
+      const terminal = chiefEntries(desk, sessions, terminals()).find(({ topic }) => topic.id === this.topic)?.terminal;
       if (terminal) {
         this.phase = "resuming";
         showChief(terminal.address);

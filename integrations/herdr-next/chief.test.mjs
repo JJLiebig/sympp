@@ -42,6 +42,16 @@ test('an unreported Claude conversation cannot resume from a bridge ID or a fork
   assert.equal(chiefSession(term).session, null);
 });
 
+test('a resumed Codex chief takes its conversation from the session positional', () => {
+  const id = '11111111-1111-4111-8111-111111111111';
+  const term = { address: 't1', state: 'live', program: { key: 'codex', agent: false } };
+  const record = (args) => chiefSession({ ...term, foreground: { pid: 20, argv: ['codex', ...args] } });
+  assert.equal(record(['-m', 'gpt-6.2-sol', 'resume', id]).session, id);
+  assert.equal(record(['--profile=chief', 'resume', '-c', 'model="gpt-6.2-sol"', '--', id]).session, id);
+  assert.equal(record(['--profile', 'resume', id]).session, null, 'a profile name does not select a subcommand');
+  assert.equal(record(['resume', '--last', id]).session, null, 'a UUID supplied with --last can be a prompt');
+});
+
 test('a desktop-only topic keeps its team folder on the factory machine', () => {
   const topic = [
     checkout('C:\\Code\\nextidemedia\\capture'),

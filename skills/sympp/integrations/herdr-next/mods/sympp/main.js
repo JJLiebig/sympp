@@ -708,12 +708,11 @@ export default class Lens extends View {
     if (this.role !== "panel" || this.studio) return;
     const desk = L.deskOf(this.deskTopics(), this.spaceList()), bindings = board ? this.bindingsOf(board) : [];
     const out = {}, list = terminals(), sessions = shared(CHIEF_SESSIONS) ?? {};
-    const labelled = M.chiefsOf(list), next = { ...sessions };
+    const next = { ...sessions };
     let changed = false;
     this.chiefWatch = [];
-    for (const topic of desk.filter((x) => x.kind === "topic")) {
+    for (const { topic, entries, terminal, matches } of L.chiefEntries(desk, sessions, list, this.repoTopics, now)) {
       const last = sessions[topic.id];
-      const { entries, terminal, matches } = L.chiefEntries(topic, last, labelled, list, desk, this.repoTopics, now);
       this.chiefWatch.push(...matches.flatMap((chief) => M.chiefBindings(bindings, chief)));
       if (entries.length) out[topic.id] = entries;
       const record = chiefSession(terminal, last);

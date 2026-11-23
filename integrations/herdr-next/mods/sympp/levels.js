@@ -3,7 +3,7 @@
 // imports, so every rule here is asserted on its own. Jobs stay canonical sympp jobs: a level only
 // places, ranks and references them; it never copies the backlog.
 
-import { shortRepo, lanesOf, chiefBindings } from "./model.js";
+import { shortRepo, lanesOf, chiefBindings, chiefsOf } from "./model.js";
 import * as J from "./job.js";
 import { intoTopic, chiefAgentKey, recordedChief } from "./chief.js";
 
@@ -239,21 +239,36 @@ export function chiefsFor(topic, chiefs, desk, repoTopics) {
   return free.filter((c) => c.repos.some((repo) => topicsOfRepo(repo, desk, repoTopics).some((t) => t.id === topic.id)));
 }
 
-// Keep the recorded chief first. When discovering a replacement, apply topic-name precedence to
-// running candidates so an exact-labelled shell cannot hide a live chief with a shorter domain.
-export function chiefEntries(topic, latest, labelled, terminalList, desk, repoTopics, now = Date.now()) {
-  const live = new Map(terminalList.filter((t) => chiefAgentKey(t, latest?.agent)).map((t) => [t.address, t]));
-  const matches = chiefsFor(topic, labelled, desk, repoTopics);
-  const active = chiefsFor(topic, labelled.filter((chief) => live.has(chief.terminal)), desk, repoTopics);
-  const terminal = recordedChief(latest, terminalList, now) ?? live.get(active[0]?.terminal) ?? null;
-  const shown = new Map([...active, ...matches].map((chief) => [chief.terminal, chief.domain]));
-  const entries = [];
-  if (terminal) {
-    entries.push({ domain: shown.get(terminal.address) ?? topic.name, terminal: terminal.address });
-    shown.delete(terminal.address);
+// Claim all live recorded chiefs by topic ID before looking for replacements by domain. Apply
+// topic-name precedence to running candidates so an exact-labelled shell cannot hide a live chief.
+export function chiefEntries(desk, sessions, terminalList, repoTopics, now = Date.now()) {
+  const topics = desk.filter((entry) => entry.kind === "topic");
+  const labelled = chiefsOf(terminalList), owners = new Map(), recorded = new Map();
+  for (const topic of topics) {
+    const term = recordedChief(sessions[topic.id], terminalList, now);
+    if (term && !owners.has(term.address)) {
+      owners.set(term.address, topic.id);
+      recorded.set(topic.id, term);
+    }
   }
-  for (const [address, domain] of shown) entries.push({ domain, terminal: live.has(address) ? address : null });
-  return { terminal, entries, matches };
+
+  return topics.map((topic) => {
+    const latest = sessions[topic.id];
+    const live = new Map(terminalList.filter((t) => chiefAgentKey(t, latest?.agent)).map((t) => [t.address, t]));
+    const available = (chief) => !owners.has(chief.terminal) || owners.get(chief.terminal) === topic.id;
+    const matches = chiefsFor(topic, labelled, desk, repoTopics);
+    const active = chiefsFor(topic, labelled.filter((chief) => available(chief) && live.has(chief.terminal)), desk, repoTopics);
+    const terminal = recorded.get(topic.id) ?? live.get(active[0]?.terminal) ?? null;
+    const shown = new Map([...active, ...matches.filter(available)].map((chief) => [chief.terminal, chief.domain]));
+    const entries = [];
+    if (terminal) {
+      owners.set(terminal.address, topic.id);
+      entries.push({ domain: shown.get(terminal.address) ?? topic.name, terminal: terminal.address });
+      shown.delete(terminal.address);
+    }
+    for (const [address, domain] of shown) entries.push({ domain, terminal: live.has(address) ? address : null });
+    return { topic, terminal, entries, matches };
+  });
 }
 
 // The chief as an agent, by the Job level's rule: Live only after a helper check of its bound session,
