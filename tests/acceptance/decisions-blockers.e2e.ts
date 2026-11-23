@@ -1,10 +1,10 @@
 import { expect } from 'e2e';
+import { blockerActive, row } from '../support/delivery.js';
 import { contract, herdr, nextTerminal, test, type Client } from '../support/factory.js';
 import { age, test as coreTest } from '../support/herdr-core.js';
 
 async function packageState(architect: Client, request: string, wp: string) {
-  const board = await architect.call('read_work_request', { view: 'board', detail: 'full', work_request_id: request });
-  return board.delivery_board.work_packages.find((entry: any) => entry.work_package.id === wp).work_package;
+  return row(architect, request, wp);
 }
 
 test('a conversational answer records its decision atomically and a resolved ask stays resolved', async ({ factory }) => {
@@ -28,9 +28,9 @@ test('a conversational answer records its decision atomically and a resolved ask
   expect(repeated.ask).toEqual(answer.ask);
   expect(repeated.decision_log_entry).toBeUndefined();
   const observer = await factory.client();
-  const read = await observer.call('read_work_request', { detail: 'full', work_request_id: id });
-  expect(read.decision_log_entries).toHaveLength(1);
-  const decision = read.decision_log_entries[0];
+  const read = await observer.call('read_work_request', { work_request_id: id });
+  expect(read.decisions).toHaveLength(1);
+  const decision = await observer.readDecision(id, answer.decision_log_entry.id);
   expect(decision.id).toBe(answer.decision_log_entry.id);
   expect(decision.source_type).toBe('human');
   expect(decision.source_id).toBe(ask.id);
@@ -38,7 +38,7 @@ test('a conversational answer records its decision atomically and a resolved ask
   expect(decision.decision).toBe(args.decision.decision);
   expect(decision.rationale).toBe(args.decision.rationale);
   expect(decision.scope_impact).toBe(args.decision.scope_impact);
-  expect(read.asks[0].answer).toBe(args.answer);
+  expect((await observer.readAsk(id, ask.id)).answer).toBe(args.answer);
   expect(read.work_request.phase).toBe('intake');
   expect((await architect.addPackages([contract('Approved outcome', { goal: `Implement decision ${decision.id}` })]))).toHaveLength(1);
 });
@@ -50,16 +50,15 @@ test('asks and operator reports leave explicit package blockers and sibling stat
   const [affected, sibling] = await architect.addPackages([contract('Affected work'), contract('Sibling work')]);
   await architect.call('dispatch_work_package', { work_package_id: affected });
   await architect.call('dispatch_work_package', { work_package_id: sibling });
-  const initial = await packageState(architect, id, affected);
   const siblingBefore = await packageState(architect, id, sibling);
-  expect(initial.blocker_state['active?']).toBe(false);
+  expect(await blockerActive(architect, affected)).toBe(false);
   const ask = (await chief.call('ask', {
     work_request_id: id, work_package_id: affected, question: 'Should we change the optional detail?',
   })).ask.id;
   await architect.call('set_report', { brief: 'Waiting for a human scope choice.', parking: { reason: 'Should the optional detail ship?' } });
-  const parked = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
+  const parked = await architect.call('read_work_request', { work_request_id: id });
   expect(parked.work_request.operator_report.parking.reason).toBe('Should the optional detail ship?');
-  expect((await packageState(architect, id, affected)).blocker_state['active?']).toBe(false);
+  expect(await blockerActive(architect, affected)).toBe(false);
 
   const declaration = { work_package_id: affected, blocker_id: 'schema', active: true, summary: 'Required schema is unavailable.' };
   expect((await architect.call('set_blocker', declaration)).changed).toBe(true);
@@ -68,22 +67,22 @@ test('asks and operator reports leave explicit package blockers and sibling stat
   expect([reworded.changed, reworded.blocker.summary]).toEqual([true, 'Required schema is still unavailable.']);
   await architect.reject('set_blocker', { work_package_id: affected, blocker_id: 'schema-typo', active: false }, 'blocker_not_found');
   await architect.call('set_blocker', { work_package_id: affected, blocker_id: 'access', active: true, summary: 'Required access is unavailable.' });
-  expect((await packageState(architect, id, affected)).blocker_state['active?']).toBe(true);
+  expect(await blockerActive(architect, affected)).toBe(true);
   await architect.call('resolve_ask', {
     ask_id: ask, to: 'answered', answer: 'Keep the optional detail deferred.',
     decision: { source_type: 'human', decision: 'Defer the optional detail.', rationale: 'The current scope is sufficient.', scope_impact: 'No package changes.' },
   });
   await architect.call('set_report', { parking: null });
-  expect((await packageState(architect, id, affected)).blocker_state['active?']).toBe(true);
+  expect(await blockerActive(architect, affected)).toBe(true);
 
   const cleared = await architect.call('set_blocker', { work_package_id: affected, blocker_id: 'schema', active: false });
   expect(cleared.blocker).toMatchObject({ id: 'schema', active: false });
   expect((await architect.call('set_blocker', { work_package_id: affected, blocker_id: 'schema', active: false })).changed).toBe(false);
-  expect((await packageState(architect, id, affected)).blocker_state['active?']).toBe(true);
+  expect(await blockerActive(architect, affected)).toBe(true);
   await architect.call('set_blocker', { work_package_id: affected, blocker_id: 'access', active: false, summary: 'Access prerequisite available.' });
-  expect((await packageState(architect, id, affected)).blocker_state['active?']).toBe(false);
+  expect(await blockerActive(architect, affected)).toBe(false);
   expect(await packageState(architect, id, sibling)).toEqual(siblingBefore);
-  const report = (await architect.call('read_work_request', { detail: 'full', work_request_id: id })).work_request.operator_report;
+  const report = (await architect.call('read_work_request', { work_request_id: id })).work_request.operator_report;
   expect(report.brief.text).toBe('Waiting for a human scope choice.');
   expect(report.parking.reason).toBe('Should the optional detail ship?');
   expect(report.parking.resumed_at).toBeTruthy();
@@ -102,9 +101,8 @@ test('an ask on a package is withdrawn when the package ends, and only the asker
   await stranger.reject('resolve_ask', { ask_id: onRequest.id, to: 'withdrawn' }, 'not_asker_or_owner');
   expect((await architect.call('resolve_ask', { ask_id: onRequest.id, to: 'withdrawn' })).ask.state).toBe('withdrawn');
   await architect.call('close_work_package', { work_package_id: wp, outcome: 'skipped' });
-  const read = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
-  expect(read.asks.find((entry: any) => entry.id === onPackage.id)).toMatchObject({ state: 'withdrawn', answered_by: 'subject_ended' });
-  expect(read.asks.find((entry: any) => entry.id === onSibling.id).state).toBe('open');
+  expect(await architect.readAsk(id, onPackage.id)).toMatchObject({ state: 'withdrawn', answered_by: 'subject_ended' });
+  expect((await architect.readAsk(id, onSibling.id)).state).toBe('open');
   await chief.reject('ask', { work_request_id: id, work_package_id: wp, question: 'Too late?' }, 'work_package_ended');
 });
 
@@ -122,8 +120,7 @@ test('a chief recommends one choice, persists it for both interfaces, and cannot
   } };
   const ask = (await chief.call('ask', params)).ask;
   expect(ask.decision_prompt.options).toEqual(options);
-  const read = await owner.call('read_work_request', { detail: 'full', work_request_id: id });
-  expect(read.asks[0].decision_prompt.options).toEqual(options);
+  expect((await owner.readAsk(id, ask.id)).decision_prompt.options).toEqual(options);
   for (const route of ['/api/v1/sympp/operator/work-requests/' + id, '/api/v1/sympp/herdr/dashboard']) {
     const response = await owner.raw(null, { origin: new URL(await factory.endpoint).origin }, 'GET', route);
     expect(response.status).toBe(200);
@@ -135,7 +132,7 @@ test('a chief recommends one choice, persists it for both interfaces, and cannot
   }));
   expect(rejected.error.code).toBe(-32602);
   expect(rejected.error.data).toMatchObject({ code: 'invalid_decision_prompt', message: 'at most one option may be recommended' });
-  expect((await owner.call('read_work_request', { detail: 'full', work_request_id: id })).asks).toHaveLength(1);
+  expect((await owner.call('read_work_request', { work_request_id: id })).asks).toHaveLength(1);
 });
 
 test('human choice submission rejects unknown or empty redirects and preserves the selected answer', async ({ factory }) => {
@@ -146,7 +143,7 @@ test('human choice submission rejects unknown or empty redirects and preserves t
     work_request_id: id, question: 'May this PR exceed the size guide?',
   }, 'chief_only');
   expect(refused.next_action).toBe('Only the chief asks the human owner. Send your chief one line instead.');
-  expect((await architect.call('read_work_request', { detail: 'full', work_request_id: id })).asks).toEqual([]);
+  expect((await architect.call('read_work_request', { work_request_id: id })).asks).toEqual([]);
   const prompt = {
     tl_dr: 'Choose the bounded path.', details: 'The operator decides the product outcome.',
     options: [{ id: 'continue', label: 'Continue', answer: 'Continue with the bounded path.' }],
@@ -158,7 +155,7 @@ test('human choice submission rejects unknown or empty redirects and preserves t
     const response = await chief.rpc('tools/call', chief.toolParams('ask', { work_request_id: id, question: 'Invalid question', decision_prompt: malformed }));
     expect(response.error.code).toBe(-32602);
   }
-  expect((await architect.call('read_work_request', { detail: 'full', work_request_id: id })).asks).toEqual([]);
+  expect((await architect.call('read_work_request', { work_request_id: id })).asks).toEqual([]);
   const ask = async (decision_prompt?: object) => (await chief.call('ask', {
     work_request_id: id, question: 'Which path should ship?', ...(decision_prompt ? { decision_prompt } : {}),
   })).ask.id;
@@ -173,17 +170,17 @@ test('human choice submission rejects unknown or empty redirects and preserves t
     const rejected = await architect.operator(path, invalid);
     expect(rejected.status).toBe(422);
     expect((await architect.raw(invalid, {}, 'POST', path.replace('/operator/', '/herdr/'))).status).toBe(422);
-    const current = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
-    expect(current.asks[0].state).toBe('open');
-    expect(current.decision_log_entries).toEqual([]);
+    const current = await architect.call('read_work_request', { work_request_id: id });
+    expect((await architect.readAsk(id, first)).state).toBe('open');
+    expect(current.decisions).toEqual([]);
   }
   const answered = await architect.operator(path, { answer_choice: 'continue', answer_note: 'Keep the detail deferred.', answer: 'Stale autofilled answer.' });
   expect(answered.status).toBe(200);
   // The answer is kept whether or not the asking terminal could be reached.
   expect(answered.body.delivery.state).toMatch(/^(pending|delivered|not_delivered)$/);
-  const read = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
-  expect(read.asks[0].answer).toBe('Continue with the bounded path. Keep the detail deferred.');
-  expect(read.asks[0].answered_by).toBe('operator');
+  expect(await architect.readAsk(id, first)).toMatchObject({
+    answer: 'Continue with the bounded path. Keep the detail deferred.', answered_by: 'operator',
+  });
 
   const cases = [
     { prompt, input: { answer_choice: '__custom_redirect__', answer_note: 'Use a smaller path.' }, answer: 'Use a smaller path.' },
@@ -198,17 +195,17 @@ test('human choice submission rejects unknown or empty redirects and preserves t
     expect((await architect.raw(choice.input, {}, 'POST', endpoint.replace(q, 'missing-ask'))).status).toBe(404);
     expect((await architect.raw(choice.input, {}, 'POST', endpoint)).status).toBe(200);
     expect((await architect.raw(choice.input, {}, 'POST', endpoint)).status).toBe(409);
-    const result = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
-    expect(result.asks.find((entry: any) => entry.id === q).answer).toBe(choice.answer);
+    const result = await architect.call('read_work_request', { work_request_id: id });
+    expect((await architect.readAsk(id, q)).answer).toBe(choice.answer);
     expect(result.work_request.phase).toBe('intake');
   }
   const withdrawn = await ask();
   await architect.call('resolve_ask', { ask_id: withdrawn, to: 'withdrawn' });
   expect((await architect.raw({ answer: 'Too late.' }, {}, 'POST', `/api/v1/sympp/herdr/asks/${withdrawn}/answer`)).status).toBe(409);
   await architect.reject('resolve_ask', { ask_id: withdrawn, to: 'answered', answer: 'Too late.' }, 'ask_not_open');
-  const final = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
-  expect(final.asks.find((entry: any) => entry.id === withdrawn).answer).toBeUndefined();
-  expect(final.decision_log_entries).toEqual([]);
+  const final = await architect.call('read_work_request', { work_request_id: id });
+  expect((await architect.readAsk(id, withdrawn)).answer).toBeUndefined();
+  expect(final.decisions).toEqual([]);
 });
 
 const description = 'Synthetic acceptance request; no external work is executed.';
@@ -229,10 +226,11 @@ coreTest('asks go open to answered or withdrawn, take no ownership, and an answe
   expect((await asker.call('sympp.health')).caller.owns).toEqual([]);
   const decision = { source_type: 'bot', decision: 'Europe', rationale: 'Cheaper', scope_impact: 'None' };
   await asker.reject('resolve_ask', { ask_id: ask.id, to: 'answered', answer: 'Europe', decision }, 'invalid_decision');
-  const rolledBack = await architect.call('read_work_request', { detail: 'full', work_request_id: id });
-  expect(rolledBack.asks[0]).toMatchObject({ state: 'open' });
-  expect(rolledBack.asks[0].answer).toBeUndefined();
-  expect(rolledBack.decision_log_entries).toEqual([]);
+  const rolledBack = await architect.call('read_work_request', { work_request_id: id });
+  const unresolved = await architect.readAsk(id, ask.id);
+  expect(unresolved.state).toBe('open');
+  expect(unresolved.answer).toBeUndefined();
+  expect(rolledBack.decisions).toEqual([]);
   const answered = await asker.call('resolve_ask', { ask_id: ask.id, to: 'answered', answer: 'Europe, said in chat.', decision: { ...decision, source_type: 'human' } });
   expect(answered.ask).toMatchObject({ state: 'answered', answer: 'Europe, said in chat.', answered_by: asker.address });
   expect(answered.decision_log_entry).toMatchObject({ source_id: ask.id, decision: 'Europe' });
@@ -273,7 +271,7 @@ coreTest('asks go open to answered or withdrawn, take no ownership, and an answe
   expect((await nativeBoard(architect, id)).asks).toEqual([]);
   const repeated = { ask_id: live, to: 'answered' };
   await (await core.client()).reject('resolve_ask', repeated, 'not_asker_or_owner');
-  const stored = (await architect.call('read_work_request', { detail: 'full', work_request_id: id })).asks.find((entry: any) => entry.id === live);
+  const stored = await architect.readAsk(id, live);
   expect(stored).toMatchObject({ state: 'answered', answer, answered_by: 'operator' });
   expect((await asker.call('resolve_ask', repeated)).ask).toEqual(stored);
 
@@ -283,7 +281,7 @@ coreTest('asks go open to answered or withdrawn, take no ownership, and an answe
   const remoteAnswer = await architect.operator(`/api/v1/sympp/operator/asks/${remote.result.structuredContent.ask.id}/answer`, { answer: 'Yes' });
   expect(remoteAnswer.body.delivery).toEqual({ state: 'pending' });
   const askDelivery = async (client: typeof architect, askId: string) =>
-    (await client.call('read_work_request', { detail: 'full', work_request_id: id })).asks.find((entry: any) => entry.id === askId)?.delivery;
+    (await client.readAsk(id, askId)).delivery;
   await expect.poll(() => askDelivery(architect, remote.result.structuredContent.ask.id))
     .toEqual({ state: 'not_delivered', reason: 'terminal_unreachable' });
   // An asker whose terminal has since finished keeps the answer undelivered.
@@ -303,7 +301,7 @@ coreTest('asks go open to answered or withdrawn, take no ownership, and an answe
   // Completing the request withdraws its open asks and takes no new ones; archiving refuses ask writes until restore.
   const pending = (await operator.call('ask', { work_request_id: id, question: 'Still needed?' })).ask.id;
   expect((await operator.operator(`/api/v1/sympp/operator/work-requests/${id}/complete`, {})).status).toBe(200);
-  expect((await operator.call('read_work_request', { detail: 'full', work_request_id: id })).asks.find((entry: any) => entry.id === pending).state).toBe('withdrawn');
+  expect((await operator.readAsk(id, pending)).state).toBe('withdrawn');
   expect((await operator.reject('ask', { work_request_id: id, question: 'After completion?' }, 'work_request_completed')).state).toBe('done');
   expect((await operator.operator(`/api/v1/sympp/operator/work-requests/${id}/archive`, {})).status).toBe(200);
   const originalAsker = await core.factory.client(asker.terminal, { 'sympp.role': 'chief' });
@@ -338,10 +336,10 @@ test('flagged decisions reject long text while unflagged evidence stays unrestri
   const flagged = await recorder.call('record_decision', { ...args, ...limit, flag: true });
   expect(flagged.decision_log_entry).toMatchObject({ decision: limit.decision, flagged: true });
   accepted.push({ id: flagged.decision_log_entry.id, ...limit });
-  const stored = await recorder.call('read_work_request', { work_request_id, detail: 'full' });
-  expect(stored.decision_log_entries).toHaveLength(accepted.length);
+  const stored = await recorder.call('read_work_request', { work_request_id });
+  expect(stored.decisions.length + stored.older_decision_count).toBe(accepted.length);
   for (const entry of accepted) {
-    expect(stored.decision_log_entries.find((decision: any) => decision.id === entry.id)).toMatchObject(entry);
+    expect(await recorder.readDecision(work_request_id, entry.id)).toMatchObject(entry);
   }
 });
 
