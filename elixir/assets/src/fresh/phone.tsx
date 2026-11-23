@@ -455,7 +455,7 @@ function SmallRow({ card, ref }: { card: Cards[number]; ref: (node: HTMLElement 
         <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5">
           <span className={`font-mono text-[11px] font-semibold ${CARD_STATE[card.state].tone}`}>{CARD_STATE[card.state].label}</span>
           <CiCell ci={card.ci} stale={card.stale.includes("github")} />
-          <ReviewCell review={card.review} />
+          <ReviewCell review={card.review} spelled />
           <PrLink className="-mx-2.5 -my-3.5 px-2.5 py-3.5" pr={card.pr} repos={[card.repo.toLowerCase()]} />
         </span>
         {failure ? (

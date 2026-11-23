@@ -1,4 +1,4 @@
-import { Check, ChevronRight, CircleDashed, Hourglass, ScanSearch, X } from "lucide-react";
+import { Check, ChevronRight, Circle, CircleAlert, CircleDashed, CircleQuestionMark, Hourglass, Minus, X } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { GoalActions, GoalRefusal, ShelfCleanup } from "./actions";
@@ -28,10 +28,10 @@ export const OUTCOME: Record<Outcome, { label: string; tone: string }> = {
 
 // Package and card rows are fixed column grids, so every column starts at the same x on every row,
 // whatever is in it. Below 1280px the lifecycle shows only its current stage and the PR and owner columns narrow.
-// Package: pip, title, lifecycle, status, PR with its CI, owner, action. Below 1000px only the pip, the title
+// Package: pip, title, lifecycle, status, PR, CI, owner, action. Below 1000px only the pip, the title
 // and the action share a line (see NARROW_HIDDEN), the title wraps instead of clipping, and the PR with its CI
 // takes the line under the title (NARROW_UNDER), with an exited worker or the review state under it (NARROW_STATUS).
-export const PKG_GRID = "grid grid-cols-[10px_minmax(0,1fr)_auto] items-center gap-x-2.5 min-[1000px]:grid-cols-[10px_minmax(0,1fr)_48px_124px_200px_150px_52px] min-[1280px]:grid-cols-[10px_minmax(0,1fr)_240px_124px_240px_170px_52px]";
+export const PKG_GRID = "grid grid-cols-[10px_minmax(0,1fr)_auto] items-center gap-x-2.5 min-[1000px]:grid-cols-[10px_minmax(0,1fr)_48px_124px_120px_40px_150px_52px] min-[1280px]:grid-cols-[10px_minmax(0,1fr)_240px_124px_150px_40px_170px_52px]";
 // A package row cell that only fits from 1000px up.
 export const NARROW_HIDDEN = "hidden min-[1000px]:grid";
 // A package title: wrapped while narrow, clipped to its column once the row has every column.
@@ -39,6 +39,8 @@ export const PKG_TITLE = "text-sm wrap-break-word min-[1000px]:truncate";
 // Narrow, the line under the package title, and the line under that for an exited worker or the review state.
 export const NARROW_UNDER = "max-[1000px]:col-span-2 max-[1000px]:col-start-2 max-[1000px]:row-start-2";
 export const NARROW_STATUS = "max-[1000px]:col-span-2 max-[1000px]:col-start-2 max-[1000px]:row-start-3";
+// Narrow, the PR and its CI share the line under the title; from 1000px each takes its own column.
+export const PR_AND_CI = `flex min-w-0 flex-wrap items-center gap-x-2 min-[1000px]:contents ${NARROW_UNDER}`;
 // Narrow, a PR name wraps rather than clip, so the PR and its CI can take two lines.
 export const NARROW_WRAP = "max-[1000px]:overflow-visible max-[1000px]:whitespace-normal max-[1000px]:wrap-anywhere";
 // Card: pip, task, repo and branch, CI, review, PR, state, owner, dismiss. Below 1000px the pip, task, state and
@@ -129,9 +131,48 @@ export function Lifecycle({ view }: { view: PkgView }) {
   );
 }
 
-// How long the package has been in its stage; under review, the round and how long it has run, or
-// once the round has ended, how it ended.
-// Right-aligned with tabular figures so the times line up.
+// The state of a review or of CI is a coloured icon; hover and screen readers get it in words. Review and CI share shapes:
+// dashed while it runs, a tick once it passed, a question mark when it could not be read.
+type Mark = { icon: typeof Check; tone: string; spoken: string };
+
+const CI: Record<Ci, Mark> = {
+  passing: { icon: Check, tone: "text-merge", spoken: "CI passing" },
+  pending: { icon: CircleDashed, tone: "text-checks", spoken: "CI running" },
+  failing: { icon: X, tone: "text-fail", spoken: "CI failing" },
+};
+const CI_UNREAD: Mark = { icon: CircleQuestionMark, tone: "text-faint", spoken: "CI status unavailable" };
+
+// `waiting` is a review with no round on the PR's current head yet; `skipped` one whose mode is none.
+type ReviewMark = NonNullable<Review["state"]> | "waiting" | "skipped";
+const REVIEW: Record<ReviewMark, Mark> = {
+  running: { icon: CircleDashed, tone: "text-review", spoken: "Review: running" },
+  findings: { icon: CircleAlert, tone: "text-checks", spoken: "Review: findings" },
+  done: { icon: Check, tone: "text-merge/80", spoken: "Review: passed" },
+  unknown: { icon: CircleQuestionMark, tone: "text-faint", spoken: "Review: status unavailable" },
+  waiting: { icon: Circle, tone: "text-faint", spoken: "Review: not started" },
+  skipped: { icon: Minus, tone: "text-faint", spoken: "Review: skipped" },
+};
+
+function reviewMark(review: Review): Mark {
+  return REVIEW[review.mode === "none" ? "skipped" : (review.state ?? "waiting")];
+}
+
+// The review's mode, unless it is the default, and its round.
+const modeAndRound = (review: Review) => `${MODE_WORD[review.mode!] ?? ""}r${Math.max(1, review.round)}`;
+
+// A state icon, centred on the text beside it.
+function MarkIcon({ mark }: { mark: Mark }) {
+  return (
+    <Glyph>
+      <mark.icon aria-hidden className="size-3" />
+    </Glyph>
+  );
+}
+
+// How long the package has been in its stage, right-aligned with tabular figures so the times line up. Under review,
+// the review's state icon, its mode and round, and while it runs how long the round has run: the icon at the
+// column's start and the time at its end, so both line up with the rows above and below. Narrow, the cell sits
+// under the title and keeps to its right edge.
 export function StageStatus({ at, view }: { at: number; view: PkgView }) {
   const { pkg } = view;
   const cell = "truncate whitespace-nowrap text-right font-mono text-[11px] tabular-nums";
@@ -140,11 +181,13 @@ export function StageStatus({ at, view }: { at: number; view: PkgView }) {
   const review = pkg.review;
   if (slotOf(view) === REVIEW_SLOT && review) {
     const from = review.at ?? (view.untimed ? null : view.since);
-    const words = reviewLabel(review);
+    const mark = reviewMark(review);
     return (
-      <span className={`${cell} ${words.tone}`} title={`Review: ${words.text}`}>
-        {MODE_WORD[review.mode!] ?? ""}r{Math.max(1, review.round)}
-        {review.state !== "running" ? ` · ${review.state}` : from === null ? "" : ` · ${span(at - from)}`}
+      <span className={`grid grid-flow-col items-center justify-end gap-x-1.5 whitespace-nowrap font-mono text-[11px] tabular-nums min-[1000px]:grid-cols-[auto_minmax(0,1fr)_auto] min-[1000px]:justify-stretch ${mark.tone}`} title={mark.spoken}>
+        <MarkIcon mark={mark} />
+        <span className="sr-only">{mark.spoken}</span>
+        <span className="truncate">{modeAndRound(review)}</span>
+        {review.state === "running" && from !== null ? <span className="text-right">{span(at - from)}</span> : null}
       </span>
     );
   }
@@ -152,14 +195,7 @@ export function StageStatus({ at, view }: { at: number; view: PkgView }) {
   return <span className={`${cell} text-dim max-[1000px]:hidden`}>{view.untimed ? "" : span(at - view.since)}</span>;
 }
 
-// Failing CI reads "CI" beside its ✗ like passing CI beside its ✓; hover and screen readers still get the state in words.
-const CI: Record<Ci, { label: string; spoken?: string; tone: string; icon: typeof Check }> = {
-  passing: { label: "CI", tone: "text-merge", icon: Check },
-  pending: { label: "CI running", tone: "text-checks", icon: CircleDashed },
-  failing: { label: "CI", spoken: "CI failing", tone: "text-fail", icon: X },
-};
-
-// The mode, then the state. A card's review has no known mode, so it shows the state alone.
+// The mode, then the state, in words, for a phone, which has no hover. A card's review has no known mode, so it shows the state alone.
 export function reviewLabel(review: Review): { text: string; tone: string } {
   if (review.mode === "none") return { text: "none", tone: "text-faint" };
   const words = (state: string) => (review.mode ? `${review.mode} · ${state}` : state);
@@ -171,44 +207,36 @@ export function reviewLabel(review: Review): { text: string; tone: string } {
   return { text: review.mode ?? "pending", tone: "text-faint" };
 }
 
-// The PR's checks. An empty cell keeps its column. When GitHub could not be read, the last result is not shown as current.
-export function CiCell({ ci, stale = false }: { ci: Ci | null; stale?: boolean }) {
-  if (stale) {
-    return (
-      <span className="flex min-w-0 items-center gap-1 whitespace-nowrap font-mono text-[11px] text-faint" title="GitHub could not be read on the last look">
-        <Glyph>
-          <CircleDashed aria-hidden className="size-3" />
-        </Glyph>
-        <span className="truncate">CI unknown</span>
-      </span>
-    );
-  }
-  if (!ci) return <span />;
-  const check = CI[ci];
+// The icon, then what it is about, the way a passing check reads "✓ CI".
+function MarkCell({ label, mark }: { label: string; mark: Mark }) {
   return (
-    <span className={`flex min-w-0 items-center gap-1 whitespace-nowrap font-mono text-[11px] ${check.tone}`} title={check.spoken}>
-      <Glyph>
-        <check.icon aria-hidden className="size-3" />
-      </Glyph>
-      <span aria-hidden={check.spoken ? true : undefined} className="truncate">
-        {check.label}
+    <span className={`flex min-w-0 items-center gap-1 whitespace-nowrap font-mono text-[11px] ${mark.tone}`} title={mark.spoken}>
+      <MarkIcon mark={mark} />
+      <span aria-hidden className="truncate">
+        {label}
       </span>
-      {check.spoken ? <span className="sr-only">{check.spoken}</span> : null}
+      <span className="sr-only">{mark.spoken}</span>
     </span>
   );
 }
 
-// The Review Suite mode and state for the PR's current head. An empty cell keeps its column.
-export function ReviewCell({ review }: { review: Review | null }) {
+// The PR's checks. An empty cell keeps its column. When GitHub could not be read, the last result is not shown as current.
+export function CiCell({ ci, stale = false }: { ci: Ci | null; stale?: boolean }) {
+  if (stale) return <MarkCell label="CI" mark={CI_UNREAD} />;
+  if (!ci) return <span />;
+  return <MarkCell label="CI" mark={CI[ci]} />;
+}
+
+// The Review Suite state for the PR's current head, beside "Review" the way CI's sits beside "CI". `spelled`, for a phone,
+// adds the mode and state in words. An empty cell keeps its column.
+export function ReviewCell({ review, spelled = false }: { review: Review | null; spelled?: boolean }) {
   if (!review) return <span />;
-  const words = reviewLabel(review);
+  const mark = reviewMark(review);
+  if (!spelled) return <MarkCell label="Review" mark={mark} />;
   return (
-    <span className={`flex min-w-0 items-center gap-1 whitespace-nowrap font-mono text-[11px] ${words.tone}`} title={`Review: ${words.text}`}>
-      <Glyph>
-        <ScanSearch aria-hidden className="size-3" />
-      </Glyph>
-      <span className="sr-only">Review </span>
-      <span className="truncate">{words.text}</span>
+    <span className={`flex min-w-0 items-center gap-1 whitespace-nowrap font-mono text-[11px] ${mark.tone}`} title={mark.spoken}>
+      <MarkIcon mark={mark} />
+      <span className="truncate">{reviewLabel(review).text}</span>
     </span>
   );
 }
