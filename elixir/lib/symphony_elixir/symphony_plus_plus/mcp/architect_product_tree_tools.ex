@@ -12,19 +12,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     Config,
     ErrorDetails,
     ToolResult,
-    WorkRequestPayloads,
     WorkRequestScope
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionFeedback
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
@@ -48,7 +44,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, source_id} <- optional_string_argument(arguments, "source_id"),
          {:ok, flag} <- flag_argument(arguments),
          :ok <- validate_flagged_decision(flag, decision, rationale),
-         {:ok, _work_request, _filters, scope} <- scoped_work_request(config.repo, work_request_id),
+         {:ok, _work_request} <- WorkRequestScope.scoped_work_request(config.repo, work_request_id),
          {:ok, decision_record} <-
            WorkRequestService.record_decision(
              config.repo,
@@ -64,14 +60,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
              }
              |> optional_put("source_id", source_id)
              |> Map.merge(DecisionFeedback.record_attrs(flag))
-           ),
-         {:ok, updated_work_request} <- WorkRequestScope.scoped_work_request(config.repo, work_request_id) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
-         "decision_log_entry" => WorkRequestPayloads.decision_log_entry(decision_record),
-         "scope" => scope
-       })}
+           ) do
+      receipt =
+        %{"id" => decision_record.id, "sequence" => decision_record.sequence, "flagged" => decision_record.flagged}
+        |> optional_put("review_state", decision_record.review_state)
+
+      {:ok, ToolResult.receipt_result(%{"decision_log_entry" => receipt})}
     else
       {:tool_error, reason} -> invalid_params_error("record_decision", reason)
       {:error, :not_found} -> not_found_error("record_decision")
@@ -85,13 +79,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
     with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, ops} <- edit_plan_ops(arguments),
-         {:ok, _work_request, _filters, scope} <- scoped_work_request(config.repo, work_request_id),
-         {:ok, {applied, graph}} <-
+         {:ok, _work_request} <- WorkRequestScope.scoped_work_request(config.repo, work_request_id),
+         {:ok, applied} <-
            mutate_product_tree(config.repo, work_request_id, tool, created_by, fn ->
-             apply_plan_edit(config.repo, work_request_id, ops, created_by)
+             WorkRequestService.edit_plan(config.repo, work_request_id, ops, created_by)
            end) do
       WorkRequestService.notify_plan_changed()
-      {:ok, ToolResult.agent_tool_result(%{"applied" => applied, "plan" => graph, "scope" => scope})}
+      {:ok, ToolResult.receipt_result(%{"applied" => applied})}
     else
       {:tool_error, reason} -> invalid_params_error(tool, reason)
       {:error, :not_found} -> not_found_error(tool)
@@ -122,13 +116,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     case Map.get(arguments, "ops") do
       [_ | _] = ops -> if Enum.all?(ops, &is_map/1), do: {:ok, ops}, else: {:tool_error, "invalid_ops"}
       _ops -> {:tool_error, "invalid_ops"}
-    end
-  end
-
-  defp apply_plan_edit(repo, work_request_id, ops, created_by) do
-    with {:ok, applied} <- WorkRequestService.edit_plan(repo, work_request_id, ops, created_by),
-         {:ok, graph} <- effective_graph(repo, work_request_id) do
-      {:ok, {applied, graph}}
     end
   end
 
@@ -180,33 +167,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   defp op_error_details(:invalid_work_package), do: {%{"allowed_kinds" => WorkPackage.kinds()}, "Use an executable package kind."}
   defp op_error_details(:database_busy), do: {%{}, "Another write held the ledger. Resend the edit."}
   defp op_error_details(_reason), do: {%{}, "Fix the operation and resend the whole edit."}
-
-  # The plan after the edit: each package with its group, status, revision and
-  # what it depends on, plus any cycles.
-  defp effective_graph(repo, work_request_id) do
-    with {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request_id),
-         {:ok, graph} <- ExecutionGraph.evaluate(repo, work_request_id, work_packages) do
-      depends_on =
-        Enum.group_by(graph.effective_edges, & &1.dependent_work_package_id, & &1.prerequisite_work_package_id)
-
-      ready_ids = MapSet.new(graph.dependency_ready_work_package_ids)
-
-      packages =
-        Enum.map(work_packages, fn package ->
-          %{
-            "id" => package.id,
-            "title" => Redactor.redact_text(package.title),
-            "group" => Redactor.redact_text(package.group),
-            "status" => package.status,
-            "revision" => package.contract_revision,
-            "depends_on" => Map.get(depends_on, package.id, []),
-            "next_action" => Lifecycle.next_action(package, %{dependencies_met?: MapSet.member?(ready_ids, package.id)}).action
-          }
-        end)
-
-      {:ok, %{"work_packages" => packages} |> optional_put("cycles", if(graph.cycles == [], do: nil, else: graph.cycles))}
-    end
-  end
 
   defp mutate_product_tree(repo, work_request_id, tool, created_by, mutation_fun) do
     run_architect_transaction(repo, fn ->
@@ -294,12 +254,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   defp optional_put(attrs, key, value), do: Map.put(attrs, key, value)
 
   defp terminal_name(%Terminal{display_address: address}), do: address
-
-  defp scoped_work_request(repo, work_request_id) do
-    with {:ok, work_request, filters} <- WorkRequestScope.work_request_scope(repo, work_request_id) do
-      {:ok, work_request, filters, WorkRequestPayloads.redacted_work_request_scope(work_request)}
-    end
-  end
 
   defp architect_error({:work_request_archived, revision}, tool) do
     ErrorDetails.lifecycle_error(tool, :work_request_archived, optional_put(%{"state" => "archived"}, "current_contract_revision", revision))

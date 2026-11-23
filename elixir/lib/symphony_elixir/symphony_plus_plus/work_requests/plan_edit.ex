@@ -94,7 +94,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlanEdit do
          {:ok, work_package} <- Repository.add_work_package(context.repo, context.work_request_id, contract),
          :ok <- add_dependencies(work_package.id, prerequisite_ids, context) do
       context = if key, do: put_in(context, [:keys, key], work_package.id), else: context
-      {:ok, context, %{"op" => "add_package", "work_package_id" => work_package.id} |> put_present("key", key)}
+
+      receipt =
+        %{"op" => "add_package", "work_package_id" => work_package.id, "revision" => work_package.contract_revision}
+        |> put_present("key", key)
+
+      {:ok, context, receipt}
     end
   end
 

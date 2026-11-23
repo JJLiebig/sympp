@@ -77,6 +77,25 @@ decision, name the decision to escalate.
 - `set_dependency` and `remove_dependency` take `from` and `to`. The package
   named by `from` depends on `to`. Set an optional `reason` with `set_dependency`.
 
+Use `applied` for the receipt of each operation in order. Add and update
+receipts include the package ID and revision.
+
+In a Codex code cell, use `structuredContent.applied` for follow-up calls.
+Show the TOON text when you need to read the receipt in the conversation.
+
+```js
+const receipt = await tools.mcp__sympp__edit_plan({ work_request_id, ops });
+text(receipt.content[0].text);
+```
+
+When you need the current groups, revisions or dependencies, read the plan.
+In code, use `structuredContent.plan` from this read.
+
+```js
+const plan = await tools.mcp__sympp__read_work_request({ work_request_id, view: "plan" });
+text(plan.content[0].text);
+```
+
 A ready contract is frozen; add a successor.
 
 ## Test execution
