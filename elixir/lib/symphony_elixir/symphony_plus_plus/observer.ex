@@ -71,7 +71,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     Api.create_table()
     Process.send_after(self(), :terminals, 1_000)
     Process.send_after(self(), :sweep, 5_000)
-    {:ok, %{repo: Keyword.fetch!(opts, :repo), pending: nil, sweep_round: 0, closing_workers: nil}}
+    {:ok, %{repo: Keyword.fetch!(opts, :repo), pending: nil, sweep_round: 0, closeout_tasks: %{}}}
   end
 
   @impl true
@@ -95,13 +95,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   def handle_info(:sweep, state), do: {:noreply, state}
 
-  def handle_info({ref, :ok}, %{closing_workers: ref} = state) do
+  def handle_info({ref, workers}, %{closeout_tasks: tasks} = state) when is_map_key(tasks, ref) do
     Process.demonitor(ref, [:flush])
-    {:noreply, %{state | closing_workers: nil}}
+    {:noreply, start_worker_closeout(%{state | closeout_tasks: Map.delete(tasks, ref)}, workers)}
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{closing_workers: ref} = state) do
-    {:noreply, %{state | closing_workers: nil}}
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{closeout_tasks: tasks} = state) when is_map_key(tasks, ref) do
+    {:noreply, %{state | closeout_tasks: Map.delete(tasks, ref)}}
   end
 
   def handle_info({ref, stacks}, %{pending: {ref, publish}} = state) do
@@ -115,14 +115,38 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     finish_sweep(state)
   end
 
-  # Keep the terminal and PR passes responsive while Herdr waits for workers
-  # to exit. Each terminal pass can retry any worker that is still live.
-  defp start_worker_closeout(%{closing_workers: nil} = state, [_ | _] = workers) do
-    task = Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn -> close_workers(workers) end)
-    %{state | closing_workers: task.ref}
+  defp start_worker_closeout(state, :lookup_reachable_workers) do
+    start_closeout_task(state, :lookup, fn -> reachable_ended_workers(state.repo) end)
   end
 
-  defp start_worker_closeout(state, _workers), do: state
+  # Serialize kills per Herdr route while letting other routes and the observer
+  # continue. The next pass can retry a worker that is still live.
+  defp start_worker_closeout(state, workers) do
+    workers
+    |> Enum.group_by(&worker_route/1)
+    |> Enum.reduce(state, fn {route, workers}, state ->
+      start_closeout_task(state, route, fn ->
+        close_workers(workers)
+        []
+      end)
+    end)
+  end
+
+  defp worker_route({_id, address}) do
+    case String.split(address, "/", parts: 2) do
+      [route, _address] -> route
+      [_local] -> :local
+    end
+  end
+
+  defp start_closeout_task(state, route, fun) do
+    if route in Map.values(state.closeout_tasks) do
+      state
+    else
+      task = Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fun)
+      %{state | closeout_tasks: Map.put(state.closeout_tasks, task.ref, route)}
+    end
+  end
 
   defp finish_sweep(state) do
     ReviewRefresh.advance()
@@ -199,22 +223,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   """
   @spec observe_terminals(module(), {:ok, map()} | :unavailable | nil) :: :ok
   def observe_terminals(repo, snapshot \\ nil) do
-    repo |> observe_and_find_ended_workers(snapshot) |> close_workers()
+    case observe_and_find_ended_workers(repo, snapshot) do
+      :lookup_reachable_workers -> repo |> reachable_ended_workers() |> close_workers()
+      workers -> close_workers(workers)
+    end
   end
 
   defp observe_and_find_ended_workers(repo, snapshot) do
     # Only rows that started before the snapshot was read can be judged by it.
     read_at = DateTime.utc_now(:microsecond)
 
-    case snapshot || HerdrCore.refresh() do
+    snapshot = snapshot || HerdrCore.refresh()
+
+    case snapshot do
       {:ok, %{core_id: core_id, terminals: terminals} = core} ->
         Ownership.observe_core(repo, core_id, Map.get(core, :core_name), terminals, in_flight_ids(repo), read_at)
-        if OfflineSandbox.enabled?(), do: [], else: ended_workers(repo, terminals)
 
       _unavailable ->
-        []
+        :ok
     end
+
+    if OfflineSandbox.enabled?(), do: [], else: closeout_candidates(repo, snapshot)
   end
+
+  defp closeout_candidates(repo, {:ok, %{terminals: terminals}}), do: ended_workers(repo, terminals)
+  defp closeout_candidates(_repo, :unavailable), do: :lookup_reachable_workers
+
+  # A partial list can locate workers for shutdown. Absence from it gives no
+  # evidence that a terminal finished, so it stays out of ownership observation.
+  defp reachable_ended_workers(repo), do: ended_workers(repo, HerdrCore.closeout_terminals())
 
   defp in_flight_ids(repo) do
     repo.all(from(package in WorkPackage, where: package.status in ^Lifecycle.in_flight_statuses(), select: package.id))

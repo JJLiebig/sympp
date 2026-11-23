@@ -653,9 +653,16 @@ test('the watcher carries a dispatched package through ready to a recorded merge
 
 test('an explicit end closes the worker at its forwarded address when Herdr is reachable', async ({ watched: { factory, provider } }) => {
   const architect = await factory.client();
-  await architect.request('Worker closeout');
-  const [wp, skipped] = await architect.addPackages([contract('Remote worker'), contract('Unused package')]);
+  const request = await architect.request('Worker closeout');
+  const [wp, skipped, active] = await architect.addPackages([contract('Remote worker'), contract('Unused package'), contract('Active worker')]);
   await architect.call('dispatch_work_package', { work_package_id: wp, machine: 'workers' });
+  await architect.call('dispatch_work_package', { work_package_id: active, machine: 'stalled' });
+  const stalled = 'stalled/t7';
+  provider.terminal({
+    address: stalled, name: active, state: 'live', labels: { 'sympp.role': 'worker', 'sympp.work_package_id': active },
+  });
+  await factory.tick('terminals');
+
   await architect.call('close_work_package', { work_package_id: wp, outcome: 'abandoned', rationale: 'The work is no longer needed.' });
   await architect.call('close_work_package', { work_package_id: skipped, outcome: 'skipped' });
 
@@ -673,11 +680,14 @@ test('an explicit end closes the worker at its forwarded address when Herdr is r
   expect(provider.terminals.get('workers/t7')?.state).toBe('live');
 
   provider.core = core;
+  provider.terminalListReplies.push(null, [...provider.terminals.values()].filter(({ address }) => address !== stalled));
   await factory.tick('terminals');
   expect(provider.terminals.get('workers/t7')?.state).toBe('finished');
   for (const address of ['t7', 'other/t7', 'workers/t8', 't9']) {
     expect(provider.terminals.get(address)?.state).toBe('live');
   }
+  const detail = await architect.raw(undefined, {}, 'GET', `/api/v1/sympp/herdr/work-requests/${request}`);
+  expect(detail.body.work_packages.find((item: any) => item.id === active).worker_terminal.state).toBe('live');
 });
 
 test('the watcher unqualifies a retargeted, closed or elsewhere-merged PR and watches a closed one again only once it is synced', async ({ watched: { factory, provider, root } }) => {

@@ -25,10 +25,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   @cache_ms 15_000
   @last_good_ms 120_000
   @command_timeout_ms 2_000
-  # Herdr waits up to three seconds for remote machines before returning a partial list.
-  @list_timeout_ms 5_000
-  # Herdr's hangup, terminate and kill escalation can take three seconds.
-  @kill_timeout_ms 5_000
+  # Herdr gives remote machines three seconds to reply before returning a partial list.
+  @worker_lookup_timeout_ms 5_000
+  # Leave time for forwarding and Herdr's three-second hangup and escalation.
+  @kill_timeout_ms 8_000
   # Herdr holds a submitted send for 60 seconds after the last key in an unfinished draft by default.
   @send_timeout_ms 75_000
 
@@ -208,18 +208,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
 
   def live_worker_package_id(_record), do: nil
 
+  @doc "Finds reachable terminals for worker closeout, allowing Herdr to return a partial list."
+  @spec closeout_terminals() :: %{String.t() => map()}
+  def closeout_terminals do
+    with command when is_binary(command) <- Application.get_env(:symphony_elixir, :sympp_herdr_core, "hc"),
+         {:ok, %{terminals: terminals}} <- load_command(command, @worker_lookup_timeout_ms) do
+      terminals
+    else
+      _unavailable -> %{}
+    end
+  end
+
   @doc "Closes a live worker after confirming its binding at the supplied Herdr address."
   @spec close_worker(String.t(), String.t()) :: :ok | :error
   def close_worker(address, work_package_id) do
     with command when is_binary(command) <- Application.get_env(:symphony_elixir, :sympp_herdr_core, "hc"),
          path when is_binary(path) <- System.find_executable(command),
-         {:ok, %{"address" => ^address} = terminal} <- run(path, ["get", address, "--json"]),
+         {:ok, %{"address" => ^address} = terminal} <- run(path, ["get", address, "--json"], @worker_lookup_timeout_ms),
          ^work_package_id <- live_worker_package_id(terminal) do
       case run(path, ["kill", address, "--json"], @kill_timeout_ms) do
         {:ok, %{"state" => "finished"}} -> :ok
         _failed -> :error
       end
     else
+      :error -> :error
+      {:error, _reason} -> :error
       _unconfirmed_or_finished -> :ok
     end
   end
@@ -395,10 +408,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   defp last_good({command, _at, _result, good}, command), do: good
   defp last_good(_cached, _command), do: nil
 
-  defp load_command(command) do
+  defp load_command(command, timeout \\ @command_timeout_ms) do
     with path when is_binary(path) <- System.find_executable(command),
          {:ok, %{"core" => %{"id" => core_id} = core}} when is_binary(core_id) <- run(path, ["server", "status", "--json"]),
-         {:ok, %{"terminals" => records}} when is_list(records) <- list_terminals(path) do
+         {:ok, %{"terminals" => records}} when is_list(records) <- list_terminals(path, timeout) do
       terminals = Map.new(records, fn record -> {record["address"], Map.delete(record, "argv")} end)
 
       snapshot = %{core_id: core_id, terminals: terminals}
@@ -410,7 +423,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
 
   # The CLI's compact `hc ls` output omits labels. `terminal.list` returns full
   # public records, including those forwarded by other machines.
-  defp list_terminals(path) do
+  defp list_terminals(path, timeout) do
     task =
       Task.async(fn ->
         port = Port.open({:spawn_executable, path}, [:binary, :exit_status, :hide, args: ["connect"]])
@@ -423,7 +436,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
         end
       end)
 
-    case Task.yield(task, @list_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+    case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
       {:ok, result} -> result
       _failed -> :error
     end
