@@ -142,14 +142,14 @@ const CI: Record<Ci, Mark> = {
 };
 const CI_UNREAD: Mark = { icon: CircleQuestionMark, tone: "text-faint", spoken: "CI status unavailable" };
 
-// `waiting` is a review with no round on the PR's current head yet; `skipped` one whose mode is none.
+// `waiting` is a review with no result for the PR's current head yet; `skipped` one whose mode is none.
 type ReviewMark = NonNullable<Review["state"]> | "waiting" | "skipped";
 const REVIEW: Record<ReviewMark, Mark> = {
   running: { icon: CircleDashed, tone: "text-review", spoken: "Review: running" },
   findings: { icon: CircleAlert, tone: "text-checks", spoken: "Review: findings" },
   done: { icon: Check, tone: "text-merge/80", spoken: "Review: passed" },
   unknown: { icon: CircleQuestionMark, tone: "text-faint", spoken: "Review: status unavailable" },
-  waiting: { icon: Circle, tone: "text-faint", spoken: "Review: not started" },
+  waiting: { icon: Circle, tone: "text-faint", spoken: "Review: none for latest commit" },
   skipped: { icon: Minus, tone: "text-faint", spoken: "Review: skipped" },
 };
 
@@ -236,6 +236,7 @@ export function ReviewCell({ review, spelled = false }: { review: Review | null;
   return (
     <span className={`flex min-w-0 items-center gap-1 whitespace-nowrap font-mono text-[11px] ${mark.tone}`} title={mark.spoken}>
       <MarkIcon mark={mark} />
+      <span className="sr-only">Review </span>
       <span className="truncate">{reviewLabel(review).text}</span>
     </span>
   );
