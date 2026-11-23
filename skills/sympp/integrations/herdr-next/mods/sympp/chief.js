@@ -21,6 +21,13 @@ export const chiefArgv = (agent, brief) => [...agent.run, ...(MESSAGE[agent.key]
 
 export const chiefSpaceName = (name) => `${name} chief`;
 
+export function chiefTerminalName(name) {
+  const suffix = "-chief";
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-/, "")
+    .slice(0, 32 - suffix.length).replace(/-$/, "");
+  return `${slug || "topic"}${suffix}`;
+}
+
 // Agents whose saved session can be resumed, as herdr-core resumes them after a restart: the arguments
 // after the agent's own command.
 const RESUME = { codex: (id) => ["resume", id], claude: (id) => ["--resume", id] };
