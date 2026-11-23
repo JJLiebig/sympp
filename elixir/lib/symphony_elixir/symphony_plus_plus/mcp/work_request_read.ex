@@ -42,7 +42,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
   defp read(repo, request, view, cursor, _arguments) when view in @live_views do
     # The board needs fresh review evidence. An overview at intake would
     # otherwise cache an empty review scope until the next sweep.
-    if view == "board", do: ReviewRefresh.request(repo, {:request, request.id}, true)
+    if view == "board" and is_nil(request.archived_at), do: ReviewRefresh.request(repo, {:request, request.id}, true)
 
     snapshot(repo, fn ->
       with {:ok, current} <- WorkRequestService.get(repo, request.id) do
@@ -80,7 +80,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
 
     with {:ok, phases} <- Phase.load(repo, [request], packages, repo, deliveries) do
       phase = Map.fetch!(phases, request.id).phase
-      payload = %{"work_request" => %{"id" => request.id, "phase" => phase}, "ended" => ended_counts(ended, deliveries)}
+      work_request = %{"id" => request.id, "phase" => phase} |> put_present("next_action", Phase.next_action(phase))
+      payload = %{"work_request" => work_request, "ended" => ended_counts(ended, deliveries)}
       read_live_view(repo, request, view, payload, {packages, live, deliveries}, cursor)
     end
   end
@@ -121,7 +122,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
       )
 
     report = report_preview(OperatorReport.public(request.report))
-    {action, actor} = request_action(payload["work_request"]["phase"], asks, report, rows)
+    phase = payload["work_request"]["phase"]
+    {action, actor} = request_action(phase, asks, report, rows)
 
     work_request =
       payload["work_request"]
@@ -136,7 +138,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
     payload =
       Map.merge(payload, %{
         "work_request" => work_request,
-        "work_packages" => Enum.map(rows, &overview_row/1),
+        "work_packages" => Enum.map(rows, &overview_row(&1, phase)),
         "asks" => asks,
         "decisions" => Enum.map(decisions, &headline/1),
         "older_decision_count" => repo.aggregate(query, :count, :id) - length(decisions)
@@ -180,7 +182,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
   end
 
   defp board(request, payload, rows, cursor) do
-    board = %{"work_packages" => Enum.map(rows, &board_row/1), "recovery" => recovery_actions(rows)}
+    phase = payload["work_request"]["phase"]
+    recovery = if phase == "archived", do: %{}, else: recovery_actions(rows)
+    board = %{"work_packages" => Enum.map(rows, &board_row(&1, phase)), "recovery" => recovery}
 
     WorkRequestReadPage.rows(
       Map.put(payload, "delivery_board", board),
@@ -357,8 +361,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
     |> put_present("review_state", if(decision.flagged, do: decision.review_state || "recorded"))
   end
 
-  defp overview_row(row) do
-    {action, _actor} = activity(row)
+  defp overview_row(row, phase) do
+    {action, _actor} = activity(row, phase)
     stage = row.operational_state.activity_signal["stage"]
 
     %{"id" => row.id, "title" => preview(row.title, 70), "status" => row.raw_status, "next_action" => preview(action, 140)}
@@ -366,8 +370,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
     |> put_present("pr_url", pr(row)[:url])
   end
 
-  defp board_row(row) do
-    {action, actor} = activity(row)
+  defp board_row(row, phase) do
+    {action, actor} = activity(row, phase)
     signal = row.operational_state.activity_signal
     summary = row.work_package || %{}
     pr = pr(row)
@@ -378,9 +382,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
       "status" => row.raw_status,
       "next_action" => preview(action, 140),
       "next_actor" => actor,
-      "merge_eligibility" => Map.take(row.merge_eligibility, [:eligible, :reason_codes, :next_action])
+      "merge_eligibility" => merge_eligibility(row, phase)
     }
     |> put_present("waiting_reason", signal["waiting_reason"])
+    |> put_present("observation_stale", if(summary[:observation_stale] not in [nil, []], do: summary[:observation_stale]))
+    |> put_blockers(summary)
     |> put_waiting_for(summary[:stacked_on] || [])
     |> put_prerequisite(summary)
     |> put_present("worker", get_in(summary, [:worker_terminal, :address]))
@@ -391,6 +397,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
     |> put_present("review", review(summary))
     |> put_present("review_mode", if(action in ["run_launch_line", "inspect_worker"], do: row.review_mode))
   end
+
+  defp merge_eligibility(_row, "archived"), do: %{eligible: false, reason_codes: ["work_request_archived"], next_action: "restore"}
+  defp merge_eligibility(row, _phase), do: Map.take(row.merge_eligibility, [:eligible, :reason_codes, :next_action])
+
+  defp activity(_row, "archived"), do: {"restore", "operator"}
+  defp activity(row, _phase), do: activity(row)
 
   defp activity(nil), do: {"wait", nil}
   defp activity(%{operational_state: %{key: "needs_closeout"}}), do: {"sync_pr", "architect"}
@@ -439,7 +451,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
   defp recovery("run_launch_line"), do: "If no worker holds the package, repeat dispatch_work_package with its review_mode and run launch_line."
   defp recovery("inspect_worker"), do: "Check the worker and PR. Repeat dispatch_work_package with its review_mode to refresh the assignment."
   defp recovery("sync_pr"), do: "Read the PR on GitHub and sync_pr with its URL."
+  defp recovery("clear_blocker"), do: "Use set_blocker with a blocker_id and active: false. The operator board shows any additional blockers."
   defp recovery(_action), do: nil
+
+  defp put_blockers(row, summary) do
+    ids = get_in(summary, [:blocker_state, :active_ids]) || []
+    visible = ids |> Enum.filter(&(byte_size(&1) <= 256)) |> Enum.take(8)
+    more = length(ids) - length(visible)
+
+    row
+    |> put_present("blocker_ids", if(visible != [], do: visible))
+    |> put_present("more_blockers", if(more > 0, do: more))
+  end
 
   defp put_prerequisite(%{"waiting_for" => _} = row, _summary), do: row
   defp put_prerequisite(row, summary), do: put_waiting_for(row, get_in(summary, [:dependency_signal, :unmet_work_package_ids]) || [])

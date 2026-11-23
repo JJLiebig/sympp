@@ -565,14 +565,15 @@ test('architect integration holds gate a ready PR without reopening work or chan
   }
   expect((await architect.call('set_blocker', hold)).changed).toBe(true);
   expect((await architect.call('set_blocker', hold)).changed).toBe(false);
-  const held = await row(architect, request, wp);
+  const held = (await architect.board(request)).work_packages.find((entry: any) => entry.id === wp);
   expect(held.status).toBe('ready');
   expect(held.merge_eligibility.eligible).toBe(false);
   expect(held.merge_eligibility.reason_codes).toContain('active_blocker');
   expect(held.merge_eligibility.next_action).toBe('clear_blocker');
+  expect(held.blocker_ids).toEqual([hold.blocker_id]);
   expect((await row(architect, request, sibling)).merge_eligibility.eligible).toBe(true);
   expect((await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).metadata).toEqual(metadata);
-  const resolution = { work_package_id: wp, blocker_id: 'integration-authority', active: false, summary: 'Integration authorized.' };
+  const resolution = { work_package_id: wp, blocker_id: held.blocker_ids[0], active: false, summary: 'Integration authorized.' };
   expect((await row(architect, request, wp)).merge_eligibility.eligible).toBe(false);
   expect((await architect.call('set_blocker', resolution)).changed).toBe(true);
   expect((await architect.call('set_blocker', resolution)).changed).toBe(false);
@@ -725,7 +726,8 @@ test('the watcher holds work on unknown GitHub or Review Suite input and follows
     expect(stale.merge_eligibility.reason_codes).toContain('observation_stale');
   }
   expect((await architect.board(request)).work_packages.find((row: any) => row.id === wp)).toMatchObject({
-    next_action: 'wait', merge_eligibility: { eligible: false, reason_codes: expect.arrayContaining(['observation_stale']) },
+    next_action: 'wait', observation_stale: ['github'],
+    merge_eligibility: { eligible: false, reason_codes: expect.arrayContaining(['observation_stale']) },
   });
   provider.github = 'up';
   await factory.tick('sweep');
@@ -751,7 +753,7 @@ test('the watcher holds work on unknown GitHub or Review Suite input and follows
   await review.answer({ traceback: 'Traceback (most recent call last)' } as object, 1);
   await factory.tick('sweep');
   expect(await status(wp)).toBe('dispatched');
-  expect((await row(architect, request, wp)).observation_stale).toEqual(['review']);
+  expect((await architect.board(request)).work_packages.find((entry: any) => entry.id === wp).observation_stale).toEqual(['review']);
   await done('d', 'd');
   await factory.tick('sweep');
   expect(await status(wp)).toBe('ready');

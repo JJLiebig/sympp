@@ -633,6 +633,11 @@ test('the native board\'s operator actions finish, release, complete, archive, r
   expect((await architect.readAsk(request, ask)).state).toBe('withdrawn');
   expect(done.work_packages.find((wp: any) => wp.id === planned).status).toBe('planned');
   expect((await act(`work-requests/${request}/archive`)).body.work_request.phase).toBe('archived');
+  const archived = await architect.call('read_work_request', { work_request_id: request, view: 'board' });
+  expect(archived.work_request).toMatchObject({ phase: 'archived', next_action: 'restore' });
+  expect(archived.delivery_board.work_packages.find((entry: any) => entry.id === planned)).toMatchObject({
+    status: 'planned', next_action: 'restore', next_actor: 'operator', merge_eligibility: { eligible: false },
+  });
   // The browser board drops an archived request and the packages only it links.
   const browser = await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated');
   expect(browser.work_request_details.map((detail: any) => detail.work_request.id)).not.toContain(request);
