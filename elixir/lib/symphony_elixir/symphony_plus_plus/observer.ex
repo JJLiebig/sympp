@@ -71,14 +71,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     Api.create_table()
     Process.send_after(self(), :terminals, 1_000)
     Process.send_after(self(), :sweep, 5_000)
-    {:ok, %{repo: Keyword.fetch!(opts, :repo), pending: nil, sweep_round: 0}}
+    {:ok, %{repo: Keyword.fetch!(opts, :repo), pending: nil, sweep_round: 0, closing_workers: nil}}
   end
 
   @impl true
   def handle_info(:terminals, state) do
-    safely(fn -> observe_terminals(state.repo) end)
+    workers = safely(fn -> observe_and_find_ended_workers(state.repo, nil) end, [])
     Process.send_after(self(), :terminals, @terminal_interval_ms)
-    {:noreply, state}
+    {:noreply, start_worker_closeout(state, workers)}
   end
 
   def handle_info(:sweep, %{pending: nil} = state) do
@@ -95,6 +95,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   def handle_info(:sweep, state), do: {:noreply, state}
 
+  def handle_info({ref, :ok}, %{closing_workers: ref} = state) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, %{state | closing_workers: nil}}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{closing_workers: ref} = state) do
+    {:noreply, %{state | closing_workers: nil}}
+  end
+
   def handle_info({ref, stacks}, %{pending: {ref, publish}} = state) do
     Process.demonitor(ref, [:flush])
     safely(fn -> publish.(stacks) end)
@@ -105,6 +114,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     safely(fn -> publish.(%{}) end)
     finish_sweep(state)
   end
+
+  # Keep the terminal and PR passes responsive while Herdr waits for workers
+  # to exit. Each terminal pass can retry any worker that is still live.
+  defp start_worker_closeout(%{closing_workers: nil} = state, [_ | _] = workers) do
+    task = Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn -> close_workers(workers) end)
+    %{state | closing_workers: task.ref}
+  end
+
+  defp start_worker_closeout(state, _workers), do: state
 
   defp finish_sweep(state) do
     ReviewRefresh.advance()
@@ -181,17 +199,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   """
   @spec observe_terminals(module(), {:ok, map()} | :unavailable | nil) :: :ok
   def observe_terminals(repo, snapshot \\ nil) do
+    repo |> observe_and_find_ended_workers(snapshot) |> close_workers()
+  end
+
+  defp observe_and_find_ended_workers(repo, snapshot) do
     # Only rows that started before the snapshot was read can be judged by it.
     read_at = DateTime.utc_now(:microsecond)
 
     case snapshot || HerdrCore.refresh() do
       {:ok, %{core_id: core_id, terminals: terminals} = core} ->
         Ownership.observe_core(repo, core_id, Map.get(core, :core_name), terminals, in_flight_ids(repo), read_at)
-        unless OfflineSandbox.enabled?(), do: close_ended_workers(repo, terminals)
-        :ok
+        if OfflineSandbox.enabled?(), do: [], else: ended_workers(repo, terminals)
 
       _unavailable ->
-        :ok
+        []
     end
   end
 
@@ -199,12 +220,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     repo.all(from(package in WorkPackage, where: package.status in ^Lifecycle.in_flight_statuses(), select: package.id))
   end
 
-  defp close_ended_workers(repo, terminals) do
+  defp ended_workers(repo, terminals) do
     workers = for {address, record} <- terminals, id = HerdrCore.live_worker_package_id(record), do: {id, address}
     ended = ended_dispatched_ids(repo, Enum.map(workers, &elem(&1, 0)))
+    Enum.filter(workers, fn {id, _address} -> MapSet.member?(ended, id) end)
+  end
 
+  defp close_workers(workers) do
     Enum.each(workers, fn {id, address} ->
-      if MapSet.member?(ended, id) and HerdrCore.close_worker(address, id) == :error do
+      if HerdrCore.close_worker(address, id) == :error do
         Logger.warning("sympp could not close worker terminal #{address} for #{id}")
       end
     end)

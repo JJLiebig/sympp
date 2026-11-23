@@ -25,6 +25,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
   @cache_ms 15_000
   @last_good_ms 120_000
   @command_timeout_ms 2_000
+  # Herdr waits up to three seconds for remote machines before returning a partial list.
+  @list_timeout_ms 5_000
   # Herdr's hangup, terminate and kill escalation can take three seconds.
   @kill_timeout_ms 5_000
   # Herdr holds a submitted send for 60 seconds after the last key in an unfinished draft by default.
@@ -421,7 +423,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.HerdrCore do
         end
       end)
 
-    case Task.yield(task, @command_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+    case Task.yield(task, @list_timeout_ms) || Task.shutdown(task, :brutal_kill) do
       {:ok, result} -> result
       _failed -> :error
     end
