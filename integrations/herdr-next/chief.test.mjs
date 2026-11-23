@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chiefCheckouts, chiefFolders, chiefTerminalName } from './mods/sympp/chief.js';
+import { chiefCheckouts, chiefFolders, chiefSession, chiefTerminalName } from './mods/sympp/chief.js';
 
 test('chief terminal names fit Herdr even for long or punctuation-only topics', () => {
   for (const [topic, name] of [
@@ -17,6 +17,40 @@ test('chief terminal names fit Herdr even for long or punctuation-only topics', 
 
 const factory = { machine: 'build', root: '/srv/ana/Code' };
 const checkout = (folder, machine = null) => ({ folder, machine });
+
+test('a fresh native session supersedes launch arguments only for its own live process', () => {
+  const launched = '11111111-1111-4111-8111-111111111111';
+  const active = '22222222-2222-4222-8222-222222222222';
+  const term = { address: 't1', state: 'live', program: { key: 'codex', agent: true },
+    foreground: { pid: 20, argv: ['codex', '--no-daemon', 'resume', launched] } };
+  const reply = { state: 'live', foreground: { pid: 20 }, status: { app: 'codex' }, resume_session: active };
+  const saved = chiefSession(term, chiefSession(term), reply);
+  assert.equal(saved.session, active);
+  assert.equal(chiefSession(term, saved).session, active, 'the following snapshot still has the original launch arguments');
+  const cleared = chiefSession(term, saved, { ...reply, resume_session: null });
+  assert.equal(chiefSession(term, cleared).session, null, 'a cleared native session does not fall back to the old launch');
+
+  const replacement = { ...term, foreground: { pid: 21, argv: ['codex'] } };
+  assert.equal(chiefSession(replacement, saved, reply).session, null, 'neither a late reply nor a remembered ID belongs to the new process');
+});
+
+test('an unreported Claude conversation cannot resume from a bridge ID or a fork source', () => {
+  const source = '11111111-1111-4111-8111-111111111111';
+  const term = { address: 't1', state: 'live', program: { key: 'claude', agent: true },
+    labels: { 'sympp.session_id': '22222222-2222-4222-8222-222222222222' },
+    foreground: { pid: 20, argv: ['claude', '--resume', source, '--fork-session'] } };
+  assert.equal(chiefSession(term).session, null);
+});
+
+test('a resumed Codex chief takes its conversation from the session positional', () => {
+  const id = '11111111-1111-4111-8111-111111111111';
+  const term = { address: 't1', state: 'live', program: { key: 'codex', agent: false } };
+  const record = (args) => chiefSession({ ...term, foreground: { pid: 20, argv: ['codex', ...args] } });
+  assert.equal(record(['-m', 'gpt-6.2-sol', 'resume', id]).session, id);
+  assert.equal(record(['--profile=chief', 'resume', '-c', 'model="gpt-6.2-sol"', '--', id]).session, id);
+  assert.equal(record(['--profile', 'resume', id]).session, null, 'a profile name does not select a subcommand');
+  assert.equal(record(['resume', '--last', id]).session, null, 'a UUID supplied with --last can be a prompt');
+});
 
 test('a desktop-only topic keeps its team folder on the factory machine', () => {
   const topic = [

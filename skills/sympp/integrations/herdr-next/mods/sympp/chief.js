@@ -32,29 +32,116 @@ export function chiefTerminalName(name) {
 // after the agent's own command.
 const RESUME = { codex: (id) => ["resume", id], claude: (id) => ["--resume", id] };
 
-// Each topic's latest chief: { [topic id]: { terminal, agent, session, cwd, started? } }. Start chief
-// records the terminal it started or resumed; while the chief runs, the sympp panel adds the session
-// Herdr saved for it, kept after its program ends (Herdr then forgets it) so the topic's mark can
-// resume it.
+// Each topic's latest chief: { [topic id]: { terminal, agent, session, cwd, started?, pid?, native? } }.
+// Start chief records its launch. The panel follows the live agent and keeps its conversation
+// after it exits so the mark can resume it.
 export const CHIEF_SESSIONS = "sympp.chief.sessions";
 // How long a chief Start chief just started counts as running before its agent shows in its terminal.
 const STARTING = 30e3;
 
-// A running chief's terminal as a CHIEF_SESSIONS entry, when its agent saved a session it can resume.
-export function chiefSession(term) {
-  const agent = term?.program?.key, session = term?.resume_session;
-  if (term?.state !== "live" || !RESUME[agent] || typeof session !== "string" || !session) return null;
-  return { terminal: term.address, agent, session, cwd: term.foreground?.cwd || term.cwd || "" };
+// Herdr sets program.agent on status reports. The program key also identifies a stock Codex or
+// Claude without reports, and the agent originally picked for a recorded launch.
+export function chiefAgentKey(term, recordedAgent) {
+  const program = term?.program;
+  if (term?.state !== "live" || !program?.key || program.shell || program.key === "shell") return null;
+  return program.agent || program.key === recordedAgent || canResumeAgent(program.key) ? program.key : null;
+}
+const chiefPid = (term) => term.foreground?.pid ?? term.pid ?? null;
+
+// The record associates the terminal with a topic ID. That association survives a topic rename
+// or failure to apply the terminal's labels during launch.
+export function recordedChief(last, terminalList, now) {
+  if (!last?.terminal) return null;
+  const term = terminalList.find((t) => t.address === last.terminal);
+  if (term?.state !== "live") return null;
+  const role = term.labels?.["sympp.role"];
+  if (role && role !== "chief") return null;
+  const starting = last.started > 0 && now - last.started < STARTING;
+  return chiefAgentKey(term, last.agent) || starting ? term : null;
+}
+
+const uuid = (value) => typeof value === "string" && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value) ? value : null;
+
+const CODEX_VALUES = new Set(["-a", "-c", "-C", "-m", "-p", "-s", "--add-dir", "--ask-for-approval", "--cd",
+  "--config", "--disable", "--enable", "--local-provider", "--model", "--profile", "--remote", "--remote-auth-token-env", "--sandbox"]);
+const CODEX_SWITCHES = new Set(["--all", "--approve-for-me", "--auto-account", "--dangerously-bypass-approvals-and-sandbox",
+  "--dangerously-bypass-hook-trust", "--include-non-interactive", "--no-alt-screen", "--no-daemon", "--oss", "--search", "--strict-config", "--worktree"]);
+
+// Codex accepts options before and after resume. A UUID in a prompt or an option value is not
+// the SESSION_ID positional, and --last can reinterpret that positional as a prompt.
+function codexSession(args) {
+  let resume = false, options = true, session = null;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (options && arg === "--") {
+      if (!resume) return null;
+      options = false;
+    } else if (options && arg.startsWith("-")) {
+      if (arg === "--last") return null;
+      if (arg.startsWith("-i") || arg === "--image" || arg.startsWith("--image=")) {
+        while (args[i + 1] && !args[i + 1].startsWith("-")) i++;
+      } else if (CODEX_VALUES.has(arg)) {
+        i++;
+      } else if (!CODEX_SWITCHES.has(arg) && !arg.includes("=") && !CODEX_VALUES.has(arg.slice(0, 2))) {
+        return null;
+      }
+    } else if (!resume) {
+      if (arg !== "resume") return null;
+      resume = true;
+    } else if (!session) {
+      session = uuid(arg);
+      if (!session) return null;
+    }
+  }
+  return session;
+}
+
+// A CLI can name its conversation explicitly. Use the actual agent's arguments so a shell
+// wrapping a different launch, a prompt, or a sympp bridge ID cannot supply the session.
+function launchSession(term, agent) {
+  const argv = term.foreground?.argv?.length ? term.foreground.argv : term.argv ?? [];
+  const command = argv[0]?.split(/[\\/]/).at(-1).toLowerCase().replace(/\.exe$/, "");
+  if (command !== agent && !(agent === "claude" && command === "claude-code")) return null;
+  if (agent === "codex") return codexSession(argv.slice(1));
+  const end = argv.indexOf("--", 1);
+  const args = argv.slice(1, end < 0 ? argv.length : end);
+  const fork = args.includes("--fork-session");
+  for (const [at, arg] of args.entries()) {
+    const [name, value] = arg.split("=", 2);
+    if (name === "--session-id" || (!fork && (name === "--resume" || name === "-r"))) {
+      const session = uuid(value ?? args[at + 1]);
+      if (session) return session;
+    }
+  }
+  return null;
+}
+
+export const canResumeAgent = (agent) => Object.hasOwn(RESUME, agent);
+
+// A fresh core reply can supply an updated native conversation. The app snapshot doesn't
+// refresh resume_session on status events. Keep a known ID only for the same agent and process.
+export function chiefSession(term, last, saved = null) {
+  const agent = chiefAgentKey(term, last?.agent);
+  if (!agent) return null;
+  const pid = chiefPid(term);
+  const same = last?.terminal === term.address && last.agent === agent && (last.pid == null || last.pid === pid);
+  const app = saved?.status?.app;
+  const currentReport = saved?.state === "live" && chiefPid(saved) === pid && (app === agent || (agent === "claude" && app === "claude-code"));
+  const fromCore = currentReport ? uuid(saved.resume_session) : null;
+  const remembered = same ? uuid(last.session) : null;
+  const resumable = canResumeAgent(agent);
+  const native = resumable && (fromCore !== null || (same && last.native === true));
+  let session = null;
+  if (resumable) {
+    session = native ? (currentReport ? fromCore : remembered) : launchSession(term, agent) ?? remembered;
+  }
+  return { terminal: term.address, agent, session, cwd: term.foreground?.cwd || term.cwd || "", pid,
+    ...(native ? { native: true } : {}) };
 }
 
 export const machineOf = (address) => (address.includes("/") ? address.slice(0, address.indexOf("/")) : null);
 
-// The topic's latest chief runs in its terminal: its agent runs there, or Start chief has just started
-// it. That is the topic's chief from its start, before its agent first reaches sympp.
-export const chiefRunning = (last, terminalList, now = Date.now()) => Boolean(last?.terminal) && terminalList.some((k) =>
-  k.address === last.terminal && k.state === "live" && (k.program?.key === last.agent || (last.started > 0 && now - last.started < STARTING)));
-
-export const canResume = (last) => Boolean(last && RESUME[last.agent] && typeof last.session === "string" && last.session);
+export const canResume = (last) => Boolean(last && canResumeAgent(last.agent) && typeof last.session === "string" && last.session);
 
 // Resumes the recorded session with the agent's own command and its brief again, in a new terminal
 // that Start chief labels like the first.
@@ -84,12 +171,6 @@ export async function factoryMachine(endpoint, list, resolve) {
   if (named) return named.name;
   for (const m of list.filter((m) => !m.via && m.target)) if (same(await resolve(m.target).catch(() => null))) return m.name;
   return undefined;
-}
-
-// A labelled chief's terminal while it is live.
-export function chiefTerminal(chief, terminalList) {
-  if (!chief?.terminal) return null;
-  return terminalList.find((t) => t.address === chief.terminal && t.state === "live")?.address ?? null;
 }
 
 const trimmed = (path) => path.replace(/[\\/]+$/, "");
