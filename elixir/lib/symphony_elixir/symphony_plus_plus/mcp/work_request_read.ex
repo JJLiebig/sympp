@@ -40,7 +40,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
   end
 
   defp read(repo, request, view, cursor, _arguments) when view in @live_views do
-    if view != "plan", do: ReviewRefresh.request(repo, {:request, request.id}, true)
+    # The board needs fresh review evidence. An overview at intake would
+    # otherwise cache an empty review scope until the next sweep.
+    if view == "board", do: ReviewRefresh.request(repo, {:request, request.id}, true)
 
     snapshot(repo, fn ->
       with {:ok, current} <- WorkRequestService.get(repo, request.id) do
@@ -385,10 +387,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
     |> put_present("pr_url", pr[:url])
     |> put_present("head_sha", pr[:head_sha])
     |> put_present("current_head_sha", if(pr[:current_head_sha] != pr[:head_sha], do: pr[:current_head_sha]))
-    |> put_present("pr_state", pr[:status])
     |> put_present("ci", ci(pr, summary))
     |> put_present("review", review(summary))
-    |> put_present("review_mode", if(action == "run_launch_line", do: row.review_mode))
+    |> put_present("review_mode", if(action in ["run_launch_line", "inspect_worker"], do: row.review_mode))
   end
 
   defp activity(nil), do: {"wait", nil}
@@ -436,7 +437,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
   end
 
   defp recovery("run_launch_line"), do: "If no worker holds the package, repeat dispatch_work_package with its review_mode and run launch_line."
-  defp recovery("inspect_worker"), do: "Check the worker terminal and PR. Reuse the dispatch if the worker needs a fresh assignment."
+  defp recovery("inspect_worker"), do: "Check the worker and PR. Repeat dispatch_work_package with its review_mode to refresh the assignment."
   defp recovery("sync_pr"), do: "Read the PR on GitHub and sync_pr with its URL."
   defp recovery(_action), do: nil
 
