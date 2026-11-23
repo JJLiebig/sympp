@@ -7,6 +7,15 @@ const path = require("node:path");
 const http = require("node:http");
 const { spawn } = require("node:child_process");
 const { once } = require("node:events");
+const { serverConnection } = require("../../scripts/sympp-remote.js");
+
+test("a stalled SSH connection is distinguishable from a missing token", () => {
+  const connect = (read) => serverConnection("factory", (_command, args) => args[0] === "-G"
+    ? { status: 0, stdout: "hostname factory.example\n" }
+    : read);
+  assert.throws(() => connect({ status: null, error: { code: "ETIMEDOUT" } }), /did not answer over SSH within 30 seconds/);
+  assert.throws(() => connect({ status: 1, stdout: "" }), /Could not read the sympp token over SSH/);
+});
 
 // The installed journey reaches a loopback factory, which needs no token and never drops a
 // request. A tailnet factory's credential and a connection lost mid-mutation stay here.
