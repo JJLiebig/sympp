@@ -440,7 +440,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     %{
       "work_requests" => cards,
       "total_count" => length(cards),
-      "filters" => filters,
+      "filters" => Redactor.redact_output(filters),
       "limit" => limit
     }
     |> maybe_put_next_cursor(next_cursor)

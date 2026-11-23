@@ -40,18 +40,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
           "jsonrpc" => "2.0",
           "id" => "local-list-work-requests",
           "method" => "tools/call",
-          "params" => %{"name" => "list_work_requests", "arguments" => %{"phase" => "planned"}}
+          "params" => %{
+            "name" => "list_work_requests",
+            "arguments" => %{"phase" => "planned", "repo" => work_request.repo}
+          }
         },
         local_server
       )
 
     list_payload = get_in(list_response, ["result", "structuredContent"])
-    assert list_payload["filters"] == %{"phase" => "planned"}
+    redacted_repo = "https://example.test/repo?token=[REDACTED]"
+    assert list_payload["filters"] == %{"phase" => "planned", "repo" => redacted_repo}
+    assert get_in(list_response, ["result", "content", Access.at(0), "text"]) =~ ~s(  repo: "#{redacted_repo}")
     assert list_payload["total_count"] == 1
     assert [%{"id" => "WR-MCP-LOCAL-READ", "title" => listed_title} = listed] = list_payload["work_requests"]
     assert listed_title == "Local [REDACTED] discovery"
-    assert listed["repo"] == "https://example.test/repo?token=[REDACTED]"
-    assert listed["base_branch"] == "feature/[REDACTED]"
+    assert listed["repo"] == redacted_repo
+    refute Map.has_key?(listed, "base_branch")
     refute inspect(list_response) =~ "ghp_localreadsecret"
     refute inspect(list_response) =~ "localreadsecretvalue"
     refute inspect(list_response) =~ "raw-secret-localreadbranch"
