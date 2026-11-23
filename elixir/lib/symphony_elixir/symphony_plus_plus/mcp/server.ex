@@ -420,8 +420,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp run("set_report", arguments, _terminal, %__MODULE__{config: config}) do
     case OperatorReport.set(config.repo, Map.fetch!(arguments, "work_request_id"), arguments) do
-      {:ok, %WorkRequest{} = work_request} ->
-        {:ok, ToolResult.tool_result(%{"work_request_id" => work_request.id, "report" => OperatorReport.public(work_request.report)})}
+      {:ok, %WorkRequest{id: work_request_id}, applied} ->
+        {:ok, ToolResult.receipt_result(%{"work_request_id" => work_request_id, "applied" => applied})}
 
       {:tool_error, reason} ->
         {:error, -32_602, "Invalid params", %{"tool" => "set_report", "reason" => reason}}

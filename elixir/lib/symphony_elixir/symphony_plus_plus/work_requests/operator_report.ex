@@ -14,12 +14,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport do
   @type repo :: module()
   @fields ["brief", "eta", "parking"]
 
-  @doc "Applies a report patch to a WorkRequest and returns the stored report."
-  @spec set(repo(), String.t(), map()) :: {:ok, WorkRequest.t()} | {:error, term()} | {:tool_error, String.t()}
+  @doc "Applies a report patch and returns the WorkRequest and the field operations."
+  @spec set(repo(), String.t(), map()) :: {:ok, WorkRequest.t(), map()} | {:error, term()} | {:tool_error, String.t()}
   def set(repo, work_request_id, arguments) when is_map(arguments) do
-    with {:ok, patch} <- normalize_patch(arguments) do
-      repo.transaction(fn -> store_patch(repo, work_request_id, patch) end, mode: :immediate)
-      |> DashboardPubSub.broadcast_changed_on_success()
+    with {:ok, patch} <- normalize_patch(arguments),
+         {:ok, work_request} <-
+           repo.transaction(fn -> store_patch(repo, work_request_id, patch) end, mode: :immediate)
+           |> DashboardPubSub.broadcast_changed_on_success() do
+      applied =
+        Map.new(patch, fn
+          {field, nil} -> {field, "cleared"}
+          {field, _value} -> {field, "set"}
+        end)
+
+      {:ok, work_request, applied}
     end
   end
 

@@ -121,7 +121,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
       "Move a WorkRequest and its open packages in the source repository to another repository. The owner or a chief can move it. GitHub-confirmed renames keep attached PRs. Resolve source PRs before importing. A move to the current repository changes nothing."
 
   defp description("edit_plan"),
-    do: "Edit a WorkRequest plan you own. See the symphony-architect skill for contract fields."
+    do: "Edit a WorkRequest plan you own. Returns ordered receipts in applied. See the symphony-architect skill for contract fields."
 
   defp description("dispatch_work_package"),
     do:
