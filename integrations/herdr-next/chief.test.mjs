@@ -1,6 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chiefCheckouts, chiefFolders, chiefSession, chiefTerminalName } from './mods/sympp/chief.js';
+import { registerHooks } from 'node:module';
+import { CHIEF_SESSIONS, chiefCheckouts, chiefFolders, chiefSession, chiefTerminalName } from './mods/sympp/chief.js';
+
+const hostModules = {
+  'gpui-kit': 'export const div = null, svg = null, image = null;',
+  'gpui-base': 'export const h_flex = null, v_flex = null, InputState = null, Input = null, Button = null;',
+  herdr: `
+    let host;
+    export const useHost = (next) => { host = next; };
+    export const exec = (...args) => host.exec(...args), hc = (args) => host.hc(args);
+    export const terminals = () => host.terminals, spaces = () => host.spaces;
+    export const shared = (key) => host.shared.get(key), setShared = (key, value) => host.shared.set(key, value);
+    export const layout = () => null, props = null, theme = null, panes = null, run = null,
+      closeOverlay = null, openOverlay = null, knownAgents = null, machines = null, home = null, settings = null;
+  `,
+};
+const hooks = registerHooks({
+  resolve(name, context, next) {
+    if (!Object.hasOwn(hostModules, name)) return next(name, context);
+    return { url: `data:text/javascript,${encodeURIComponent(hostModules[name])}`, shortCircuit: true };
+  },
+});
+const { ChiefStart } = await import('./mods/sympp/chiefview.js');
+const { useHost } = await import('herdr');
+hooks.deregister();
 
 test('chief terminal names fit Herdr even for long or punctuation-only topics', () => {
   for (const [topic, name] of [
@@ -12,6 +36,85 @@ test('chief terminal names fit Herdr even for long or punctuation-only topics', 
     ['abcdefghijklmnopqrstuvwxy more', 'abcdefghijklmnopqrstuvwxy-chief'],
   ]) {
     assert.equal(chiefTerminalName(topic), name);
+  }
+});
+
+const shell = { key: 'shell', shell: true, agent: false };
+const chiefLabels = { 'sympp.role': 'chief', 'sympp.domain': 'Tools' };
+
+// Herdr rejects a name already in use on the machine and releases it once the holder ends.
+async function replaceChief(terminals, { machine = null, last, closesSpace = false, hasShellChildren = false } = {}) {
+  const prefix = machine ? `${machine}/` : '';
+  const existingSpace = { id: `${prefix}chief-space`, name: 'Tools chief', machine };
+  const shared = new Map([[CHIEF_SESSIONS, { tools: last }],
+    ['desk.topics', { groups: [{ id: 'tools', name: 'Tools', spaces: [existingSpace.id] }] }]]);
+  let spaceClosed = false;
+  useHost({ terminals, shared, spaces: [existingSpace],
+    async hc([command, address]) {
+      if (command === 'kill') {
+        // The name remains held until the close completes.
+        await Promise.resolve();
+        terminals.find((term) => term.address === address).state = 'finished';
+        spaceClosed = closesSpace;
+      }
+      return { code: 0 };
+    },
+    async exec(app, [_do, command, json]) {
+      if (app === 'pgrep') return { code: hasShellChildren ? 0 : 1 };
+      if (app === 'powershell.exe') return { code: hasShellChildren ? 1 : 0 };
+      const { terminal_name: name } = JSON.parse(json);
+      if (command === 'tab.new' && spaceClosed) {
+        return { code: 1, stdout: JSON.stringify({ error: `no space "${existingSpace.id}"` }) };
+      }
+      if (name && terminals.some((t) => t.state === 'live' && t.name === name && t.address === `${prefix}t1`)) {
+        return { code: 1, stdout: JSON.stringify({ error: `cannot start a terminal: terminal.run: a live terminal is already named "${name}"` }) };
+      }
+      const terminal = `${prefix}t9`;
+      terminals.push({ address: terminal, state: 'live', name });
+      return { code: 0, stdout: JSON.stringify({ terminal, space: command === 'tab.new' ? existingSpace.id : `${prefix}new-space` }) };
+    },
+  });
+  const start = Object.assign(Object.create(ChiefStart.prototype), { topic: 'tools', name: 'Tools' });
+  await start.place(machine, '/work', ['codex'], { agent: 'codex', session: null, cwd: '/work' });
+  return terminals.find((t) => t.address === shared.get(CHIEF_SESSIONS).tools.terminal);
+}
+
+test('relaunch closes an owned idle shell and gives the replacement the chief name', async () => {
+  const holder = { address: 't1', name: 'tools-chief', state: 'live', program: shell, labels: chiefLabels,
+    pid: 50, foreground: { name: 'pwsh.exe' } };
+  const remote = { ...holder, address: 'factory/t1', labels: undefined, foreground: { name: 'bash' } };
+  const replacement = await replaceChief([holder, remote], { machine: 'factory', last: { terminal: remote.address }, closesSpace: true });
+  assert.equal(remote.state, 'finished');
+  assert.equal(holder.state, 'live', 'the same name on a different machine is unaffected');
+  assert.equal(replacement.name, 'tools-chief');
+
+  const localReplacement = await replaceChief([holder]);
+  assert.equal(holder.state, 'finished', 'the chief labels also establish ownership');
+  assert.equal(localReplacement.name, 'tools-chief');
+});
+
+test('relaunch leaves a live, unowned or depended-on name holder in place', async () => {
+  for (const [program, labels, dependent] of [
+    [{ key: 'codex', agent: false }, chiefLabels, false],
+    [{ key: 'agent', agent: true }, chiefLabels, false],
+    [shell, { ...chiefLabels, 'sympp.domain': 'Other topic' }, false],
+    [shell, chiefLabels, true],
+  ]) {
+    const holder = { address: 't1', name: 'tools-chief', state: 'live', program, labels };
+    const child = { address: 't2', state: 'live', parent: 't1', die_with_parent: true };
+    const replacement = await replaceChief(dependent ? [holder, child] : [holder]);
+    assert.equal(holder.state, 'live');
+    assert.equal(replacement.name, undefined);
+  }
+});
+
+test('relaunch keeps a shell that still has child processes before Herdr reports them', async () => {
+  for (const name of ['pwsh.exe', 'bash']) {
+    const holder = { address: 't1', name: 'tools-chief', state: 'live', program: shell, labels: chiefLabels,
+      pid: 50, foreground: { name } };
+    const replacement = await replaceChief([holder], { hasShellChildren: true });
+    assert.equal(holder.state, 'live');
+    assert.equal(replacement.name, undefined);
   }
 });
 

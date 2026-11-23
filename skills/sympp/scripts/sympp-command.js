@@ -4,6 +4,13 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
+const missingConnection = "sympp has no saved connection. Run sympp --help to see setup options for this machine.";
+
+function setupArgument(value) {
+  if (/^[\w./:@-]+$/.test(value)) return value;
+  return process.platform === 'win32' ? "'" + value.replaceAll("'", "''") + "'" : quote(value);
+}
+
 function installCommand(root) {
   const bin = path.join(os.homedir(), ".local", "bin");
   fs.mkdirSync(bin, { recursive: true });
@@ -30,7 +37,7 @@ function saveConnection(env) {
 }
 async function status() {
   const file = path.join(os.homedir(), ".local", "share", "sympp", "connection.json");
-  if (!fs.existsSync(file)) throw new Error("Run sympp setup first.");
+  if (!fs.existsSync(file)) throw new Error(missingConnection);
   const saved = JSON.parse(fs.readFileSync(file, "utf8"));
   const env = saved.env || saved;
   let endpoint = env.SYMPP_SERVER_URL;
@@ -50,7 +57,7 @@ async function status() {
 }
 async function board() {
   const file = path.join(os.homedir(), ".local", "share", "sympp", "connection.json");
-  if (!fs.existsSync(file)) throw new Error("Run sympp setup first.");
+  if (!fs.existsSync(file)) throw new Error(missingConnection);
   const saved = JSON.parse(fs.readFileSync(file, "utf8"));
   const env = saved.env || saved;
   let endpoint = env.SYMPP_SERVER_URL;
@@ -75,9 +82,22 @@ async function board() {
 }
 async function update() {
   const file = path.join(os.homedir(), '.local', 'share', 'sympp', 'connection.json');
-  if (!fs.existsSync(file)) throw new Error('Run sympp setup first.');
+  if (!fs.existsSync(file)) throw new Error(missingConnection);
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-  if (!saved.setup) throw new Error('Run sympp setup once to save the server and host selection, then retry sympp update.');
+  if (!saved.setup) throw new Error('sympp has no saved setup selections. Run sympp --help for setup options, then retry sympp update.');
+  const { server, hosts, cwd } = saved.setup;
+  const setupArgs = [...(server ? ['--server', server] : []), '--host', hosts];
+  const setupCommand = ['sympp', ...setupArgs.map(setupArgument)].join(' ');
+  const setupSettings = [
+    ...['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'HERDR_APP_HOME'].filter(key => saved.setup.homes?.[key]),
+    ...['SYMPP_REMOTE_HOME', 'SYMPP_REMOTE_PORT'].filter(key => saved.setup.remote?.[key]),
+    ...['SYMPP_HOME', 'SYMPP_DATABASE', 'SYMPP_RUNTIME_FILE', 'SYMPP_BACKEND_PORT', 'SYMPP_LOG_DIR', 'SYMPP_OPEN_DASHBOARD']
+      .filter(key => saved.env?.[key]),
+  ];
+  const retrySettings = saved.setup.remote?.SYMPP_REMOTE_SERVICE ? [...setupSettings, 'SYMPP_REMOTE_SERVICE'] : setupSettings;
+  const setupRetry = retrySettings.length
+    ? `Setup failed during update. Restore any custom values for ${retrySettings.join(', ')} before running ${setupCommand}`
+    : `Setup failed during the update. Rerun setup with ${setupCommand}`;
   const env = { ...process.env };
   for (const key of ['SYMPP_REMOTE_HOME', 'SYMPP_REMOTE_PORT', 'SYMPP_REMOTE_SERVICE', 'SYMPP_BACKEND_PORT', 'SYMPP_LOG_DIR', 'SYMPP_OPEN_DASHBOARD']) delete env[key];
   Object.assign(env, saved.env, saved.setup.homes, saved.setup.remote);
@@ -98,24 +118,28 @@ async function update() {
     const skillCheckFailed = label === 'skill' && /Failed to check skills|No installed skills found|No global skills tracked|No project skills|cannot be (?:checked|updated) automatically|Skipped/i.test((result.stdout || '') + (result.stderr || ''));
     if (result.error || result.status !== 0 || skillCheckFailed) {
       process.stderr.write((result.stdout || '') + (result.stderr || ''));
-      failures.push(`${label} failed. ${label === 'skill' ? 'Run npx skills update sympp -g, then retry sympp update.' : label === 'setup' ? 'Run sympp setup again with your original server and host selection.' : 'Inspect the factory update error, then retry sympp update.'}`);
+      failures.push(label === 'setup'
+        ? setupRetry
+        : 'skill failed. Run npx skills update sympp -g, then retry sympp update.');
       return;
     }
-    process.stdout.write(label === 'factory' ? result.stdout : `${label}: updated\n`);
+    process.stdout.write(`${label}: updated\n`);
   };
   if (process.platform === 'win32') step('skill', 'powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '& npx.cmd skills update sympp -g; exit $LASTEXITCODE'], { cwd: os.homedir() });
   else step('skill', 'npx', ['skills', 'update', 'sympp', '-g'], { cwd: os.homedir() });
   // Spawn after the skill update so setup comes from the newly installed bundle.
-  step('setup', process.execPath, [path.join(__dirname, 'setup-sympp.js'), '--host', saved.setup.hosts,
-    ...(saved.setup.server ? ['--server', saved.setup.server] : [])], { cwd: saved.setup.cwd });
-  if (saved.setup.server) {
+  step('setup', process.execPath, [path.join(__dirname, 'setup-sympp.js'), ...setupArgs], { cwd });
+  if (server) {
     const script = fs.readFileSync(path.join(__dirname, 'update-sympp-service.sh'), 'utf8');
     const service = saved.setup.remote?.SYMPP_REMOTE_SERVICE || 'sympp';
-    if (!/^[a-zA-Z0-9_-]+$/.test(service)) throw new Error('Invalid remote service name. Run sympp setup again.');
-    if (saved.setup.server.startsWith('http://')) {
-      const endpoint = new URL(saved.setup.server);
+    if (!/^[a-zA-Z0-9_-]+$/.test(service)) {
+      const restore = setupSettings.length ? ` and restore any custom values for ${setupSettings.join(', ')}` : '';
+      throw new Error(`The saved remote service name is invalid. Set SYMPP_REMOTE_SERVICE to the correct service name${restore} before running ${setupCommand}`);
+    }
+    if (server.startsWith('http://')) {
+      const endpoint = new URL(server);
       if (process.platform === 'linux' && ['127.0.0.1', 'localhost'].includes(endpoint.hostname)) await factory('bash', ['-s', '--', service, endpoint.port || '80'], script);
-    } else await factory('ssh', ['-o', 'BatchMode=yes', saved.setup.server, `bash -s -- ${quote(service)}`], script);
+    } else await factory('ssh', ['-o', 'BatchMode=yes', server, `bash -s -- ${quote(service)}`], script);
   }
   if (failures.length) throw new Error(failures.join(' '));
 }
