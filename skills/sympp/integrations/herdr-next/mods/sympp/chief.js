@@ -141,6 +141,18 @@ export function chiefSession(term, last, saved = null) {
 
 export const machineOf = (address) => (address.includes("/") ? address.slice(0, address.indexOf("/")) : null);
 
+export function idleChiefNameHolder(terminalList, machine, terminalName, topicName, last) {
+  const holder = terminalList.find((t) => t.state === "live" && t.name === terminalName && machineOf(t.address) === machine);
+  if (!holder || holder.reason === "spawn_pending") return null;
+  const { labels, program } = holder;
+  const owned = last?.terminal === holder.address || (labels?.["sympp.role"] === "chief" && labels["sympp.domain"] === topicName);
+  const idle = !program || (!program.agent && (program.shell || program.key === "shell"));
+  if (!owned || !idle || recordedChief(last, [holder], Date.now())) return null;
+  // Core also ends terminals that depend on this parent when it exits.
+  if (terminalList.some((t) => t.state === "live" && t.parent === holder.address && t.die_with_parent)) return null;
+  return holder;
+}
+
 export const canResume = (last) => Boolean(last && canResumeAgent(last.agent) && typeof last.session === "string" && last.session);
 
 // Resumes the recorded session with the agent's own command and its brief again, in a new terminal

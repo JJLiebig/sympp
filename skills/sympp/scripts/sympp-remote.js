@@ -27,6 +27,7 @@ function serverConnection(host, run = spawnSync) {
   const hostname = config.status === 0 && config.stdout.match(/^hostname\s+(.+)$/mi)?.[1].trim();
   if (!hostname) throw new Error("Could not resolve the SSH server hostname.");
   const result = run("ssh", ["-o", "BatchMode=yes", host, factoryHome ? "cat " + "'" + (factoryHome + '/remote-token').replaceAll("'", "'\\''") + "'" : "cat ~/.agents/splusplus/remote-token"], options);
+  if (result.error?.code === "ETIMEDOUT") throw new Error("The server did not answer over SSH within 30 seconds. Check SSH access and try again.");
   if (result.error || result.status !== 0 || !result.stdout.trim()) throw new Error("Could not read the sympp token over SSH.");
   // Remote factories expose authenticated HTTP on the private tailnet by contract.
   return { endpoint: origin(`http://${hostname.includes(":") ? `[${hostname}]` : hostname}:${port}`), token: result.stdout.trim() };

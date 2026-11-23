@@ -11,7 +11,7 @@ import { div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input, Button } from "gpui-base";
 import { theme, props, closeOverlay, openOverlay, knownAgents, machines, spaces, terminals, panes, shared, setShared, exec, hc, home, layout, run, settings } from "herdr";
 import { chiefBrief, chiefArgv, chiefLabelArgs, chiefSpaceName, chiefTerminalName, factoryMachine, chiefCheckouts, chiefFolders, intoTopic, isChiefSpace, CHIEF_SPACES, chiefMenu,
-  CHIEF_SESSIONS, canResume, machineOf, resumeArgv } from "./chief.js";
+  CHIEF_SESSIONS, canResume, machineOf, resumeArgv, idleChiefNameHolder } from "./chief.js";
 import { chiefEntries, deskOf } from "./levels.js";
 
 const W = 560;
@@ -33,6 +33,44 @@ async function app(command, args) {
   try { out = JSON.parse(result.stdout); } catch {}
   if (result.code !== 0 || !out?.terminal) throw new Error(out?.error || result.stderr.trim() || "Herdr didn't say why");
   return out;
+}
+
+function launchChief(command, args, terminalName) {
+  return app(command, { ...args, terminal_name: terminalName }).catch((error) => {
+    // Both refusals happen before creating a terminal, so retrying cannot create a second one.
+    const message = String(error?.message ?? error);
+    const unsupported = `${command}: unknown argument(s): terminal_name;`;
+    const taken = `cannot start a terminal: terminal.run: a live terminal is already named "${terminalName}"`;
+    if (message.startsWith(unsupported) || message.startsWith(taken)) return app(command, args);
+    throw error;
+  });
+}
+
+// A foreground shell can still have a job running in the background.
+async function shellHasNoChildren(holder, machine) {
+  const { pid } = holder;
+  if (pid == null) return true;
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  const options = { on: machine, timeout: 3000 };
+  const executable = holder.foreground?.name || holder.argv?.[0] || "";
+  if (/\.exe$/i.test(executable)) {
+    const check = `if (Get-CimInstance Win32_Process -Filter 'ParentProcessId = ${pid}' -ErrorAction Stop) { exit 1 }`;
+    const result = await exec("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", check], options).catch(() => null);
+    return result?.code === 0;
+  }
+  const result = await exec("pgrep", ["-P", String(pid)], options).catch(() => null);
+  return result?.code === 1;
+}
+
+async function releaseChiefName(machine, terminalName, topicName, topic) {
+  const findHolder = () => idleChiefNameHolder(terminals(), machine, terminalName, topicName, shared(CHIEF_SESSIONS)?.[topic]);
+  const holder = findHolder();
+  if (!holder || !(await shellHasNoChildren(holder, machine))) return false;
+  const current = findHolder();
+  if (current?.address !== holder.address || current.pid !== holder.pid) return false;
+  // Kill by address and wait for Core to finish. A terminal may already have exited.
+  await hc(["kill", holder.address]).catch(() => {});
+  return true;
 }
 
 // Herdr's first sentence says what failed; the rest is advice for scripts.
@@ -160,18 +198,20 @@ export class ChiefStart {
   // Starts the chief as the "chief" tab in the topic's chief space on the machine, made once and
   // reused, and records its terminal as the topic's latest chief.
   async place(machine, folder, argv, record) {
-    const { own } = this.where(machine);
-    const command = own ? "tab.new" : "space.new";
-    const target = own ? { space: own.id, name: "chief" }
-      : { name: chiefSpaceName(this.name), tab: "chief", machine: machine ?? "" };
-    const args = { ...target, argv, ...(folder ? { folder } : {}) };
     const terminalName = chiefTerminalName(this.name);
-    const made = await app(command, { ...args, terminal_name: terminalName }).catch((error) => {
-      // Both refusals happen before creating a terminal, so retrying cannot create a second one.
-      const message = String(error?.message ?? error);
-      const unsupported = `${command}: unknown argument(s): terminal_name;`;
-      const taken = `cannot start a terminal: terminal.run: a live terminal is already named "${terminalName}"`;
-      if (message.startsWith(unsupported) || message.startsWith(taken)) return app(command, args);
+    const released = await releaseChiefName(machine, terminalName, this.name, this.topic);
+    let { own } = this.where(machine);
+    const launch = (space) => {
+      const target = space ? { space: space.id, name: "chief" }
+        : { name: chiefSpaceName(this.name), tab: "chief", machine: machine ?? "" };
+      return launchChief(space ? "tab.new" : "space.new", { ...target, argv, ...(folder ? { folder } : {}) }, terminalName);
+    };
+    const made = await launch(own).catch((error) => {
+      // Closing the only pane can remove the chief space before Herdr adds the new tab.
+      if (released && own && error.message === `no space ${JSON.stringify(own.id)}`) {
+        own = null;
+        return launch(null);
+      }
       throw error;
     });
     // Its labels make it the topic's chief for sympp. Without them it still runs, unattributed.
@@ -239,13 +279,14 @@ export class ChiefStart {
         const machine = machineOf(last.terminal);
         const agent = (await knownAgents({ on: machine })).find((a) => a.key === last.agent && a.installed);
         if (!agent) throw new Error(`${last.agent} isn't installed on ${machine ?? "this computer"}.`);
-        // The finished chief's tab, when that terminal is all it holds and it is in the chief space.
-        const pane = panes().find((p) => p.terminal === last.terminal);
-        const space = pane && spaces().find((s) => s.tabs.some((t) => t.id === pane.tab));
-        const old = space && space.id === this.where(machine).own?.id && space.tabs.find((t) => t.id === pane.tab).panes === 1 ? pane.tab : null;
         made = await this.place(machine, last.cwd, resumeArgv(agent, last, this.name), last);
         if (!(await this.settled(made.terminal, last.agent, cx))) throw new Error("it ended right away.");
-        if (old) run("tab.close", { id: old, confirmed: true });
+        // Close only the finished chief's tab, when it contains just that terminal.
+        const pane = panes().find((p) => p.terminal === last.terminal);
+        if (pane && this.where(machine).own?.tabs.some((t) => t.id === pane.tab && t.panes === 1) &&
+            !terminals().some((t) => t.address === last.terminal && t.state === "live")) {
+          run("tab.close", { id: pane.tab, confirmed: true });
+        }
         this.close();
       } catch (error) {
         // A failed resume leaves no tab behind, and the topic its previous chief.
