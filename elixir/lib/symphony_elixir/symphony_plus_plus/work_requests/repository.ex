@@ -95,8 +95,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   @spec list(repo(), map() | keyword()) :: {:ok, [WorkRequest.t()]} | {:error, error()}
   def list(repo, filters \\ %{}) when is_atom(repo) and (is_map(filters) or is_list(filters)) do
     filters = normalize_keys(filters)
+    query = from(work_request in list_query(filters), order_by: [asc: work_request.inserted_at, asc: work_request.id])
 
-    repo.all(list_query(filters))
+    repo.all(query)
     |> filter_derived(repo, filters)
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
@@ -107,7 +108,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   def list_page(repo, filters, limit, cursor)
       when is_atom(repo) and (is_map(filters) or is_list(filters)) and is_integer(limit) and limit > 0 do
     filters = normalize_keys(filters)
-    collect_page(repo, list_query(filters), filters, limit, cursor, [])
+    query = from(work_request in list_query(filters), order_by: [desc: work_request.inserted_at, desc: work_request.id])
+    collect_page(repo, query, filters, limit, cursor, [])
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
@@ -294,15 +296,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     filters = normalize_keys(filters)
 
     base_query =
-      from(work_request in WorkRequest,
-        order_by: [asc: work_request.inserted_at, asc: work_request.id]
-      )
-
-    base_query =
       if include_archived?(filters) or Map.get(filters, "phase") == "archived" do
-        base_query
+        WorkRequest
       else
-        from(work_request in base_query, where: is_nil(work_request.archived_at))
+        from(work_request in WorkRequest, where: is_nil(work_request.archived_at))
       end
 
     Enum.reduce(filters, base_query, fn
@@ -328,8 +325,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   defp page_after(query, {%DateTime{} = inserted_at, id}) when is_binary(id) do
     from(work_request in query,
       where:
-        work_request.inserted_at > ^inserted_at or
-          (work_request.inserted_at == ^inserted_at and work_request.id > ^id)
+        work_request.inserted_at < ^inserted_at or
+          (work_request.inserted_at == ^inserted_at and work_request.id < ^id)
     )
   end
 

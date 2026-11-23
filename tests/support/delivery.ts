@@ -9,7 +9,7 @@ import { Factory, type Client } from './factory.js';
 type Reply = { stdout: string; exitCode: number };
 
 // A terminal as the factory host's herdr-core lists it.
-export type Terminal = { address: string; state: 'live' | 'finished'; cwd?: string; parent?: string; title?: string; labels?: Record<string, string> };
+export type Terminal = { address: string; state: 'live' | 'finished'; name?: string; status?: string; cwd?: string; parent?: string; title?: string; labels?: Record<string, string> };
 
 // Own only the external protocols: the `gh` and `hc` CLIs, and GitHub's HTTP
 // API the Observer reads. One PR model (`set`) answers both `gh pr view` and
@@ -33,6 +33,7 @@ export class Provider {
   // herdr-core: `core` null is unreachable. `sent` records `hc send`.
   core: { id: string; name: string } | null = { id: 'acceptance-core', name: 'acceptance' };
   readonly terminals = new Map<string, Terminal>();
+  readonly terminalListReplies: (Terminal[] | null)[] = [];
   readonly sent: string[][] = [];
   readonly execRoutes: string[] = [];
   private terminalGetRequested?: (address: string) => void;
@@ -128,7 +129,9 @@ export class Provider {
     const [command, ...rest] = argv;
     if (command === 'server' && rest.join(' ') === 'status --json') return json({ core: this.core });
     if (command === 'connect' && rpc?.method === 'terminal.list') {
-      return { stdout: JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result: { terminals: [...this.terminals.values()] } }) + '\n', exitCode: 0 };
+      const terminals = this.terminalListReplies.shift();
+      if (terminals === null) return { stdout: 'terminal list unavailable', exitCode: 1 };
+      return { stdout: JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result: { terminals: terminals ?? [...this.terminals.values()] } }) + '\n', exitCode: 0 };
     }
     if (command === 'ls' && rest[0] === '--all' && rest[1] === '--json') {
       const [key, value] = rest[2] === '--label' ? rest[3].split('=') : [];
@@ -137,6 +140,11 @@ export class Provider {
       return json({ terminals: listed.map(({ labels, ...terminal }) => (labels?.['sympp.role'] === 'worker' ? terminal : { ...terminal, labels })) });
     }
     if (command === 'get' && rest[1] === '--json' && this.terminals.has(rest[0])) return json(this.terminals.get(rest[0]));
+    if (command === 'kill' && rest[1] === '--json' && this.terminals.has(rest[0])) {
+      const address = rest[0];
+      this.terminal({ address, state: 'finished' });
+      return json(this.terminals.get(address));
+    }
     if (command === 'send') {
       this.sent.push(rest);
       return json({ ok: true });

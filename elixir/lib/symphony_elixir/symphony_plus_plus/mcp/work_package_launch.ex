@@ -240,18 +240,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageLaunch do
 
     (["hc", "run", "--bg"] ++
        machine_args ++
-       ["--cwd", worktree_path, "--name", terminal_name(work_package.id)] ++
+       ["--cwd", worktree_path, "--name", HerdrCore.worker_name(work_package.id)] ++
        ["--label", "sympp.role=worker", "--label", "sympp.work_package_id=" <> work_package.id] ++ review_label ++ ["--", agent])
     |> Enum.map_join(" ", &shell_arg/1)
     |> Kernel.<>(" " <> prompt_arg(assignment_file))
-  end
-
-  # Herdr names are 1-32 characters of a-z, 0-9, - and _.
-  defp terminal_name(work_package_id) do
-    case work_package_id |> String.downcase() |> String.replace(~r/[^a-z0-9_-]/, "-") |> String.slice(0, 32) do
-      "" -> "worker"
-      name -> name
-    end
   end
 
   defp prompt_arg(file) do
