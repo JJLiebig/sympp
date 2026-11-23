@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as M from './mods/sympp/model.js';
 import * as L from './mods/sympp/levels.js';
+import { canResume, chiefSession, resumeArgv } from './mods/sympp/chief.js';
 import { NOW, chiefTerminals, deskFixture } from './fixture.mjs';
+
+const topicChief = (topic, last, list, now = NOW) => L.chiefEntries([topic], { [topic.id]: last }, list, null, now)[0];
 
 test('a chief is Live only after a helper check of the chief session in its own terminal, else unknown', () => {
   const [herdr, live] = M.chiefsOf(chiefTerminals());
@@ -25,20 +28,72 @@ test('a chief is Live only after a helper check of the chief session in its own 
   assert.equal(L.chiefAgent(live, bindings, [terminal], checks, NOW).state, 'unknown', 'no chief session in its terminal is unknown');
 });
 
-test('a labelled chief and Start chief share one entry without bypassing verified liveness', () => {
-  const term = { address: 'build/t9', state: 'live', program: { key: 'codex' }, labels: { 'sympp.role': 'chief', 'sympp.domain': 'Herdr' } };
-  const [chief] = M.chiefsOf([term]);
-  const topic = { name: chief.domain };
-  const latest = { terminal: 'build/t9', agent: 'codex' };
-  const unchecked = L.chiefAgent(chief, [], [term], {}, NOW);
-  const entries = (list, last, c = chief, agent = unchecked) => L.chiefEntries(topic, [{ chief: c, agent }], last, list, NOW);
-  const expected = [{ domain: chief.domain, terminal: 'build/t9' }];
-  assert.deepEqual(entries([term]), [{ domain: chief.domain, terminal: null }], 'labels and a live terminal alone never prove a running chief');
-  assert.deepEqual(entries([term], latest), expected, 'dedupe by terminal even without a helper result');
-  assert.deepEqual(entries([term], latest, chief, { state: 'live', binding: { address: term.address } }), expected);
-  assert.equal(entries([term], latest, { ...chief, terminal: 'other/t9' }).length, 2, 'another terminal is another chief');
-  assert.deepEqual(entries([{ ...term, program: { key: 'shell' } }], latest),
-    [{ domain: chief.domain, terminal: null }], 'a shell left behind is not a running chief');
+test('a newly started chief has a 30-second grace while its terminal is live', () => {
+  const term = { address: 'build/t9', state: 'live', program: { key: 'shell', agent: false }, labels: { 'sympp.role': 'chief', 'sympp.domain': 'Herdr' } };
+  const topic = { id: 'herdr', kind: 'topic', name: 'Herdr' };
+  const last = { terminal: term.address, agent: 'codex', started: NOW };
+  const entries = (list, at) => topicChief(topic, last, list, at).entries;
+  assert.deepEqual(entries([term], NOW + 29_999), [{ domain: topic.name, terminal: term.address }]);
+  assert.deepEqual(entries([term], NOW + 30_000), [{ domain: topic.name, terminal: null }]);
+  assert.deepEqual(entries([{ ...term, state: 'finished' }], NOW), []);
+});
+
+for (const [name, domain, recorded, running] of [
+  ['an agent switches in the recorded terminal', 'Nextide-Kraken', 'build/t1', 'build/t1'],
+  ['a different labelled terminal is running the chief', 'Tools', 'build/t2', 'build/t3'],
+]) {
+  test(`the topic mark and resume command follow the chief when ${name}`, () => {
+    const topic = { id: 'topic', name: domain, kind: 'topic' };
+    const labels = { 'sympp.role': 'chief', 'sympp.domain': domain };
+    const oldSession = '11111111-1111-4111-8111-111111111111';
+    const currentSession = '22222222-2222-4222-8222-222222222222';
+    const last = { terminal: recorded, agent: 'codex', session: oldSession };
+    const live = { address: running, state: 'live', labels, program: { key: 'claude', agent: false },
+      argv: ['codex', 'resume', oldSession], foreground: { pid: 20, argv: ['claude', '--model', 'opus', '--resume', currentSession], cwd: '/src' } };
+    const list = [{ ...live, address: 'build/t4', labels: { ...labels, 'sympp.domain': 'Other' } }, live];
+    if (recorded !== running) list.push({ address: recorded, state: 'finished', labels });
+    const { entries, terminal } = topicChief(topic, last, list);
+    assert.deepEqual(entries, [{ domain, terminal: running }]);
+
+    const saved = chiefSession(terminal, last);
+    assert.deepEqual([saved.terminal, saved.agent, saved.session, saved.cwd], [running, 'claude', currentSession, '/src']);
+    assert.equal(canResume(saved), true);
+    assert.deepEqual(resumeArgv({ run: ['claude'] }, saved, domain).slice(0, 3), ['claude', '--resume', currentSession]);
+  });
+}
+
+test('a recorded chief keeps its topic after a rename or failure to apply labels', () => {
+  const topic = { id: 'same-topic-id', kind: 'topic', name: 'New name' };
+  const last = { terminal: 't1', agent: 'codex' };
+  const term = { address: 't1', state: 'live', program: { key: 'codex', agent: false } };
+  for (const labels of [{ 'sympp.role': 'chief', 'sympp.domain': 'Old name' }, {}]) {
+    const list = [{ ...term, labels }];
+    const { entries } = topicChief(topic, last, list);
+    assert.deepEqual(entries, [{ domain: topic.name, terminal: term.address }]);
+  }
+});
+
+test('reusing a renamed topic’s former name leaves its chief with the original topic', () => {
+  const renamed = { id: 'original-tools', kind: 'topic', name: 'Platform' };
+  const tools = { id: 'new-tools', kind: 'topic', name: 'Tools' };
+  const term = { address: 't1', state: 'live', program: { key: 'codex', agent: false },
+    labels: { 'sympp.role': 'chief', 'sympp.domain': 'Tools' } };
+  const saved = { [renamed.id]: { terminal: term.address, agent: 'codex' } };
+  const [fresh, original] = L.chiefEntries([tools, renamed], saved, [term], null, NOW);
+  assert.deepEqual(fresh.entries, []);
+  assert.equal(fresh.terminal, null);
+  assert.deepEqual(original.entries, [{ domain: 'Platform', terminal: term.address }]);
+});
+
+test('a stopped chief with an exact domain cannot hide the running chief with a shorter domain', () => {
+  const topic = { id: 'kraken', kind: 'topic', name: 'Nextide-Kraken' };
+  const shell = { address: 't1', state: 'live', program: { key: 'shell', agent: false },
+    labels: { 'sympp.role': 'chief', 'sympp.domain': 'Nextide-Kraken' } };
+  const live = { address: 't2', state: 'live', program: { key: 'codex', agent: false },
+    labels: { 'sympp.role': 'chief', 'sympp.domain': 'Kraken' } };
+  const list = [shell, live];
+  const { entries } = topicChief(topic, { terminal: shell.address, agent: 'claude' }, list);
+  assert.deepEqual(entries, [{ domain: 'Kraken', terminal: live.address }, { domain: 'Nextide-Kraken', terminal: null }]);
 });
 
 // Tasks as the board sends them: each with its repository, its owner (worked_on) and the chief it was
