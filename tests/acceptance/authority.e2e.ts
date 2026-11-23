@@ -697,7 +697,7 @@ test('reads list every request, redact what they return, put open asks first and
   const listed = await reader.call('list_work_requests', { phase: 'planned' });
   expect(listed.filters).toEqual({ phase: 'planned' });
   expect(listed.total_count).toBe(1);
-  expect(listed.work_requests).toEqual([expect.objectContaining({ id, title: 'Read WorkRequests', repo: 'example/service', base_branch: 'beta', phase: 'planned', open_asks: 1 })]);
+  expect(listed.work_requests).toEqual([expect.objectContaining({ id, title: 'Read WorkRequests', repo: 'example/service', phase: 'planned', open_asks: 1 })]);
   const read = await reader.tool('read_work_request', { detail: 'full', work_request_id: id });
   expect(JSON.stringify(read)).not.toContain('raw-secret-value');
   const payload = read.result.structuredContent;

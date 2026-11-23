@@ -1,5 +1,5 @@
 {
-  "mcp_contract_fingerprint": "a99cc850704b8b2bf6a8595d7d242b7cacadd6eea785155418dc7300896a5825",
+  "mcp_contract_fingerprint": "f83a287aa1478051ee01855834bd6d02239c713645f10cd2b8281599e6659019",
   "tool_sets": {
     "owner_gated_tools": [
       "move_work_request",
