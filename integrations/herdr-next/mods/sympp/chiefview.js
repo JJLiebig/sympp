@@ -10,7 +10,7 @@
 import { div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input, Button } from "gpui-base";
 import { theme, props, closeOverlay, openOverlay, knownAgents, machines, spaces, terminals, panes, shared, setShared, exec, hc, home, layout, run, settings } from "herdr";
-import { chiefBrief, chiefArgv, chiefLabelArgs, chiefSpaceName, factoryMachine, chiefCheckouts, chiefFolders, intoTopic, isChiefSpace, CHIEF_SPACES, chiefMenu,
+import { chiefBrief, chiefArgv, chiefLabelArgs, chiefSpaceName, chiefTerminalName, factoryMachine, chiefCheckouts, chiefFolders, intoTopic, isChiefSpace, CHIEF_SPACES, chiefMenu,
   CHIEF_SESSIONS, canResume, chiefRunning, machineOf, resumeArgv } from "./chief.js";
 
 const W = 560;
@@ -155,9 +155,19 @@ export class ChiefStart {
   // reused, and records its terminal as the topic's latest chief.
   async place(machine, folder, argv, record) {
     const { own } = this.where(machine);
-    const made = own
-      ? await app("tab.new", { space: own.id, name: "chief", argv, ...(folder ? { folder } : {}) })
-      : await app("space.new", { name: chiefSpaceName(this.name), tab: "chief", argv, ...(folder ? { folder } : {}), machine: machine ?? "" });
+    const command = own ? "tab.new" : "space.new";
+    const target = own ? { space: own.id, name: "chief" }
+      : { name: chiefSpaceName(this.name), tab: "chief", machine: machine ?? "" };
+    const args = { ...target, argv, ...(folder ? { folder } : {}) };
+    const terminalName = chiefTerminalName(this.name);
+    const made = await app(command, { ...args, terminal_name: terminalName }).catch((error) => {
+      // Both refusals happen before creating a terminal, so retrying cannot create a second one.
+      const message = String(error?.message ?? error);
+      const unsupported = `${command}: unknown argument(s): terminal_name;`;
+      const taken = `cannot start a terminal: terminal.run: a live terminal is already named "${terminalName}"`;
+      if (message.startsWith(unsupported) || message.startsWith(taken)) return app(command, args);
+      throw error;
+    });
     // Its labels make it the topic's chief for sympp. Without them it still runs, unattributed.
     await hc(chiefLabelArgs(made.terminal, this.name)).catch(() => {});
     if (!own) {
