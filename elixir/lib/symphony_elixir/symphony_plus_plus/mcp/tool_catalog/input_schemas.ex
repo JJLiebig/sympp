@@ -168,8 +168,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   defp tool_schema("ask") do
     schema(
       %{
-        "work_request_id" => described_string_schema("Omit for a card ask."),
-        "work_package_id" => string_schema(),
+        "work_request_id" => string_schema(),
+        "work_package_id" => described_string_schema("Requires work_request_id. The ask is withdrawn when the package ends."),
         "question" => string_schema(),
         "decision_prompt" => decision_prompt_schema()
       },

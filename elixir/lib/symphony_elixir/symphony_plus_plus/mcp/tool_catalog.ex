@@ -139,7 +139,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
       "Any Herdr terminal can log a decision. Flag in-scope product calls for operator review. Use one plain sentence each when flagged (decision ≤160 chars, rationale ≤240). Put evidence in the report."
 
   defp description("ask"),
-    do: "Chief only. Ask the operator on the board. Answers arrive by <sympp> on the factory host."
+    do: "Chief only. Ask the operator on the board. Omit both IDs for your card."
 
   defp description("resolve_ask"),
     do:
