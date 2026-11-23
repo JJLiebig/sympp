@@ -1,6 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chiefCheckouts, chiefFolders } from './mods/sympp/chief.js';
+import { chiefCheckouts, chiefFolders, chiefTerminalName } from './mods/sympp/chief.js';
+
+test('chief terminal names fit Herdr even for long or punctuation-only topics', () => {
+  for (const [topic, name] of [
+    ['Nextide - Misc', 'nextide-misc-chief'],
+    ['tools', 'tools-chief'],
+    [' / QA___2026! ', 'qa-2026-chief'],
+    ['— ⚙', 'topic-chief'],
+    ['ABCDEFGHIJKLMNOPQRSTUVWXYZ again', 'abcdefghijklmnopqrstuvwxyz-chief'],
+    ['abcdefghijklmnopqrstuvwxy more', 'abcdefghijklmnopqrstuvwxy-chief'],
+  ]) {
+    assert.equal(chiefTerminalName(topic), name);
+  }
+});
 
 const factory = { machine: 'build', root: '/srv/ana/Code' };
 const checkout = (folder, machine = null) => ({ folder, machine });
