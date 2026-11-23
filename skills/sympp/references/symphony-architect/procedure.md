@@ -40,19 +40,30 @@ Front-end-only PRs are scoped by feature instead: one UI change or rework is one
 PR, even if it's large. Prefer independent packages; a dependent dispatches once its prerequisite is
 delivered, which small PRs make quick.
 
-Each package needs a title (2–5 words, at most 40 characters), goal,
-acceptance criteria, owned globs, validation steps and stop conditions. Repo
-and base default to the WorkRequest's; a package in another repo names both.
-State constraints by outcome; an intentional narrow stop must name the decision
-to escalate.
-`group` is an optional path such as `"Backend / Billing"`.
+Give each package a `title` (2–5 words, at most 40 characters), a `goal`,
+and lists of strings for `acceptance_criteria`, `validation_steps` and
+`stop_conditions`. State constraints by outcome. If work must stop for a
+decision, name the decision to escalate.
+
+- Set `allowed_file_globs` to the owned file globs. Use `forbidden_file_globs`
+  for any exclusions. Both take lists of strings.
+- Use `group` for a path such as `"Backend / Billing"`. Set it to `null` to clear it.
+- `kind` defaults to `standard_pr`. Other kinds are `quick_fix`, `hotfix`,
+  `docs`, `investigation`, `adapter`, `mcp`, `skill` and `hooks`.
+- `repo` and `base_branch` default to the WorkRequest's. Name both for a
+  package in another repo. `branch_pattern` is an exact branch or a
+  `{{placeholder}}` template.
+- To specify a contract review requirement, use `review` with a string
+  `type` and optional `args` object containing non-secret provider arguments.
 
 `edit_plan(work_request_id, ops)` applies its ops atomically:
 
-- `add_package`, with a `key` that later ops in the same call can name, and
-  `depends_on`;
-- `update_package` with `expected_revision` and a `patch`;
-- `set_dependency` and `remove_dependency`, where `from` depends on `to`.
+- `add_package` takes the contract fields directly. An optional `key` lets
+  later ops in this call refer to it. `depends_on` takes IDs or earlier keys.
+- `update_package` takes `work_package_id`, `expected_revision` and a `patch`.
+  Send only the fields you change, such as `{"group":"Platform"}`.
+- `set_dependency` and `remove_dependency` take `from` and `to`. The package
+  named by `from` depends on `to`. Set an optional `reason` with `set_dependency`.
 
 A ready contract is frozen; add a successor.
 

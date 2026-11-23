@@ -168,9 +168,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   defp tool_schema("ask") do
     schema(
       %{
-        "work_request_id" => described_string_schema("The WorkRequest the ask is about. Leave it out to ask on your own card."),
-        "work_package_id" => described_string_schema("Optional package the ask is about; the ask is withdrawn when that package ends."),
-        "question" => markdown_string_schema("The question for the operator, in Markdown."),
+        "work_request_id" => described_string_schema("Omit for a card ask."),
+        "work_package_id" => string_schema(),
+        "question" => string_schema(),
         "decision_prompt" => decision_prompt_schema()
       },
       ["question"]
@@ -205,21 +205,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
       %{
         "work_request_id" => string_schema(),
         "source_type" => string_enum_schema(DecisionLogEntry.source_types()),
-        "decision" =>
-          string_schema()
-          |> Map.put("description", "One plain sentence saying what changes for the owner. When flagged, at most 160 characters."),
-        "rationale" =>
-          string_schema()
-          |> Map.put("description", "One plain sentence saying why, with no IDs, SHAs or jargon. Put evidence in the report. When flagged, at most 240 characters."),
-        "scope_impact" => markdown_string_schema("Human-facing scope impact note in Markdown."),
+        "decision" => string_schema(),
+        "rationale" => string_schema(),
+        "scope_impact" => string_schema(),
         "created_by" => string_schema(),
         "source_id" => string_schema(),
-        "flag" =>
-          boolean_schema()
-          |> Map.put(
-            "description",
-            "Flag an in-scope product call for the operator to review (default false). The original decision and their feedback arrive in a <sympp> message submitted to your terminal."
-          )
+        "flag" => boolean_schema()
       },
       ["work_request_id", "source_type", "decision", "rationale", "scope_impact"]
     )
@@ -232,9 +223,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "ops" => %{
           "type" => "array",
           "minItems" => 1,
-          "description" =>
-            "Applied in order in one transaction; any failure rolls back the whole edit. " <>
-              "A package reference is a WorkPackage id or the key of an earlier add_package.",
+          "description" => "Ops apply in order. A failure rolls back the batch and reports the op index. Package references use IDs or keys from earlier add_package ops.",
           "items" => %{
             "oneOf" => [
               add_package_op_schema(),
@@ -288,17 +277,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     %{"anyOf" => [%{"type" => "integer", "minimum" => 1}, %{"type" => "string", "pattern" => "^[1-9][0-9]*$"}]}
   end
 
-  defp nullable_string_schema, do: %{"type" => ["string", "null"]}
   defp object_schema, do: %{"type" => "object", "additionalProperties" => true}
 
   defp add_package_op_schema do
-    work_package_contract_properties()
-    |> Map.merge(%{
-      "op" => %{"const" => "add_package"},
-      "key" => described_string_schema("Optional name later ops in this edit use to refer to the new package."),
-      "depends_on" => described_string_array_schema("Package references the new package depends on.")
-    })
-    |> schema(["op", "title", "goal", "acceptance_criteria", "validation_steps", "stop_conditions"])
+    schema(
+      %{
+        "op" => %{"const" => "add_package"},
+        "title" => string_schema(),
+        "goal" => nonblank_string_schema(),
+        "acceptance_criteria" => string_array_schema(),
+        "validation_steps" => string_array_schema(),
+        "stop_conditions" => string_array_schema(),
+        "key" => string_schema(),
+        "depends_on" => string_array_schema()
+      },
+      ["op", "title", "goal", "acceptance_criteria", "validation_steps", "stop_conditions"]
+    )
     |> Map.put("additionalProperties", true)
   end
 
@@ -308,7 +302,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "op" => %{"const" => "update_package"},
         "work_package_id" => nonblank_string_schema(),
         "expected_revision" => positive_integer_schema(),
-        "patch" => work_package_contract_patch_schema()
+        "patch" => object_schema()
       },
       ["op", "work_package_id", "expected_revision", "patch"]
     )
@@ -318,9 +312,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     schema(
       %{
         "op" => %{"const" => "set_dependency"},
-        "from" => described_string_schema("Package reference that depends on `to`."),
-        "to" => described_string_schema("Package reference that must be delivered first."),
-        "reason" => described_string_schema("Optional reason for the dependency.")
+        "from" => described_string_schema("Depends on to."),
+        "to" => string_schema(),
+        "reason" => string_schema()
       },
       ["op", "from", "to"]
     )
@@ -330,49 +324,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     schema(%{"op" => %{"const" => "remove_dependency"}, "from" => nonblank_string_schema(), "to" => nonblank_string_schema()}, ["op", "from", "to"])
   end
 
-  defp work_package_contract_patch_schema do
-    schema(work_package_contract_properties(), [])
-    |> Map.put("additionalProperties", true)
-  end
-
-  defp work_package_contract_properties do
-    %{
-      "group" => nullable_string_schema() |> Map.put("description", "Group path such as \"Backend / Billing\"; null or blank for none."),
-      "title" => task_title_schema(),
-      "goal" => nonblank_string_schema(),
-      "kind" => Map.put(string_enum_schema(WorkPackage.kinds()), "default", "standard_pr"),
-      "repo" => described_string_schema("Optional delivery repo. Defaults to the WorkRequest primary repo."),
-      "base_branch" => described_string_schema("Optional delivery base branch. Defaults to the WorkRequest base branch."),
-      "branch_pattern" => described_string_schema("Optional exact branch or {{placeholder}} template."),
-      "allowed_file_globs" => described_string_array_schema("Optional descriptive file scope."),
-      "forbidden_file_globs" => described_string_array_schema("Optional descriptive exclusions."),
-      "acceptance_criteria" => string_array_schema(),
-      "validation_steps" => string_array_schema(),
-      "review" => review_requirement_schema(),
-      "stop_conditions" => string_array_schema()
-    }
-  end
-
-  defp review_requirement_schema do
-    %{
-      "type" => "object",
-      "description" => "Optional provider-agnostic review requirement. Omit when no review is required.",
-      "additionalProperties" => false,
-      "properties" => %{
-        "type" => nonblank_string_schema() |> Map.put("description", "Opaque review provider or type."),
-        "args" => object_schema() |> Map.put("description", "Optional opaque non-secret provider arguments.")
-      },
-      "required" => ["type"]
-    }
-  end
-
   defp decision_prompt_schema do
     %{
       "type" => "object",
       "additionalProperties" => false,
       "properties" => %{
         "tl_dr" => nonblank_string_schema(),
-        "details" => nonblank_string_schema() |> Map.put("description", "Human-facing decision prompt details in Markdown."),
+        "details" => nonblank_string_schema(),
         "options" => %{
           "type" => "array",
           "minItems" => 1,
@@ -389,7 +347,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
               "answer" => nonblank_string_schema(),
               "recommended" => %{
                 "type" => "boolean",
-                "description" => "Mark the option you recommend with recommended: true (at most one)."
+                "description" => "At most one per prompt."
               }
             },
             "required" => ["id", "label", "answer"]
@@ -402,7 +360,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   end
 
   defp string_array_schema, do: %{"type" => "array", "items" => nonblank_string_schema()}
-  defp described_string_array_schema(description), do: Map.put(string_array_schema(), "description", description)
 
   defp task_title_schema do
     described_string_schema("Title is the short name: 2–5 words, max 40 characters after trimming, e.g. Board read access. Put detail in the description.")

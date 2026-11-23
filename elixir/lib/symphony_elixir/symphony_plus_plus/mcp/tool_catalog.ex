@@ -8,7 +8,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
 
   @health_tool "sympp.health"
   @mcp_contract_schema_version "sympp-mcp-contract.v1"
@@ -122,8 +121,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
       "Move a WorkRequest and its open packages in the source repository to another repository. The owner or a chief can move it. GitHub-confirmed renames keep attached PRs. Resolve source PRs before importing. A move to the current repository changes nothing."
 
   defp description("edit_plan"),
-    do:
-      "Edit the plan of a WorkRequest you own in one atomic call: add_package (contract, optional group path such as \"Backend / Billing\", depends_on), update_package (expected_revision and a patch), set_dependency (from depends on to; to must be delivered before from dispatches) and remove_dependency. Any failing op rolls back the whole edit; the error names the op index, the state and the next action. Returns each op's result and the plan after the edit."
+    do: "Edit a WorkRequest plan you own. See the symphony-architect skill for contract fields."
 
   defp description("dispatch_work_package"),
     do:
@@ -138,11 +136,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   defp description("record_decision"),
     do:
-      "Record a durable decision on a WorkRequest; any Herdr terminal may, without owning it. source_type must be one of: #{Enum.join(DecisionLogEntry.source_types(), ", ")}. flag: true asks the operator to review an in-scope product call (they acknowledge it or send feedback) with one plain sentence each: decision says what changes for the owner (up to 160 characters); rationale says why (up to 240), without IDs, SHAs or jargon. Put evidence in the report."
+      "Any Herdr terminal can log a decision. Flag in-scope product calls for operator review. Use one plain sentence each when flagged (decision ≤160 chars, rationale ≤240). Put evidence in the report."
 
   defp description("ask"),
-    do:
-      "Chief only. Asks the human owner; the question shows on the sympp board until it is answered or withdrawn. Without work_request_id it asks on your own card. Optionally name a package and give a decision_prompt with options. On the factory's machine, the original question and the operator's answer arrive in a <sympp> message submitted to your terminal. Read stored answers with read_work_request detail: full, or under caller.card in sympp.health for card asks."
+    do: "Chief only. Ask the operator on the board. Answers arrive by <sympp> on the factory host."
 
   defp description("resolve_ask"),
     do:
