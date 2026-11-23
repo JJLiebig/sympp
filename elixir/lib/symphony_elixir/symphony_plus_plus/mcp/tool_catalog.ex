@@ -123,7 +123,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   defp description("edit_plan"),
     do:
-      "Edit the plan of a WorkRequest you own in one atomic call: add_package (contract, optional group path such as \"Backend / Billing\", depends_on), update_package (expected_revision and a patch), set_dependency (from depends on to; to must be delivered before from dispatches) and remove_dependency. Any failing op rolls back the whole edit; the error names the op index, the state and the next action. Returns each op's result and the plan after the edit."
+      "Edit the plan of a WorkRequest you own in one atomic call: add_package (contract, optional group path such as \"Backend / Billing\", depends_on), update_package (expected_revision and a patch), set_dependency (from depends on to; to must be delivered before from dispatches) and remove_dependency. Any failing op rolls back the whole edit; the error names the op index, the state and the next action. Returns ordered operation receipts in applied. Read the plan with read_work_request and view: plan."
 
   defp description("dispatch_work_package"),
     do:
