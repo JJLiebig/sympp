@@ -23,7 +23,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   @spec json(module(), atom(), projection()) :: {:ok | :stale, binary(), binary()} | {:error, term()} | :building
   def json(Repo, surface, fun) do
     if server = Process.whereis(__MODULE__) do
-      read_with_budget(server, source(), surface, fun)
+      source = source()
+
+      case read_with_budget(server, source, surface, fun) do
+        :unversioned -> unversioned_json(source, surface, fun)
+        response -> response
+      end
     else
       project(surface, fun)
     end
@@ -37,6 +42,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     # Revision probes also touch SQLite. A stalled probe must not hold HTTP
     # readers hostage to the cache process or stop them getting a snapshot.
     :exit, {:timeout, _call} -> available({source, surface})
+  end
+
+  # A memory ledger has no versioned snapshot to fetch later. Each read
+  # waits for its own projection so it can return the data it observed.
+  defp unversioned_json(source, surface, fun) do
+    task =
+      Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn ->
+        Repo.put_dynamic_repo(source)
+        build(nil, surface, fun)
+      end)
+
+    case Task.yield(task, :infinity) do
+      {:ok, {response, _deadlines, _inputs}} -> response
+      {:exit, _reason} -> {:error, {:storage_failed, "Dashboard refresh interrupted"}}
+    end
   end
 
   @doc false
@@ -128,7 +148,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   def handle_call({:watch, source, projections}, {pid, _tag}, state) do
     {connection, state} = connection(source, state)
 
-    if connection do
+    if connection in [nil, :unversioned] do
+      {:reply, :unversioned, state}
+    else
       ref = Process.monitor(pid)
 
       watches =
@@ -139,15 +161,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
       # Register the stream before checking any revision, including if an
       # on-demand build for this surface is already in flight.
       {:reply, {:ok, ref}, queue_refresh(%{state | watches: watches})}
-    else
-      {:reply, :unversioned, state}
     end
   end
 
   defp read_json(source, surface, fun, from, state) do
-    {connection, state} = connection(source, state)
+    case connection(source, state) do
+      {:unversioned, state} -> {:reply, :unversioned, state}
+      {connection, state} -> read_versioned_json(state, {source, surface}, connection, fun, from)
+    end
+  end
+
+  defp read_versioned_json(state, {_source, surface} = key, connection, fun, from) do
     revision = probe(connection, [surface])
-    key = {source, surface}
     entry = Map.get(state.entries, key)
     generation = generation(revision, surface)
 
@@ -155,12 +180,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
       current?(state, entry, generation) ->
         {:reply, entry.response, state}
 
-      connection != nil and generation == nil ->
+      generation == nil ->
         {:reply, pending_response(state, key), state}
 
       true ->
-        # Unversioned reads cannot join a projection that might predate their write.
-        {job_key, _config} = request = build_request(key, generation || make_ref())
+        {job_key, _config} = request = build_request(key, generation)
         state = ensure_refresh(state, request, fun)
 
         case {pending_response(state, key), Map.get(state.refreshing, job_key)} do
@@ -186,8 +210,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     Map.put(watches, key, {target, Map.put(readers, ref, pid)})
   end
 
-  defp ensure_refresh(state, {{key, generation, _revision}, _config} = request, fun) do
-    if is_reference(generation) or (not refreshing?(state, key) and retry_due?(state, key)) do
+  defp ensure_refresh(state, {{key, _generation, _revision}, _config} = request, fun) do
+    if not refreshing?(state, key) and retry_due?(state, key) do
       start_refresh(state, request, fun)
     else
       state
@@ -231,11 +255,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     timer = Process.send_after(self(), {:read_budget_elapsed, job_key, sequence}, @read_budget_ms)
     job = %{pid: pid, sequence: sequence, monitor: Process.monitor(pid), read_timer: timer, waiters: []}
     put_in(state.refreshing[job_key], job)
-  end
-
-  defp build_on_ledger(source, nil, surface, fun) do
-    Repo.put_dynamic_repo(source)
-    build(nil, surface, fun)
   end
 
   defp build_on_ledger(source, database, surface, fun) do
@@ -386,7 +405,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     schedule(state)
   end
 
-  defp install(state, key, %{response: {:ok, _body, etag}, generation: generation} = entry) when not is_reference(generation) do
+  defp install(state, key, %{response: {:ok, _body, etag}} = entry) do
     :ets.insert(@snapshots, {key, entry.response})
 
     case Map.get(state.entries, key) do
@@ -400,8 +419,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
         state
     end
   end
-
-  defp install(state, _key, _entry), do: state
 
   defp notify_projection_readers({fun, readers}) when is_function(fun, 0), do: notify_readers(readers)
   defp notify_projection_readers(_other), do: :ok
@@ -454,11 +471,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
       nil ->
         state
     end
-  end
-
-  defp finish_failure(state, {_key, generation, _config}, job, error) when is_reference(generation) do
-    reply_waiters(job, error)
-    state
   end
 
   defp finish_failure(state, {{_source, surface} = key, _generation, _config}, job, error) do
@@ -672,6 +684,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
         ledger = %{connection: connection, database: path, monitor: monitor}
         {connection, put_in(state.sources[source], ledger)}
       else
+        [_, "main", ""] -> {:unversioned, state}
         _unavailable -> {nil, state}
       end
     after
