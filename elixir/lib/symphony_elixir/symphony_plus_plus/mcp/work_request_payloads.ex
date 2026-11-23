@@ -156,20 +156,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
 
   @spec work_request_card(WorkRequest.t()) :: map()
   def work_request_card(%WorkRequest{} = work_request) do
-    scope = redacted_work_request_scope(work_request)
-
     %{
       "id" => work_request.id,
       "title" => Redactor.redact_text(work_request.title),
-      "repo" => Map.fetch!(scope, "repo"),
-      "base_branch" => Map.fetch!(scope, "base_branch"),
-      "work_type" => work_request.work_type,
-      "desired_dispatch_shape" => work_request.desired_dispatch_shape,
-      "creator" => work_request_creator(work_request),
-      "inserted_at" => timestamp(work_request.inserted_at),
-      "updated_at" => timestamp(work_request.updated_at)
+      "repo" => Redactor.redact_text(work_request.repo)
     }
-    |> Dashboard.put_attribution("dispatched_by", work_request.dispatched_by)
   end
 
   @spec work_request(WorkRequest.t()) :: map()

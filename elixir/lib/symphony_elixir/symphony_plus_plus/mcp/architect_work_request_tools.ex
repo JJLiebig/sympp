@@ -39,7 +39,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     "move_work_request",
     "dispatch_work_package"
   ]
-  @default_list_limit 50
+  @default_list_limit 20
   @max_list_limit 200
 
   @spec tools() :: [String.t()]
@@ -58,7 +58,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
          filters = Map.reject(%{"phase" => phase, "repo" => repo_filter}, fn {_key, value} -> is_nil(value) end),
          {:ok, work_requests, next_cursor} <- local_work_request_page(config.repo, filters, pagination),
          {:ok, cards} <- WorkRequestPayloads.work_request_cards(config.repo, work_requests) do
-      {:ok, ToolResult.agent_tool_result(work_request_list_payload(cards, filters, pagination.limit, next_cursor))}
+      payload = work_request_list_payload(cards, filters, pagination.limit, next_cursor)
+      {:ok, ToolResult.read_tool_result(payload, WorkerContext.encode_tool_payload(payload))}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "list_work_requests", "reason" => reason}}
       {:error, reason} -> architect_error(reason, "list_work_requests")
@@ -359,7 +360,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     %{
       "work_requests" => cards,
       "total_count" => length(cards),
-      "filters" => filters,
+      "filters" => Redactor.redact_output(filters),
       "limit" => limit
     }
     |> maybe_put_next_cursor(next_cursor)

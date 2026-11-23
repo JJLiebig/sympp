@@ -74,7 +74,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
       %{
         "phase" => string_enum_schema(Phase.phases()),
         "repo" => described_string_schema("Only WorkRequests for this repo: git remote URL or owner/name."),
-        "limit" => integer_schema() |> Map.merge(%{"minimum" => 1, "maximum" => 200, "description" => "Page size. Defaults to 50; values above 200 are rejected."}),
+        "limit" => integer_schema() |> Map.merge(%{"minimum" => 1, "maximum" => 200, "description" => "Page size. Defaults to 20; values above 200 are rejected."}),
         "cursor" => described_string_schema("Opaque cursor returned by the previous list_work_requests page.")
       },
       []
