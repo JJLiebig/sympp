@@ -57,7 +57,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
       alias Ecto.Adapters.SQL
       alias Mix.Tasks.Sympp.Mcp, as: McpTask
       alias SymphonyElixir.MCPHarness
-      alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext
       alias SymphonyElixir.SymphonyPlusPlus.MCP.Config
       alias SymphonyElixir.SymphonyPlusPlus.MCP.Repository, as: MCPRepository
       alias SymphonyElixir.SymphonyPlusPlus.MCP.Server

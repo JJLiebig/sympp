@@ -16,16 +16,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     Config,
     ErrorDetails,
-    TaskPlanTools,
-    ToolCatalog,
     ToolResult,
     WorkPackageLaunch,
     WorkRequestPayloads,
+    WorkRequestRead,
     WorkRequestScope
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.HerdrCore
-  alias SymphonyElixir.SymphonyPlusPlus.Observer.ReviewRefresh
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -41,7 +39,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     "move_work_request",
     "dispatch_work_package"
   ]
-  @work_request_views ToolCatalog.work_request_views()
   @default_list_limit 50
   @max_list_limit 200
 
@@ -69,13 +66,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   end
 
   defp call_tool("read_work_request", config, _terminal, arguments, _opts) do
-    with {:ok, detail} <- payload_detail(arguments),
-         {:ok, view} <- work_request_view(arguments),
-         {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, work_request, _filters} <- WorkRequestScope.work_request_scope(config.repo, work_request_id),
-         {:ok, result} <- read_view(view, config.repo, work_request, arguments, detail) do
-      {:ok, result}
-    else
+    case WorkRequestRead.call(config.repo, arguments) do
+      {:ok, result} -> {:ok, result}
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_work_request", "reason" => reason}}
       {:error, :not_found} -> not_found_error("read_work_request")
       {:error, reason} -> architect_error(reason, "read_work_request")
@@ -228,78 +220,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
 
   defp launch_next_action(_agent, false), do: "Run launch_line."
 
-  defp read_view("overview", repo, work_request, _arguments, detail) do
-    if detail == "summary", do: ReviewRefresh.request(repo, {:request, work_request.id}, true)
-
-    with {:ok, payload} <- WorkRequestPayloads.work_request_read(repo, work_request, detail) do
-      payload = Map.put(payload, "scope", WorkRequestPayloads.redacted_work_request_scope(work_request))
-      {:ok, work_request_read_result(payload, detail)}
-    end
-  end
-
-  defp read_view("plan", repo, work_request, _arguments, detail) do
-    ReviewRefresh.request(repo, {:request, work_request.id}, true)
-
-    case repo.transaction(fn -> read_plan_transaction(repo, work_request, detail) end) do
-      {:ok, result} -> {:ok, result}
-      {:error, {:error, reason}} -> {:error, reason}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp read_view("board", repo, work_request, _arguments, detail) do
-    ReviewRefresh.request(repo, {:request, work_request.id}, true)
-
-    with {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request.id),
-         {:ok, delivery_board} <- WorkRequestScope.scoped_delivery_board(repo, work_request, work_packages),
-         mutation = WorkRequestPayloads.work_request_mutation(work_request),
-         {:ok, work_request_payload} <- WorkRequestPayloads.put_phase(mutation, repo, work_request) do
-      payload = %{
-        "work_request" => work_request_payload,
-        "delivery_board" => WorkRequestPayloads.delivery_board(delivery_board, detail),
-        "detail" => detail,
-        "scope" => WorkRequestPayloads.redacted_work_request_scope(work_request)
-      }
-
-      {:ok, delivery_board_result(payload, detail)}
-    end
-  end
-
-  defp read_view("package", repo, work_request, arguments, detail) do
-    with {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
-         {:ok, work_package} <- WorkRequestService.get_work_package(repo, work_request.id, work_package_id),
-         _review <- ReviewRefresh.request(repo, {:package, work_request.id, work_package.id}, true),
-         {:ok, payload} <- WorkRequestPayloads.work_package_read(repo, work_request, work_package, detail),
-         {:ok, task_plan} <- TaskPlanTools.task_plan(repo, work_package.id, detail) do
-      payload =
-        payload
-        |> Map.put("task_plan", task_plan)
-        |> Map.put("scope", WorkRequestPayloads.redacted_work_request_scope(work_request))
-
-      {:ok, ToolResult.with_text_profile(:full, fn -> ToolResult.read_tool_result(payload) end)}
-    end
-  end
-
-  defp read_plan_transaction(repo, work_request, detail) do
-    with {:ok, work_request} <- WorkRequestService.get(repo, work_request.id),
-         {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request.id),
-         {:ok, delivery_board} <- operational_delivery_board(repo, work_request, work_packages),
-         {:ok, payload} <- WorkRequestPayloads.work_request_plan(repo, work_request, work_packages, delivery_board) do
-      payload = Map.put(payload, "scope", WorkRequestPayloads.redacted_work_request_scope(work_request))
-
-      if detail == "full" do
-        ToolResult.architect_agent_tool_result(payload, :work_request_plan)
-      else
-        plan_summary_result(WorkRequestPayloads.plan_summary(payload))
-      end
-    else
-      error -> repo.rollback(error)
-    end
-  end
-
-  defp operational_delivery_board(repo, work_request, work_packages),
-    do: WorkRequestScope.scoped_delivery_board(repo, work_request, work_packages, slice_projection: :operational_state)
-
   defp dispatch_work_package_error({:invalid_work_package_status, status} = reason) do
     {:error, -32_009, WorkPackageDispatch.error_message(reason),
      %{"tool" => "dispatch_work_package", "reason" => "invalid_work_package_status", "state" => status, "next_action" => dispatch_next_action(status)}}
@@ -448,13 +368,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   defp maybe_put_next_cursor(payload, nil), do: payload
   defp maybe_put_next_cursor(payload, next_cursor), do: Map.put(payload, "next_cursor", next_cursor)
 
-  defp work_request_view(arguments) do
-    case Map.get(arguments, "view", "overview") do
-      view when view in @work_request_views -> {:ok, view}
-      _view -> {:tool_error, "invalid_view"}
-    end
-  end
-
   defp architect_error(:database_busy, tool), do: service_error(:database_busy, tool)
   defp architect_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp architect_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
@@ -545,51 +458,4 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   defp reason_text(reason) when is_binary(reason), do: reason
   defp reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp reason_text(reason), do: inspect(reason)
-
-  defp payload_detail(arguments) do
-    case Map.get(arguments, "detail", "summary") do
-      detail when detail in ["summary", "full"] -> {:ok, detail}
-      _other -> {:tool_error, "invalid_detail"}
-    end
-  end
-
-  defp work_request_read_result(payload, "full"), do: ToolResult.architect_agent_tool_result(payload, :work_request_read)
-
-  defp work_request_read_result(payload, "summary") do
-    read_summary_result(payload)
-  end
-
-  defp read_summary_result(payload) do
-    text_payload =
-      payload
-      |> Map.take(~w(work_request summary omitted help))
-      |> Map.update!("work_request", &Map.take(&1, ~w(id title phase next_action)))
-
-    ToolResult.with_text_profile(:full, fn ->
-      ToolResult.agent_tool_result(payload, fn -> WorkerContext.encode_tool_payload(text_payload) end)
-    end)
-  end
-
-  # The plan summary's text keeps the package list and dependencies, which is
-  # what planning needs; the execution graph stays in structuredContent.
-  defp plan_summary_result(payload) do
-    text_payload =
-      payload
-      |> Map.take(~w(work_request omitted help))
-      |> Map.put("plan", Map.take(payload["plan"], ~w(work_packages dependencies)))
-
-    ToolResult.with_text_profile(:full, fn ->
-      ToolResult.agent_tool_result(payload, fn -> WorkerContext.encode_tool_payload(text_payload) end)
-    end)
-  end
-
-  defp delivery_board_result(payload, detail) do
-    ToolResult.with_text_profile(:full, fn ->
-      if detail == "full" do
-        ToolResult.architect_agent_tool_result(payload, :work_request_delivery_board)
-      else
-        ToolResult.read_tool_result(Map.put(payload, "help", "Use read_work_request with view: board and detail: full for complete evidence."))
-      end
-    end)
-  end
 end

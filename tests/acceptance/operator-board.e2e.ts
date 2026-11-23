@@ -150,9 +150,8 @@ test('the person answers a question, reviews flagged decisions and releases a go
   const feedbackOn = await flag('Use regional prices.');
   await candidate.capture('question-and-decision');
   await app.open('/sympp/board');
-  const full = () => client.call('read_work_request', { detail: 'full', work_request_id: request });
-  const answer = async () => (await full()).asks.find((entry: any) => entry.id === ask);
-  const decision = async (id: string) => (await full()).decision_log_entries.find((entry: any) => entry.id === id);
+  const answer = () => client.readAsk(request, ask);
+  const decision = (id: string) => client.readDecision(request, id);
 
   // On a phone the question comes first, folded to an Answer button. Its goal opens on a screen of its own,
   // and back returns to the question with what was picked still there.

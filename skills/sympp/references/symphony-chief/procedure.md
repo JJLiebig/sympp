@@ -36,8 +36,9 @@ The factory submits board answers and decision feedback to your terminal.
 The `<sympp>` message identifies the ask or decision, includes its full question
 or decision, and identifies its WorkRequest when present. Read XML entities as
 their original characters in URLs and commands.
-If delivery can't reach your terminal, use
-`read_work_request(detail: "full")` or, for a card ask, `sympp.health`.
+If delivery can't reach your terminal, use `read_work_request` with the
+WorkRequest ID and `view: "ask", ask_id` or `view: "decision", decision_id`.
+For a card ask, read `sympp.health`.
 
 ## Messages
 
@@ -51,8 +52,9 @@ Workers settle implementation and review fixes within the approved outcome and
 constraints; architects settle in-scope technical disputes. You decide changes
 to product intent or authority.
 
-- When a handoff names flagged calls, read them with
-  `read_work_request(work_request_id: ..., detail: "full")`. Message the architect
+- When a handoff names flagged calls, read `flagged_decisions` for that
+  WorkRequest. Follow `next_cursor` for more rows and use `decision` with a
+  `decision_id` for the full entry. Message the architect
   one line correcting any that conflict with the owner's intent or other
   WorkRequests. Accept the handoff without waiting for owner acknowledgement.
 - Don't ask architects for status: read the board.

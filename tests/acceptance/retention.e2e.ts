@@ -28,7 +28,7 @@ test('never-started retention uses creation age and restore age without inventin
   client = await factory.client();
   await retention(client, 60);
   expect((await archives(client)).map((row: any) => row.id)).toContain(old);
-  expect((await client.call('read_work_request', { detail: 'full', work_request_id: old })).decision_log_entries).toHaveLength(2);
+  expect((await client.call('read_work_request', { work_request_id: old })).decisions).toHaveLength(2);
   expect((await client.operator(`${requestPath(old)}/restore`, {})).status).toBe(200);
   await retention(client);
   expect((await archives(client)).map((row: any) => row.id)).not.toContain(old);

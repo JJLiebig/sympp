@@ -18,6 +18,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.Toon do
 
   @spec encode(json_like()) :: String.t()
   def encode(value) do
+    reject_ambiguous_arrays!(value)
+    encode_json(value)
+  end
+
+  @doc "Encodes a value from a JSON payload, where integer lists are arrays."
+  @spec encode_json(json_like()) :: String.t()
+  def encode_json(value) do
     value
     |> emit_root()
     |> Enum.join("\n")
@@ -57,8 +64,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.Toon do
   defp emit_array(key, [], depth), do: [array_header(key, 0, depth) <> ":"]
 
   defp emit_array(key, list, depth) do
-    reject_ambiguous_printable_integer_list!(list)
-
     cond do
       Enum.all?(list, &primitive?/1) ->
         [array_header(key, length(list), depth) <> ": " <> Enum.map_join(list, ",", &encode_primitive/1)]
@@ -100,8 +105,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.Toon do
   defp emit_list_item([], depth), do: [indent(depth) <> "- [0]:"]
 
   defp emit_list_item(list, depth) when is_list(list) do
-    reject_ambiguous_printable_integer_list!(list)
-
     if Enum.all?(list, &primitive?/1) do
       line =
         indent(depth) <>
@@ -131,8 +134,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.Toon do
   end
 
   defp emit_first_list_item_field(key, list, depth) when is_list(list) do
-    reject_ambiguous_printable_integer_list!(list)
-
     cond do
       Enum.all?(list, &primitive?/1) ->
         line =
@@ -280,11 +281,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.Toon do
   defp primitive?(value) when is_boolean(value) or is_number(value) or is_binary(value), do: true
   defp primitive?(_value), do: false
 
-  defp reject_ambiguous_printable_integer_list!(list) do
+  defp reject_ambiguous_arrays!(%_{}), do: :ok
+  defp reject_ambiguous_arrays!(%{} = value), do: Enum.each(value, fn {_key, field} -> reject_ambiguous_arrays!(field) end)
+
+  defp reject_ambiguous_arrays!(list) when is_list(list) do
     if list != [] and List.ascii_printable?(list) do
       raise ArgumentError, "TOON cannot distinguish printable integer arrays from charlists; use compact JSON for this shape or convert text to binary strings"
     end
+
+    Enum.each(list, &reject_ambiguous_arrays!/1)
   end
+
+  defp reject_ambiguous_arrays!(_value), do: :ok
 
   defp indent(depth), do: String.duplicate("  ", depth)
 

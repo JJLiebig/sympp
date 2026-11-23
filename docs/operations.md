@@ -71,7 +71,7 @@ The board does not create requests. Start one from a trusted local MCP session.
 An optional architect report gives the goal a brief, free-text ETA, parking
 reason, and explicit question requiring a human decision. The hydrated dashboard
 returns it at `work_request_details[].work_request.operator_report`;
-`read_work_request` returns the same report. Each brief/ETA has `text` and
+`read_work_request` previews the report text. Each brief/ETA has `text` and
 `written_at`. Parking has `reason`, `parked_at`, and `resumed_at`. A missing
 report/field is absent information; a non-null resume time means that interval
 is closed. Questions the chief sends to the operator are asks, which the board shows as Needs
@@ -79,17 +79,21 @@ you; worker waits do not. Reports do not change blockers or completion. See the
 [architect procedure](../packages/sympp/skills/symphony-architect/SKILL.md#report)
 for optional milestone updates.
 
-MCP `read_work_request` defaults to a compact overview: request description,
-open asks, package status/PR/next action, and five recent decision previews.
-Omission counts point to `detail: "full"` for complete contracts and history.
-Its `plan`, `board` and `package` views use the same detail option; the plan
-view keeps the execution graph and dependency evidence in both. Large progress documents summarize five
-recent events; request full detail with the same document/cursor to read their
-evidence bodies. Smaller reads retain their existing payloads. Herdr and the web
-board use their own HTTP projections and keep complete detail.
+MCP `read_work_request` defaults to a status overview with phase, next action
+and actor, report preview, open asks, live packages, ended counts, and recent
+decisions. The `plan` view shows live packages and dependency delivery, and
+`board` shows delivery evidence and next actions. `package` reads one
+contract, `request` reads the brief and constraints, and `ask` and
+`decision` read individual entries by ID. `flagged_decisions` includes
+acknowledged calls.
+
+Pass `next_cursor` as `cursor` with the same view and IDs to read the next
+page. Oversize documents return ordered `chunk` strings. Concatenate them and
+parse the result as JSON. Start the read again if its cursor expires after a
+change to the document or row list.
 
 Upgrade the Skills bundle and open fresh MCP sessions to load the updated tool
-schemas; an existing session does not acquire the new detail options automatically.
+schemas.
 
 ### Herdr Execution Inspector
 
