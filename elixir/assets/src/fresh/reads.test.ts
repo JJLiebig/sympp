@@ -89,6 +89,8 @@ it("explicit refreshes recover from stalled reads and reject pre-save data and e
 function factory(start: DemoLedger) {
   let ledger = start;
   let version = 1;
+  let building = false;
+  let refreshing = false;
   let hold: Promise<void> | null = null;
   const asked: Array<string | null> = [];
   const etag = () => `"v${version}"`;
@@ -96,11 +98,14 @@ function factory(start: DemoLedger) {
     const tag = (init?.headers as Record<string, string> | undefined)?.["if-none-match"] ?? null;
     const archivedRoute = url.includes("archived");
     if (!archivedRoute) asked.push(tag);
+    if (!archivedRoute && building) return new Response(JSON.stringify({ status: "building" }), { status: 202 });
     // What the read answers is fixed when it reaches the factory, however long it then takes to arrive.
     const [body, current] = [archivedRoute ? ledger.archived : ledger.hydrated, etag()];
     if (!archivedRoute && hold) await hold;
-    if (tag === current) return new Response(null, { status: 304 });
-    return new Response(JSON.stringify(body), { status: 200, headers: { etag: current } });
+    const headers: Record<string, string> = { etag: current };
+    if (refreshing && archivedRoute) headers["x-sympp-board-refresh"] = "pending";
+    if (tag === current) return new Response(null, { status: 304, headers });
+    return new Response(JSON.stringify(body), { status: 200, headers });
   });
   vi.stubGlobal("fetch", fetch);
   return {
@@ -109,6 +114,12 @@ function factory(start: DemoLedger) {
     change(next: DemoLedger) {
       ledger = next;
       version += 1;
+    },
+    building(pending: boolean) {
+      building = pending;
+    },
+    refreshing(pending: boolean) {
+      refreshing = pending;
     },
     get ledger() {
       return ledger;
@@ -162,6 +173,21 @@ function liveBoard() {
 }
 
 const NOW = Date.parse("2026-11-10T12:00:00Z");
+
+it("a first read still building leaves the board waiting for its first snapshot", async () => {
+  const server = factory(demoLedger(NOW));
+  const board = liveBoard();
+
+  server.building(true);
+  await board.read();
+  expect(board.show).toHaveBeenCalledExactlyOnceWith(null);
+
+  server.building(false);
+  await board.read();
+  expect(server.asked).toEqual([null, null]);
+  expect(board.openAsks()).toContain("ask-slack");
+  board.stop();
+});
 
 it("a change signal reads again with the shown ETag: 304 changes nothing, another client's change appears", async () => {
   const server = factory(demoLedger(NOW));
@@ -225,6 +251,27 @@ it("an action whose outcome a change signal read first ends when the factory agr
   expect(await agreed).toBeNull();
   await vi.waitFor(() => expect(board.show).toHaveBeenCalledTimes(3));
   expect(board.show).toHaveBeenLastCalledWith(null);
+  expect(pendingActions()).not.toContainEqual(ack);
+  board.stop();
+});
+
+it("keeps a saved action pending while a board surface is refreshing", async () => {
+  const server = factory(demoLedger(NOW));
+  const board = liveBoard();
+  await board.read();
+
+  const ack: OperatorAction = { kind: "ack", decisionId: "dec-alerts-scope" };
+  expect(await operate(ack, async (action) => {
+    server.change(applyDemo(server.ledger, action, NOW));
+    server.refreshing(true);
+  }, () => {})).toBeNull();
+
+  await board.read();
+  await board.read();
+  expect(pendingActions()).toContainEqual(ack);
+
+  server.refreshing(false);
+  await board.read();
   expect(pendingActions()).not.toContainEqual(ack);
   board.stop();
 });

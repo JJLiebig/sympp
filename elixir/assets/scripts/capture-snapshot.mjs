@@ -18,8 +18,9 @@ await mkdir(outputDir, { recursive: true });
 
 const dashboard = await capture("/dashboard", "dashboard.json");
 const deferred = await capture("/dashboard/deferred", "dashboard.deferred.json");
-await capture("/dashboard/hydrated", "dashboard.hydrated.json");
 const archived = await capture("/dashboard?surface=archived", "dashboard.archived.json");
+// The snapshot server discovers captures by the hydrated file and needs the archive to open them.
+const hydrated = dashboard && archived && await capture("/dashboard/hydrated", "dashboard.hydrated.json");
 
 const details = deferred?.work_request_details ?? [];
 const workRequestIds = unique([
@@ -55,14 +56,14 @@ await writeFile(
 );
 
 console.log(JSON.stringify({ outputDir, requests: requests.length, failed: failed.length }, null, 2));
-if (!dashboard) process.exitCode = 1;
+if (!dashboard || !hydrated) process.exitCode = 1;
 
 async function capture(apiPath, file) {
   const response = await fetch(`${origin}${apiBase}${apiPath}`, { headers: { accept: "application/json", origin } });
   const text = await response.text();
   requests.push({ path: apiPath, status: response.status, bytes: text.length });
   await new Promise((resolve) => setTimeout(resolve, pauseMs));
-  if (!response.ok) return null;
+  if (response.status !== 200) return null;
 
   const target = path.join(outputDir, file);
   await mkdir(path.dirname(target), { recursive: true });

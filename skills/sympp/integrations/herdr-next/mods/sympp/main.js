@@ -253,7 +253,7 @@ export default class Lens extends View {
       this.dashboard = M.dashboardUrl(this.endpoint, this.given.dashboardUrl);
     }
     const cached = restore ? connection?.latest : null;
-    if (!cached) return;
+    if (!cached || cached.building) return;
     this.seeded = true;
     this.readSince = cached.since;
     this.payload = cached.payload;
@@ -290,7 +290,8 @@ export default class Lens extends View {
     const connection = this.connection;
     const changedConnection = connection && !currentConnection(connection);
     if ((changedConnection || connection?.denied) && this.net.data) this.clearBoard();
-    const newer = (connection?.latest?.since ?? 0) > this.readSince;
+    const latest = connection?.latest;
+    const newer = latest && !latest.building && latest.since > this.readSince;
     const afterWrite = this.readSince < (connection?.factory.lastWrite ?? 0);
     const due = newer || (!this.net.error && afterWrite) || M.fetchDue(this.net, now, active);
     const busy = (changedConnection || due) && this.read(cx, changedConnection);
@@ -335,7 +336,7 @@ export default class Lens extends View {
         this.readBoundary = factory.lastWrite;
         const cached = connection.latest;
         const active = appWindow()?.active !== false;
-        const recent = !unverified && cached && cached.since >= after && !connection.pending && !connection.disconnected &&
+        const recent = !unverified && cached && !cached.building && cached.since >= after && !connection.pending && !connection.disconnected &&
           cached.since > factory.lastWrite && (!this.net.error || cached.since > this.readSince) &&
           Date.now() - cached.receivedAt < M.nextDelay({ data: cached.board }, active);
         if (recent && cached.since === this.readSince) return;
@@ -360,6 +361,10 @@ export default class Lens extends View {
     const now = Date.now();
     this.painted = now;
     if (!outcome.board) {
+      if (outcome.building) {
+        this.net = M.fetchBuilding(this.net, now);
+        return;
+      }
       if (outcome.denied && this.net.data) this.clearBoard();
       this.net = M.fetchFailed(this.net, outcome.error, now);
       if (outcome.unreachable) this.startServer(cx);
@@ -367,9 +372,10 @@ export default class Lens extends View {
     }
 
     this.seeded = false;
-    this.readSince = outcome.since;
-    const board = this.drawn(outcome.payload, outcome.board, outcome.since);
+    if (!outcome.building) this.readSince = outcome.since;
+    const board = this.drawn(outcome.payload, outcome.board, outcome.building ? null : outcome.since);
     this.net = M.fetchSucceeded(this.net, board, outcome.receivedAt);
+    if (outcome.building) this.net = M.fetchBuilding(this.net, now);
     this.updatePlacement();
     this.outage = false;
     this.startFailed = false;

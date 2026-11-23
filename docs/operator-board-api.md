@@ -88,15 +88,19 @@ or repair the ledger.
 Dashboard reads (priority, deferred, hydrated, archived, and Herdr) return an
 `ETag` and `Cache-Control: private, no-cache`. Send that route's previous ETag
 as `If-None-Match`; HTTP 304 has no body and means keep the existing board.
-Successful writes are durable before HTTP 200. A read started after that
-response sees the committed state, including an acknowledged decision leaving
-`decisions_to_review`. An earlier in-flight read may describe an older snapshot;
-clients must discard reads started before their successful mutation.
+Successful writes are durable before HTTP 200. Clients should discard reads
+started before their successful mutation and read again for the committed state.
 
-A plain dashboard `GET` checks the latest revision and reuses the prepared
-board and its ETag when the data is still current. The first read may build the
-board from scratch, and overlapping reads for the same version can share work
-already underway.
+A dashboard read reuses the latest completed snapshot and its ETag while a
+slow refresh runs. The header `X-Sympp-Board-Refresh: pending` marks a snapshot
+that may predate a write. Herdr also receives `refresh_pending: true` in the
+snapshot body. When Herdr already has that ETag, it receives HTTP 202 so it
+can keep the snapshot and keep checking.
+
+While the first snapshot is building, the API returns HTTP 202 with
+`{"status":"building"}` and `Retry-After`. If the first build fails, the API
+reports the storage error until a snapshot is available. The board event
+stream signals when a first build fails or a new snapshot is ready.
 
 An open SSE stream watches the hydrated and archived boards and checks every
 250 ms for changes from other writers. It notifies clients when an updated
@@ -238,9 +242,8 @@ routes.
 
 ## Hydrated board
 
-`GET /api/v1/sympp/operator/dashboard/hydrated` returns the current board in one
-response. Existing fields retain their meaning. Read each entry of
-`work_request_details[].work_packages[]` for these additive fields:
+`GET /api/v1/sympp/operator/dashboard/hydrated` returns a board snapshot in one
+response. These fields appear on each entry in `work_request_details[].work_packages[]`.
 
 | Field | Meaning |
 | --- | --- |

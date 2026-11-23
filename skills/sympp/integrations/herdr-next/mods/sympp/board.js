@@ -37,12 +37,17 @@ async function fetchBoard(connection, cached, since, stillCurrent) {
     return { error: caught.userMessage || networkError(endpoint), unreachable: caught.status === undefined };
   }
   if (!stillCurrent()) return null;
-  if (response.status === 304 && cached?.etag) return { ...cached, since, receivedAt: Date.now() };
+  if (response.status === 202) return { ...cached, since, building: true };
+  if (response.status === 304 && cached?.etag) return { ...cached, since, receivedAt: Date.now(), building: false };
   if (!response.ok) return { error: httpError(response.status), denied: response.status === 401 || response.status === 403 };
 
   try {
     const payload = await response.json().catch(() => null);
-    return { board: parseBoard(payload), payload, since, receivedAt: Date.now(), etag: typeof payload.etag === "string" ? payload.etag : null };
+    return {
+      board: parseBoard(payload), payload, since, receivedAt: Date.now(),
+      etag: typeof payload.etag === "string" ? payload.etag : null,
+      building: payload.refresh_pending === true,
+    };
   } catch (caught) {
     return { error: caught.message };
   }
