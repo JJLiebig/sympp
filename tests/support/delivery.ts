@@ -343,13 +343,18 @@ export function pr(number: number, sha: string, patch: object = {}) {
 }
 
 export async function board(client: Client, request: string) {
-  return client.board(request, 'full');
+  return client.inspect(`/api/v1/sympp/herdr/work-requests/${request}`);
 }
 
 export async function row(client: Client, request: string, wp: string) {
   const result = (await board(client, request)).work_packages.find((item: any) => item.id === wp);
   expect(result).toBeTruthy();
   return result;
+}
+
+export async function blockerActive(client: Client, wp: string) {
+  const detail = await client.inspect(`/api/v1/sympp/operator/work-packages/${wp}`);
+  return detail.blockers.some((blocker: any) => blocker.active);
 }
 
 // Only superseded and skipped can end a planned package, so other outcomes

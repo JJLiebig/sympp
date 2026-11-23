@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { parseBoard } from '../../integrations/herdr-next/mods/sympp/model.js';
 import { Client, contract, nextTerminal } from '../support/factory.js';
 import { initialize, packages, test, tool } from '../support/authority.js';
-import { close, head, pr, prUrl, row, test as deliveryTest } from '../support/delivery.js';
+import { blockerActive, close, head, pr, prUrl, row, test as deliveryTest } from '../support/delivery.js';
 
 test('HTTP initialization and local origin checks prevent ambient requests from writing', async ({ processes }) => {
   const factory = processes.factory();
@@ -59,6 +59,7 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
     .toEqual(parseBoard(browserBoard));
   const detail = nativeBoard.body.work_request_details.find((entry: any) => entry.work_request.id === id);
   expect(detail.asks).toEqual([]);
+  expect((await fresh.inspect(`/api/v1/sympp/operator/work-requests/${id}`)).work_request.creator).toEqual({ kind: 'agent', name: fresh.address, via: 'mcp' });
   expect(browserBoard.work_request_details.find((entry: any) => entry.work_request.id === id).work_packages.find((entry: any) => entry.id === nativePackage).group).toBeNull();
   expect(detail.work_packages.find((entry: any) => entry.id === nativePackage).board_state.stage).toBe('build');
   for (const headers of [
@@ -118,7 +119,7 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
   expect(nativeDetail.body.work_request.phase).toBe('intake');
   expect(nativeDetail.body.work_packages).toEqual([]);
   expect((await native.raw({}, {}, 'POST', `/api/v1/sympp/operator/work-requests/${nativeId}/delete`)).status).toBe(401);
-  expect((await fresh.call('read_work_request', { detail: 'full', work_request_id: id })).work_packages.map((entry: any) => entry.id)).toEqual([nativePackage]);
+  expect((await fresh.call('read_work_request', { work_request_id: id })).work_packages.map((entry: any) => entry.id)).toEqual([nativePackage]);
   const owned = (await fresh.call('sympp.health')).caller.owns.map((entry: any) => entry.work_request_id);
   expect(owned).toEqual([id]);
   expect((await fresh.rpc('initialize', initialize)).error.data.reason).toBe('already_initialized');
@@ -131,7 +132,7 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
     const ambient = { work_request_id: id, source_type: 'operator', decision: 'Denied ambient decision', rationale: 'Ambient', scope_impact: 'None', created_by: 'attacker' };
     expect((await fresh.raw(tool('record_decision', ambient), headers)).status).toBe(403);
   }
-  expect((await fresh.call('read_work_request', { detail: 'full', work_request_id: id })).decision_log_entries).toEqual([]);
+  expect((await fresh.call('read_work_request', { work_request_id: id })).decisions).toEqual([]);
   for (const batch of [[], [list], [init, list]]) {
     expect((await fresh.raw(batch)).body.error.data.reason).toBe('batch_not_supported');
   }
@@ -150,7 +151,7 @@ test('HTTP initialization and local origin checks prevent ambient requests from 
   const notification = await fresh.raw({ jsonrpc: '2.0', method: 'notifications/initialized' });
   expect(notification.status).toBe(202);
   expect(notification.body).toBeNull();
-  expect((await fresh.call('read_work_request', { detail: 'full', work_request_id: id })).work_request.id).toBe(id);
+  expect((await fresh.call('read_work_request', { work_request_id: id })).work_request.id).toBe(id);
 });
 
 test('ownership lets every terminal read any request but refuses writes to another owner and its endpoints', async ({ processes }) => {
@@ -166,12 +167,20 @@ test('ownership lets every terminal read any request but refuses writes to anoth
   }, 'invalid_decision_prompt');
   expect(malformedAsk.message).toBe('must contain 1 to 4 options');
   expect(JSON.stringify(malformedAsk)).not.toContain('Private malformed prompt sentinel');
-  expect((await architect.call('read_work_request', { detail: 'full', work_request_id: own })).asks).toEqual([]);
+  expect((await architect.call('read_work_request', { work_request_id: own })).asks).toEqual([]);
   const peer = await factory.client();
   const other = await peer.request('Other request');
   const [otherWp] = await peer.addPackages([contract('Hidden sibling')]);
   const question = (await chief.call('ask', { work_request_id: other, question: 'Which behavior is required?' })).ask;
-  expect((await architect.call('read_work_request', { detail: 'full', work_request_id: other })).work_request.id).toBe(other);
+  const decision = (await peer.call('record_decision', {
+    work_request_id: other, source_type: 'architect', decision: 'Keep scope.', rationale: 'Agreed.', scope_impact: 'None',
+  })).decision_log_entry.id;
+  expect((await architect.call('read_work_request', { work_request_id: other })).work_request.id).toBe(other);
+  for (const target of [
+    { view: 'package', work_package_id: otherWp },
+    { view: 'ask', ask_id: question.id },
+    { view: 'decision', decision_id: decision },
+  ]) await architect.reject('read_work_request', { work_request_id: own, ...target }, 'not_found');
   for (const [name, args] of [
     ['edit_plan', { work_request_id: other, ops: [{ op: 'add_package', ...contract('Stolen') }] }],
     ['dispatch_work_package', { work_request_id: other, work_package_id: otherWp }],
@@ -196,29 +205,29 @@ test('ownership lets every terminal read any request but refuses writes to anoth
     const refused = await architect.reject('edit_plan', { work_request_id: own, ops: [op] }, 'unknown_work_package');
     expect(refused.work_package_ref).toBe(otherWp);
   }
-  const tree = await architect.call('read_work_request', { detail: 'full', work_request_id: own, view: 'plan' });
+  const tree = await architect.call('read_work_request', { work_request_id: own, view: 'plan' });
   expect(JSON.stringify(tree)).not.toContain(otherWp);
-  const unchanged = await peer.call('read_work_request', { detail: 'full', work_request_id: other });
+  const unchanged = await peer.call('read_work_request', { work_request_id: other });
   expect(unchanged.work_request.title).toBe('Other request');
   expect(unchanged.work_packages[0].status).toBe('planned');
-  expect(unchanged.asks.find((entry: any) => entry.id === question.id).state).toBe('open');
+  expect(unchanged.asks.map((entry: any) => entry.id)).toContain(question.id);
   await peer.call('dispatch_work_package', { work_package_id: otherWp });
 
   const secondary = await factory.client();
   await secondary.request('Secondary repository reader', 'integration', 'example/client');
-  expect((await secondary.call('read_work_request', { detail: 'full', work_request_id: own })).work_request.id).toBe(own);
+  expect((await secondary.call('read_work_request', { work_request_id: own })).work_request.id).toBe(own);
   const [secondaryWp] = await architect.addPackages([contract('Secondary delivery', { repo: 'example/client', base_branch: 'integration' })]);
   await architect.call('dispatch_work_package', { work_package_id: secondaryWp });
-  // Another terminal reads this WorkRequest in full; ownership gates writes only.
-  const readerBoard = await secondary.board(own, 'full');
-  expect(readerBoard.work_packages.find((entry: any) => entry.id === ownWp).work_package.id).toBe(ownWp);
-  expect(readerBoard.work_packages.find((entry: any) => entry.id === secondaryWp).work_package.id).toBe(secondaryWp);
+  // Reads see all live packages across repository and base scopes.
+  const readerBoard = await secondary.board(own);
+  expect(readerBoard.work_packages.map((entry: any) => entry.id)).toContain(ownWp);
+  expect(readerBoard.work_packages.map((entry: any) => entry.id)).toContain(secondaryWp);
   await architect.call('edit_plan', { ops: [
     { op: 'update_package', work_package_id: ownWp, expected_revision: 1, patch: { group: 'Primary group' } },
     { op: 'update_package', work_package_id: secondaryWp, expected_revision: 1, patch: { group: 'Visible ancestor / Secondary group' } },
     { op: 'set_dependency', from: ownWp, to: secondaryWp, reason: 'Scoped dependency' },
   ] });
-  const planArgs = { detail: 'full', work_request_id: own, view: 'plan' };
+  const planArgs = { work_request_id: own, view: 'plan' };
   const readerPlan = await secondary.call('read_work_request', planArgs);
   expect(readerPlan.plan.work_packages.map((entry: any) => entry.group).sort()).toEqual(['Primary group', 'Visible ancestor / Secondary group']);
   expect(readerPlan).toEqual(await architect.call('read_work_request', planArgs));
@@ -227,34 +236,34 @@ test('ownership lets every terminal read any request but refuses writes to anoth
   expect((await architect.call('read_work_request', planArgs)).plan.dependencies).toEqual(beforeEdges);
   await close(architect, ownWp);
   const closedRow = await row(secondary, own, ownWp);
-  expect(closedRow.work_package.id).toBe(ownWp);
+  expect(closedRow.id).toBe(ownWp);
   expect(closedRow.operational_state.key).toBe('completed_no_pr');
   const sameRepoReader = await factory.client();
   await sameRepoReader.request('Same repository different delivery base', 'integration');
   const [alternateBase] = await architect.addPackages([contract('Alternate delivery base', { base_branch: 'integration' })]);
   await architect.call('dispatch_work_package', { work_package_id: alternateBase });
-  const baseBoard = await sameRepoReader.board(own, 'full');
-  expect(baseBoard.work_packages.find((entry: any) => entry.id === alternateBase).work_package.id).toBe(alternateBase);
-  expect(baseBoard.work_packages.find((entry: any) => entry.id === ownWp).work_package.id).toBe(ownWp);
+  const baseBoard = await sameRepoReader.board(own);
+  expect(baseBoard.work_packages.map((entry: any) => entry.id)).toContain(alternateBase);
+  expect((await sameRepoReader.readPackage(own, ownWp)).status).toBe('ended');
   await sameRepoReader.reject('close_work_package', { work_package_id: ownWp, outcome: 'completed_no_pr', evidence: 'Refuse hidden-base closeout' }, 'owned_by_other_terminal');
 
   for (const [repo, branch] of [['foreign/service', 'beta'], ['example/service', 'other-branch']]) {
     const outsider = await factory.client();
     const foreign = await outsider.request('Confidential outside scope', branch, repo);
-    expect((await architect.call('read_work_request', { detail: 'full', work_request_id: foreign })).work_request.id).toBe(foreign);
+    expect((await architect.call('read_work_request', { work_request_id: foreign })).work_request.id).toBe(foreign);
     const listed = await architect.call('list_work_requests', {});
     expect(listed.work_requests.map((entry: any) => entry.id)).toContain(foreign);
   }
 });
 
-test('read views give a terminal that owns another request the same complete plan as the owner', async ({ processes }) => {
+test('read views give a terminal that owns another request the same live plan and ended counts as the owner', async ({ processes }) => {
   const factory = processes.factory();
   const architect = await factory.client();
   const request = await architect.request('Plan projection authority');
   const reader = await factory.client();
   await reader.request('Secondary plan reader', 'integration', 'example/client');
   const views = ['overview', 'plan', 'board'];
-  const read = async (client: Client, view: string) => client.call('read_work_request', { detail: 'full', work_request_id: request, view });
+  const read = async (client: Client, view: string) => client.call('read_work_request', { work_request_id: request, view });
   for (const client of [architect, reader]) expect((await read(client, 'plan')).plan.work_packages).toEqual([]);
   const secondary = { repo: 'example/client', base_branch: 'integration' };
   const add = (title: string, key: string, patch: object = {}) => ({ op: 'add_package', key, ...contract(title, patch) });
@@ -271,11 +280,12 @@ test('read views give a terminal that owns another request the same complete pla
   const ids = Object.fromEntries(edited.applied.map((op: any) => [op.key, op.work_package_id]));
   const assertComplete = async (terminalStatus: string) => {
     for (const view of views) expect(await read(reader, view)).toEqual(await read(architect, view));
-    const plan = (await read(reader, 'plan')).plan;
-    expect(plan.work_packages.map((entry: any) => entry.id).sort()).toEqual(Object.values(ids).sort());
-    expect(plan.summary.work_package_count).toBe(8);
-    expect(plan.work_packages.find((entry: any) => entry.id === ids.terminal).status).toBe(terminalStatus);
-    expect(plan.work_packages.find((entry: any) => entry.id === ids.primaryTerminal).status).toBe(terminalStatus);
+    const { plan, ended } = await read(reader, 'plan');
+    const terminal = [ids.terminal, ids.primaryTerminal];
+    const live = Object.values(ids).filter((id) => terminalStatus === 'planned' || !terminal.includes(id));
+    expect(plan.work_packages.map((entry: any) => entry.id).sort()).toEqual(live.sort());
+    expect(ended).toEqual(terminalStatus === 'planned' ? {} : { completed_no_pr: 2 });
+    for (const id of terminal) expect((await reader.readPackage(request, id as string)).status).toBe(terminalStatus);
     expect(plan.work_packages.find((entry: any) => entry.id === ids.root).group).toBeNull();
     expect(plan.dependencies).toHaveLength(4);
   };
@@ -299,9 +309,6 @@ test('package documents stay redacted and blocker history is attributed to the o
   ]);
   for (const work_package_id of [wp, sibling]) await architect.call('dispatch_work_package', { work_package_id });
   const own = (args: object) => ({ work_package_id: wp, ...args });
-  const taskPlan = async (work_package_id: string) =>
-    (await architect.call('read_work_request', { work_request_id: request, view: 'package', work_package_id, detail: 'full' })).task_plan;
-  expect((await taskPlan(wp)).text).toContain('Implement requested scope');
   const progressBefore = (await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).progress;
   for (const [args, reason] of [
     [{ blocker_id: 'no-summary', active: true }, 'missing_summary'],
@@ -319,7 +326,7 @@ test('package documents stay redacted and blocker history is attributed to the o
   expect(history.some((entry: any) => entry.summary === 'Cannot forge audit identity')).toBe(false);
   // The package view is readable by every trusted caller and stays redacted.
   const reader = await factory.client(null);
-  const packageView = await reader.tool('read_work_request', { work_request_id: request, view: 'package', work_package_id: wp, detail: 'full' });
+  const packageView = await reader.tool('read_work_request', { work_request_id: request, view: 'package', work_package_id: wp });
   for (const text of [packageView.result.content[0].text, JSON.stringify(packageView.result.structuredContent)]) {
     for (const secret of ['sk-synthetic-progress-token', ...reviewValues]) expect(text).not.toContain(secret);
   }
@@ -374,16 +381,19 @@ test('operator reports keep server times and partial edits and only the owner wr
   const request = await architect.request('Truthful operator reports');
   const [wp] = await packages(architect, ['Report boundary']);
   const question = (await chief.call('ask', { work_request_id: request, question: 'Which release should include this?' })).ask;
-  const read = async () => (await architect.call('read_work_request', { detail: 'full', work_request_id: request })).work_request.operator_report;
+  const read = async () => (await architect.call('read_work_request', { work_request_id: request })).work_request.operator_report;
   const peer = await factory.client();
   await peer.reject('set_report', { work_request_id: request, brief: 'Forged brief' }, 'owned_by_other_terminal');
   await (await factory.client(null)).reject('set_report', { work_request_id: request, brief: 'Forged brief' }, 'read_only_outside_herdr');
   expect(await read()).toBeFalsy();
+  const stored = async () => (await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated'))
+    .work_request_details.find((entry: any) => entry.work_request.id === request).work_request.operator_report;
   await architect.call('set_report', { brief: 'x'.repeat(4000) });
-  expect((await read()).brief.text).toHaveLength(4000);
+  expect((await read()).brief.text).toBe('x'.repeat(317) + '…');
+  expect((await stored()).brief.text).toHaveLength(4000);
   await architect.reject('set_report', { brief: 'x'.repeat(4001) }, 'invalid_operator_report_brief');
   await architect.reject('set_report', { brief: 'Forged time', written_at: '2000-01-01T00:00:00Z' }, 'unexpected_argument');
-  expect((await read()).brief.text).toHaveLength(4000);
+  expect((await stored()).brief.text).toHaveLength(4000);
   const started = Date.now();
   await architect.call('set_report', { brief: 'Core work is ready.', eta: 'After review', parking: { reason: 'Awaiting a release window' } });
   const first = await read();
@@ -409,9 +419,9 @@ test('operator reports keep server times and partial edits and only the owner wr
   const detail = dashboard.work_request_details.find((entry: any) => entry.work_request.id === request);
   expect(detail.work_request.operator_report).toEqual(reparked);
   expect(detail.work_request.worked_on.address).toBe(architect.address);
-  const unchanged = await architect.call('read_work_request', { detail: 'full', work_request_id: request });
+  const unchanged = await architect.call('read_work_request', { work_request_id: request });
   expect(unchanged.work_request.phase).toBe('active');
-  expect(unchanged.asks.find((entry: any) => entry.id === question.id).state).toBe('open');
+  expect(unchanged.asks.map((entry: any) => entry.id)).toContain(question.id);
   expect((await row(architect, request, wp)).attention_reason_codes).not.toContain('active_blocker');
 });
 
@@ -452,11 +462,12 @@ test('asks and decisions preserve provenance and redact their responses', async 
     expect(JSON.stringify(result)).not.toContain('raw_secret_synthetic');
     ids.push(result.decision_log_entry.id);
   }
-  const persisted = await architect.call('read_work_request', { detail: 'full', work_request_id: request });
+  const persisted = await architect.call('read_work_request', { work_request_id: request });
   expect(persisted.work_request.phase).toBe('intake');
-  expect(persisted.asks.map((entry: any) => entry.state).sort()).toEqual(['answered', 'answered', 'withdrawn']);
-  expect(persisted.decision_log_entries.map((entry: any) => entry.id)).toEqual(ids);
-  expect(JSON.stringify(persisted)).not.toContain('raw_secret_synthetic');
+  const asks = await Promise.all([first, deciding, closing].map((id) => architect.readAsk(request, id)));
+  expect(asks.map((entry) => entry.state)).toEqual(['answered', 'answered', 'withdrawn']);
+  expect(persisted.decisions.map((entry: any) => entry.id).sort()).toEqual(ids.sort());
+  expect(JSON.stringify({ ...persisted, asks })).not.toContain('raw_secret_synthetic');
 });
 
 test('any Herdr terminal flags a decision, redacted, and the operator reviews it over HTTP', async ({ processes }) => {
@@ -481,8 +492,7 @@ test('any Herdr terminal flags a decision, redacted, and the operator reviews it
   await (await factory.client(null)).reject('record_decision', { ...decisionArgs, flag: true }, 'read_only_outside_herdr');
   // Decisions never take ownership.
   expect((await observer.call('sympp.health')).caller.owns).toEqual([]);
-  const persisted = await architect.call('read_work_request', { detail: 'full', work_request_id: request });
-  const stored = persisted.decision_log_entries.find((entry: any) => entry.id === flagged.decision_log_entry.id);
+  const stored = await architect.readDecision(request, flagged.decision_log_entry.id);
   expect(stored).toMatchObject({ decision: 'Use [REDACTED]', rationale: 'Context [REDACTED]', scope_impact: 'Bounded [REDACTED]' });
   expect(JSON.stringify(stored)).not.toContain('sk-synthetic');
 
@@ -542,8 +552,7 @@ test('any Herdr terminal flags a decision, redacted, and the operator reviews it
   expect(again.body.error).toMatchObject({ state: 'feedback', next_action: 'dismiss' });
   expect((await architect.raw({}, {}, 'POST', decisionPath(flagged.decision_log_entry.id, 'dismiss').replace('/operator/', '/herdr/'))).status).toBe(200);
   expect(await toReview()).toEqual([]);
-  const read = await other.call('read_work_request', { detail: 'full', work_request_id: request });
-  expect(read.decision_log_entries.find((entry: any) => entry.id === flagged.decision_log_entry.id))
+  expect(await other.readDecision(request, flagged.decision_log_entry.id))
     .toMatchObject({ review_state: 'feedback', feedback: 'Prefer [REDACTED] the bounded option.' });
 });
 
@@ -560,7 +569,7 @@ test('architect descendant planning stays owned through terminal closeout and re
   const foreignRequest = await foreign.request('Other planning owner');
   const [otherWp] = await packages(foreign, ['Private foreign plan']);
   // Reads by explicit id are free for trusted callers; writes need the owner.
-  expect((await architect.call('read_work_request', { work_request_id: foreignRequest, view: 'package', work_package_id: otherWp })).task_plan).toBeTruthy();
+  expect((await architect.readPackage(foreignRequest, otherWp)).title).toBe('Private foreign plan');
   await architect.reject('set_blocker', { work_package_id: otherWp, blocker_id: 'foreign', active: true, summary: 'Foreign' }, 'owned_by_other_terminal');
   await close(architect, wp);
   // Ending the package cleared its blocker; an ended package takes no new one.
@@ -588,9 +597,8 @@ test('the native board\'s operator actions finish, release, complete, archive, r
   const finished = await act(`work-packages/${dispatched}/finish`);
   expect(finished.body).toMatchObject({ ok: true, work_package_id: dispatched, status: 'ended' });
   expect((await act(`work-packages/${dispatched}/finish`)).status).toBe(200);
-  expect((await architect.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages.find((wp: any) => wp.id === dispatched))
-    .toMatchObject({ status: 'ended' });
-  expect((await row(architect, request, dispatched)).delivery_outcome).toBe('finished');
+  expect((await architect.readPackage(request, dispatched)).status).toBe('ended');
+  expect((await row(architect, request, dispatched)).delivery.outcome).toBe('finished');
   const plannedRefusal = await act(`work-packages/${planned}/finish`);
   expect([plannedRefusal.status, plannedRefusal.body.error.code]).toEqual([422, 'ending_not_allowed']);
   // Operators archive only delivered packages that no request still owns.
@@ -606,9 +614,9 @@ test('the native board\'s operator actions finish, release, complete, archive, r
   for (const _ of [1, 2]) {
     await architect.call('set_blocker', { work_package_id: active, blocker_id: 'review-scope', active: true, summary: 'Reviewer asked for an out-of-scope change.' });
     expect((await architect.operator(`/api/v1/sympp/operator/work-packages/${active}/blockers/review-scope/clear`, {})).status).toBe(200);
-    expect((await row(architect, request, active)).work_package.blocker_state['active?']).toBe(false);
+    expect(await blockerActive(architect, active)).toBe(false);
   }
-  expect((await row(architect, request, active)).work_package.status).toBe('dispatched');
+  expect((await row(architect, request, active)).status).toBe('dispatched');
 
   const released = await act(`work-requests/${request}/release`);
   expect(released.body).toMatchObject({ work_request_id: request, released: { address: architect.address } });
@@ -621,10 +629,15 @@ test('the native board\'s operator actions finish, release, complete, archive, r
   const completed = await act(`work-requests/${request}/complete`);
   expect(completed.body.work_request.phase).toBe('done');
   expect(completed.body.refresh).toEqual({ dashboard: false, work_request_id: request });
-  const done = await architect.call('read_work_request', { detail: 'full', work_request_id: request });
-  expect(done.asks.find((entry: any) => entry.id === ask).state).toBe('withdrawn');
+  const done = await architect.call('read_work_request', { work_request_id: request });
+  expect((await architect.readAsk(request, ask)).state).toBe('withdrawn');
   expect(done.work_packages.find((wp: any) => wp.id === planned).status).toBe('planned');
   expect((await act(`work-requests/${request}/archive`)).body.work_request.phase).toBe('archived');
+  const archived = await architect.call('read_work_request', { work_request_id: request, view: 'board' });
+  expect(archived.work_request).toMatchObject({ phase: 'archived', next_action: 'restore' });
+  expect(archived.delivery_board.work_packages.find((entry: any) => entry.id === planned)).toMatchObject({
+    status: 'planned', next_action: 'restore', next_actor: 'operator', merge_eligibility: { eligible: false },
+  });
   // The browser board drops an archived request and the packages only it links.
   const browser = await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated');
   expect(browser.work_request_details.map((detail: any) => detail.work_request.id)).not.toContain(request);
@@ -683,7 +696,7 @@ test('reads list every request, redact what they return, put open asks first and
   const id = created.work_request.id;
   architect.workRequest = id;
   await (await factory.client()).request('Another request', 'beta', 'example/other');
-  const [plannedWp, , skippedWp] = await architect.addPackages(['Planned', 'Also planned', 'Skipped'].map((title) => contract(title)));
+  const [plannedWp, otherPlannedWp, skippedWp] = await architect.addPackages(['Planned', 'Also planned', 'Skipped'].map((title) => contract(title)));
   await architect.call('close_work_package', { work_package_id: skippedWp, outcome: 'skipped' });
   const ask = async (question: string) => (await chief.call('ask', { work_request_id: id, question })).ask.id;
   const open = await ask('Still open?');
@@ -691,21 +704,30 @@ test('reads list every request, redact what they return, put open asks first and
   await architect.call('resolve_ask', { ask_id: withdrawn, to: 'withdrawn' });
   const answered = await ask('Answered?');
   await architect.call('resolve_ask', { ask_id: answered, to: 'answered', answer: 'Bearer raw-secret-value' });
-  await architect.call('record_decision', { work_request_id: id, source_type: 'architect', decision: 'Use https://example.test/path?sig=raw-secret-value', rationale: 'Why', scope_impact: 'None' });
+  const decision = (await architect.call('record_decision', { work_request_id: id, source_type: 'architect', decision: 'Use https://example.test/path?sig=raw-secret-value', rationale: 'Why', scope_impact: 'None' })).decision_log_entry.id;
   const reader = await factory.client(null);
   const before = (await architect.inspect(`/api/v1/sympp/operator/work-packages/${plannedWp}`)).progress;
   const listed = await reader.call('list_work_requests', { phase: 'planned' });
   expect(listed.filters).toEqual({ phase: 'planned' });
   expect(listed.total_count).toBe(1);
   expect(listed.work_requests).toEqual([expect.objectContaining({ id, title: 'Read WorkRequests', repo: 'example/service', base_branch: 'beta', phase: 'planned', open_asks: 1 })]);
-  const read = await reader.tool('read_work_request', { detail: 'full', work_request_id: id });
+  const read = await reader.tool('read_work_request', { work_request_id: id });
   expect(JSON.stringify(read)).not.toContain('raw-secret-value');
   const payload = read.result.structuredContent;
-  // Open asks first, then newest first.
-  expect(payload.asks.map((entry: any) => entry.id)).toEqual([open, answered, withdrawn]);
-  expect(payload.summary).toEqual({ open_ask_count: 1, decision_count: 1, work_package_count: 3,
-    planned_work_package_count: 2, dispatched_work_package_count: 0, ended_work_package_count: 1 });
-  expect((await reader.tool('read_work_request', { detail: 'full', work_request_id: 'missing-request' })).error.data.code).toBe('not_found');
+  expect(payload.asks).toEqual([{ id: open, question: 'Still open?' }]);
+  expect(payload.work_packages.map((entry: any) => entry.id)).toEqual([plannedWp, otherPlannedWp]);
+  expect(payload.ended).toEqual({ skipped: 1 });
+  const documents = await Promise.all([
+    reader.tool('read_work_request', { work_request_id: id, view: 'request' }),
+    reader.tool('read_work_request', { work_request_id: id, view: 'ask', ask_id: answered }),
+    reader.tool('read_work_request', { work_request_id: id, view: 'decision', decision_id: decision }),
+  ]);
+  for (const document of documents) expect(JSON.stringify(document.result)).not.toContain('raw-secret-value');
+  expect(documents[0].result.structuredContent.work_request.human_description).toContain('[REDACTED]');
+  expect(documents[1].result.structuredContent.ask).toMatchObject({ state: 'answered', answer: '[REDACTED]' });
+  expect(documents[2].result.structuredContent.decision.decision).toContain('[REDACTED]');
+  expect((await reader.readAsk(id, withdrawn)).state).toBe('withdrawn');
+  expect((await reader.tool('read_work_request', { work_request_id: 'missing-request' })).error.data.code).toBe('not_found');
   expect((await reader.reject('list_work_requests', { base_branch: 'other' }, 'unexpected_argument')).arguments).toEqual(['base_branch']);
   await reader.reject('list_work_requests', { phase: 'merged' }, 'invalid_phase');
   expect((await architect.inspect(`/api/v1/sympp/operator/work-packages/${plannedWp}`)).progress).toEqual(before);

@@ -39,7 +39,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "set_report",
     "summarize_failed_mcp_calls"
   ]
-  @work_request_views ["overview", "plan", "board", "package"]
+  @work_request_views ~w(overview plan board package request ask decision flagged_decisions)
   # Every tool is a write unless listed here. Writes need a Herdr terminal
   # identity; the same split drives the MCP readOnlyHint annotation.
   @read_tools [@health_tool, "list_work_requests", "read_work_request", "summarize_failed_mcp_calls"]
@@ -111,7 +111,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   defp description("read_work_request"),
     do:
-      "Read one WorkRequest in a view: overview (default; phase, asks, package next actions, recent decisions), plan (packages with group paths, dependencies, execution graph), board (delivery state and evidence) or package (one package's contract, revision, dependencies and task plan; needs work_package_id). detail: full returns complete payloads."
+      "Read WorkRequest status (overview), dependencies (plan), or delivery actions (board). Use request for the brief and constraints, package for one contract, ask or decision for one entry, and flagged_decisions for the review index."
 
   defp description("create_work_request"),
     do: "Create a WorkRequest. The calling terminal becomes its owner unless own is false."
@@ -139,7 +139,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
       "Any Herdr terminal can log a decision. Flag in-scope product calls for operator review. Use one plain sentence each when flagged (decision ≤160 chars, rationale ≤240). Put evidence in the report."
 
   defp description("ask"),
-    do: "Chief only. Ask the operator on the board. Omit both IDs for your card."
+    do: "Chief only. Omit both IDs for cards. Read answers with read_work_request(view: ask, ask_id) or sympp.health caller.card."
 
   defp description("resolve_ask"),
     do:

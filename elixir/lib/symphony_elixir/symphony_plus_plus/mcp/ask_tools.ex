@@ -46,7 +46,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AskTools do
 
   defp ask_next_action(_ask),
     do:
-      "The operator answers on the board. The answer is typed into this terminal when it runs on the factory's machine; otherwise read it from the ask in read_work_request with detail: full. Withdraw it with resolve_ask if it stops mattering."
+      "The operator answers on the board. The answer is typed into this terminal when it runs on the factory's machine; otherwise use read_work_request with view: ask and the ask_id. Withdraw it with resolve_ask if it stops mattering."
 
   defp error(tool, :chief_only),
     do:
