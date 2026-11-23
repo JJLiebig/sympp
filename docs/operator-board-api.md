@@ -99,7 +99,8 @@ can keep the snapshot and keep checking.
 
 While the first snapshot is building, the API returns HTTP 202 with
 `{"status":"building"}` and `Retry-After`. If the first build fails, the API
-reports the storage error until another attempt can start.
+reports the storage error until a snapshot is available. The board event
+stream signals when a first build fails or a new snapshot is ready.
 
 An open SSE stream watches the hydrated and archived boards and checks every
 250 ms for changes from other writers. It notifies clients when an updated

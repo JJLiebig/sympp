@@ -18,8 +18,9 @@ await mkdir(outputDir, { recursive: true });
 
 const dashboard = await capture("/dashboard", "dashboard.json");
 const deferred = await capture("/dashboard/deferred", "dashboard.deferred.json");
-const hydrated = await capture("/dashboard/hydrated", "dashboard.hydrated.json");
 const archived = await capture("/dashboard?surface=archived", "dashboard.archived.json");
+// The snapshot server discovers captures by the hydrated file and needs the archive to open them.
+const hydrated = dashboard && archived && await capture("/dashboard/hydrated", "dashboard.hydrated.json");
 
 const details = deferred?.work_request_details ?? [];
 const workRequestIds = unique([

@@ -204,18 +204,46 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert Jason.decode!(body)["archived_work_requests"]["work_requests"] == []
   end
 
-  test "a cold projection reports a storage failure without restarting for every reader" do
-    controlled_clock()
+  test "a slow cold projection wakes readers on failure and reports it until recovery", %{pid: pid} do
+    clock = controlled_clock()
+    caller = self()
 
-    assert {:error, {:storage_failed, _reason}} =
-             DashboardCache.json(Repo, :missing, fn ->
-               Repo.query!("SELECT value FROM missing_table")
-             end)
+    builder = fn ->
+      send(caller, {:cold_build_started, self()})
 
+      receive do
+        :fail -> Repo.query!("SELECT value FROM missing_table")
+        :continue -> payload()
+      end
+    end
+
+    {cache, ref} = watch(:missing, builder)
+    assert_receive {:cold_build_started, worker}
+    release_on_exit(worker)
+    read = :gen_server.send_request(cache, {:json, pid, :missing, builder})
+    expire_read_budget(worker)
+    assert {:reply, :building} = :gen_server.wait_response(read, 1_000)
+
+    send(worker, :fail)
+    assert_receive {:dashboard_changed, ^ref, _failed}
     assert {:error, {:storage_failed, _reason}} = DashboardCache.json(Repo, :missing, fn -> flunk("retry during backoff") end)
 
-    assert {:ok, body, _etag} = DashboardCache.json(Repo, :native, &payload/0)
+    :atomics.add(clock, 1, 2_000)
+    refresh_watches()
+    assert_receive {:cold_build_started, retry}
+    release = release_on_exit(retry)
+    assert {:error, {:storage_failed, _reason}} = DashboardCache.json(Repo, :missing, builder)
+
+    release.()
+    assert_receive {:dashboard_changed, ^ref, _recovered}
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :missing, builder)
     assert Jason.decode!(body)["decision"] == "recorded"
+  end
+
+  defp expire_read_budget(worker) do
+    {job_key, job} = Enum.find(:sys.get_state(DashboardCache).refreshing, fn {_key, job} -> job.pid == worker end)
+    Process.cancel_timer(job.read_timer)
+    send(DashboardCache, {:read_budget_elapsed, job_key, job.sequence})
   end
 
   defp controlled_clock do
@@ -551,9 +579,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     release = release_on_exit(worker)
     finished = Process.monitor(worker)
 
-    {job_key, job} = Enum.find(:sys.get_state(DashboardCache).refreshing, fn {_key, job} -> job.pid == worker end)
-    Process.cancel_timer(job.read_timer)
-    send(DashboardCache, {:read_budget_elapsed, job_key, job.sequence})
+    expire_read_budget(worker)
     assert :building = Task.await(slow)
     assert :building = DashboardCache.json(Repo, :cold, fn -> flunk("duplicate build") end)
 

@@ -163,12 +163,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
         {job_key, _config} = request = build_request(key, generation || make_ref())
         state = ensure_refresh(state, request, fun)
 
-        case Map.get(state.refreshing, job_key) do
-          %{read_timer: timer} when is_reference(timer) ->
+        case {pending_response(state, key), Map.get(state.refreshing, job_key)} do
+          {{:error, _reason} = error, _job} ->
+            {:reply, error, state}
+
+          {_pending, %{read_timer: timer}} when is_reference(timer) ->
             {:noreply, update_in(state.refreshing[job_key].waiters, &[from | &1])}
 
-          _busy ->
-            {:reply, pending_response(state, key), state}
+          {pending, _busy} ->
+            {:reply, pending, state}
         end
     end
   end
@@ -461,12 +464,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   defp finish_failure(state, {{_source, surface} = key, _generation, _config}, job, error) do
     Logger.warning("board_refresh_failed surface=#{surface}")
     error = if error == {:error, :database_busy}, do: error, else: {:error, {:storage_failed, :dashboard_build_failed}}
-    reply_waiters(job, available(key, error))
+    response = available(key, error)
+    reply_waiters(job, response)
+    previous = Map.get(state.failures, key)
+
+    if response == error and not match?({_deadline, _delay, ^error}, previous) do
+      notify_projection_readers(Map.get(state.watches, key))
+    end
 
     # Retry only on reader demand. Give a failing surface progressively more
     # time to recover so other reads and watch ticks cannot restart it in a loop.
     delay =
-      case Map.get(state.failures, key) do
+      case previous do
         {_, previous, _error} -> min(2 * previous, @max_retry_delay_ms)
         nil -> @read_budget_ms
       end
@@ -476,11 +485,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
 
   defp pending_response(state, key) do
     case Map.get(state.failures, key) do
-      {retry_at, _delay, error} ->
-        available(key, if(state.clock.() < retry_at, do: error, else: :building))
-
-      nil ->
-        available(key)
+      {_retry_at, _delay, error} -> available(key, error)
+      nil -> available(key)
     end
   end
 
