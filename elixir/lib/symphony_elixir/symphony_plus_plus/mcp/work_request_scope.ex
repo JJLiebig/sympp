@@ -7,11 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
   objects exist and belong together.
   """
 
-  import Ecto.Query, only: [from: 2]
-
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -39,52 +35,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
   @spec scoped_work_request(repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, term()}
   def scoped_work_request(repo, work_request_id), do: WorkRequestService.get(repo, work_request_id)
 
-  @spec scoped_delivery_board(repo(), WorkRequest.t(), [WorkPackage.t()], keyword()) :: term()
-  def scoped_delivery_board(repo, %WorkRequest{} = work_request, work_packages, opts \\ []) when is_list(work_packages) do
-    {visible_work_package_ids, work_package_contexts} =
-      visible_delivery_board_work_package_contexts(repo, work_request, work_packages)
-
-    project_opts =
-      [
-        work_request: work_request,
-        work_packages: work_packages,
-        visible_work_package_ids: visible_work_package_ids,
-        work_package_contexts: work_package_contexts,
-        slice_projection: Keyword.get(opts, :slice_projection)
-      ]
-      |> Keyword.reject(fn {_key, value} -> is_nil(value) end)
-
-    DeliveryBoard.project(repo, work_request.id, project_opts)
-  end
-
-  @doc "The WorkRequest's packages plus any same-WorkRequest successors their endings name."
-  @spec visible_delivery_board_work_package_contexts(repo(), WorkRequest.t(), [WorkPackage.t()]) ::
-          {[String.t()], map()}
-  def visible_delivery_board_work_package_contexts(repo, %WorkRequest{} = work_request, work_packages) do
-    work_package_ids = Enum.map(work_packages, & &1.id)
-
-    successor_ids =
-      repo.all(
-        from(delivery in WorkPackageDelivery,
-          where: delivery.work_request_id == ^work_request.id and delivery.work_package_id in ^work_package_ids,
-          select: delivery.successor_work_package_id
-        )
-      )
-
-    ids = (work_package_ids ++ successor_ids) |> Enum.filter(&filled_string?/1) |> Enum.uniq()
-    owned = Map.new(work_packages, &{&1.id, &1})
-
-    work_package_contexts =
-      repo.all(from(work_package in WorkPackage, where: work_package.id in ^ids))
-      |> Enum.filter(&(Map.has_key?(owned, &1.id) and &1.work_request_id == work_request.id))
-      |> Map.new(&{&1.id, %{work_package: &1}})
-
-    {Map.keys(work_package_contexts), work_package_contexts}
-  end
-
   @spec require_work_package_in_work_request(WorkPackage.t(), WorkRequest.t()) :: :ok | {:error, :not_found}
   def require_work_package_in_work_request(%WorkPackage{work_request_id: id}, %WorkRequest{id: id}), do: :ok
   def require_work_package_in_work_request(%WorkPackage{}, %WorkRequest{}), do: {:error, :not_found}
-
-  defp filled_string?(value), do: is_binary(value) and String.trim(value) != ""
 end

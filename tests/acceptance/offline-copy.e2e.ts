@@ -13,7 +13,7 @@ if (process.env.SYMPP_OFFLINE_ACCEPTANCE === '1') {
     const architect = await source.client();
     const request = await architect.request('Synthetic online snapshot');
     const [wp] = (await architect.addPackages([contract('Persisted snapshot package')]));
-    const before = await architect.call('read_work_request', { detail: 'full', work_request_id: request });
+    const before = await architect.readPackage(request, wp);
     const sourceBoard = await architect.raw(null, {}, 'GET', '/api/v1/sympp/herdr/dashboard');
     expect(sourceBoard.status).toBe(200);
     expect(sourceBoard.body.runtime).toEqual({ offline: false, repos_root: null });
@@ -57,7 +57,7 @@ if (process.env.SYMPP_OFFLINE_ACCEPTANCE === '1') {
     for (const route of ['/mcp', '/mcp/client-lease']) {
       expect((await viewer.raw({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }, {}, 'POST', route)).status).toBe(403);
     }
-    expect((await architect.call('read_work_request', { detail: 'full', work_request_id: request })).work_packages).toEqual(before.work_packages);
+    expect(await architect.readPackage(request, wp)).toEqual(before);
     await offline.stop();
 
     await architect.call('record_decision', { source_type: 'operator', work_request_id: request, decision: 'Only the explicit refresh sees this', rationale: 'Offline copy', scope_impact: 'None', created_by: 'acceptance' });

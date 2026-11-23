@@ -40,7 +40,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "set_report",
     "summarize_failed_mcp_calls"
   ]
-  @work_request_views ["overview", "plan", "board", "package"]
+  @work_request_views ~w(overview plan board package request ask decision flagged_decisions)
   # Every tool is a write unless listed here. Writes need a Herdr terminal
   # identity; the same split drives the MCP readOnlyHint annotation.
   @read_tools [@health_tool, "list_work_requests", "read_work_request", "summarize_failed_mcp_calls"]
@@ -112,7 +112,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   defp description("read_work_request"),
     do:
-      "Read one WorkRequest in a view: overview (default; phase, asks, package next actions, recent decisions), plan (packages with group paths, dependencies, execution graph), board (delivery state and evidence) or package (one package's contract, revision, dependencies and task plan; needs work_package_id). detail: full returns complete payloads."
+      "Read WorkRequest status (overview), dependencies (plan), or delivery actions (board). Use request for the brief and constraints, package for one contract, ask or decision for one entry, and flagged_decisions for the review index."
 
   defp description("create_work_request"),
     do: "Create a WorkRequest. The calling terminal becomes its owner unless own is false."
@@ -142,7 +142,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   defp description("ask"),
     do:
-      "Chief only. Asks the human owner; the question shows on the sympp board until it is answered or withdrawn. Without work_request_id it asks on your own card. Optionally name a package and give a decision_prompt with options. On the factory's machine, the original question and the operator's answer arrive in a <sympp> message submitted to your terminal. Read stored answers with read_work_request detail: full, or under caller.card in sympp.health for card asks."
+      "Chief only. Asks the human owner; the question shows on the sympp board until it is answered or withdrawn. Without work_request_id it asks on your own card. Optionally name a package and give a decision_prompt with options. On the factory's machine, the original question and the operator's answer arrive in a <sympp> message submitted to your terminal. Read stored answers with read_work_request view: ask and ask_id, or under caller.card in sympp.health for card asks."
 
   defp description("resolve_ask"),
     do:

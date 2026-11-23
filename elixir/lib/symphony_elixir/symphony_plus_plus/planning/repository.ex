@@ -421,11 +421,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
     do_get_state(repo, work_package_id, {:bounded, document, before_sequence}, state_read_retry_attempts())
   end
 
-  @spec get_task_plan_render_state(repo(), String.t()) :: {:ok, State.t()} | {:error, error()}
-  def get_task_plan_render_state(repo, work_package_id) when is_atom(repo) and is_binary(work_package_id) do
-    do_get_state(repo, work_package_id, :task_plan, state_read_retry_attempts())
-  end
-
   defp do_get_status_summary(repo, work_package_id, attempts_left) do
     repo.transaction(fn ->
       with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
@@ -492,15 +487,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
          plan_nodes: plan_nodes,
          progress_events: progress_events,
          artifacts: artifacts,
-         plan_version_material: plan_nodes,
          plan_nodes_omitted_count: 0,
          progress_events_omitted_count: 0,
          artifacts_omitted_count: 0
        }}
     end
   end
-
-  defp load_state(repo, work_package_id, :bounded), do: load_state(repo, work_package_id, {:bounded, nil, nil})
 
   defp load_state(repo, id, {:bounded, document, before_sequence}) do
     progress_cursor = if document == "progress.md", do: before_sequence
@@ -520,13 +512,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
          progress_events_omitted_count: progress_omitted,
          artifacts_omitted_count: artifacts_omitted
        }}
-    end
-  end
-
-  defp load_state(repo, work_package_id, :task_plan) do
-    with {:ok, %State{} = state} <- load_state(repo, work_package_id, :bounded),
-         {:ok, plan_version_material} <- list_plan_nodes_version_material(repo, work_package_id) do
-      {:ok, %State{state | plan_version_material: plan_version_material}}
     end
   end
 

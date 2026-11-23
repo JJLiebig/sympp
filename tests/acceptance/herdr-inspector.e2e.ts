@@ -3,7 +3,7 @@ import { join, basename } from 'node:path';
 import { test } from '../support/browser-candidate.js';
 import { InspectorHost } from '../support/inspector-host.js';
 import { contract } from '../support/factory.js';
-import { head, pr, row, sync } from '../support/delivery.js';
+import { blockerActive, head, pr, row, sync } from '../support/delivery.js';
 
 test('compiled inspector binds and pins actual request detail without stealing focus or inventing a worker', async ({ candidate, app, browser }) => {
   const { client, factory, provider } = candidate;
@@ -33,7 +33,7 @@ test('compiled inspector binds and pins actual request detail without stealing f
     expect(host.screen).not.toContain('Other inspector request');
     expect(host.calls.filter((call) => call.method === 'pane.focus')).toEqual([]);
     expect(snapshot.focused_pane_id).toBe('owner-a');
-    expect((await row(client, request, wp)).work_package.blocker_state['active?']).toBe(false);
+    expect(await blockerActive(client, wp)).toBe(false);
     await app.open('/sympp/board');
     await expect(browser.locator(`[data-goal="${request}"]`)).toContainText('Inspector findings');
 
