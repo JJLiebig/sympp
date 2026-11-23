@@ -11,7 +11,8 @@ import { div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input, Button } from "gpui-base";
 import { theme, props, closeOverlay, openOverlay, knownAgents, machines, spaces, terminals, panes, shared, setShared, exec, hc, home, layout, run, settings } from "herdr";
 import { chiefBrief, chiefArgv, chiefLabelArgs, chiefSpaceName, chiefTerminalName, factoryMachine, chiefCheckouts, chiefFolders, intoTopic, isChiefSpace, CHIEF_SPACES, chiefMenu,
-  CHIEF_SESSIONS, canResume, chiefRunning, machineOf, resumeArgv } from "./chief.js";
+  CHIEF_SESSIONS, canResume, machineOf, resumeArgv } from "./chief.js";
+import { chiefEntries, deskOf } from "./levels.js";
 
 const W = 560;
 const H = 46;
@@ -71,12 +72,17 @@ export class ChiefStart {
     this.input = InputState.new({ placeholder: `Start ${this.name} chief…` });
     this.input.on("submit", (_e, cx) => this.start(cx));
     this.handle = cx.focus_handle();
-    const previous = own.fresh ? null : shared(CHIEF_SESSIONS)?.[this.topic];
-    if (chiefRunning(previous, terminals())) {
-      this.phase = "resuming";
-      showChief(previous.terminal);
-      this.close();
-      return;
+    const sessions = shared(CHIEF_SESSIONS) ?? {};
+    const previous = own.fresh ? null : sessions[this.topic];
+    if (!own.fresh) {
+      const desk = deskOf(shared("desk.topics"), []);
+      const terminal = chiefEntries(desk, sessions, terminals()).find(({ topic }) => topic.id === this.topic)?.terminal;
+      if (terminal) {
+        this.phase = "resuming";
+        showChief(terminal.address);
+        this.close();
+        return;
+      }
     }
     if (canResume(previous)) this.resume(previous, cx);
     else {
@@ -175,7 +181,8 @@ export class ChiefStart {
       if (next) setShared("desk.topics", next);
     }
     setShared(CHIEF_SPACES, { ...shared(CHIEF_SPACES), [own?.id ?? made.space]: this.topic });
-    setShared(CHIEF_SESSIONS, { ...shared(CHIEF_SESSIONS), [this.topic]: { ...record, terminal: made.terminal, started: Date.now() } });
+    const { agent, session, cwd } = record;
+    setShared(CHIEF_SESSIONS, { ...shared(CHIEF_SESSIONS), [this.topic]: { terminal: made.terminal, agent, session, cwd, started: Date.now() } });
     // It is the topic's chief from now on: the mark lights and leads to it before its agent starts.
     setShared(CHIEFS, { ...shared(CHIEFS), [this.topic]: [{ domain: this.name, terminal: made.terminal }] });
     // A desk shows its spaces' tabs in its workspace view.
@@ -245,7 +252,8 @@ export class ChiefStart {
         if (made) {
           const tab = panes().find((p) => p.terminal === made.terminal)?.tab;
           if (tab) run("tab.close", { id: tab, confirmed: true });
-          setShared(CHIEF_SESSIONS, { ...shared(CHIEF_SESSIONS), [this.topic]: last });
+          const sessions = shared(CHIEF_SESSIONS);
+          if (sessions?.[this.topic]?.terminal === made.terminal) setShared(CHIEF_SESSIONS, { ...sessions, [this.topic]: last });
         }
         this.phase = "ask";
         this.error = `Couldn't resume the chief: ${reason(error)}`;
