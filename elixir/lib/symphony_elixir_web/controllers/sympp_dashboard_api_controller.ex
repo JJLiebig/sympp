@@ -282,25 +282,50 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       end
 
     case DashboardCache.json(repo, surface, fun) do
-      {:ok, body, etag} ->
-        conn = conn |> put_resp_header("etag", etag) |> put_resp_header("cache-control", "private, no-cache")
-
-        if etag in get_req_header(conn, "if-none-match") do
-          send_resp(conn, 304, "")
-        else
-          conn |> put_resp_content_type("application/json") |> send_resp(200, body)
-        end
+      {status, body, etag} when status in [:ok, :stale] ->
+        snapshot_response(conn, surface, status, body, etag)
 
       :building ->
-        conn
-        |> put_resp_header("cache-control", "no-store")
-        |> put_resp_header("retry-after", "1")
-        |> put_status(202)
-        |> json(%{status: "building"})
+        building_response(conn)
 
       {:error, _reason} = error ->
         error
     end
+  end
+
+  defp snapshot_response(conn, surface, status, body, etag) do
+    conn = conn |> put_resp_header("etag", etag) |> put_resp_header("cache-control", "private, no-cache")
+    unchanged? = etag in get_req_header(conn, "if-none-match")
+
+    cond do
+      status == :stale and surface == :herdr and unchanged? ->
+        building_response(conn)
+
+      status == :stale ->
+        conn = conn |> put_resp_header("x-sympp-board-refresh", "pending") |> put_resp_header("retry-after", "1")
+        if unchanged?, do: send_resp(conn, 304, ""), else: send_snapshot(conn, pending_snapshot(surface, body))
+
+      unchanged? ->
+        send_resp(conn, 304, "")
+
+      true ->
+        send_snapshot(conn, body)
+    end
+  end
+
+  # Native fetch exposes the response body and status but no response headers.
+  # The encoded snapshot is a JSON object and can be sent without re-encoding.
+  defp pending_snapshot(:herdr, "{" <> rest), do: [~s({"refresh_pending":true,), rest]
+  defp pending_snapshot(_surface, body), do: body
+
+  defp send_snapshot(conn, body), do: conn |> put_resp_content_type("application/json") |> send_resp(200, body)
+
+  defp building_response(conn) do
+    conn
+    |> put_resp_header("cache-control", "no-store")
+    |> put_resp_header("retry-after", "1")
+    |> put_status(202)
+    |> json(%{status: "building"})
   end
 
   @spec herdr_work_request_detail(Conn.t(), map()) :: Conn.t()

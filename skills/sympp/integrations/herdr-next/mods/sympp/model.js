@@ -64,7 +64,11 @@ export function fetchSucceeded(state, data, now) {
 }
 
 export function fetchFailed(state, error, now) {
-  return { ...state, attemptAt: now, error, failures: state.failures + 1 };
+  return { ...state, attemptAt: now, building: false, error, failures: state.failures + 1 };
+}
+
+export function fetchBuilding(state, now) {
+  return { ...state, attemptAt: now, building: true, error: null, failures: 0 };
 }
 
 export function httpError(status) {
@@ -82,11 +86,12 @@ export function networkError(endpoint) {
 export function nextDelay(state, active) {
   if (state.error) return POLL.retry[Math.min(state.failures - 1, POLL.retry.length - 1)] ?? POLL.retry[0];
   if (!active) return POLL.background;
-  return !state.data || state.data.jobs.some((job) => job.state === "live" || job.needs.length > 0) ? POLL.live : POLL.quiet;
+  return state.data?.jobs.some((job) => job.state === "live" || job.needs.length > 0) ? POLL.live : POLL.quiet;
 }
 
 export function fetchDue(state, now, active) {
   if (state.attemptAt === null) return true;
+  if (state.building) return now > state.attemptAt;
   return now - state.attemptAt >= nextDelay(state, active);
 }
 

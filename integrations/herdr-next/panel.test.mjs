@@ -151,6 +151,7 @@ test('a panel and job tab share a 200, a bodyless 304, and a change after the in
 });
 
 test('a post-write read bypasses the older in-flight read and a 304 keeps an unconfirmed answer hidden', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
   const initial = { ...boardPayload(), etag: '"unanswered"' };
   const oldRead = { started: Promise.withResolvers(), release: Promise.withResolvers() };
   const tags = [];
@@ -165,6 +166,7 @@ test('a post-write read bypasses the older in-flight read and a 304 keeps an unc
       return { ...response(url), json: async () => { staleParses++; return initial; } };
     }
     if (tags.length === 3) return { ok: false, status: 304, url };
+    if (tags.length === 4) return { ok: true, status: 202, url };
     const confirmed = structuredClone(initial);
     confirmed.etag = '"answered"';
     confirmed.work_request_details[0].asks = [];
@@ -191,11 +193,19 @@ test('a post-write read bypasses the older in-flight read and a 304 keeps an unc
   await panel.finish();
   assert.equal(staleParses, 0, 'the pre-write response is ineligible even though it finished last');
 
+  const readSince = panel.view.readSince;
   panel.view.retry(panel.cx);
+  await panel.finish();
+  assert.equal(panel.view.readSince, readSince, 'a building reply does not confirm post-write freshness');
+  assert.equal(panel.view.taken.length, 1);
+  assert.equal(openAsk(panel.view), false);
+
+  t.mock.timers.tick(1_000);
+  panel.view.tick(panel.cx);
   await panel.finish();
   tab.view.tick(tab.cx);
   await tab.finish();
-  assert.equal(tags.length, 4, 'the tab also adopts a completed peer read');
+  assert.equal(tags.length, 5, 'the pending view retries and the tab adopts the completed read');
   assert.equal(openAsk(tab.view), false);
   assert.equal(panel.view.taken.length, 0, 'the changed response confirmed the answer');
 });

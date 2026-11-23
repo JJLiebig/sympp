@@ -204,11 +204,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert Jason.decode!(body)["archived_work_requests"]["work_requests"] == []
   end
 
-  test "a cold projection with a storage error leaves other reads available" do
-    assert :building =
+  test "a cold projection reports a storage failure without restarting for every reader" do
+    controlled_clock()
+
+    assert {:error, {:storage_failed, _reason}} =
              DashboardCache.json(Repo, :missing, fn ->
                Repo.query!("SELECT value FROM missing_table")
              end)
+
+    assert {:error, {:storage_failed, _reason}} = DashboardCache.json(Repo, :missing, fn -> flunk("retry during backoff") end)
 
     assert {:ok, body, _etag} = DashboardCache.json(Repo, :native, &payload/0)
     assert Jason.decode!(body)["decision"] == "recorded"
@@ -808,10 +812,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     on_exit(fn -> send(worker, :continue) end)
 
     Process.exit(worker, :kill)
-    assert {:reply, {:ok, ^old, ^etag}} = :gen_server.wait_response(read, 1_000)
+    assert {:reply, {:stale, ^old, ^etag}} = :gen_server.wait_response(read, 1_000)
 
     refresh_watches()
-    assert {:ok, ^old, ^etag} = DashboardCache.json(Repo, :failed, fn -> flunk("retry during backoff") end)
+    assert {:stale, ^old, ^etag} = DashboardCache.json(Repo, :failed, fn -> flunk("retry during backoff") end)
     refute_received {:current_projection, _duplicate}
     refute_received {:dashboard_changed, ^ref, _version}
 
