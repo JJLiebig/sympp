@@ -11,9 +11,9 @@ import { div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input, Button } from "gpui-base";
 import { theme, props, closeOverlay, openOverlay, knownAgents, machines, spaces, terminals, panes, shared, setShared, exec, hc, home, layout, run, settings } from "herdr";
 import { chiefBrief, chiefArgv, chiefLabelArgs, chiefSpaceName, chiefTerminalName, factoryMachine, chiefCheckouts, chiefFolders, intoTopic, isChiefSpace, CHIEF_SPACES, chiefMenu,
-  CHIEF_SESSIONS, canResume, runningChief, machineOf, resumeArgv } from "./chief.js";
+  CHIEF_SESSIONS, canResume, machineOf, resumeArgv } from "./chief.js";
 import { chiefsOf } from "./model.js";
-import { chiefsFor, deskOf } from "./levels.js";
+import { chiefEntries, deskOf } from "./levels.js";
 
 const W = 560;
 const H = 46;
@@ -77,11 +77,11 @@ export class ChiefStart {
     if (!own.fresh) {
       const list = terminals();
       const desk = deskOf(shared("desk.topics"), []);
-      const topic = desk.find((entry) => entry.id === this.topic);
-      const running = runningChief(previous, chiefsFor(topic, chiefsOf(list), desk), list);
-      if (running) {
+      const topic = desk.find((entry) => entry.id === this.topic) ?? { name: this.name };
+      const { terminal } = chiefEntries(topic, previous, chiefsOf(list), list, desk);
+      if (terminal) {
         this.phase = "resuming";
-        showChief(running.address);
+        showChief(terminal.address);
         this.close();
         return;
       }
@@ -183,7 +183,8 @@ export class ChiefStart {
       if (next) setShared("desk.topics", next);
     }
     setShared(CHIEF_SPACES, { ...shared(CHIEF_SPACES), [own?.id ?? made.space]: this.topic });
-    setShared(CHIEF_SESSIONS, { ...shared(CHIEF_SESSIONS), [this.topic]: { ...record, terminal: made.terminal, started: Date.now() } });
+    const { agent, session, cwd } = record;
+    setShared(CHIEF_SESSIONS, { ...shared(CHIEF_SESSIONS), [this.topic]: { terminal: made.terminal, agent, session, cwd, started: Date.now() } });
     // It is the topic's chief from now on: the mark lights and leads to it before its agent starts.
     setShared(CHIEFS, { ...shared(CHIEFS), [this.topic]: [{ domain: this.name, terminal: made.terminal }] });
     // A desk shows its spaces' tabs in its workspace view.

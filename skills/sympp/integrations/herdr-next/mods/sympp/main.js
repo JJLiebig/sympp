@@ -47,7 +47,7 @@ import * as O from "./overview.js";
 import * as Lv from "./scopeview.js";
 import { studioView } from "./studioview.js";
 import { ChiefStart, ChiefMenu } from "./chiefview.js";
-import { CHIEF_SESSIONS, CHIEF_SPACES, canResumeAgent, chiefSession } from "./chief.js";
+import { CHIEF_SESSIONS, CHIEF_SPACES, canResumeAgent, chiefSession, recordedChief } from "./chief.js";
 
 const TICK = 5000;
 const REPAINT = 30000;
@@ -64,7 +64,7 @@ const DASHBOARD = "sympp.dashboard_url";
 // For the spaces sidebar's chief button: each Herdr topic's chiefs, { [topic id]: [{ domain,
 // terminal }] }, terminal only while its agent runs or Start chief is in its starting grace.
 const CHIEFS = "sympp.chiefs";
-// How often a running chief's saved session is read: until one is known, then once it is.
+// Read sooner until the core confirms the session. Launch arguments can name an older conversation.
 const SESSION_READ = [10e3, 60e3];
 const STAGES = ["build", "checks", "review", "merge"];
 const SWEEP = 60e3;
@@ -712,20 +712,17 @@ export default class Lens extends View {
     let changed = false;
     this.chiefWatch = [];
     for (const topic of desk.filter((x) => x.kind === "topic")) {
-      const chiefs = L.chiefsFor(topic, labelled, desk, this.repoTopics);
-      this.chiefWatch.push(...chiefs.flatMap((chief) => M.chiefBindings(bindings, chief)));
       const last = sessions[topic.id];
-      const entries = L.chiefEntries(topic, chiefs, last, list, now);
+      const { entries, terminal, matches } = L.chiefEntries(topic, last, labelled, list, desk, this.repoTopics, now);
+      this.chiefWatch.push(...matches.flatMap((chief) => M.chiefBindings(bindings, chief)));
       if (entries.length) out[topic.id] = entries;
-      const address = entries[0]?.terminal;
-      const live = chiefs.some((c) => c.terminal === address) ? list.find((t) => t.address === address) : null;
-      const record = chiefSession(live, last);
+      const record = chiefSession(terminal, last);
       if (!record) continue;
       if (JSON.stringify(record) !== JSON.stringify(last)) {
         next[topic.id] = record;
         changed = true;
       }
-      if (canResumeAgent(record.agent)) this.readSession(topic.id, live, record, now);
+      if (canResumeAgent(record.agent)) this.readSession(topic.id, record, now);
     }
     if (changed) setShared(CHIEF_SESSIONS, next);
     if (JSON.stringify(shared(CHIEFS) ?? {}) !== JSON.stringify(out)) setShared(CHIEFS, out);
@@ -735,19 +732,18 @@ export default class Lens extends View {
   }
 
   // Refresh the conversation from herdr-core. A pending reply belongs to the observed process;
-  // a replacement chief or a relabelled terminal can take over before it arrives.
-  readSession(topic, term, record, now) {
-    const { terminal: address, agent, pid, session } = record;
+  // a replacement chief can take over before it arrives.
+  readSession(topic, record, now) {
+    const { terminal: address, agent, pid, session, native } = record;
     const reads = (this.sessionReads ??= new Map()), previous = reads.get(topic);
-    if (previous?.address === address && previous.agent === agent && previous.pid === pid && now - previous.at < SESSION_READ[session ? 1 : 0]) return;
+    if (previous?.address === address && previous.agent === agent && previous.pid === pid && now - previous.at < SESSION_READ[native && session ? 1 : 0]) return;
     const read = { address, agent, pid, at: now };
     reads.set(topic, read);
     hc(["get", address, "--json"]).then((result) => {
       if (result.code !== 0 || reads.get(topic) !== read) return;
       const all = shared(CHIEF_SESSIONS) ?? {}, current = all[topic];
       if (current?.terminal !== address || current.agent !== agent || current.pid !== pid) return;
-      const live = terminals().find((k) => k.address === address);
-      if (live?.labels?.["sympp.role"] !== "chief" || live.labels["sympp.domain"] !== term.labels["sympp.domain"]) return;
+      const live = recordedChief(current, terminals(), Date.now());
       const next = chiefSession(live, current, JSON.parse(result.stdout));
       if (next?.agent === agent && next.pid === pid && JSON.stringify(current) !== JSON.stringify(next)) {
         setShared(CHIEF_SESSIONS, { ...all, [topic]: next });

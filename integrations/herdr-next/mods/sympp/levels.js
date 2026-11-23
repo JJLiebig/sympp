@@ -5,7 +5,7 @@
 
 import { shortRepo, lanesOf, chiefBindings } from "./model.js";
 import * as J from "./job.js";
-import { intoTopic, chiefAgentKey, runningChief, startingChief } from "./chief.js";
+import { intoTopic, chiefAgentKey, recordedChief } from "./chief.js";
 
 export const UNSORTED = "unsorted";
 export const NOWHERE = "nowhere";
@@ -239,16 +239,21 @@ export function chiefsFor(topic, chiefs, desk, repoTopics) {
   return free.filter((c) => c.repos.some((repo) => topicsOfRepo(repo, desk, repoTopics).some((t) => t.id === topic.id)));
 }
 
-// The topic mark points to its selected running chief first. Include other labelled chiefs so
-// they still show on the desk and a stopped chief can leave a mark to resume from.
-export function chiefEntries(topic, chiefs, latest, terminalList, now) {
-  const running = runningChief(latest, chiefs, terminalList, now);
-  const live = new Set(terminalList.filter(chiefAgentKey).map((t) => t.address));
-  const entries = chiefs.filter((c) => c.terminal !== running?.address)
-    .map(({ domain, terminal }) => ({ domain, terminal: live.has(terminal) ? terminal : null }));
-  if (!running) return entries;
-  const domain = chiefs.find((chief) => chief.terminal === running.address)?.domain ?? topic.name;
-  return [{ domain, terminal: running.address }, ...entries];
+// Keep the recorded chief first. When discovering a replacement, apply topic-name precedence to
+// running candidates so an exact-labelled shell cannot hide a live chief with a shorter domain.
+export function chiefEntries(topic, latest, labelled, terminalList, desk, repoTopics, now = Date.now()) {
+  const live = new Map(terminalList.filter((t) => chiefAgentKey(t, latest?.agent)).map((t) => [t.address, t]));
+  const matches = chiefsFor(topic, labelled, desk, repoTopics);
+  const active = chiefsFor(topic, labelled.filter((chief) => live.has(chief.terminal)), desk, repoTopics);
+  const terminal = recordedChief(latest, terminalList, now) ?? live.get(active[0]?.terminal) ?? null;
+  const shown = new Map([...active, ...matches].map((chief) => [chief.terminal, chief.domain]));
+  const entries = [];
+  if (terminal) {
+    entries.push({ domain: shown.get(terminal.address) ?? topic.name, terminal: terminal.address });
+    shown.delete(terminal.address);
+  }
+  for (const [address, domain] of shown) entries.push({ domain, terminal: live.has(address) ? address : null });
+  return { terminal, entries, matches };
 }
 
 // The chief as an agent, by the Job level's rule: Live only after a helper check of its bound session,
@@ -305,15 +310,15 @@ export function crumbs(path, desk, jobs) {
 export const scopeTabKey = (path) => `scope:${path.topic ?? ""}:${path.space ?? ""}`;
 
 // Each chief terminal the panel knows, with its topic: the chiefs it shares ({ [topic id]: [{ terminal }] }),
-// new chief launches that are still starting, and running agents labelled as chiefs whose domains
-// name a topic.
+// recorded chiefs that still run or are starting, and running agents labelled as chiefs whose
+// domains name a topic.
 export function chiefTopics(chiefs, sessions, labelled, desk, terminalList = [], now = Date.now()) {
   const out = new Map();
   for (const [topic, list] of Object.entries(chiefs && typeof chiefs === "object" ? chiefs : {})) {
     for (const c of Array.isArray(list) ? list : []) if (c?.terminal) out.set(c.terminal, topic);
   }
   for (const [topic, s] of Object.entries(sessions && typeof sessions === "object" ? sessions : {})) {
-    if (s?.terminal && !out.has(s.terminal) && startingChief(s, terminalList, now)) out.set(s.terminal, topic);
+    if (s?.terminal && !out.has(s.terminal) && recordedChief(s, terminalList, now)) out.set(s.terminal, topic);
   }
   for (const c of labelled ?? []) {
     if (!chiefAgentKey(terminalList.find((k) => k.address === c.terminal))) continue;

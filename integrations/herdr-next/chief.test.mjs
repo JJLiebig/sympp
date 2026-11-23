@@ -27,6 +27,8 @@ test('a fresh native session supersedes launch arguments only for its own live p
   const saved = chiefSession(term, chiefSession(term), reply);
   assert.equal(saved.session, active);
   assert.equal(chiefSession(term, saved).session, active, 'the following snapshot still has the original launch arguments');
+  const cleared = chiefSession(term, saved, { ...reply, resume_session: null });
+  assert.equal(chiefSession(term, cleared).session, null, 'a cleared native session does not fall back to the old launch');
 
   const replacement = { ...term, foreground: { pid: 21, argv: ['codex'] } };
   assert.equal(chiefSession(replacement, saved, reply).session, null, 'neither a late reply nor a remembered ID belongs to the new process');

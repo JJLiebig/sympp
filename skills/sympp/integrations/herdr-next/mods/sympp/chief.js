@@ -32,27 +32,32 @@ export function chiefTerminalName(name) {
 // after the agent's own command.
 const RESUME = { codex: (id) => ["resume", id], claude: (id) => ["--resume", id] };
 
-// Each topic's latest chief: { [topic id]: { terminal, agent, session, cwd, started?, pid? } }.
+// Each topic's latest chief: { [topic id]: { terminal, agent, session, cwd, started?, pid?, native? } }.
 // Start chief records its launch. The panel follows the live agent and keeps its conversation
 // after it exits so the mark can resume it.
 export const CHIEF_SESSIONS = "sympp.chief.sessions";
 // How long a chief Start chief just started counts as running before its agent shows in its terminal.
 const STARTING = 30e3;
 
-export const chiefAgentKey = (term) => term?.state === "live" && term.program?.agent ? term.program.key : null;
+// Herdr sets program.agent on status reports. The program key also identifies a stock Codex or
+// Claude without reports, and the agent originally picked for a recorded launch.
+export function chiefAgentKey(term, recordedAgent) {
+  const program = term?.program;
+  if (term?.state !== "live" || !program?.key || program.shell || program.key === "shell") return null;
+  return program.agent || program.key === recordedAgent || canResumeAgent(program.key) ? program.key : null;
+}
 const chiefPid = (term) => term.foreground?.pid ?? term.pid ?? null;
 
-export function startingChief(last, terminalList, now) {
-  if (!(last?.started > 0 && now - last.started < STARTING)) return null;
-  return terminalList.find((t) => t.address === last.terminal && t.state === "live") ?? null;
-}
-
-// Keep the recorded chief while it is running or starting. Otherwise follow another labelled
-// chief with an agent in its terminal. Labels can outlive the agent that was there.
-export function runningChief(last, chiefs, terminalList, now = Date.now()) {
-  const addresses = new Set(chiefs.map((chief) => chief.terminal));
-  const running = terminalList.filter((t) => addresses.has(t.address) && chiefAgentKey(t));
-  return running.find((t) => t.address === last?.terminal) ?? startingChief(last, terminalList, now) ?? running[0] ?? null;
+// The record associates the terminal with a topic ID. That association survives a topic rename
+// or failure to apply the terminal's labels during launch.
+export function recordedChief(last, terminalList, now) {
+  if (!last?.terminal) return null;
+  const term = terminalList.find((t) => t.address === last.terminal);
+  if (term?.state !== "live") return null;
+  const role = term.labels?.["sympp.role"];
+  if (role && role !== "chief") return null;
+  const starting = last.started > 0 && now - last.started < STARTING;
+  return chiefAgentKey(term, last.agent) || starting ? term : null;
 }
 
 const uuid = (value) => typeof value === "string" && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value) ? value : null;
@@ -85,16 +90,22 @@ export const canResumeAgent = (agent) => Object.hasOwn(RESUME, agent);
 // A fresh core reply can supply an updated native conversation. The app snapshot doesn't
 // refresh resume_session on status events. Keep a known ID only for the same agent and process.
 export function chiefSession(term, last, saved = null) {
-  const agent = chiefAgentKey(term);
+  const agent = chiefAgentKey(term, last?.agent);
   if (!agent) return null;
   const pid = chiefPid(term);
   const same = last?.terminal === term.address && last.agent === agent && (last.pid == null || last.pid === pid);
   const app = saved?.status?.app;
-  const native = saved?.state === "live" && chiefPid(saved) === pid && (app === agent || (agent === "claude" && app === "claude-code"))
-    ? uuid(saved.resume_session) : null;
+  const currentReport = saved?.state === "live" && chiefPid(saved) === pid && (app === agent || (agent === "claude" && app === "claude-code"));
+  const fromCore = currentReport ? uuid(saved.resume_session) : null;
   const remembered = same ? uuid(last.session) : null;
-  const session = canResumeAgent(agent) ? native ?? (last?.pid != null ? remembered : null) ?? launchSession(term, agent) ?? remembered : null;
-  return { terminal: term.address, agent, session, cwd: term.foreground?.cwd || term.cwd || "", pid };
+  const resumable = canResumeAgent(agent);
+  const native = resumable && (fromCore !== null || (same && last.native === true));
+  let session = null;
+  if (resumable) {
+    session = native ? (currentReport ? fromCore : remembered) : launchSession(term, agent) ?? remembered;
+  }
+  return { terminal: term.address, agent, session, cwd: term.foreground?.cwd || term.cwd || "", pid,
+    ...(native ? { native: true } : {}) };
 }
 
 export const machineOf = (address) => (address.includes("/") ? address.slice(0, address.indexOf("/")) : null);
