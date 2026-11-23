@@ -379,7 +379,9 @@ test('operator reports keep server times and partial edits and only the owner wr
   await peer.reject('set_report', { work_request_id: request, brief: 'Forged brief' }, 'owned_by_other_terminal');
   await (await factory.client(null)).reject('set_report', { work_request_id: request, brief: 'Forged brief' }, 'read_only_outside_herdr');
   expect(await read()).toBeFalsy();
-  await architect.call('set_report', { brief: 'x'.repeat(4000) });
+  const reportReceipt = (await architect.tool('set_report', { brief: 'x'.repeat(4000) })).result;
+  expect(reportReceipt.structuredContent).toEqual({ work_request_id: request, applied: { brief: 'set' } });
+  expect(reportReceipt.content[0].text).toContain('brief: set');
   expect((await read()).brief.text).toHaveLength(4000);
   await architect.reject('set_report', { brief: 'x'.repeat(4001) }, 'invalid_operator_report_brief');
   await architect.reject('set_report', { brief: 'Forged time', written_at: '2000-01-01T00:00:00Z' }, 'unexpected_argument');
@@ -396,7 +398,8 @@ test('operator reports keep server times and partial edits and only the owner wr
   expect(edited.brief).toEqual(first.brief);
   expect(edited.parking).toEqual(first.parking);
   expect(edited.eta.text).toBe('Friday');
-  await architect.call('set_report', { eta: null, parking: null });
+  const cleared = await architect.call('set_report', { eta: null, parking: null });
+  expect(cleared).toEqual({ work_request_id: request, applied: { eta: 'cleared', parking: 'cleared' } });
   const resumed = await read();
   expect(resumed.eta).toBeUndefined();
   expect(resumed.brief).toEqual(first.brief);
@@ -443,12 +446,12 @@ test('asks and decisions preserve provenance and redact their responses', async 
   expect(combined.ask.state).toBe('answered');
   expect(combined.decision_log_entry.source_id).toBe(deciding);
   const ids: string[] = [combined.decision_log_entry.id];
-  for (const [source, by] of [['implicit', undefined], ['override', 'synthetic-architect-override']] as const) {
+  const overrideAuthor = 'synthetic-architect-override';
+  for (const [source, by] of [['implicit', undefined], ['override', overrideAuthor]] as const) {
     const result = await architect.call('record_decision', { work_request_id: request, source_type: 'architect', source_id: source,
       decision: 'Exclude raw_secret_synthetic from the decision', rationale: 'Keep the scope bounded.', scope_impact: 'No scope expansion.',
       ...(by ? { created_by: by } : {}),
     });
-    expect(result.decision_log_entry.created_by).toBe(by ?? architect.address);
     expect(JSON.stringify(result)).not.toContain('raw_secret_synthetic');
     ids.push(result.decision_log_entry.id);
   }
@@ -456,6 +459,7 @@ test('asks and decisions preserve provenance and redact their responses', async 
   expect(persisted.work_request.phase).toBe('intake');
   expect(persisted.asks.map((entry: any) => entry.state).sort()).toEqual(['answered', 'answered', 'withdrawn']);
   expect(persisted.decision_log_entries.map((entry: any) => entry.id)).toEqual(ids);
+  expect(persisted.decision_log_entries.slice(1).map((entry: any) => entry.created_by)).toEqual([architect.address, overrideAuthor]);
   expect(JSON.stringify(persisted)).not.toContain('raw_secret_synthetic');
 });
 
@@ -467,24 +471,25 @@ test('any Herdr terminal flags a decision, redacted, and the operator reviews it
     rationale: 'Context sk-synthetic-note-rationale', scope_impact: 'Bounded sk-synthetic-note-scope' };
   // A terminal that does not own the WorkRequest may still flag a decision.
   const other = await factory.client();
-  const flagged = await other.call('record_decision', { ...decisionArgs, flag: true });
-  expect(flagged.decision_log_entry).toMatchObject({ created_by: other.address, decision: 'Use [REDACTED]', flagged: true, review_state: 'recorded' });
-  expect(JSON.stringify(flagged)).not.toContain('sk-synthetic');
+  const flaggedResult = (await other.tool('record_decision', { ...decisionArgs, flag: true })).result;
+  const flagged = flaggedResult.structuredContent;
+  expect(flagged).toEqual({ decision_log_entry: { id: expect.any(String), sequence: 1, flagged: true, review_state: 'recorded' } });
+  expect(flaggedResult.content[0].text).toContain(flagged.decision_log_entry.id);
   const observer = await factory.client();
   const plain = await observer.call('record_decision', {
     ...decisionArgs, source_id: 'ghp_syntheticdecision', created_by: 'operator sk-synthetic-decision-author',
   });
-  expect(plain.decision_log_entry.source_id).toBe('[REDACTED]');
-  expect(plain.decision_log_entry.created_by).toBe('operator [REDACTED]');
-  expect(plain.decision_log_entry.review_state).toBeUndefined();
+  expect(plain).toEqual({ decision_log_entry: { id: expect.any(String), sequence: 2, flagged: false } });
   await observer.reject('record_decision', { ...decisionArgs, work_request_id: 'missing-request' }, 'not_found');
   await (await factory.client(null)).reject('record_decision', { ...decisionArgs, flag: true }, 'read_only_outside_herdr');
   // Decisions never take ownership.
   expect((await observer.call('sympp.health')).caller.owns).toEqual([]);
   const persisted = await architect.call('read_work_request', { detail: 'full', work_request_id: request });
   const stored = persisted.decision_log_entries.find((entry: any) => entry.id === flagged.decision_log_entry.id);
-  expect(stored).toMatchObject({ decision: 'Use [REDACTED]', rationale: 'Context [REDACTED]', scope_impact: 'Bounded [REDACTED]' });
+  expect(stored).toMatchObject({ created_by: other.address, decision: 'Use [REDACTED]', rationale: 'Context [REDACTED]', scope_impact: 'Bounded [REDACTED]' });
   expect(JSON.stringify(stored)).not.toContain('sk-synthetic');
+  expect(persisted.decision_log_entries.find((entry: any) => entry.id === plain.decision_log_entry.id))
+    .toMatchObject({ source_id: '[REDACTED]', created_by: 'operator [REDACTED]' });
 
   // The board lists the flagged decision; plain decisions are not reviewed.
   const toReview = async () => (await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated'))

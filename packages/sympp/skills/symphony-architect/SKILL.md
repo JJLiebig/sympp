@@ -59,6 +59,18 @@ to escalate.
 - `update_package` with `expected_revision` and a `patch`;
 - `set_dependency` and `remove_dependency`, where `from` depends on `to`.
 
+Use `applied` for the receipt of each operation in order. Add and update
+receipts include the package ID and revision. Call `read_work_request` with
+`view: "plan"` when you need the current plan and dependencies.
+
+In a Codex code cell, use `structuredContent.applied` for follow-up calls.
+Show the TOON text when you need to read the receipt in the conversation.
+
+```js
+const receipt = await tools.mcp__sympp__edit_plan({ work_request_id, ops });
+text(receipt.content[0].text);
+```
+
 A ready contract is frozen; add a successor.
 
 ## Test execution

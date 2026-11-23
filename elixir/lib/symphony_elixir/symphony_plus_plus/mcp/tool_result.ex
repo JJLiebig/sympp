@@ -34,6 +34,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
   @spec read_tool_result(term()) :: map()
   def read_tool_result(payload), do: agent_tool_result(payload, fn -> WorkerContext.encode_tool_payload(payload) end)
 
+  @spec receipt_result(map()) :: map()
+  def receipt_result(payload), do: result(payload, WorkerContext.encode_tool_payload(payload))
+
   @spec agent_tool_result(term(), String.t() | (-> String.t())) :: map()
   def agent_tool_result(payload, agent_text) when is_binary(agent_text),
     do: result(payload, text_for_profile(payload, fn -> agent_text end))

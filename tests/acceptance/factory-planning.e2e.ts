@@ -148,13 +148,14 @@ test('group paths organize scope while the effective dependency graph prevents p
     add('Independent', 'independent'),
   ] });
   const [documentation, api, peerApi, client, independent] = edited.applied.map((op: any) => op.work_package_id);
-  const planned = Object.fromEntries(edited.plan.work_packages.map((wp: any) => [wp.id, wp]));
-  expect(planned[api]).toMatchObject({ group: 'Capability / Prerequisites / Nested', depends_on: [documentation], next_action: 'deliver_prerequisites' });
-  expect(planned[documentation]).toMatchObject({ group: 'Capability / Prerequisites', depends_on: [], next_action: 'dispatch_work_package' });
+  const readPlan = async () => (await architect.call('read_work_request', { detail: 'full', work_request_id: id, view: 'plan' })).plan;
+  const initialPlan = await readPlan();
+  const planned = Object.fromEntries(initialPlan.work_packages.map((wp: any) => [wp.id, wp]));
+  expect(planned[api].group).toBe('Capability / Prerequisites / Nested');
+  expect(planned[documentation].group).toBe('Capability / Prerequisites');
   expect(planned[independent].group).toBeNull();
 
-  const readPlan = async () => (await architect.call('read_work_request', { detail: 'full', work_request_id: id, view: 'plan' })).plan;
-  const overlap = (await readPlan()).execution_graph;
+  const overlap = initialPlan.execution_graph;
   expect(overlap.effective_edges.map((edge: any) => [edge.prerequisite_work_package_id, edge.dependent_work_package_id]).sort())
     .toEqual([[documentation, api], [documentation, peerApi]].sort());
   expect(overlap.cycles).toEqual([]);
@@ -163,10 +164,14 @@ test('group paths organize scope while the effective dependency graph prevents p
     expect(blocked.prerequisite_work_package_ids).toEqual([documentation]);
   }
   expect((await architect.call('dispatch_work_package', { work_package_id: documentation })).work_package.id).toBe(documentation);
-  await architect.call('edit_plan', { ops: [
+  const relinked = await architect.call('edit_plan', { ops: [
     { op: 'set_dependency', from: client, to: api, reason: 'The consumer requires its API.' },
     { op: 'set_dependency', from: client, to: peerApi },
   ] });
+  expect(relinked.applied).toEqual([
+    { op: 'set_dependency', from: client, to: api },
+    { op: 'set_dependency', from: client, to: peerApi },
+  ]);
   const unmet = await architect.reject('dispatch_work_package', { work_package_id: client }, 'unmet_work_package_dependencies');
   expect([...unmet.prerequisite_work_package_ids].sort()).toEqual([api, peerApi].sort());
   const self = await architect.reject('edit_plan', { ops: [{ op: 'set_dependency', from: client, to: client }] }, 'self_dependency');
@@ -186,11 +191,16 @@ test('group paths organize scope while the effective dependency graph prevents p
   expect(rolledBack.op_index).toBe(1);
   expect((await readPlan()).work_packages.find((wp: any) => wp.id === client).group).toBe('Consumers');
 
-  await architect.call('edit_plan', { ops: [
+  const changed = await architect.call('edit_plan', { ops: [
     { op: 'update_package', work_package_id: client, expected_revision: 1, patch: { group: null } },
     { op: 'remove_dependency', from: client, to: api },
     { op: 'remove_dependency', from: client, to: peerApi },
   ] });
+  expect(changed.applied).toEqual([
+    { op: 'update_package', work_package_id: client, revision: 2 },
+    { op: 'remove_dependency', from: client, to: api },
+    { op: 'remove_dependency', from: client, to: peerApi },
+  ]);
   const plan = await readPlan();
   expect(plan.work_packages.find((wp: any) => wp.id === client)).toMatchObject({ group: null, contract_revision: 2 });
   expect(plan.dependencies.map((dependency: any) => [dependency.from, dependency.to]).sort()).toEqual([[api, documentation], [peerApi, documentation]].sort());
@@ -234,7 +244,13 @@ test('plan edits normalize groups, version moves, update dependency reasons and 
     { op: 'add_package', ...contract('Token ghp_editplansecretvalue12345', { group: 'Ops / ghp_editplansecretvalue12345' }) },
   ] });
   expect(JSON.stringify(added)).not.toContain('ghp_editplansecretvalue12345');
-  const [api, ui] = added.result.structuredContent.applied.map((op: any) => op.work_package_id);
+  const [api, ui, operations] = added.result.structuredContent.applied.map((op: any) => op.work_package_id);
+  expect(added.result.structuredContent).toEqual({ applied: [
+    { op: 'add_package', key: 'api', work_package_id: api, revision: 1 },
+    { op: 'add_package', key: 'ui', work_package_id: ui, revision: 1 },
+    { op: 'add_package', work_package_id: operations, revision: 1 },
+  ] });
+  expect(added.result.content[0].text).toContain(api);
   const readPlan = async () => (await architect.call('read_work_request', { detail: 'full', work_request_id: id, view: 'plan' })).plan;
   expect((await readPlan()).work_packages.find((wp: any) => wp.id === api)).toMatchObject({ group: 'Backend / Billing', status: 'planned', contract_revision: 1 });
   const invalid = await architect.reject('edit_plan', { ops: [{ op: 'update_package', work_package_id: api, expected_revision: 1, patch: { group: 'Backend // Billing' } }] }, 'invalid_work_package');
