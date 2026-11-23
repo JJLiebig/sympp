@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as M from './mods/sympp/model.js';
 import * as L from './mods/sympp/levels.js';
+import { canResume, chiefSession, resumeArgv } from './mods/sympp/chief.js';
 import { NOW, chiefTerminals, deskFixture } from './fixture.mjs';
 
 test('a chief is Live only after a helper check of the chief session in its own terminal, else unknown', () => {
@@ -25,21 +26,40 @@ test('a chief is Live only after a helper check of the chief session in its own 
   assert.equal(L.chiefAgent(live, bindings, [terminal], checks, NOW).state, 'unknown', 'no chief session in its terminal is unknown');
 });
 
-test('a labelled chief and Start chief share one entry without bypassing verified liveness', () => {
-  const term = { address: 'build/t9', state: 'live', program: { key: 'codex' }, labels: { 'sympp.role': 'chief', 'sympp.domain': 'Herdr' } };
+test('a newly started chief has a 30-second grace while its terminal is live', () => {
+  const term = { address: 'build/t9', state: 'live', program: { key: 'shell', agent: false }, labels: { 'sympp.role': 'chief', 'sympp.domain': 'Herdr' } };
   const [chief] = M.chiefsOf([term]);
   const topic = { name: chief.domain };
-  const latest = { terminal: 'build/t9', agent: 'codex' };
-  const unchecked = L.chiefAgent(chief, [], [term], {}, NOW);
-  const entries = (list, last, c = chief, agent = unchecked) => L.chiefEntries(topic, [{ chief: c, agent }], last, list, NOW);
-  const expected = [{ domain: chief.domain, terminal: 'build/t9' }];
-  assert.deepEqual(entries([term]), [{ domain: chief.domain, terminal: null }], 'labels and a live terminal alone never prove a running chief');
-  assert.deepEqual(entries([term], latest), expected, 'dedupe by terminal even without a helper result');
-  assert.deepEqual(entries([term], latest, chief, { state: 'live', binding: { address: term.address } }), expected);
-  assert.equal(entries([term], latest, { ...chief, terminal: 'other/t9' }).length, 2, 'another terminal is another chief');
-  assert.deepEqual(entries([{ ...term, program: { key: 'shell' } }], latest),
-    [{ domain: chief.domain, terminal: null }], 'a shell left behind is not a running chief');
+  const last = { terminal: term.address, agent: 'codex', started: NOW };
+  assert.deepEqual(L.chiefEntries(topic, [chief], last, [term], NOW + 29_999), [{ domain: chief.domain, terminal: term.address }]);
+  assert.deepEqual(L.chiefEntries(topic, [chief], last, [term], NOW + 30_000), [{ domain: chief.domain, terminal: null }]);
+  assert.deepEqual(L.chiefEntries(topic, [], last, [{ ...term, state: 'finished' }], NOW), []);
 });
+
+for (const [name, domain, recorded, running] of [
+  ['an agent switches in the recorded terminal', 'Nextide-Kraken', 'build/t1', 'build/t1'],
+  ['a different labelled terminal is running the chief', 'Tools', 'build/t2', 'build/t3'],
+]) {
+  test(`the topic mark and resume command follow the chief when ${name}`, () => {
+    const topic = { id: 'topic', name: domain, kind: 'topic' };
+    const labels = { 'sympp.role': 'chief', 'sympp.domain': domain };
+    const oldSession = '11111111-1111-4111-8111-111111111111';
+    const currentSession = '22222222-2222-4222-8222-222222222222';
+    const last = { terminal: recorded, agent: 'codex', session: oldSession };
+    const live = { address: running, state: 'live', labels, program: { key: 'claude', agent: true },
+      argv: ['codex', 'resume', oldSession], foreground: { pid: 20, argv: ['claude', '--model', 'opus', '--resume', currentSession], cwd: '/src' } };
+    const list = [{ ...live, address: 'build/t4', labels: { ...labels, 'sympp.domain': 'Other' } }, live];
+    if (recorded !== running) list.push({ address: recorded, state: 'finished', labels });
+    const chiefs = L.chiefsFor(topic, M.chiefsOf(list), [topic]);
+    const entries = L.chiefEntries(topic, chiefs, last, list, NOW);
+    assert.deepEqual(entries, [{ domain, terminal: running }]);
+
+    const saved = chiefSession(list.find((t) => t.address === entries[0].terminal), last);
+    assert.deepEqual([saved.terminal, saved.agent, saved.session, saved.cwd], [running, 'claude', currentSession, '/src']);
+    assert.equal(canResume(saved), true);
+    assert.deepEqual(resumeArgv({ run: ['claude'] }, saved, domain).slice(0, 3), ['claude', '--resume', currentSession]);
+  });
+}
 
 // Tasks as the board sends them: each with its repository, its owner (worked_on) and the chief it was
 // created under (dispatched_by), when either is recorded.

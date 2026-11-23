@@ -5,7 +5,7 @@
 
 import { shortRepo, lanesOf, chiefBindings } from "./model.js";
 import * as J from "./job.js";
-import { intoTopic, chiefTerminal, chiefRunning } from "./chief.js";
+import { intoTopic, chiefAgentKey, runningChief, startingChief } from "./chief.js";
 
 export const UNSORTED = "unsorted";
 export const NOWHERE = "nowhere";
@@ -239,14 +239,16 @@ export function chiefsFor(topic, chiefs, desk, repoTopics) {
   return free.filter((c) => c.repos.some((repo) => topicsOfRepo(repo, desk, repoTopics).some((t) => t.id === topic.id)));
 }
 
-// The latest started chief and its labelled terminal are one entry even before a helper check succeeds.
-// The labelled terminal is only an identity for dedupe; liveness still comes from chiefAgent.
+// The topic mark points to its selected running chief first. Include other labelled chiefs so
+// they still show on the desk and a stopped chief can leave a mark to resume from.
 export function chiefEntries(topic, chiefs, latest, terminalList, now) {
-  const running = chiefRunning(latest, terminalList, now);
-  const entries = chiefs.filter(({ chief, agent }) => !running ||
-    (agent.binding?.address ?? chiefTerminal(chief, terminalList)) !== latest.terminal)
-    .map(({ chief, agent }) => ({ domain: chief.domain, terminal: agent.state === "live" ? agent.binding.address : null }));
-  return running ? [{ domain: topic.name, terminal: latest.terminal }, ...entries] : entries;
+  const running = runningChief(latest, chiefs, terminalList, now);
+  const live = new Set(terminalList.filter(chiefAgentKey).map((t) => t.address));
+  const entries = chiefs.filter((c) => c.terminal !== running?.address)
+    .map(({ domain, terminal }) => ({ domain, terminal: live.has(terminal) ? terminal : null }));
+  if (!running) return entries;
+  const domain = chiefs.find((chief) => chief.terminal === running.address)?.domain ?? topic.name;
+  return [{ domain, terminal: running.address }, ...entries];
 }
 
 // The chief as an agent, by the Job level's rule: Live only after a helper check of its bound session,
@@ -303,20 +305,18 @@ export function crumbs(path, desk, jobs) {
 export const scopeTabKey = (path) => `scope:${path.topic ?? ""}:${path.space ?? ""}`;
 
 // Each chief terminal the panel knows, with its topic: the chiefs it shares ({ [topic id]: [{ terminal }] }),
-// each topic's latest started chief while it still runs ({ [topic id]: { terminal, agent } }) and
-// terminals labelled as a chief ([{ domain, terminal }]) whose domain names a topic, unless only a
-// shell runs there now.
+// new chief launches that are still starting, and running agents labelled as chiefs whose domains
+// name a topic.
 export function chiefTopics(chiefs, sessions, labelled, desk, terminalList = [], now = Date.now()) {
   const out = new Map();
   for (const [topic, list] of Object.entries(chiefs && typeof chiefs === "object" ? chiefs : {})) {
     for (const c of Array.isArray(list) ? list : []) if (c?.terminal) out.set(c.terminal, topic);
   }
   for (const [topic, s] of Object.entries(sessions && typeof sessions === "object" ? sessions : {})) {
-    if (s?.terminal && !out.has(s.terminal) && chiefRunning(s, terminalList, now)) out.set(s.terminal, topic);
+    if (s?.terminal && !out.has(s.terminal) && startingChief(s, terminalList, now)) out.set(s.terminal, topic);
   }
   for (const c of labelled ?? []) {
-    // A chief that exited leaves its labels on the shell left behind.
-    if ((terminalList ?? []).find((k) => k.address === c.terminal)?.program?.key === "shell") continue;
+    if (!chiefAgentKey(terminalList.find((k) => k.address === c.terminal))) continue;
     const topic = out.has(c.terminal) ? null : domainTopic(c.domain, desk, chiefs);
     if (topic) out.set(c.terminal, topic);
   }

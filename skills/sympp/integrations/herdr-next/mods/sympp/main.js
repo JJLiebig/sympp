@@ -2,10 +2,9 @@
 // goes up one. Topic and Space show the same tasks, a space only those on its repository; a task shows
 // its packages at work. A copy opened with props.job is that job's own tab. A panel copy follows
 // Herdr's focus (a job's terminal or tab, else the space, else its topic) until it is pinned. A toast
-// says when something newly needs the person. Intake and answers persist through sympp; chiefs
-// are "Live" only after a trusted execution helper's check, never on terminal labels or text. A
-// copy opened with props.studio is one UI
-// package's studio: its worker's terminal beside a preview, in a tab named after the package. A copy
+// says when something newly needs the person. Intake and answers persist through sympp; board
+// agent controls require a trusted execution helper's check. A copy opened with props.studio is one
+// UI package's studio: its worker's terminal beside a preview, in a tab named after the package. A copy
 // opened with props.role "chief" is the Start chief dialog for props.topic; "chief-menu" is the topic
 // mark's right-click menu.
 //
@@ -48,7 +47,7 @@ import * as O from "./overview.js";
 import * as Lv from "./scopeview.js";
 import { studioView } from "./studioview.js";
 import { ChiefStart, ChiefMenu } from "./chiefview.js";
-import { CHIEF_SESSIONS, CHIEF_SPACES, chiefSession, chiefRunning } from "./chief.js";
+import { CHIEF_SESSIONS, CHIEF_SPACES, canResumeAgent, chiefSession } from "./chief.js";
 
 const TICK = 5000;
 const REPAINT = 30000;
@@ -63,7 +62,7 @@ const OPEN = "sympp.open";
 // For desk-tabs' link beside the sympp panel button: the board's address, null when there is none.
 const DASHBOARD = "sympp.dashboard_url";
 // For the spaces sidebar's chief button: each Herdr topic's chiefs, { [topic id]: [{ domain,
-// terminal }] }, terminal only while the helper confirms the chief live.
+// terminal }] }, terminal only while its agent runs or Start chief is in its starting grace.
 const CHIEFS = "sympp.chiefs";
 // How often a running chief's saved session is read: until one is known, then once it is.
 const SESSION_READ = [10e3, 60e3];
@@ -706,37 +705,53 @@ export default class Lens extends View {
   // Written outside render, and only when something differs.
   shareChiefs(now) {
     const board = this.net.data;
-    if (this.role !== "panel" || this.studio || !board) return;
-    const desk = L.deskOf(this.deskTopics(), this.spaceList()), bindings = this.bindingsOf(board);
+    if (this.role !== "panel" || this.studio) return;
+    const desk = L.deskOf(this.deskTopics(), this.spaceList()), bindings = board ? this.bindingsOf(board) : [];
     const out = {}, list = terminals(), sessions = shared(CHIEF_SESSIONS) ?? {};
+    const labelled = M.chiefsOf(list), next = { ...sessions };
+    let changed = false;
     this.chiefWatch = [];
     for (const topic of desk.filter((x) => x.kind === "topic")) {
-      const chiefs = this.chiefsOf(topic, board, desk, bindings, now);
-      this.chiefWatch.push(...chiefs.flatMap((c) => c.agent.bindings));
-      const entries = L.chiefEntries(topic, chiefs, sessions[topic.id], list, now);
+      const chiefs = L.chiefsFor(topic, labelled, desk, this.repoTopics);
+      this.chiefWatch.push(...chiefs.flatMap((chief) => M.chiefBindings(bindings, chief)));
+      const last = sessions[topic.id];
+      const entries = L.chiefEntries(topic, chiefs, last, list, now);
       if (entries.length) out[topic.id] = entries;
-      const live = out[topic.id]?.find((c) => c.terminal);
-      if (live) this.readSession(topic.id, live.terminal, now);
+      const address = entries[0]?.terminal;
+      const live = chiefs.some((c) => c.terminal === address) ? list.find((t) => t.address === address) : null;
+      const record = chiefSession(live, last);
+      if (!record) continue;
+      if (JSON.stringify(record) !== JSON.stringify(last)) {
+        next[topic.id] = record;
+        changed = true;
+      }
+      if (canResumeAgent(record.agent)) this.readSession(topic.id, live, record, now);
     }
+    if (changed) setShared(CHIEF_SESSIONS, next);
     if (JSON.stringify(shared(CHIEFS) ?? {}) !== JSON.stringify(out)) setShared(CHIEFS, out);
     // A chief space that fell out of its topic goes back, where the desk keeps it unlisted.
     const home = L.homeChiefSpaces(this.deskTopics(), shared(CHIEF_SPACES), this.spaceList().map((s) => s.id));
     if (home) setShared("desk.topics", home);
   }
 
-  // A running chief's session as Herdr saved it, kept once it stops so its mark can resume it. Only
-  // herdr-core's own terminal record carries it.
-  readSession(topic, address, now) {
-    const known = shared(CHIEF_SESSIONS)?.[topic], reads = (this.sessionReads ??= {});
-    if (now - (reads[address] ?? 0) < SESSION_READ[known?.terminal === address && known.session ? 1 : 0]) return;
-    reads[address] = now;
+  // Refresh the conversation from herdr-core. A pending reply belongs to the observed process;
+  // a replacement chief or a relabelled terminal can take over before it arrives.
+  readSession(topic, term, record, now) {
+    const { terminal: address, agent, pid, session } = record;
+    const reads = (this.sessionReads ??= new Map()), previous = reads.get(topic);
+    if (previous?.address === address && previous.agent === agent && previous.pid === pid && now - previous.at < SESSION_READ[session ? 1 : 0]) return;
+    const read = { address, agent, pid, at: now };
+    reads.set(topic, read);
     hc(["get", address, "--json"]).then((result) => {
-      const program = terminals().find((k) => k.address === address)?.program;
-      const session = chiefSession({ ...JSON.parse(result.stdout), address, program });
+      if (result.code !== 0 || reads.get(topic) !== read) return;
       const all = shared(CHIEF_SESSIONS) ?? {}, current = all[topic];
-      // Never in place of another chief started since and running.
-      if (current && current.terminal !== address && chiefRunning(current, terminals())) return;
-      if (session && JSON.stringify(current) !== JSON.stringify(session)) setShared(CHIEF_SESSIONS, { ...all, [topic]: session });
+      if (current?.terminal !== address || current.agent !== agent || current.pid !== pid) return;
+      const live = terminals().find((k) => k.address === address);
+      if (live?.labels?.["sympp.role"] !== "chief" || live.labels["sympp.domain"] !== term.labels["sympp.domain"]) return;
+      const next = chiefSession(live, current, JSON.parse(result.stdout));
+      if (next?.agent === agent && next.pid === pid && JSON.stringify(current) !== JSON.stringify(next)) {
+        setShared(CHIEF_SESSIONS, { ...all, [topic]: next });
+      }
     }).catch(() => {});
   }
 

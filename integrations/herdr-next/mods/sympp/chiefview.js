@@ -11,7 +11,9 @@ import { div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input, Button } from "gpui-base";
 import { theme, props, closeOverlay, openOverlay, knownAgents, machines, spaces, terminals, panes, shared, setShared, exec, hc, home, layout, run, settings } from "herdr";
 import { chiefBrief, chiefArgv, chiefLabelArgs, chiefSpaceName, chiefTerminalName, factoryMachine, chiefCheckouts, chiefFolders, intoTopic, isChiefSpace, CHIEF_SPACES, chiefMenu,
-  CHIEF_SESSIONS, canResume, chiefRunning, machineOf, resumeArgv } from "./chief.js";
+  CHIEF_SESSIONS, canResume, runningChief, machineOf, resumeArgv } from "./chief.js";
+import { chiefsOf } from "./model.js";
+import { chiefsFor, deskOf } from "./levels.js";
 
 const W = 560;
 const H = 46;
@@ -72,11 +74,17 @@ export class ChiefStart {
     this.input.on("submit", (_e, cx) => this.start(cx));
     this.handle = cx.focus_handle();
     const previous = own.fresh ? null : shared(CHIEF_SESSIONS)?.[this.topic];
-    if (chiefRunning(previous, terminals())) {
-      this.phase = "resuming";
-      showChief(previous.terminal);
-      this.close();
-      return;
+    if (!own.fresh) {
+      const list = terminals();
+      const desk = deskOf(shared("desk.topics"), []);
+      const topic = desk.find((entry) => entry.id === this.topic);
+      const running = runningChief(previous, chiefsFor(topic, chiefsOf(list), desk), list);
+      if (running) {
+        this.phase = "resuming";
+        showChief(running.address);
+        this.close();
+        return;
+      }
     }
     if (canResume(previous)) this.resume(previous, cx);
     else {
@@ -245,7 +253,8 @@ export class ChiefStart {
         if (made) {
           const tab = panes().find((p) => p.terminal === made.terminal)?.tab;
           if (tab) run("tab.close", { id: tab, confirmed: true });
-          setShared(CHIEF_SESSIONS, { ...shared(CHIEF_SESSIONS), [this.topic]: last });
+          const sessions = shared(CHIEF_SESSIONS);
+          if (sessions?.[this.topic]?.terminal === made.terminal) setShared(CHIEF_SESSIONS, { ...sessions, [this.topic]: last });
         }
         this.phase = "ask";
         this.error = `Couldn't resume the chief: ${reason(error)}`;
