@@ -266,6 +266,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     :sys.get_state(DashboardCache)
   end
 
+  test "a stream can retry after the file ledger reader is temporarily unavailable", %{path: path} do
+    held = path <> ".held"
+    File.rename!(path, held)
+
+    try do
+      assert :busy = DashboardCache.watch(Repo, hydrated: &payload/0)
+    after
+      File.rename!(held, path)
+    end
+
+    {_cache, ref} = watch(:hydrated, &payload/0)
+    assert_receive {:dashboard_changed, ^ref, _version}
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :hydrated, &payload/0)
+    assert Jason.decode!(body)["decision"] == "recorded"
+  end
+
   test "pending feedback reaches its interruption deadline without writes or reads" do
     clock = controlled_clock()
     initial = :atomics.get(clock, 1)

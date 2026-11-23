@@ -90,6 +90,7 @@ function factory(start: DemoLedger) {
   let ledger = start;
   let version = 1;
   let building = false;
+  let refreshing = false;
   let hold: Promise<void> | null = null;
   const asked: Array<string | null> = [];
   const etag = () => `"v${version}"`;
@@ -101,8 +102,10 @@ function factory(start: DemoLedger) {
     // What the read answers is fixed when it reaches the factory, however long it then takes to arrive.
     const [body, current] = [archivedRoute ? ledger.archived : ledger.hydrated, etag()];
     if (!archivedRoute && hold) await hold;
-    if (tag === current) return new Response(null, { status: 304 });
-    return new Response(JSON.stringify(body), { status: 200, headers: { etag: current } });
+    const headers: Record<string, string> = { etag: current };
+    if (refreshing && archivedRoute) headers["x-sympp-board-refresh"] = "pending";
+    if (tag === current) return new Response(null, { status: 304, headers });
+    return new Response(JSON.stringify(body), { status: 200, headers });
   });
   vi.stubGlobal("fetch", fetch);
   return {
@@ -114,6 +117,9 @@ function factory(start: DemoLedger) {
     },
     building(pending: boolean) {
       building = pending;
+    },
+    refreshing(pending: boolean) {
+      refreshing = pending;
     },
     get ledger() {
       return ledger;
@@ -245,6 +251,27 @@ it("an action whose outcome a change signal read first ends when the factory agr
   expect(await agreed).toBeNull();
   await vi.waitFor(() => expect(board.show).toHaveBeenCalledTimes(3));
   expect(board.show).toHaveBeenLastCalledWith(null);
+  expect(pendingActions()).not.toContainEqual(ack);
+  board.stop();
+});
+
+it("keeps a saved action pending while a board surface is refreshing", async () => {
+  const server = factory(demoLedger(NOW));
+  const board = liveBoard();
+  await board.read();
+
+  const ack: OperatorAction = { kind: "ack", decisionId: "dec-alerts-scope" };
+  expect(await operate(ack, async (action) => {
+    server.change(applyDemo(server.ledger, action, NOW));
+    server.refreshing(true);
+  }, () => {})).toBeNull();
+
+  await board.read();
+  await board.read();
+  expect(pendingActions()).toContainEqual(ack);
+
+  server.refreshing(false);
+  await board.read();
   expect(pendingActions()).not.toContainEqual(ack);
   board.stop();
 });

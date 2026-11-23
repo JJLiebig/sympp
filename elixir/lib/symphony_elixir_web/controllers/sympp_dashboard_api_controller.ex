@@ -222,6 +222,9 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
       :unversioned ->
         with :ok <- DashboardPubSub.subscribe(), do: {:ok, {nil, nil, nil}}
+
+      :busy ->
+        {:error, :database_busy}
     end
   end
 

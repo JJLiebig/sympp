@@ -60,13 +60,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   end
 
   @doc false
-  @spec watch(module(), [{atom(), projection() | :revision}]) :: {:ok, pid(), reference()} | :unversioned
+  @spec watch(module(), [{atom(), projection() | :revision}]) :: {:ok, pid(), reference()} | :busy | :unversioned
   def watch(Repo, projections) do
     with pid when is_pid(pid) <- Process.whereis(__MODULE__),
          {:ok, ref} <- GenServer.call(pid, {:watch, source(), projections}, :infinity) do
       {:ok, pid, ref}
     else
-      _unversioned -> :unversioned
+      nil -> :unversioned
+      result -> result
     end
   end
 
@@ -146,21 +147,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   end
 
   def handle_call({:watch, source, projections}, {pid, _tag}, state) do
-    {connection, state} = connection(source, state)
+    case connection(source, state) do
+      {nil, state} ->
+        {:reply, :busy, state}
 
-    if connection in [nil, :unversioned] do
-      {:reply, :unversioned, state}
-    else
-      ref = Process.monitor(pid)
+      {:unversioned, state} ->
+        {:reply, :unversioned, state}
 
-      watches =
-        Enum.reduce(projections, state.watches, fn {surface, fun}, watches ->
-          add_reader(watches, {source, surface}, fun, ref, pid)
-        end)
+      {_connection, state} ->
+        ref = Process.monitor(pid)
 
-      # Register the stream before checking any revision, including if an
-      # on-demand build for this surface is already in flight.
-      {:reply, {:ok, ref}, queue_refresh(%{state | watches: watches})}
+        watches =
+          Enum.reduce(projections, state.watches, fn {surface, fun}, watches ->
+            add_reader(watches, {source, surface}, fun, ref, pid)
+          end)
+
+        # Register the stream before checking any revision, including if an
+        # on-demand build for this surface is already in flight.
+        {:reply, {:ok, ref}, queue_refresh(%{state | watches: watches})}
     end
   end
 
