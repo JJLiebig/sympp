@@ -9,7 +9,7 @@ import { Factory, type Client } from './factory.js';
 type Reply = { stdout: string; exitCode: number };
 
 // A terminal as the factory host's herdr-core lists it.
-export type Terminal = { address: string; state: 'live' | 'finished'; cwd?: string; parent?: string; title?: string; labels?: Record<string, string> };
+export type Terminal = { address: string; state: 'live' | 'finished'; name?: string; status?: string; cwd?: string; parent?: string; title?: string; labels?: Record<string, string> };
 
 // Own only the external protocols: the `gh` and `hc` CLIs, and GitHub's HTTP
 // API the Observer reads. One PR model (`set`) answers both `gh pr view` and
@@ -137,6 +137,11 @@ export class Provider {
       return json({ terminals: listed.map(({ labels, ...terminal }) => (labels?.['sympp.role'] === 'worker' ? terminal : { ...terminal, labels })) });
     }
     if (command === 'get' && rest[1] === '--json' && this.terminals.has(rest[0])) return json(this.terminals.get(rest[0]));
+    if (command === 'kill' && rest[1] === '--json' && this.terminals.has(rest[0])) {
+      const address = rest[0];
+      this.terminal({ address, state: 'finished' });
+      return json(this.terminals.get(address));
+    }
     if (command === 'send') {
       this.sent.push(rest);
       return json({ ok: true });

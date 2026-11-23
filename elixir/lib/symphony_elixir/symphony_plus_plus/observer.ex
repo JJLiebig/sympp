@@ -10,6 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     * a terminal the core reports finished ends its worked-on rows, which feeds
       ownership liveness. An unreachable core changes nothing: unknown never
       counts as finished.
+    * a live worker whose package has ended is closed at its Herdr address.
 
   Every 60 s it sweeps the dispatched and ready packages:
     * one batched GraphQL snapshot covers every watched PR, plus branch
@@ -175,7 +176,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   @doc """
   One terminal pass: reads the factory's core (or uses `snapshot`) and applies
-  what it reports to worked-on rows. An unreachable core changes nothing.
+  what it reports to worked-on rows, then closes workers of ended packages.
+  An unreachable core changes nothing.
   """
   @spec observe_terminals(module(), {:ok, map()} | :unavailable | nil) :: :ok
   def observe_terminals(repo, snapshot \\ nil) do
@@ -185,6 +187,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     case snapshot || HerdrCore.refresh() do
       {:ok, %{core_id: core_id, terminals: terminals} = core} ->
         Ownership.observe_core(repo, core_id, Map.get(core, :core_name), terminals, in_flight_ids(repo), read_at)
+        unless OfflineSandbox.enabled?(), do: close_ended_workers(repo, terminals)
+        :ok
 
       _unavailable ->
         :ok
@@ -193,6 +197,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   defp in_flight_ids(repo) do
     repo.all(from(package in WorkPackage, where: package.status in ^Lifecycle.in_flight_statuses(), select: package.id))
+  end
+
+  defp close_ended_workers(repo, terminals) do
+    workers = for {address, record} <- terminals, id = HerdrCore.live_worker_package_id(record), do: {id, address}
+    ended = ended_dispatched_ids(repo, Enum.map(workers, &elem(&1, 0)))
+
+    Enum.each(workers, fn {id, address} ->
+      if MapSet.member?(ended, id) and HerdrCore.close_worker(address, id) == :error do
+        Logger.warning("sympp could not close worker terminal #{address} for #{id}")
+      end
+    end)
+  end
+
+  defp ended_dispatched_ids(_repo, []), do: MapSet.new()
+
+  defp ended_dispatched_ids(repo, ids) do
+    from(package in WorkPackage,
+      where: package.id in ^ids and package.status == "ended" and not is_nil(package.launch_machine),
+      select: package.id
+    )
+    |> repo.all()
+    |> MapSet.new()
   end
 
   @doc """

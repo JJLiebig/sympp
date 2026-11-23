@@ -316,6 +316,11 @@ The factory watches dispatched packages without agent calls:
   within one 30-second deadline, including remote transport;
 - it moves packages to `ready` and back, and records merges, from what it sees.
 
+After a work package ends, including through a recorded merge or an explicit
+close, the factory closes its worker terminal on the next terminal pass once
+Herdr can reach it. Workers waiting for review or merge stay available until
+the package ends.
+
 It uses `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token` (read once) over HTTP.
 Background reads stop when less than 10% of the rate limit remains; a rate-limit
 refusal pauses them until GitHub's reset or `retry-after`, else backs off from
