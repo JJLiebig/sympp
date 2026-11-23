@@ -10,6 +10,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   alias SymphonyElixir.SymphonyPlusPlus.{OperatorConfig, Repo}
 
   @refresh_interval_ms 250
+  @read_budget_ms 2_000
+  @max_retry_delay_ms 30_000
   @deadline_key {__MODULE__, :deadline}
 
   @type projection :: (-> {:ok, map()} | {:error, term()})
@@ -17,7 +19,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
-  @spec json(module(), atom(), projection()) :: {:ok, binary(), binary()} | {:error, term()}
+  @spec json(module(), atom(), projection()) :: {:ok, binary(), binary()} | {:error, term()} | :building
   def json(Repo, surface, fun) do
     if Process.whereis(__MODULE__) do
       GenServer.call(__MODULE__, {:json, source(), surface, fun}, :infinity)
@@ -100,6 +102,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
        entries: %{},
        watches: %{},
        refreshing: %{},
+       failures: %{},
        deployment_publication: nil,
        timer: nil,
        refresh_pending?: false,
@@ -134,17 +137,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   defp read_json(source, surface, fun, from, state) do
     {connection, state} = connection(source, state)
     revision = probe(connection, [surface])
-    # Unversioned reads cannot join a projection that might predate their write.
-    generation = generation(revision, surface) || make_ref()
     key = {source, surface}
     entry = Map.get(state.entries, key)
+    generation = generation(revision, surface)
 
-    if current?(state, entry, generation) do
-      {:reply, entry.response, state}
-    else
-      {job_key, _config} = request = build_request(key, generation)
-      state = ensure_refresh(state, request, fun)
-      {:noreply, update_in(state.refreshing[job_key].waiters, &[from | &1])}
+    cond do
+      current?(state, entry, generation) ->
+        {:reply, entry.response, state}
+
+      connection != nil and generation == nil ->
+        {:reply, available(state, key), state}
+
+      true ->
+        # Unversioned reads cannot join a projection that might predate their write.
+        {job_key, _config} = request = build_request(key, generation || make_ref())
+        state = ensure_refresh(state, request, fun)
+
+        case Map.get(state.refreshing, job_key) do
+          %{read_timer: timer} when is_reference(timer) ->
+            {:noreply, update_in(state.refreshing[job_key].waiters, &[from | &1])}
+
+          _busy ->
+            {:reply, available(state, key), state}
+        end
     end
   end
 
@@ -158,8 +173,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     Map.put(watches, key, {target, Map.put(readers, ref, pid)})
   end
 
-  defp ensure_refresh(state, {job_key, _config} = request, fun) do
-    if Map.has_key?(state.refreshing, job_key), do: state, else: start_refresh(state, request, fun)
+  defp ensure_refresh(state, {{key, generation, _revision}, _config} = request, fun) do
+    if is_reference(generation) or (not refreshing?(state, key) and retry_due?(state, key)) do
+      start_refresh(state, request, fun)
+    else
+      state
+    end
+  end
+
+  defp refreshing?(state, key), do: Enum.any?(state.refreshing, fn {{active_key, _, _}, _job} -> active_key == key end)
+
+  defp retry_due?(state, key) do
+    case Map.get(state.failures, key) do
+      {retry_at, _delay} -> state.clock.() >= retry_at
+      nil -> true
+    end
   end
 
   defp build_request({_source, :archived} = key, generation), do: {{key, generation, nil}, nil}
@@ -187,7 +215,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
         send(owner, {:refreshed, job_key, sequence, build_on_ledger(source, database, surface, project)})
       end)
 
-    job = %{pid: pid, sequence: sequence, monitor: Process.monitor(pid), waiters: []}
+    timer = Process.send_after(self(), {:read_budget_elapsed, job_key, sequence}, @read_budget_ms)
+    job = %{pid: pid, sequence: sequence, monitor: Process.monitor(pid), read_timer: timer, waiters: []}
     put_in(state.refreshing[job_key], job)
   end
 
@@ -197,9 +226,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   end
 
   defp build_on_ledger(source, database, surface, fun) do
-    # Projection snapshots may hold a checkout while doing CPU work. Give each
-    # file-backed build its own connection so it cannot exhaust the write pool.
-    {:ok, reader} = Repo.start_link(database: database, name: nil, pool_size: 1, log: false)
+    # SQLite snapshots span the whole projection. A dedicated reader can finish
+    # even when storage is slow, without holding a connection in the write pool.
+    {:ok, reader} = Repo.start_link(database: database, name: nil, pool_size: 1, timeout: :infinity, log: false)
     Repo.put_dynamic_repo(reader)
 
     try do
@@ -267,13 +296,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
 
   def handle_info({:publish_deployments, _stale}, state), do: {:noreply, state}
 
+  def handle_info({:read_budget_elapsed, {key, _, _} = job_key, sequence}, state) do
+    case Map.get(state.refreshing, job_key) do
+      %{sequence: ^sequence} = job ->
+        reply_waiters(job, available(state, key))
+        {:noreply, put_in(state.refreshing[job_key], %{job | read_timer: nil, waiters: []})}
+
+      _superseded ->
+        {:noreply, state}
+    end
+  end
+
   def handle_info({:refreshed, {key, generation, _config} = job_key, sequence, {response, deadlines, inputs}}, state) do
     case Map.get(state.refreshing, job_key) do
       %{sequence: ^sequence} = job ->
-        reply_waiters(job, response)
-        state = %{state | refreshing: Map.delete(state.refreshing, job_key)}
-        entry = %{generation: generation, sequence: sequence, response: response, deadlines: deadlines, inputs: inputs}
-        {:noreply, finish_refresh(state, key, entry)}
+        state = remove_job(state, job_key, job)
+
+        case response do
+          {:ok, _body, _etag} ->
+            reply_waiters(job, response)
+
+            entry = %{
+              generation: generation,
+              sequence: sequence,
+              response: response,
+              deadlines: deadlines,
+              inputs: inputs
+            }
+
+            state = update_in(state.failures, &Map.delete(&1, key))
+            {:noreply, finish_refresh(state, key, entry, is_nil(job.read_timer))}
+
+          {:error, _reason} ->
+            {:noreply, finish_failure(state, job_key, job, response)}
+        end
 
       _superseded ->
         {:noreply, state}
@@ -288,13 +344,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     end
   end
 
-  defp finish_refresh(state, {source, surface} = key, entry) do
+  defp finish_refresh(state, {source, surface} = key, entry, slow?) do
     case Map.get(state.watches, key) do
       {fun, _readers} when is_function(fun, 0) ->
         revision = probe(get_in(state.sources, [source, :connection]), [surface])
         latest = generation(revision, surface)
 
-        check_inputs(fn -> finish_watched(state, key, entry, latest, fun) end)
+        check_inputs(fn -> finish_watched(state, key, entry, latest, fun, slow?) end)
 
       _no_projection_watch ->
         # A later GET rechecks this build's generation. Once demand ends,
@@ -303,11 +359,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
     end
   end
 
-  defp finish_watched(state, key, entry, latest, fun) do
+  defp finish_watched(state, key, entry, latest, fun, slow?) do
     state =
       if entry.generation == latest and Inputs.current?(entry.inputs) do
         install(state, key, entry)
       else
+        # A first or slow snapshot is still useful if inputs moved during its
+        # build. Keep it available while readers wait for the newer revision.
+        state = if slow? or not Map.has_key?(state.entries, key), do: install(state, key, entry), else: state
         refresh_if_stale(state, key, latest, fun)
       end
 
@@ -316,9 +375,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
 
   defp install(state, key, %{response: {:ok, _body, etag}, generation: generation} = entry) when not is_reference(generation) do
     case Map.get(state.entries, key) do
-      %{sequence: sequence} when sequence > entry.sequence ->
-        state
-
       %{response: {:ok, _body, ^etag}} ->
         put_in(state.entries[key], entry)
 
@@ -348,6 +404,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
 
     Enum.each(owned, fn {_key, job} ->
       Process.exit(job.pid, :shutdown)
+      release_job(job)
       reply_waiters(job, {:error, {:storage_failed, "Dashboard ledger closed"}})
     end)
 
@@ -367,6 +424,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
       | sources: Map.delete(state.sources, source),
         entries: Map.reject(state.entries, fn {{owner, _surface}, _entry} -> owner == source end),
         refreshing: Map.new(other),
+        failures: Map.reject(state.failures, fn {{owner, _surface}, _failure} -> owner == source end),
         watches: Map.new(watches)
     })
   end
@@ -374,18 +432,52 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   defp failed_refresh(state, monitor) do
     case Enum.find(state.refreshing, fn {_key, job} -> job.monitor == monitor end) do
       {key, job} ->
-        reply_waiters(job, {:error, {:storage_failed, "Dashboard refresh interrupted"}})
-        %{state | refreshing: Map.delete(state.refreshing, key)}
+        state = remove_job(state, key, job)
+        finish_failure(state, key, job, {:error, {:storage_failed, "Dashboard refresh interrupted"}})
 
       nil ->
         state
     end
   end
 
-  defp reply_waiters(job, result) do
-    Process.demonitor(job.monitor, [:flush])
-    Enum.each(job.waiters, &GenServer.reply(&1, result))
+  defp finish_failure(state, {_key, generation, _config}, job, error) when is_reference(generation) do
+    reply_waiters(job, error)
+    state
   end
+
+  defp finish_failure(state, {{_source, surface} = key, _generation, _config}, job, _error) do
+    Logger.warning("board_refresh_failed surface=#{surface}")
+    reply_waiters(job, available(state, key))
+
+    # Retry only on reader demand. Give a failing surface progressively more
+    # time to recover so other reads and watch ticks cannot restart it in a loop.
+    delay =
+      case Map.get(state.failures, key) do
+        {_, previous} -> min(2 * previous, @max_retry_delay_ms)
+        nil -> @read_budget_ms
+      end
+
+    put_in(state.failures[key], {state.clock.() + delay, delay})
+  end
+
+  defp available(state, key) do
+    case Map.get(state.entries, key) do
+      %{response: response} -> response
+      nil -> :building
+    end
+  end
+
+  defp remove_job(state, job_key, job) do
+    release_job(job)
+    %{state | refreshing: Map.delete(state.refreshing, job_key)}
+  end
+
+  defp release_job(job) do
+    Process.demonitor(job.monitor, [:flush])
+    if job.read_timer, do: Process.cancel_timer(job.read_timer)
+  end
+
+  defp reply_waiters(job, result), do: Enum.each(job.waiters, &GenServer.reply(&1, result))
 
   defp remove_watch(state, ref) do
     Process.demonitor(ref, [:flush])
@@ -455,10 +547,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCache do
   defp refresh_if_stale(state, _key, nil, _fun), do: state
 
   defp refresh_if_stale(state, key, generation, fun) do
-    # Watchers need only the latest snapshot. GETs can still read a new
-    # generation while an older build is held on a different connection.
-    if current?(state, Map.get(state.entries, key), generation) or
-         Enum.any?(state.refreshing, fn {{active_key, _generation, _config}, _job} -> active_key == key end) do
+    if current?(state, Map.get(state.entries, key), generation) or refreshing?(state, key) or not retry_due?(state, key) do
       state
     else
       start_refresh(state, build_request(key, generation), fun)

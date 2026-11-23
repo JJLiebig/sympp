@@ -37,6 +37,7 @@ async function fetchBoard(connection, cached, since, stillCurrent) {
     return { error: caught.userMessage || networkError(endpoint), unreachable: caught.status === undefined };
   }
   if (!stillCurrent()) return null;
+  if (response.status === 202) return { building: true };
   if (response.status === 304 && cached?.etag) return { ...cached, since, receivedAt: Date.now() };
   if (!response.ok) return { error: httpError(response.status), denied: response.status === 401 || response.status === 403 };
 

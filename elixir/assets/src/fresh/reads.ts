@@ -8,10 +8,11 @@ import { settle } from "./pending";
 export type Tagged<T> = { body: T; etag: string | null };
 export type Fetched = { hydrated: Tagged<Hydrated>; archived: Tagged<Archived> | null };
 
-export async function conditional<T>(url: string, shown: Tagged<T> | null): Promise<Tagged<T>> {
+export async function conditional<T>(url: string, shown: Tagged<T> | null): Promise<Tagged<T> | null> {
   const headers: Record<string, string> = { accept: "application/json" };
   if (shown?.etag) headers["if-none-match"] = shown.etag;
   const response = await fetch(url, { headers });
+  if (response.status === 202) return shown;
   if (response.status === 304 && shown) return shown;
   // A refused or failed read is an error, not an empty ledger.
   if (!response.ok) throw new Error(`Could not read the ledger (${response.status})`);
@@ -26,6 +27,7 @@ export async function readBoard(shown: Fetched | null): Promise<Fetched | null> 
     // Archived goals are read separately. Without them the board still shows everything else.
     conditional<Archived>(api("/dashboard?surface=archived"), shown?.archived ?? null).catch(() => null),
   ]);
+  if (!hydrated) return null;
   return shown && hydrated === shown.hydrated && archived === shown.archived ? null : { hydrated, archived };
 }
 

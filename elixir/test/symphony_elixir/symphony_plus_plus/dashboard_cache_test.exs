@@ -87,15 +87,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     {:ok, connection} = Exqlite.Sqlite3.open(path)
     :ok = Exqlite.Sqlite3.execute(connection, "UPDATE probe SET value = 'acknowledged'")
     :ok = Exqlite.Sqlite3.close(connection)
-    assert {:ok, fresh, etag} = DashboardCache.json(Repo, :racing, &payload/0)
-    assert Jason.decode!(fresh)["decision"] == "acknowledged"
+    assert :building = DashboardCache.json(Repo, :racing, &payload/0)
     release.()
     assert {:ok, old, _etag} = Task.await(read)
     assert Jason.decode!(old)["decision"] == "recorded"
+    assert {:ok, fresh, etag} = DashboardCache.json(Repo, :racing, &payload/0)
+    assert Jason.decode!(fresh)["decision"] == "acknowledged"
     assert {:ok, ^fresh, ^etag} = DashboardCache.json(Repo, :racing, &payload/0)
   end
 
-  test "overlapping reads use the requested config through an edit and revert", %{pid: pid, path: path} do
+  test "overlapping config edits keep one build on its captured config", %{pid: pid, path: path} do
     before = %{"repos" => %{"acme/example" => %{"area" => ["Before"]}}}
     config = operator_config_file(path, before)
     caller = self()
@@ -128,8 +129,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     send(worker, :read_config)
     assert_receive {:config_captured, ^worker}
     new_read = :gen_server.send_request(DashboardCache, {:json, pid, :hydrated, builder})
-    assert {:reply, {:ok, fresh, etag}} = :gen_server.wait_response(new_read, 2_000)
-    assert Jason.decode!(fresh)["area"] == ["After"]
+    assert {:reply, :building} = :gen_server.wait_response(new_read, 1_000)
 
     File.write!(config, Jason.encode!(before))
     restored_read = :gen_server.send_request(DashboardCache, {:json, pid, :hydrated, builder})
@@ -138,8 +138,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert {:reply, {:ok, old, restored_etag}} = :gen_server.wait_response(restored_read, 1_000)
     assert Jason.decode!(old)["area"] == ["Before"]
     assert {:reply, {:ok, ^old, ^restored_etag}} = :gen_server.wait_response(old_read, 1_000)
-    refute restored_etag == etag
     assert {:ok, _, ^restored_etag} = DashboardCache.json(Repo, :hydrated, builder)
+
+    File.write!(config, Jason.encode!(put_in(before, ["repos", "acme/example", "area"], ["After"])))
+    assert {:ok, fresh, etag} = DashboardCache.json(Repo, :hydrated, builder)
+    assert Jason.decode!(fresh)["area"] == ["After"]
+    refute restored_etag == etag
   end
 
   test "committed edits invalidate only the surfaces that show the changed fields", %{path: path} do
@@ -200,8 +204,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert Jason.decode!(body)["archived_work_requests"]["work_requests"] == []
   end
 
-  test "an uninitialized schema returns a storage error without taking other reads down" do
-    assert {:error, {:storage_failed, _message}} =
+  test "a cold projection with a storage error leaves other reads available" do
+    assert :building =
              DashboardCache.json(Repo, :missing, fn ->
                Repo.query!("SELECT value FROM missing_table")
              end)
@@ -525,7 +529,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert Jason.decode!(body)["worker"] == "live"
   end
 
-  test "an unprimed slow view leaves quiet cached reads available", %{pid: pid} do
+  test "a cold slow build returns building and keeps working without delaying other surfaces", %{pid: pid} do
     assert {:ok, quiet, etag} = DashboardCache.json(Repo, :quiet, &payload/0)
     caller = self()
 
@@ -541,6 +545,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
 
     assert_receive {:cold_projection, worker}
     release = release_on_exit(worker)
+    finished = Process.monitor(worker)
+
+    {job_key, job} = Enum.find(:sys.get_state(DashboardCache).refreshing, fn {_key, job} -> job.pid == worker end)
+    Process.cancel_timer(job.read_timer)
+    send(DashboardCache, {:read_budget_elapsed, job_key, job.sequence})
+    assert :building = Task.await(slow)
+    assert :building = DashboardCache.json(Repo, :cold, fn -> flunk("duplicate build") end)
 
     read =
       Task.async(fn ->
@@ -549,8 +560,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
       end)
 
     assert {:ok, ^quiet, ^etag} = Task.await(read)
+    :ok = DashboardPubSub.subscribe()
     release.()
-    assert {:ok, _body, _etag} = Task.await(slow)
+    assert_receive {:DOWN, ^finished, :process, ^worker, :normal}
+    assert_receive :operator_dashboard_changed
+    assert {:ok, body, _etag} = DashboardCache.json(Repo, :cold, fn -> flunk("unnecessary build") end)
+    assert Jason.decode!(body)["decision"] == "recorded"
   end
 
   test "projection checkouts cannot exhaust the operator write pool", %{pid: pid} do
@@ -774,7 +789,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
     assert Jason.decode!(body)["decision"] == "acknowledged"
   end
 
-  test "a failed projection releases waiting readers and later reads recover", %{pid: pid} do
+  test "a failed refresh preserves the last board and coalesces retries across readers", %{pid: pid, path: path} do
+    clock = controlled_clock()
     caller = self()
 
     builder = fn ->
@@ -782,14 +798,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardCacheTest do
       receive do: (:continue -> payload())
     end
 
-    read = :gen_server.send_request(DashboardCache, {:json, pid, :failed, builder})
+    assert {:ok, old, etag} = DashboardCache.json(Repo, :failed, &payload/0)
+    {cache, ref} = watch(:failed, builder)
+    {:ok, writer} = Exqlite.Sqlite3.open(path)
+    on_exit(fn -> Exqlite.Sqlite3.close(writer) end)
+    :ok = Exqlite.Sqlite3.execute(writer, "UPDATE probe SET value = 'acknowledged'")
+    read = :gen_server.send_request(cache, {:json, pid, :failed, builder})
     assert_receive {:current_projection, worker}
     on_exit(fn -> send(worker, :continue) end)
 
     Process.exit(worker, :kill)
-    assert {:reply, {:error, {:storage_failed, _reason}}} = :gen_server.wait_response(read, 1_000)
-    assert {:ok, body, _etag} = DashboardCache.json(Repo, :failed, &payload/0)
-    assert Jason.decode!(body)["decision"] == "recorded"
+    assert {:reply, {:ok, ^old, ^etag}} = :gen_server.wait_response(read, 1_000)
+
+    refresh_watches()
+    assert {:ok, ^old, ^etag} = DashboardCache.json(Repo, :failed, fn -> flunk("retry during backoff") end)
+    refute_received {:current_projection, _duplicate}
+    refute_received {:dashboard_changed, ^ref, _version}
+
+    DashboardCache.unwatch(cache, ref)
+    :atomics.add(clock, 1, 2_000)
+    assert {:ok, body, new_etag} = DashboardCache.json(Repo, :failed, &payload/0)
+    assert Jason.decode!(body)["decision"] == "acknowledged"
+    refute new_etag == etag
   end
 
   test "memory-ledger reads after a write do not join an older unversioned snapshot" do

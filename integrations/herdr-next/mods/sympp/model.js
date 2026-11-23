@@ -82,7 +82,7 @@ export function networkError(endpoint) {
 export function nextDelay(state, active) {
   if (state.error) return POLL.retry[Math.min(state.failures - 1, POLL.retry.length - 1)] ?? POLL.retry[0];
   if (!active) return POLL.background;
-  return state.data?.jobs.some((job) => job.state === "live" || job.needs.length > 0) ? POLL.live : POLL.quiet;
+  return !state.data || state.data.jobs.some((job) => job.state === "live" || job.needs.length > 0) ? POLL.live : POLL.quiet;
 }
 
 export function fetchDue(state, now, active) {

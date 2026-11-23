@@ -238,9 +238,13 @@ routes.
 
 ## Hydrated board
 
-`GET /api/v1/sympp/operator/dashboard/hydrated` returns the current board in one
-response. Existing fields retain their meaning. Read each entry of
-`work_request_details[].work_packages[]` for these additive fields:
+`GET /api/v1/sympp/operator/dashboard/hydrated` returns a board snapshot in one
+response. Board snapshot reads serve the last completed snapshot while a slow
+refresh runs, with its original ETag. If the server is still building the first
+snapshot, the response is HTTP 202 with `{"status":"building"}` and `Retry-After`.
+Clients can also refetch when the board event stream signals a change.
+
+These fields appear on each entry in `work_request_details[].work_packages[]`.
 
 | Field | Meaning |
 | --- | --- |

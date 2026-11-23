@@ -281,14 +281,25 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
         conn
       end
 
-    with {:ok, body, etag} <- DashboardCache.json(repo, surface, fun) do
-      conn = conn |> put_resp_header("etag", etag) |> put_resp_header("cache-control", "private, no-cache")
+    case DashboardCache.json(repo, surface, fun) do
+      {:ok, body, etag} ->
+        conn = conn |> put_resp_header("etag", etag) |> put_resp_header("cache-control", "private, no-cache")
 
-      if etag in get_req_header(conn, "if-none-match") do
-        send_resp(conn, 304, "")
-      else
-        conn |> put_resp_content_type("application/json") |> send_resp(200, body)
-      end
+        if etag in get_req_header(conn, "if-none-match") do
+          send_resp(conn, 304, "")
+        else
+          conn |> put_resp_content_type("application/json") |> send_resp(200, body)
+        end
+
+      :building ->
+        conn
+        |> put_resp_header("cache-control", "no-store")
+        |> put_resp_header("retry-after", "1")
+        |> put_status(202)
+        |> json(%{status: "building"})
+
+      {:error, _reason} = error ->
+        error
     end
   end
 

@@ -89,6 +89,7 @@ it("explicit refreshes recover from stalled reads and reject pre-save data and e
 function factory(start: DemoLedger) {
   let ledger = start;
   let version = 1;
+  let building = false;
   let hold: Promise<void> | null = null;
   const asked: Array<string | null> = [];
   const etag = () => `"v${version}"`;
@@ -96,6 +97,7 @@ function factory(start: DemoLedger) {
     const tag = (init?.headers as Record<string, string> | undefined)?.["if-none-match"] ?? null;
     const archivedRoute = url.includes("archived");
     if (!archivedRoute) asked.push(tag);
+    if (!archivedRoute && building) return new Response(JSON.stringify({ status: "building" }), { status: 202 });
     // What the read answers is fixed when it reaches the factory, however long it then takes to arrive.
     const [body, current] = [archivedRoute ? ledger.archived : ledger.hydrated, etag()];
     if (!archivedRoute && hold) await hold;
@@ -109,6 +111,9 @@ function factory(start: DemoLedger) {
     change(next: DemoLedger) {
       ledger = next;
       version += 1;
+    },
+    building(pending: boolean) {
+      building = pending;
     },
     get ledger() {
       return ledger;
@@ -162,6 +167,21 @@ function liveBoard() {
 }
 
 const NOW = Date.parse("2026-11-10T12:00:00Z");
+
+it("a first read still building leaves the board waiting for its first snapshot", async () => {
+  const server = factory(demoLedger(NOW));
+  const board = liveBoard();
+
+  server.building(true);
+  await board.read();
+  expect(board.show).toHaveBeenCalledExactlyOnceWith(null);
+
+  server.building(false);
+  await board.read();
+  expect(server.asked).toEqual([null, null]);
+  expect(board.openAsks()).toContain("ask-slack");
+  board.stop();
+});
 
 it("a change signal reads again with the shown ETag: 304 changes nothing, another client's change appears", async () => {
   const server = factory(demoLedger(NOW));

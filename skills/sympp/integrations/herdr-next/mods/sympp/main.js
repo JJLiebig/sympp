@@ -359,6 +359,10 @@ export default class Lens extends View {
   applyRead(outcome, cx) {
     const now = Date.now();
     this.painted = now;
+    if (outcome.building) {
+      this.net = { ...this.net, attemptAt: now, error: null, failures: 0 };
+      return;
+    }
     if (!outcome.board) {
       if (outcome.denied && this.net.data) this.clearBoard();
       this.net = M.fetchFailed(this.net, outcome.error, now);
