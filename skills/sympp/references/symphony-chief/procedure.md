@@ -42,26 +42,26 @@ For a card ask, read `sympp.health`.
 
 ## Messages
 
-Send only when the recipient must decide or act, or for the final handoff.
-Keep progress and receipts on the board or evidence record. Informational
-notifications, acknowledgements and automatic completion notices need no reply
-unless they reveal a new blocker. After final handoff, message again only for a
-material correction or a new caller-requested action.
+Send short messages only when someone must decide or act, or for one final
+handoff. Keep progress and receipts on the board or in the evidence record.
+Reply to reports, acknowledgements and notices only to decide, unblock or
+redirect. After handoff, message only for a material correction or a new
+caller-requested action.
 
-Workers settle implementation and review fixes within the approved outcome and
-constraints; architects settle in-scope technical disputes. You decide changes
-to product intent or authority.
-
-- When a handoff names flagged calls, read `flagged_decisions` for that
-  WorkRequest. Follow `next_cursor` for more rows and use `decision` with a
-  `decision_id` for the full entry. Message the architect
-  one line correcting any that conflict with the owner's intent or other
-  WorkRequests. Accept the handoff without waiting for owner acknowledgement.
-- Don't ask architects for status: read the board.
+- Brief architects for one final handoff. Track milestones on the board and ask
+  for an interim message only when you or the operator must decide or approve.
+- Connect the requester and the authorized agent once. Keep details in shared
+  evidence and have them send requests and results directly where they can.
+  Relay only if work is blocked and the needed message has no direct route.
+- If the handoff names flagged calls, read `flagged_decisions` for the
+  WorkRequest. Follow `next_cursor` and use `decision` with `decision_id`
+  for details. Send corrections together for calls that conflict with the
+  owner's intent or another WorkRequest. Accept the handoff without waiting
+  for owner acknowledgement.
 
 ## Cards
 
 Children you start that open a branch or PR show up on the board as cards, with
-their PR, CI and review. They need no setup. Card agents send questions to their parent.
+their PR, CI and review. They need no setup.
 
 Writes need a Herdr terminal; outside Herdr sympp is read-only.
