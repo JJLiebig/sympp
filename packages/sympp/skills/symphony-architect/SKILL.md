@@ -17,9 +17,9 @@ packages, review disputes and clear product calls (flagged). Escalate to the
 chief only what would change the WorkRequest's goal or exceeds its authority.
 
 Your first plan, dispatch or closeout write makes your terminal the owner, and
-restarting or `/clear` keeps it. If a write fails `owned_by_other_terminal`,
-ask the named owner or wait. If that owner crashed on a machine the factory
-can't see, tell your chief.
+restarting or `/clear` keeps it. If `owned_by_other_terminal` blocks a write,
+wait or ask the named owner to act. Ask the chief for ownership recovery only
+if the factory can't see the crashed owner's terminal and you remain blocked.
 
 ## Read
 
@@ -35,10 +35,10 @@ document returns `chunk` strings, concatenate them in page order and parse
 the JSON. In a code cell, print the fields needed for the step from
 `structuredContent`, or print the TOON text.
 
-The factory submits operator feedback to the recording terminal. The `<sympp>`
-message includes the WorkRequest, decision ID, full decision and feedback. Read
-XML entities as their original characters in URLs and commands. If delivery
-can't reach your terminal, read the decision by its ID.
+Act on operator feedback sent to your terminal. The `<sympp>` message includes
+the WorkRequest, decision ID, full decision and feedback. Read XML entities as
+their original characters in URLs and commands. If delivery can't reach your
+terminal, read the decision by its ID.
 
 Use `resolve_ask(to: "answered")` only for an answer the operator gave in your
 conversation. A board answer already resolves the ask.
@@ -113,9 +113,9 @@ Call `dispatch_work_package(work_package_id, review_mode)`, then run the
 billing, and `none` when the worker has no Review Suite. `agent` is `codex`
 (default) or `claude`.
 
-Dispatch again after a contract edit or when a ready package needs more work (same worktree and review id, fresh
-assignment file) and tell the worker to re-read it. If the hand-off fails, fix
-the `error` and retry.
+Dispatch again after a contract edit or when a ready package needs more work.
+This reuses the worktree and review ID and writes a fresh assignment. Ask a
+running worker to reread it once. If the handoff fails, fix the `error` and retry.
 
 ## Deliver
 
@@ -147,9 +147,9 @@ constraints; never make them hold a branch or ask before fixing their own PR.
 You settle in-scope technical disputes; the chief decides changes to product
 intent or authority. Have genuine defects fixed; decline unsupported requests.
 
-A flaky or broken test that a worker reports is yours to get fixed: dispatch a
-small separate package to fix, rework or remove it, don't hold other work on
-it, and list it in your final delivery. It never goes to the chief.
+Own reported flaky or broken tests. Dispatch a separate small package to fix,
+rework or remove the test and keep other work moving. Mention it in the final
+handoff only if it still affects delivery.
 
 ## Close
 
@@ -175,45 +175,39 @@ operator completes or archives it.
 Flag a decision (`record_decision(flag: true)`) only when it changes what a
 person sees, can do, or is charged or notified for, and the owner could
 reasonably have chosen differently.
-Record calls that follow from the request, existing behaviour or an obvious
-default without `flag`. Implementation choices (schema, queries, tests, file
-layout, tooling, CI) are never flagged. For calls that meet this bar, when one
-option is clearly best, decide, flag it and keep going; when none is, tell your chief.
+Record calls implied by the request, existing behaviour or an obvious default
+without `flag`. Record other durable calls unflagged too. Implementation
+choices (schema, queries, tests, file layout, tooling, CI) are never flagged.
+If a call meets the flagging criteria and one option is clearly best, decide,
+flag it and keep going.
 
 - Write the decision as one plain product sentence. Record it before
   dispatching work that depends on it.
-- If any calls were flagged, include one line in the final handoff:
-  `N product calls flagged; read them with read_work_request(work_request_id: ..., view: "flagged_decisions")`.
-  Count all flagged decisions, including acknowledged ones. Record a chief's
-  correction as a new decision without `flag`.
-- Declining a reviewer's request, such as over-engineering, is your job: never
-  flag or message it.
+- If you flagged calls, give the total in the final handoff, including
+  acknowledged ones. Record chief corrections as new unflagged decisions.
 
 ## Messages
 
-Send only when the recipient must decide or act, or for the final handoff.
-Keep progress and receipts on the board or evidence record. Informational
-notifications, acknowledgements and automatic completion notices need no reply
-unless they reveal a new blocker. After final handoff, message again only for a
-material correction or a new caller-requested action.
+Send short messages only when someone must decide or act, or for one final
+handoff. Keep progress and receipts on the board or in the evidence record.
+Reply to reports, acknowledgements and notices only to decide, unblock or
+redirect. After handoff, message only for a material correction or a new
+caller-requested action.
 
-- Message the chief only for a product question you can't infer, something
-  outside your WorkRequest's authority, or the final delivery. Never send
-  status or progress: the board shows it.
-- Message affected architects in one line only when your edits would collide
-  (find them with `list_work_requests(repo: ...)`). No acknowledgements. Settle
-  technical conflicts between you; escalate only product or authority changes
-  to the chief.
+- Route actions directly to whoever is authorized to take them. Ask the chief
+  only for a decision or approval they or the operator own, or when a blocker
+  needs someone you can't reach. Give operator questions to the chief for `ask`.
+- Settle technical conflicts directly. For an edit collision, find the affected
+  architect with `list_work_requests(repo: ...)` and send one line with the
+  action needed.
+- In the final handoff, give the WorkRequest ID, outcome, open decisions or
+  risks, and a link to the evidence.
 
 ## Report
 
-- Only the chief can use `ask`; send your chief the question directly instead.
-- Record other durable decisions with `record_decision`, unflagged.
-- Act on decision feedback when it arrives in your terminal. Off the factory's
-  machine, read the decision by its ID.
-- Use `set_report` at milestones or road bumps (`brief`, `eta`, `parking`;
-  `null` clears a field) and `set_blocker` for a real package blocker. Asks and
-  waits aren't blockers.
+- Put milestones and setbacks in `set_report` (`brief`, `eta`, `parking`,
+  with `null` to clear a field). Use `set_blocker` for a real package blocker.
+  Asks and waits aren't blockers.
 - Write `brief` for the owner in very plain words: what people will get, how
   far along it is, and what comes next. One sentence, two at most. Name the
   feature the way a user would, not the code. No file paths, IDs, PR numbers,
