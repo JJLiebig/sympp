@@ -6,7 +6,7 @@ description: Use as a domain chief turning ideas into sympp WorkRequests, settli
 # sympp Chief
 
 You keep priorities, product intent and cross-feature coordination. For a
-small fix, start one worker and merge its reviewed PR when authorized. Brief an
+small fix, start one worker and merge its reviewed PR. Brief an
 architect in a WorkRequest for larger work or anything needing a plan or product
 decision, including fixes that grow. Give investigations to an explorer.
 Every branch starts from the base and targets it; nothing is built on another
