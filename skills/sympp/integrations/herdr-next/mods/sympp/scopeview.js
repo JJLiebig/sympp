@@ -248,7 +248,7 @@ function movingRow(v, t, job, { pkg, slot, waits }) {
   const el = h_flex().id(`moving-${pkg.id}`).flex_none().h(22).pl(10 + INDENT).pr(10).gap(8).items_center()
     .child(box(v, t, pkg, 7, `moving-box-${pkg.id}`))
     .child(div().flex_1().min_w(48).truncate().text_size(12.5).text_color(t.muted).child(pkg.title))
-    .child(mono(11, stepTone).w(SLOT_WIDTH).child(step))
+    .child(mono(11, stepTone).w(STEP_WIDTH).flex_none().child(step))
     .child(h_flex().id(`moving-waits-${pkg.id}`).w(64).min_w(0).flex_shrink(1).justify_end()
       .when(Boolean(waits), (el) => el.tooltip(waits.tip)
         .child(div().min_w(0).flex_shrink(1).truncate().font_family(MONO).text_size(11).text_color(waitTone).child(waits.text))));
@@ -323,6 +323,8 @@ function scopeRows(v, t, tasks, cards, key) {
 // shows, in the same place on every row. The Review slot names its mode on hover.
 const SLOT_TONE = ["build", "build", "checks", "review", "merge"];
 const SLOT_WIDTH = 46;
+// A moving row's step also says Blocked or Closed, one letter longer than any lifecycle step.
+const STEP_WIDTH = 54;
 function lifecycle(t, pkg, wide) {
   const now = S.lifecycleSlot(pkg);
   const mode = pkg.review.mode && pkg.review.mode !== "none" ? (pkg.review.mode === "base" ? "normal" : pkg.review.mode) : null;
