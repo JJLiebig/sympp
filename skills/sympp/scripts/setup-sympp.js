@@ -4,15 +4,86 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { isDeepStrictEqual } = require("node:util");
 
 const root = path.resolve(__dirname, "..");
 const name = "sympp";
 const oldName = "symphony_plus_plus";
-const usage = "sympp [board|update|status] [--host auto|codex|claude|both] [--server <ssh-host|http://127.0.0.1:19998>] [--help] [--version]";
+const usage = "sympp [board|update|status] [--host auto|codex|claude|agy|both] [--server <ssh-host|http://127.0.0.1:19998>] [--help] [--version]";
 const emit = (key, value) => process.stdout.write(`${key}: ${JSON.stringify(value)}\n`);
 
 function hostInstalled(host) {
   return spawnSync(process.platform === "win32" ? "where.exe" : "which", [host], { encoding: "utf8", windowsHide: true }).status === 0;
+}
+
+function agyJson(source) {
+  // Keep offsets so setup can edit its own entry without removing JSONC comments.
+  const withoutComments = source.replace(/"(?:\\[\s\S]|[^"\\])*"|\/\/[^\r\n]*|\/\*[\s\S]*?\*\//g,
+    token => token.startsWith('"') ? token : token.replace(/[^\r\n]/g, " "));
+  return withoutComments.replace(/"(?:\\[\s\S]|[^"\\])*"|,(?=\s*[}\]])/g,
+    token => token === "," ? " " : token);
+}
+
+function jsonProperty(json, objectStart, key) {
+  const tokens = /"(?:\\[\s\S]|[^"\\])*"|[{}\[\]:,]|[^\s{}\[\]:,]+/g;
+  tokens.lastIndex = objectStart + 1;
+  let depth = 0, valueStart, valueEnd, range;
+  for (let match; (match = tokens.exec(json));) {
+    const token = match[0];
+    if (depth === 0) {
+      if (valueStart !== undefined && (token === "," || token === "}")) {
+        range = [valueStart, valueEnd];
+        valueStart = undefined;
+      }
+      if (token === "}") break;
+      const colon = token.startsWith('"') && /^\s*:\s*/.exec(json.slice(tokens.lastIndex));
+      if (colon && JSON.parse(token) === key) {
+        tokens.lastIndex += colon[0].length;
+        valueStart = tokens.lastIndex;
+        continue;
+      }
+    }
+    if (token === "{" || token === "[") depth++;
+    if (token === "}" || token === "]") depth--;
+    valueEnd = tokens.lastIndex;
+  }
+  return range;
+}
+
+function setAgyProperty(source, json, objectStart, key, value, hasProperties) {
+  const range = jsonProperty(json, objectStart, key);
+  const encoded = JSON.stringify(value);
+  if (range) return source.slice(0, range[0]) + encoded + source.slice(range[1]);
+  const comma = hasProperties ? "," : "";
+  return source.slice(0, objectStart + 1) + `\n  ${JSON.stringify(key)}: ${encoded}${comma}\n` + source.slice(objectStart + 1);
+}
+
+function agyConfig(before, registration) {
+  const json = agyJson(before);
+  const config = JSON.parse(json.trim() || "{}");
+  const servers = config?.mcpServers ?? {};
+  if (!config || typeof config !== "object" || Array.isArray(config) || typeof servers !== "object" || Array.isArray(servers)) {
+    throw new Error("Antigravity CLI MCP configuration must contain a JSON object for its server entries.");
+  }
+  const previous = servers[name];
+  if (Object.hasOwn(servers, name) && previous?.env?.SYMPP_SKILLS_MANAGED !== "1") {
+    throw new Error("Antigravity CLI already has an unrelated sympp registration. Explicitly remove it before setup.");
+  }
+  const { command, args, env } = registration;
+  const next = { command, args, env: { ...env, SYMPP_MCP_HOST: "agy" } };
+
+  const rootStart = json.indexOf("{");
+  if (rootStart < 0) return `${before}${before ? "\n" : ""}${JSON.stringify({ mcpServers: { [name]: next } }, null, 2)}\n`;
+  if (config.mcpServers == null) return setAgyProperty(before, json, rootStart, "mcpServers", { [name]: next }, Object.keys(config).length > 0);
+  const serversStart = jsonProperty(json, rootStart, "mcpServers")[0];
+  if (!previous) return setAgyProperty(before, json, serversStart, name, next, Object.keys(servers).length > 0);
+
+  const serverStart = jsonProperty(json, serversStart, name)[0];
+  let after = before;
+  for (const [key, value] of Object.entries(next)) {
+    if (!isDeepStrictEqual(previous[key], value)) after = setAgyProperty(after, agyJson(after), serverStart, key, value, true);
+  }
+  return after;
 }
 
 const begin = "# BEGIN sympp Skills MCP";
@@ -110,17 +181,17 @@ function codexConfig(config, registration) {
 function main(args) {
   const install = JSON.parse(fs.readFileSync(path.join(root, fs.existsSync(path.join(root, ".sympp-install.json")) ? ".sympp-install.json" : "package.json"), "utf8"));
   if (args.length === 1 && ["--version", "-v", "-V"].includes(args[0])) { process.stdout.write(`${install.version}\n`); return; }
-  if (args.length === 1 && args[0] === "--help") { emit("usage", usage); emit("help", "Setup registers sympp for this user. sympp board opens the selected factory signed in. Omit --host to register installed Codex and Claude Code. Local setup: Windows x64. Remote setup: Windows and Linux."); return; }
+  if (args.length === 1 && args[0] === "--help") { emit("usage", usage); emit("help", "Setup registers sympp for this user. sympp board opens the selected factory signed in. Omit --host to register installed Codex, Claude Code, and Antigravity CLI. Local setup: Windows x64. Remote setup: Windows and Linux."); return; }
   let selection = "auto", server;
   for (let i = 0; i < args.length; i += 2) {
-    if (args[i] === "--host" && ["auto", "codex", "claude", "both"].includes(args[i + 1])) selection = args[i + 1];
+    if (args[i] === "--host" && ["auto", "codex", "claude", "agy", "both"].includes(args[i + 1])) selection = args[i + 1];
     else if (args[i] === "--server" && args[i + 1]) server = args[i + 1];
     else { emit("error", "Unknown argument. " + usage); process.exitCode = 2; return; }
   }
   if (!server && (process.platform !== "win32" || process.arch !== "x64")) throw new Error("Local sympp Skills setup supports Windows x64 only. Use --server for an existing factory.");
-  const commands = { codex: hostInstalled("codex"), claude: hostInstalled("claude") };
+  const commands = { codex: hostInstalled("codex"), claude: hostInstalled("claude"), agy: hostInstalled("agy") };
   const hosts = selection === "auto" ? Object.keys(commands).filter(host => commands[host]) : selection === "both" ? ["codex", "claude"] : [selection];
-  if (!hosts.length || hosts.some(host => !commands[host])) throw new Error("The selected host is not installed on PATH. Install Codex or Claude Code, then retry setup with --host codex or --host claude.");
+  if (!hosts.length || hosts.some(host => !commands[host])) throw new Error("The selected host is not installed on PATH. Install Codex, Claude Code, or Antigravity CLI, then retry setup.");
   const symppHome = path.resolve(process.env.SYMPP_HOME || path.join(os.homedir(), ".agents", "splusplus"));
   let env = {
     SYMPP_SKILLS_MANAGED: "1", SYMPP_RUNTIME_CHANNEL: "stable", SYMPP_HOME: symppHome,
@@ -170,6 +241,11 @@ function main(args) {
     const file = path.join(path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), ".codex")), "config.toml");
     const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
     plans.push({ host: "codex", file, before, after: codexConfig(before, registration) });
+  }
+  if (hosts.includes("agy")) {
+    const file = path.join(os.homedir(), ".gemini", "config", "mcp_config.json");
+    const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+    plans.push({ host: "agy", file, before, after: agyConfig(before, registration) });
   }
   if (remote) require("./sympp-remote.js").privateWrite(env.SYMPP_SERVER_TOKEN_FILE, remote.token);
   for (const plan of plans) {

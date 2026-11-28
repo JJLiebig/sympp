@@ -199,6 +199,32 @@ if (process.platform !== 'win32') {
       expect(await installed.ok(command, ['board'])).toContain('board: opened');
       expect(await readFile(join(root, 'opened'), 'utf8')).toBe(`${server}/sympp/board`);
 
+      // Antigravity invokes the underscored name while the factory still sees its ordinary health call.
+      await installed.program('agy', '#!/bin/sh\nexit 0\n');
+      const agyConfig = join(env.HOME!, '.gemini/config/mcp_config.json');
+      await mkdir(join(env.HOME!, '.gemini/config'), { recursive: true });
+      const notes = ' // "notes": {"command": "/bin/notes"},';
+      await writeFile(agyConfig, `{\n"mcpServers": {\n${notes}\n"backup": {"command": "/bin/backup"}}}\n`);
+      const agySetup = await installed.setup(bundle, 'auto', '--server', server);
+      expect(agySetup.code, agySetup.stdout + agySetup.stderr).toBe(0);
+      const agySettings = await readFile(agyConfig, 'utf8');
+      expect(agySettings).toContain(notes);
+      const agyServer = JSON.parse(agySettings.replace(notes, '')).mcpServers.sympp;
+      const agy = new Stdio(agyServer.command, agyServer.args, {
+        PATH: env.PATH, HOME: env.HOME, ...agyServer.env, HC_TERMINAL_ID: 't1', HC_TERMINAL_SOCKET: core,
+      }, service.checkout);
+      try {
+        await agy.request('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'agy', version: 'acceptance' } });
+        const listed = await agy.request('tools/list');
+        expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toContain('sympp_health');
+        const answer = await agy.request('tools/call', { name: 'sympp_health', arguments: {} });
+        const health = answer.result.structuredContent;
+        expect([health.status, health.caller?.access, health.caller?.terminal]).toEqual(['ok', 'write', 'desk/t1']);
+        expect(answer.result.content.map((item: { text: string }) => item.text).join('\n')).toContain('terminal: "desk/t1"');
+      } finally {
+        expect(await agy.close()).toBe(0);
+      }
+
       // Codex starts the registered server in the person's Herdr terminal, inside their checkout.
       const agent = (terminal: string) => ({ PATH: env.PATH, HOME: env.HOME, ...registration.env, HC_TERMINAL_ID: terminal, HC_TERMINAL_SOCKET: core });
       const chief = new Stdio(registration.command, registration.args, agent('t1'), service.checkout);
