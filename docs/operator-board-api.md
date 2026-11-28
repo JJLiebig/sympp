@@ -346,8 +346,8 @@ and groups appear in the order their first planned package does.
 `work_request_details[].product_tree.execution_graph` holds the effective
 dependency edges. Each `work_request` carries its derived `phase`
 (`intake`, `planned`, `active`, `unresolved`, `done` or `archived`),
-`completed_at` (when its work became done: the operator's completion or its
-latest package ending, otherwise null), `operator_completed_at`, `archived_at`
+`completed_at` (explicit completion time or latest package end time, otherwise
+null), `operator_completed_at`, `archived_at`
 and `archive_reason`. Deploy observations and repository default branches are not
 included by this change.
 
@@ -391,7 +391,8 @@ retain their history until deletion; the deletion setting `card_retention_days`
 `settings.work_request_never_started_archive_after_days` defaults to `30` elapsed
 days, configurable from 1 to 3650. A goal qualifies only if it never started:
 its phase is `intake` (no packages), or `planned` with no package ever
-dispatched or ended. An operator-completed goal never qualifies.
+dispatched or ended. An explicitly completed goal never qualifies for
+never-started retention.
 
 Age starts at goal creation; edits do not reset it. At the exact threshold the
 next successful retention pass archives the goal with `archive_reason:

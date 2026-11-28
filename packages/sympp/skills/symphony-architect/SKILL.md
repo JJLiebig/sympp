@@ -169,8 +169,8 @@ comment naming the successors or saying there are none. Close its worker
 terminal and keep the branch for reference. Close source and carrier PRs too.
 Blockers are for packages you still intend to deliver.
 
-When every package has ended the WorkRequest is `done` or `unresolved`. Only the
-operator completes or archives it.
+When every package has ended the WorkRequest is `done` or `unresolved`.
+Leave completion to a chief and archive to the operator.
 
 ## Product calls
 

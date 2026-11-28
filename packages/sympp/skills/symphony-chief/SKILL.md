@@ -25,6 +25,8 @@ the architect with the WorkRequest id. State constraints by outcome; an intentio
 narrow stop must name the decision to escalate. Architects may change in-repo
 CI and tests without asking.
 
+Call `complete_work_request` with the WorkRequest ID when its work is done.
+
 ## Settle product calls
 
 - Apply the user's existing decisions. Settle scope conflicts and
