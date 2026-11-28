@@ -262,7 +262,7 @@ function PkgCard({ at, ref, view }: { at: number; ref?: (node: HTMLElement | nul
           <span className="block text-sm leading-snug [overflow-wrap:anywhere]">{pkg.title}</span>
           <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5">
             <StageWord view={view} />
-            {exited ? null : (
+            {exited && !blockedOn(pkg) ? null : (
               <span className="grid">
                 <StageStatus at={at} still view={view} />
               </span>

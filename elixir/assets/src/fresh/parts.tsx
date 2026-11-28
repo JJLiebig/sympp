@@ -5,7 +5,7 @@ import { GoalActions, GoalRefusal, ShelfCleanup } from "./actions";
 import { areaLabel } from "./areas";
 import { blockedOn, type BlockedOn, type BlockerTarget } from "./blocked";
 import { deployAt, inRepos, span, type Ci, type DeployStep, type Goal, type GoalView, type Outcome, type Pr, type PkgView, type Review, type Stage } from "./model";
-import { focusAsk, focusGoal, focusPkg, POP, Presence, useFlash } from "./motion";
+import { focusAsk, focusGoal, focusPkg, liftFilterFor, POP, Presence, useFlash } from "./motion";
 import { Reveal } from "./reveal";
 
 // `pip` is the small square that stands for a package in a strip of dots; `bar` is its step on the track.
@@ -224,9 +224,14 @@ function openBlocker(target: BlockerTarget) {
   if (target.kind === "pr") {
     const [repo, number] = target.id.split("#");
     window.open(`https://github.com/${repo}/pull/${number}`, "_blank", "noopener,noreferrer");
-  } else if (target.kind === "ask") focusAsk(target.id);
-  else if (target.kind === "work_request") focusGoal(target.id);
-  else if (target.goalId) focusPkg(target.goalId, target.id);
+    return;
+  }
+  if (target.kind === "ask") return focusAsk(target.id);
+  const goalId = target.kind === "work_request" ? target.id : target.goalId;
+  if (!goalId) return;
+  liftFilterFor(goalId);
+  if (target.kind === "work_request") focusGoal(goalId);
+  else focusPkg(goalId, target.id);
 }
 
 // The mode, then the state, in words, for a phone, which has no hover. A card's review has no known mode, so it shows the state alone.

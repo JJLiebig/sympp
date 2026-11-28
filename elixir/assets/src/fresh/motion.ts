@@ -307,6 +307,21 @@ function bringUp(key: string, selector: string, inside?: string) {
   void Promise.all(growing.map((animation) => animation.finished.catch(() => undefined))).then(() => spotlight(inside && document.querySelector(inside) ? inside : selector));
 }
 
+const LIFT = "fresh:lift";
+
+// A jump to a goal the area filter hides lifts the filter first, as a jump from Needs you does.
+export function liftFilterFor(goalId: string) {
+  if (!document.querySelector(`[data-goal="${CSS.escape(goalId)}"]`)) flushSync(() => window.dispatchEvent(new Event(LIFT)));
+}
+
+export function useLiftFilter(lift: () => void) {
+  const onLift = useEffectEvent(lift);
+  useLayoutEffect(() => {
+    window.addEventListener(LIFT, onLift);
+    return () => window.removeEventListener(LIFT, onLift);
+  }, []);
+}
+
 // Opens a folded row when something brings it up: `goal:<id>`, `all:<goal id>` or `ask:<id>`.
 export function useOpenWhenBrought(key: string, open: () => void) {
   const onOpen = useEffectEvent(open);
