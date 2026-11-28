@@ -3,9 +3,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
   Cards: the work of the terminals the operator talks to, observed by the
   factory with no setup by the agent.
 
-  A card belongs to one terminal on the factory's herdr-core. Its id is derived
-  from the terminal key, and the terminal works on it through a
-  `sympp_worked_on` row (subject `card`, role `card`).
+  The factory keeps one card per terminal for observations and asks. Its id is
+  derived from the terminal key, and the terminal works on it through a
+  `sympp_worked_on` row (subject `card`, role `card`). The boards show one row
+  per repository and branch, and dismiss that branch's cards together.
 
   **Eligible terminals** are live, are not dispatched workers
   (`sympp.role=worker`), and either carry the label `sympp.card=1` or are
@@ -399,7 +400,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
     Ownership.end_subject(repo, "card", card_id)
   end
 
-  @doc "The operator dismisses a card; dismissing it again changes nothing."
+  @doc "The operator dismisses all cards on the same repository and branch."
   @spec dismiss(repo(), String.t()) :: {:ok, Card.t()} | {:error, :not_found}
   def dismiss(repo, card_id) when is_binary(card_id) do
     repo.transaction(
@@ -413,15 +414,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
 
           %Card{} = card ->
             now = DateTime.utc_now(:microsecond)
-            card = repo.update!(Ecto.Changeset.change(card, state: "dismissed", ended_at: card.ended_at || now, observed_at: now))
-            end_card(repo, card.id)
-            card
+
+            Enum.reduce(branch_cards(repo, card), card, fn member, requested ->
+              dismissed = repo.update!(Ecto.Changeset.change(member, state: "dismissed", ended_at: member.ended_at || now, observed_at: now))
+              end_card(repo, member.id)
+              if member.id == card.id, do: dismissed, else: requested
+            end)
         end
       end,
       mode: :immediate
     )
     |> DashboardPubSub.broadcast_changed_on_success()
   end
+
+  defp branch_cards(repo, card) do
+    case branch_key(card) do
+      {repository, branch} ->
+        repo.all(from(member in Card, where: fragment("lower(?)", member.repository) == ^repository and member.branch == ^branch and member.state != "dismissed"))
+
+      _id ->
+        [card]
+    end
+  end
+
+  defp branch_key(%Card{repository: repository, branch: branch}) when is_binary(repository) and repository != "" and is_binary(branch) and branch != "",
+    do: {String.downcase(repository), branch}
+
+  defp branch_key(%Card{id: id}), do: id
 
   @doc """
   A terminal's card for `sympp.health`: its state and branch, and its open and
@@ -441,35 +460,48 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
     do: repo.one(from(card in Card, where: card.terminal_key == ^terminal_key and card.state in ^@active))
 
   @doc """
-  Cards for the boards: open cards, and ended ones until they drop off after
-  `retention_days`. Open cards come first, then the most recently changed.
+  One card per repository and branch for the boards. Open cards come first,
+  then the most recently changed. Ended cards drop off after `retention_days`.
   """
   @spec list(repo(), pos_integer(), DateTime.t()) :: [map()]
   def list(repo, retention_days, now \\ DateTime.utc_now(:microsecond)) when is_integer(retention_days) do
     cutoff = DateTime.add(now, -retention_days * 86_400, :second)
     cards = repo.all(from(card in Card, where: card.state in ^@active or card.ended_at > ^cutoff, order_by: [desc: card.updated_at, asc: card.id]))
     ids = Enum.map(cards, & &1.id)
-    rows = workers(repo, ids)
+    rows = live_workers(repo, ids)
     asks = Asks.open_by_card(repo, ids)
 
     cards
-    |> Enum.sort_by(&(&1.state not in @active))
-    |> Enum.map(fn card ->
+    |> Enum.group_by(&branch_key/1)
+    |> Map.values()
+    |> Enum.map(&{board_card(&1), &1})
+    |> Enum.sort_by(fn {card, _members} -> {card.state not in @active, -DateTime.to_unix(card.updated_at, :microsecond), card.id} end)
+    |> Enum.map(fn {card, members} ->
       if card.state not in @active and card.ended_at do
         DashboardCache.expire_at(DateTime.add(card.ended_at, retention_days * 86_400, :second))
       end
 
-      public(card, Map.get(rows, card.id), Map.get(asks, card.id, []))
+      worker = members |> Enum.flat_map(&List.wrap(Map.get(rows, &1.id))) |> Enum.max_by(&{DateTime.to_unix(&1.started_at, :microsecond), &1.id}, fn -> nil end)
+      open_asks = members |> Enum.flat_map(&Map.get(asks, &1.id, [])) |> Enum.sort_by(&{DateTime.to_unix(&1.inserted_at, :microsecond), &1.id}, :desc)
+      public(card, worker, open_asks)
     end)
   end
 
-  # The latest worked-on row of each card: live first, else the latest.
-  defp workers(_repo, []), do: %{}
+  defp board_card(members) do
+    card = Enum.min_by(members, &{&1.state not in @active, &1.state == "dismissed", &1.state == "working"})
 
-  defp workers(repo, ids) do
-    repo.all(from(row in WorkedOn, where: row.subject_kind == "card" and row.subject_id in ^ids))
-    |> Enum.group_by(& &1.subject_id)
-    |> Map.new(fn {id, rows} -> {id, Enum.max_by(rows, &{&1.state == "live", DateTime.to_unix(&1.started_at, :microsecond)})} end)
+    # A helper may have the same PR observation without the review cycle.
+    Enum.find(members, card, fn member ->
+      is_binary(member.review_id) and member.state == card.state and member.pr == card.pr and ("github" in member.stale) == ("github" in card.stale)
+    end)
+  end
+
+  defp live_workers(_repo, []), do: %{}
+
+  defp live_workers(repo, ids) do
+    repo.all(from(row in WorkedOn, where: row.subject_kind == "card" and row.subject_id in ^ids and row.state == "live"))
+    |> Enum.filter(&(Ownership.liveness(&1) == "live"))
+    |> Map.new(&{&1.subject_id, &1})
   end
 
   @doc "A card as the boards show it."
