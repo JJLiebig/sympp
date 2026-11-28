@@ -199,6 +199,28 @@ if (process.platform !== 'win32') {
       expect(await installed.ok(command, ['board'])).toContain('board: opened');
       expect(await readFile(join(root, 'opened'), 'utf8')).toBe(`${server}/sympp/board`);
 
+      // Antigravity invokes the underscored name while the factory still sees its ordinary health call.
+      await installed.program('agy', '#!/bin/sh\nexit 0\n');
+      const agyConfig = join(env.HOME!, '.gemini/config/mcp_config.json');
+      await mkdir(join(env.HOME!, '.gemini/config'), { recursive: true });
+      await writeFile(agyConfig, '{ // Existing Antigravity config\n"mcpServers": {"notes": {"command": "/bin/notes",},},}\n');
+      const agySetup = await installed.setup(bundle, 'auto', '--server', server);
+      expect(agySetup.code, agySetup.stdout + agySetup.stderr).toBe(0);
+      const agyServers = JSON.parse(await readFile(agyConfig, 'utf8')).mcpServers;
+      expect(agyServers.notes.command).toBe('/bin/notes');
+      const agy = new Stdio(agyServers.sympp.command, agyServers.sympp.args, {
+        PATH: env.PATH, HOME: env.HOME, ...agyServers.sympp.env, HC_TERMINAL_ID: 't1', HC_TERMINAL_SOCKET: core,
+      }, service.checkout);
+      try {
+        await agy.request('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'agy', version: 'acceptance' } });
+        const listed = await agy.request('tools/list');
+        expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toContain('sympp_health');
+        const health = await agy.call('sympp_health');
+        expect([health.status, health.caller?.access, health.caller?.terminal]).toEqual(['ok', 'write', 'desk/t1']);
+      } finally {
+        expect(await agy.close()).toBe(0);
+      }
+
       // Codex starts the registered server in the person's Herdr terminal, inside their checkout.
       const agent = (terminal: string) => ({ PATH: env.PATH, HOME: env.HOME, ...registration.env, HC_TERMINAL_ID: terminal, HC_TERMINAL_SOCKET: core });
       const chief = new Stdio(registration.command, registration.args, agent('t1'), service.checkout);

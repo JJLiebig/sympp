@@ -16,6 +16,14 @@ function hostInstalled(host) {
   return spawnSync(process.platform === "win32" ? "where.exe" : "which", [host], { encoding: "utf8", windowsHide: true }).status === 0;
 }
 
+function parseAgyConfig(source) {
+  const withoutComments = source.replace(/"(?:\\[\s\S]|[^"\\])*"|\/\/[^\r\n]*|\/\*[\s\S]*?\*\//g,
+    token => token.startsWith('"') ? token : " ");
+  const json = withoutComments.replace(/"(?:\\[\s\S]|[^"\\])*"|,(?=\s*[}\]])/g,
+    token => token === "," ? "" : token);
+  return JSON.parse(json.trim() || "{}");
+}
+
 const begin = "# BEGIN sympp Skills MCP";
 const end = "# END sympp Skills MCP";
 
@@ -175,13 +183,13 @@ function main(args) {
   if (hosts.includes("agy")) {
     const file = path.join(os.homedir(), ".gemini", "config", "mcp_config.json");
     const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "{}";
-    const config = JSON.parse(before.trim() || "{}");
+    const config = parseAgyConfig(before);
     const servers = config.mcpServers ??= {};
     const previous = servers[name];
     if (Object.hasOwn(servers, name) && previous?.env?.SYMPP_SKILLS_MANAGED !== "1") {
       throw new Error("Antigravity CLI already has an unrelated sympp registration. Explicitly remove it before setup.");
     }
-    servers[name] = { ...previous, command: registration.command, args: registration.args, env };
+    servers[name] = { ...previous, command: registration.command, args: registration.args, env: { ...env, SYMPP_MCP_HOST: "agy" } };
     plans.push({ host: "agy", file, before, after: isDeepStrictEqual(previous, servers[name]) ? before : JSON.stringify(config, null, 2) + "\n" });
   }
   if (remote) require("./sympp-remote.js").privateWrite(env.SYMPP_SERVER_TOKEN_FILE, remote.token);

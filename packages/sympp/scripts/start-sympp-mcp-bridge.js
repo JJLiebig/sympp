@@ -1310,7 +1310,10 @@ async function bridge(identity, state, runtimeFile) {
     }
     input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity, terminal: false });
     input.once("close", () => sessionLocation.close());
-    for await (const line of input) {
+    // Antigravity normalizes the dotted health name on calls. Advertise the
+    // name it can invoke and restore the factory's name before forwarding.
+    const useAgyHealthName = process.env.SYMPP_MCP_HOST === "agy";
+    for await (let line of input) {
       if (!line.trim()) continue;
       let parsed = null;
       try { parsed = JSON.parse(line); } catch (_) { }
@@ -1318,6 +1321,10 @@ async function bridge(identity, state, runtimeFile) {
       if (["tools/list", "tools/call"].includes(parsed?.method) && await sessionLocation.worker()) {
         process.stdout.write(`${JSON.stringify(require("./sympp-session-location.js").workerToolsResponse(parsed))}\n`);
         continue;
+      }
+      if (useAgyHealthName && parsed?.method === "tools/call" && parsed.params?.name === "sympp_health") {
+        parsed.params.name = "sympp.health";
+        line = JSON.stringify(parsed);
       }
       const requestProtocol = parsed && parsed.method === "initialize" && parsed.params ? String(parsed.params.protocolVersion || "") : null;
       let response;
@@ -1389,8 +1396,16 @@ async function bridge(identity, state, runtimeFile) {
       for (const content of response.lines) {
         let forwarded = content;
         if (parsed?.method === "tools/list") {
-          const tools = JSON.parse(content).result?.tools;
-          if (Array.isArray(tools)) sessionTools = schemas(tools);
+          const payload = JSON.parse(content);
+          const tools = payload.result?.tools;
+          if (Array.isArray(tools)) {
+            sessionTools = schemas(tools);
+            const health = useAgyHealthName && tools.find(tool => tool.name === "sympp.health");
+            if (health) {
+              health.name = "sympp_health";
+              forwarded = JSON.stringify(payload);
+            }
+          }
         }
         if (parsed?.method === "tools/call") {
           const payload = JSON.parse(content);
