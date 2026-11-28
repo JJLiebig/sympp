@@ -40,25 +40,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
   @spec pr_entries(watching()) :: list()
   def pr_entries(watching), do: for({_subject, target} <- targets(watching), entry = BlockerTarget.pr_entry(target), do: entry)
 
-  @spec require_acyclic(module(), subject(), [BlockerTarget.target()]) :: :ok | {:error, term()}
-  def require_acyclic(repo, {kind, id} = subject, targets) do
+  @spec require_acyclic(module(), subject(), [BlockerTarget.target()], :all | :declared) :: :ok | {:error, term()}
+  def require_acyclic(repo, {kind, id} = subject, targets, mode \\ :all) do
     cond do
       Enum.any?(targets, &match?(%{"kind" => ^kind, "id" => ^id}, &1)) ->
         {:error, :blocker_cycle}
 
-      Enum.any?(targets, &pending_dependency?/1) ->
-        check_dependencies(repo, subject, targets)
+      Enum.any?(targets, &(&1["kind"] != "ask" and &1["state"] != "cleared")) ->
+        check_dependencies(repo, subject, targets, mode)
 
       true ->
         :ok
     end
   end
 
-  defp pending_dependency?(target), do: target["kind"] != "ask" and target["state"] not in ["cleared", "impossible"]
-
-  defp check_dependencies(repo, subject, targets) do
-    with {:ok, graph} <- dependency_graph(repo, targets(watch(repo))) do
-      if cyclic?(graph, subject, targets), do: {:error, :blocker_cycle}, else: :ok
+  defp check_dependencies(repo, subject, targets, mode) do
+    with edges when mode == :all or edges != [] <- targets(watch(repo)),
+         {:ok, graph} <- dependency_graph(repo, edges),
+         false <- cyclic?(graph, subject, targets, mode == :all) do
+      :ok
+    else
+      [] -> :ok
+      true -> {:error, :blocker_cycle}
+      {:error, _reason} = error -> error
     end
   end
 
@@ -88,34 +92,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
     end
   end
 
-  defp cyclic?(graph, subject, targets) do
-    pending = Enum.flat_map(targets, &vertices(&1, graph))
+  defp cyclic?(graph, subject, targets, via_declaration? \\ true) do
+    pending = for target <- targets, vertex <- vertices(target, graph), do: {vertex, via_declaration?}
     reaches?(pending, subject, graph, %{})
   end
 
   defp reaches?([], _goal, _graph, _seen), do: false
-  defp reaches?([goal | _rest], goal, _graph, _seen), do: true
+  defp reaches?([{goal, true} | _rest], goal, _graph, _seen), do: true
+  defp reaches?([{goal, false} | rest], goal, graph, seen), do: reaches?(rest, goal, graph, seen)
 
-  defp reaches?([vertex | rest], goal, graph, seen) do
-    next = if Map.has_key?(seen, vertex), do: rest, else: prerequisites(vertex, graph) ++ rest
-    reaches?(next, goal, graph, Map.put(seen, vertex, true))
+  defp reaches?([step | rest], goal, graph, seen) do
+    next = if Map.has_key?(seen, step), do: rest, else: neighbours(step, graph) ++ rest
+    reaches?(next, goal, graph, Map.put(seen, step, true))
   end
 
-  defp prerequisites({"work_request", id} = vertex, graph) do
-    target = %{"kind" => "work_request", "id" => id}
-
-    if BlockerTarget.state(graph.repo, target, %{}) in ["waiting", "unknown"] do
-      declared(vertex, graph) ++ package_vertices(Map.get(graph.packages, id, []))
-    else
-      []
-    end
+  defp neighbours({vertex, via_declaration?}, graph) do
+    declared = for target <- Map.get(graph.declared, vertex, []), neighbor <- vertices(target, graph), do: {neighbor, true}
+    declared ++ Enum.map(prerequisites(vertex, graph), &{&1, via_declaration?})
   end
 
-  defp prerequisites({"work_package", id} = vertex, graph) do
-    declared(vertex, graph) ++ plan_prerequisites(graph, id)
-  end
+  defp prerequisites({"work_request", id}, graph), do: package_vertices(Map.get(graph.packages, id, []))
 
-  defp plan_prerequisites(graph, id) do
+  defp prerequisites({"work_package", id}, graph) do
     with request_id when is_binary(request_id) <- graph.parents[id],
          {:ok, plan} <- ExecutionGraph.evaluate(graph.repo, request_id) do
       for edge <- plan.effective_edges,
@@ -127,11 +125,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
     end
   end
 
-  defp declared(vertex, graph), do: Enum.flat_map(Map.get(graph.declared, vertex, []), &vertices(&1, graph))
+  defp vertices(%{"state" => "cleared"}, _graph), do: []
 
-  defp vertices(%{"state" => state}, _graph) when state in ["cleared", "impossible"], do: []
+  # An attached PR can reopen. Its active declaration remains a dependency
+  # even if the last successful observation found the PR closed.
   defp vertices(%{"kind" => "pr", "id" => id}, graph), do: package_vertices(Map.get(graph.prs, id, []))
-  defp vertices(%{"kind" => "work_request", "id" => id}, _graph), do: [{"work_request", id}]
+
+  defp vertices(%{"kind" => "work_request", "id" => id} = target, graph) do
+    if BlockerTarget.state(graph.repo, target, %{}) in ["waiting", "unknown"], do: [{"work_request", id}], else: []
+  end
 
   defp vertices(%{"kind" => "work_package", "id" => id}, graph) do
     with {:ok, waits} <- BlockerTarget.package_waits(graph.repo, id),
@@ -190,12 +192,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
   # A newly attached PR can reveal a cycle after a declaration. Use the fresh
   # provider state so an open PR in that cycle remains impossible until replanned.
   defp attachment_graph(repo, edges) do
-    if Enum.any?(edges, fn {_subject, target} -> target["kind"] == "pr" and pending_dependency?(target) end) do
+    if Enum.any?(edges, &match?({_subject, %{"kind" => "pr", "state" => "waiting"}}, &1)) do
       with {:ok, graph} <- dependency_graph(repo, edges), do: graph
     end
   end
 
-  defp attachment_state(%{} = graph, subject, %{"kind" => "pr", "state" => state} = target) when state in ["waiting", "unknown"] do
+  defp attachment_state(%{} = graph, subject, %{"kind" => "pr", "state" => "waiting"} = target) do
     if cyclic?(graph, subject, [target]), do: %{target | "state" => "impossible"}, else: target
   end
 

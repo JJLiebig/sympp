@@ -89,9 +89,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlanEdit do
   defp change_blocker_edge([], _from, _to, false, _summary, _context), do: {:ok, :unchanged}
   defp change_blocker_edge([%{reason: summary}], _from, _to, true, summary, _context), do: {:ok, :unchanged}
 
-  defp change_blocker_edge(_edges, from, to, active, summary, context) do
-    result = if active, do: set_dependency(from, to, summary, context), else: remove_dependency(from, to, context)
-    with :ok <- result, do: {:ok, :changed}
+  defp change_blocker_edge(edges, from, to, true, summary, context) do
+    with :ok <- write_dependency(edges, from, to, summary, context), do: {:ok, :changed}
+  end
+
+  defp change_blocker_edge(_edges, from, to, false, _summary, context) do
+    with :ok <- remove_dependency(from, to, context), do: {:ok, :changed}
   end
 
   defp blocker_receipt(blocker, state, changed) do
@@ -202,26 +205,39 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlanEdit do
   end
 
   defp set_dependency(from, to, reason, context) do
-    case dependency_edges(context, from, to) do
-      [] ->
-        %{
-          "work_request_id" => context.work_request_id,
-          "source_kind" => "work_package",
-          "source_id" => from,
-          "target_kind" => "work_package",
-          "target_id" => to,
-          "kind" => "depends_on",
-          "created_by" => context.created_by
-        }
-        |> put_present("reason", reason)
-        |> DependencyEdge.create_changeset()
-        |> context.repo.insert()
-        |> ok_or_error()
+    edges = dependency_edges(context, from, to)
 
-      edges ->
-        attrs = put_present(%{}, "reason", reason)
-        Enum.reduce_while(edges, :ok, &update_edge(&1, &2, attrs, context))
+    with :ok <- require_acyclic_edit(edges, from, to, context.repo) do
+      write_dependency(edges, from, to, reason, context)
     end
+  end
+
+  # The execution graph already reports cycles made solely of plan edges.
+  defp require_acyclic_edit([], from, to, repo) do
+    BlockerObservations.require_acyclic(repo, {"work_package", from}, [%{"kind" => "work_package", "id" => to}], :declared)
+  end
+
+  defp require_acyclic_edit(_edges, _from, _to, _repo), do: :ok
+
+  defp write_dependency([], from, to, reason, context) do
+    %{
+      "work_request_id" => context.work_request_id,
+      "source_kind" => "work_package",
+      "source_id" => from,
+      "target_kind" => "work_package",
+      "target_id" => to,
+      "kind" => "depends_on",
+      "created_by" => context.created_by
+    }
+    |> put_present("reason", reason)
+    |> DependencyEdge.create_changeset()
+    |> context.repo.insert()
+    |> ok_or_error()
+  end
+
+  defp write_dependency(edges, _from, _to, reason, context) do
+    attrs = put_present(%{}, "reason", reason)
+    Enum.reduce_while(edges, :ok, &update_edge(&1, &2, attrs, context))
   end
 
   defp update_edge(edge, :ok, attrs, context) do

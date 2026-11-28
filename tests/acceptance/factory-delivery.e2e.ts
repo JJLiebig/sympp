@@ -652,9 +652,18 @@ test('attached PRs cannot create blocker cycles, including a PR discovered after
     if (id !== late) await sync(architect, id, number, sha);
   }
 
-  await architect.call('set_blocker', declare(first, 975));
+  provider.set(975, pr(975, head('b'), { state: 'CLOSED' }));
+  expect((await architect.call('set_blocker', declare(first, 975))).blocker.state).toBe('impossible');
+  provider.set(975, pr(975, head('b')));
   await architect.reject('set_blocker', declare(second, 974), 'blocker_cycle');
+  const unsafeEdit = await architect.tool('edit_plan', { ops: [{ op: 'set_dependency', from: second, to: first }] });
+  expect(unsafeEdit.error?.data?.reason).toBe('blocker_cycle');
   expect((await architect.call('set_blocker', declare(late, 976))).blocker.state).toBe('waiting');
+  await sync(architect, late, 976, head('c'));
+  provider.unreadable.add(976);
+  await factory.tick('sweep');
+  expect((await row(architect, request, late)).blockers).toMatchObject([{ state: 'waiting', unknown: true }]);
+  provider.unreadable.delete(976);
   for (const _sweep of [1, 2]) {
     await factory.tick('sweep');
     expect((await row(architect, request, late)).blockers).toMatchObject([{ state: 'impossible', next_action: 'replan' }]);

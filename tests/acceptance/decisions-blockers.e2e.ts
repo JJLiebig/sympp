@@ -138,13 +138,22 @@ deliveryTest('typed dependencies reuse plan edges and reject cycles across packa
   await architect.call('edit_plan', { ops: [{ op: 'set_dependency', from: cancelled, to: retired }] });
   await architect.call('close_work_package', { work_package_id: cancelled, outcome: 'skipped' });
   await architect.reject('set_blocker', declare(retired, packageTarget(cancelled)), 'blocker_cycle');
-  expect((await architect.call('read_work_request', { work_request_id: request, view: 'plan' })).plan.dependencies)
-    .not.toContainEqual(expect.objectContaining({ from: retired, to: cancelled }));
+  const afterRejection = await architect.call('read_work_request', { work_request_id: request, view: 'plan' });
+  expect(afterRejection.plan.dependencies.some((edge: any) => edge.from === retired && edge.to === cancelled)).toBe(false);
   await architect.call('edit_plan', { ops: [{ op: 'remove_dependency', from: cancelled, to: retired }] });
   expect((await architect.call('set_blocker', declare(retired, packageTarget(cancelled)))).blocker.state).toBe('impossible');
   await architect.call('close_work_package', { work_package_id: retired, outcome: 'skipped' });
   const native = await architect.inspect(`/api/v1/sympp/herdr/work-requests/${request}`);
   expect(native.work_packages.find((row: any) => row.id === retired).blockers).toEqual([]);
+
+  const replanning = await factory.client();
+  const replanningId = await replanning.request('Undelivered prerequisite');
+  const [oldAttempt] = await replanning.addPackages([contract('Old attempt')]);
+  await replanning.call('close_work_package', { work_package_id: oldAttempt, outcome: 'skipped' });
+  await architect.call('set_report', { parking: { targets: [requestTarget(replanningId)] } });
+  expect((await architect.board(request)).blockers[0]).toMatchObject({ target: requestTarget(replanningId), state: 'impossible' });
+  await replanning.addPackages([contract('Replanned attempt')]);
+  await replanning.reject('set_report', { parking: { targets: [requestTarget(request)] } }, 'blocker_cycle');
 });
 
 test('package endings withdraw their asks, and chiefs and the owner can resolve WorkRequest asks', async ({ factory }) => {
