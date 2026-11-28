@@ -135,9 +135,8 @@ Verify the reviewed head against acceptance and merge when authorized and
 eligible. Keep independent packages moving while a PR waits. If CI or DEV has
 no event that will wake you, keep watching it.
 
-Check DEV only when acceptance needs the running feature. Plan a no-PR package
-for required post-merge DEV evidence. Track production rollout separately,
-outside WorkRequest acceptance, blockers and holds.
+Check DEV only when acceptance needs the running feature. Track production
+rollout separately, outside WorkRequest acceptance, blockers and holds.
 
 Workers settle implementation and review fixes within the approved outcome and
 constraints; never make them hold a branch or ask before fixing their own PR.
