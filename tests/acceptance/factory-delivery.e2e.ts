@@ -628,9 +628,13 @@ test('the watcher clears merged PR blockers, marks closed PRs impossible and kee
     { target: target(973), state: 'cleared', next_action: 'dispatch' },
     { target: target(971), work_package_id: wp, summary: declaration.summary, state: 'cleared', next_action: 'dispatch' },
   ]);
-  const panel = (await reader.inspect(`/api/v1/sympp/herdr/work-requests/${request}`));
-  expect(panel.work_request.blockers).toMatchObject([{ target: target(972), state: 'impossible' }, { target: target(973), state: 'cleared' }]);
-  expect(panel.work_packages[0].blockers).toMatchObject([{ target: target(971), state: 'cleared' }]);
+  const panel = await reader.inspect('/api/v1/sympp/herdr/dashboard');
+  const summary = panel.work_request_details.find((entry: any) => entry.work_request.id === request);
+  const detail = await reader.inspect(`/api/v1/sympp/herdr/work-requests/${request}`);
+  for (const surface of [summary, detail]) {
+    expect(surface.work_request.blockers).toMatchObject([{ target: target(972), state: 'impossible' }, { target: target(973), state: 'cleared' }]);
+    expect(surface.work_packages[0].blockers).toMatchObject([{ target: target(971), state: 'cleared' }]);
+  }
 });
 
 test('the watcher carries a dispatched package through ready to a recorded merge with no architect call, and a restart replays nothing', async ({ watched: { factory, provider, restart } }) => {

@@ -425,7 +425,9 @@ test('operator reports keep server times and partial edits and only the owner wr
   await architect.reject('set_report', { brief: 'Forged time', written_at: '2000-01-01T00:00:00Z' }, 'unexpected_argument');
   expect((await stored()).brief.text).toHaveLength(4000);
   const started = Date.now();
-  await architect.call('set_report', { brief: 'Core work is ready.', eta: 'After review', parking: { reason: 'Awaiting a release window' } });
+  const target = { kind: 'ask', id: question.id };
+  const parking = { targets: [target] };
+  await architect.call('set_report', { brief: 'Core work is ready.', eta: 'After review', parking });
   const first = await read();
   expect(first.brief.text).toBe('Core work is ready.');
   expect(Date.parse(first.brief.written_at)).toBeGreaterThanOrEqual(started - 1000);
@@ -442,13 +444,12 @@ test('operator reports keep server times and partial edits and only the owner wr
   expect(resumed.eta).toBeUndefined();
   expect(resumed.brief).toEqual(first.brief);
   expect(Date.parse(resumed.parking.resumed_at)).toBeGreaterThanOrEqual(Date.parse(first.parking.parked_at));
-  await architect.call('set_report', { parking: { reason: 'Waiting on a follow-up' } });
+  await architect.call('set_report', { parking });
   const reparked = await read();
-  expect(reparked.parking.reason).toBe('Waiting on a follow-up');
   expect(reparked.parking.resumed_at).toBeNull();
   const dashboard = await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated');
   const detail = dashboard.work_request_details.find((entry: any) => entry.work_request.id === request);
-  expect(detail.work_request.operator_report).toEqual(reparked);
+  expect(detail.work_request.operator_report).toEqual({ ...reparked, parking: { ...reparked.parking, targets: [{ ...target, state: 'waiting' }] } });
   expect(detail.work_request.worked_on.address).toBe(architect.address);
   const unchanged = await architect.call('read_work_request', { work_request_id: request });
   expect(unchanged.work_request.phase).toBe('active');
@@ -650,8 +651,8 @@ test('the native board\'s operator actions finish, release, complete, archive, r
   expect([ended.status, ended.body.error.code]).toEqual([409, 'already_ended']);
   // Clearing a blocker leaves delivery state alone and works again after it is raised again.
   for (const _ of [1, 2]) {
-    await architect.call('set_blocker', { work_package_id: active, target: unknownRequest('review-scope'), active: true, summary: 'Reviewer asked for an out-of-scope change.' });
-    expect((await architect.operator(`/api/v1/sympp/operator/work-packages/${active}/blockers/review-scope/clear`, {})).status).toBe(200);
+    const { blocker } = await architect.call('set_blocker', { work_package_id: active, target: unknownRequest('review-scope'), active: true, summary: 'Reviewer asked for an out-of-scope change.' });
+    expect((await architect.operator(`/api/v1/sympp/operator/work-packages/${active}/blockers/${encodeURIComponent(blocker.id)}/clear`, {})).status).toBe(200);
     expect(await blockerActive(architect, active)).toBe(false);
   }
   expect((await row(architect, request, active)).status).toBe('dispatched');

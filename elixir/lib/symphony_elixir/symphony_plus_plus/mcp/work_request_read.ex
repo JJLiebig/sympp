@@ -380,7 +380,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
         entry = report[field],
         is_map(entry),
         into: %{} do
-      {field, entry |> Map.drop(["targets"]) |> Map.update(key, nil, &preview(&1, max_bytes)) |> Map.update("hold", nil, &preview(&1, max_bytes)) |> Map.reject(fn {_key, value} -> is_nil(value) end)}
+      {field, entry |> Map.drop(["targets"]) |> Map.replace_lazy(key, &preview(&1, max_bytes)) |> Map.replace_lazy("hold", &preview(&1, max_bytes))}
     end
   end
 

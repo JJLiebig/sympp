@@ -118,7 +118,8 @@ test('backend restart keeps the ledger and its owner but a different ledger refu
   const health = await architect.call('sympp.health');
   const ledgerPath = await realpath(original.database);
   const mutation = { work_package_id: wp, target: unknownRequest('restart-once'), active: true, summary: 'Survives a real backend stop' };
-  expect((await architect.call('set_blocker', mutation)).changed).toBe(true);
+  const declaration = await architect.call('set_blocker', mutation);
+  expect(declaration.changed).toBe(true);
   await original.stop();
   const restarted = processes.factory('factory');
   const recovered = await restarted.client(architect.terminal);
@@ -135,7 +136,7 @@ test('backend restart keeps the ledger and its owner but a different ledger refu
   expect(await realpath(outsider.database)).not.toBe(ledgerPath);
   expect((await fresh.rpc('tools/call', { name: 'read_work_request', arguments: { work_request_id: request } })).error.data.code).toBe('not_found');
   expect((await fresh.call('sympp.health')).caller.owns).toEqual([]);
-  expect((await recovered.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).blockers.filter((entry: any) => entry.id === 'restart-once' && entry.active)).toHaveLength(1);
+  expect((await recovered.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).blockers.filter((entry: any) => entry.id === declaration.blocker.id && entry.active)).toHaveLength(1);
 });
 
 test('failed calls are counted durably by tool and reason, never with their arguments', async ({ processes }) => {
