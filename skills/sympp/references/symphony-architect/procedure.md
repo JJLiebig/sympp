@@ -131,7 +131,7 @@ doesn't qualify.
 after that, its review still counts. If it changed, review only what changed.
 Never restart a whole review because `main` moved.
 
-You own the WorkRequest through merge: verify the reviewed head against
+You own the WorkRequest through delivery: verify the reviewed head against
 acceptance and merge when the board marks it eligible. Keep independent
 packages moving while a PR waits. If CI or DEV has no event that will wake
 you, keep watching it.
