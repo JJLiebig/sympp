@@ -1062,9 +1062,8 @@ function Invoke-McpSmoke {
   }
 }
 
-# Writes to the target ledger: creates one smoke WorkRequest owned by a fake
-# Herdr terminal on a core the factory cannot see, then checks that a second
-# terminal is refused and the owner can keep writing.
+# Creates a smoke WorkRequest in the target ledger. A synthetic Herdr terminal
+# claims it with its first report write, then a second terminal is refused.
 function Invoke-BoundMcpSmoke($Config) {
   $session = Initialize-HealthyMcpSession $true
   if (-not $session.ok) {
@@ -1114,10 +1113,22 @@ function Invoke-BoundMcpSmoke($Config) {
     return New-SmokeResult "create_work_request_failed" "MCP create_work_request as a Herdr terminal returned JSON-RPC error: $($create.error)"
   }
 
-  $workRequestId = [string]$create.payload.result.structuredContent.work_request.id
-  $workedOn = $create.payload.result.structuredContent.worked_on
-  if ([string]::IsNullOrWhiteSpace($workRequestId) -or $null -eq $workedOn) {
-    return New-SmokeResult "create_work_request_not_owned" "MCP create_work_request did not return the new WorkRequest with the caller as its owner."
+  $created = $create.payload.result.structuredContent
+  $workRequestId = [string]$created.work_request.id
+  if ([string]::IsNullOrWhiteSpace($workRequestId) -or $null -ne $created.worked_on) {
+    return New-SmokeResult "create_work_request_ownership_invalid" "MCP create_work_request must return an unowned WorkRequest with its ID."
+  }
+
+  $ownerWrite = Invoke-SmokeToolCall $session.sessionId "sympp-http-smoke-owner-write" "set_report" @{
+    work_request_id = $workRequestId
+    brief = "HTTP smoke owner write"
+  } $owner "set_report from the first Herdr terminal"
+  if (-not $ownerWrite.ok) {
+    return $ownerWrite.result
+  }
+
+  if ($ownerWrite.error) {
+    return New-SmokeResult "owner_write_failed" "MCP set_report from the first terminal returned JSON-RPC error: $($ownerWrite.error)"
   }
 
   $refused = Invoke-SmokeToolCall $session.sessionId "sympp-http-smoke-other-terminal" "set_report" @{
@@ -1136,20 +1147,9 @@ function Invoke-BoundMcpSmoke($Config) {
   }
 
   $refusedData = $refused.payload.error.data
-  if ([string]::IsNullOrWhiteSpace([string]$refusedData.owner.address) -or [string]::IsNullOrWhiteSpace([string]$refusedData.next_action)) {
-    return New-SmokeResult "ownership_refusal_incomplete" "MCP owned_by_other_terminal did not name the owner address and next action."
-  }
-
-  $ownerWrite = Invoke-SmokeToolCall $session.sessionId "sympp-http-smoke-owner-write" "set_report" @{
-    work_request_id = $workRequestId
-    brief = "HTTP smoke owner write"
-  } $owner "set_report from the owner"
-  if (-not $ownerWrite.ok) {
-    return $ownerWrite.result
-  }
-
-  if ($ownerWrite.error) {
-    return New-SmokeResult "owner_write_failed" "MCP set_report from the owning terminal returned JSON-RPC error: $($ownerWrite.error)"
+  $ownerAddress = "$($owner.core_name)/$($owner.terminal_id)"
+  if ($refusedData.owner.address -cne $ownerAddress -or [string]::IsNullOrWhiteSpace([string]$refusedData.next_action)) {
+    return New-SmokeResult "ownership_refusal_incomplete" "MCP owned_by_other_terminal must name the first terminal as owner and give a next action."
   }
 
   $data = @{
@@ -1160,7 +1160,7 @@ function Invoke-BoundMcpSmoke($Config) {
     daemonSourceRevision = $session.sourceRevision
     expectedSourceRevision = $session.expectedRevision
     workRequestId = $workRequestId
-    owner = [string]$workedOn.address
+    owner = $ownerAddress
     refusedOwnerAddress = [string]$refusedData.owner.address
   }
 

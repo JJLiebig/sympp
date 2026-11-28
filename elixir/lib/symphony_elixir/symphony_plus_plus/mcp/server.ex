@@ -45,6 +45,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -355,7 +356,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     with :ok <- Ownership.require_owner(repo, id, terminal), do: fun.()
   end
 
-  defp with_ownership(_tool, _repo, _id, %Terminal{role: "chief"} = terminal, fun), do: chief_write_result(fun.(), terminal)
+  defp with_ownership(_tool, repo, id, %Terminal{role: "chief"} = terminal, fun) do
+    with {:ok, work_request} <- WorkRequestService.get(repo, id),
+         :ok <- Phase.require_writable(work_request) do
+      chief_write_result(fun.(), terminal)
+    end
+  end
+
   defp with_ownership(_tool, repo, id, terminal, fun), do: Ownership.gated(repo, id, terminal, fun)
 
   defp chief_write_result({:ok, result}, %Terminal{role: "chief"}), do: {:ok, ToolResult.put_note(result, @chief_ownership_note)}

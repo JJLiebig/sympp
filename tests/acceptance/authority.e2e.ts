@@ -644,7 +644,8 @@ test('the native board\'s operator actions finish, release, complete, archive, r
   expect((await packageArchive(active)).body.error.code).toBe('not_delivered');
   expect((await packageArchive(dispatched)).body.error.code).toBe('work_request_package');
   const [noPr] = await packages(architect, ['Native no PR']);
-  await architect.call('close_work_package', { work_package_id: noPr, outcome: 'completed_no_pr', evidence: 'Closed without a PR.' });
+  const closeArgs = { work_package_id: noPr, outcome: 'completed_no_pr', evidence: 'Closed without a PR.' };
+  await architect.call('close_work_package', closeArgs);
   const ended = await architect.operator(`/api/v1/sympp/operator/work-packages/${noPr}/finish`, {});
   expect([ended.status, ended.body.error.code]).toEqual([409, 'already_ended']);
   // Clearing a blocker leaves delivery state alone and works again after it is raised again.
@@ -670,6 +671,7 @@ test('the native board\'s operator actions finish, release, complete, archive, r
   expect((await architect.readAsk(request, ask)).state).toBe('withdrawn');
   expect(done.work_packages.find((wp: any) => wp.id === planned).status).toBe('planned');
   expect((await act(`work-requests/${request}/archive`)).body.work_request.phase).toBe('archived');
+  expect((await chief.reject('close_work_package', closeArgs, 'work_request_archived')).next_action).toBe('restore');
   const archived = await architect.call('read_work_request', { work_request_id: request, view: 'board' });
   expect(archived.work_request).toMatchObject({ phase: 'archived', next_action: 'restore' });
   expect(archived.delivery_board.work_packages.find((entry: any) => entry.id === planned)).toMatchObject({
