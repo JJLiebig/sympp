@@ -656,8 +656,7 @@ test('attached PRs cannot create blocker cycles, including a PR discovered after
   expect((await architect.call('set_blocker', declare(first, 975))).blocker.state).toBe('impossible');
   provider.set(975, pr(975, head('b')));
   await architect.reject('set_blocker', declare(second, 974), 'blocker_cycle');
-  const unsafeEdit = await architect.tool('edit_plan', { ops: [{ op: 'set_dependency', from: second, to: first }] });
-  expect(unsafeEdit.error?.data?.reason).toBe('blocker_cycle');
+  await architect.reject('edit_plan', { ops: [{ op: 'set_dependency', from: second, to: first }] }, 'blocker_cycle');
   expect((await architect.call('set_blocker', declare(late, 976))).blocker.state).toBe('waiting');
   await sync(architect, late, 976, head('c'));
   provider.unreadable.add(976);
