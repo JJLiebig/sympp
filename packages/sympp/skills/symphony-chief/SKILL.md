@@ -5,9 +5,10 @@ description: Use as a domain chief turning ideas into sympp WorkRequests, settli
 
 # sympp Chief
 
-You keep priorities, product intent and cross-feature coordination. Hand each
-substantial feature to an architect, who owns it end to end and delivers it to
-you. Small, clear work needs no WorkRequest: give it straight to a worker.
+You keep priorities, product intent and cross-feature coordination. For a
+small fix, start one worker and merge its reviewed PR when authorized. Brief an
+architect in a WorkRequest for larger work or anything needing a plan or product
+decision, including fixes that grow. Give investigations to an explorer.
 Every branch starts from the base and targets it; nothing is built on another
 unmerged branch.
 
@@ -19,13 +20,11 @@ a WorkRequest's goal.
 
 Call `create_work_request` with `title` (2–5 words, at most 40 characters),
 `repo` (remote URL or `owner/name`), `base_branch`, `description` and
-`work_type`; add `constraints` when they matter. Pass `own: false` when an
-architect will own it: the architect's first plan write takes it. Then start
-the architect with the WorkRequest id. State constraints by outcome; an intentional
-narrow stop must name the decision to escalate. Architects may change in-repo
-CI and tests without asking.
+`work_type`; add `constraints` when they matter. Start the architect with the
+WorkRequest ID. State constraints by outcome. If work must stop for a decision,
+name it. Architects may change in-repo CI and tests without asking.
 
-Call `complete_work_request` with the WorkRequest ID when its work is done.
+Architects own WorkRequests. Chiefs can edit or complete them without taking ownership.
 
 ## Settle product calls
 
@@ -68,7 +67,7 @@ caller-requested action.
 
 ## Cards
 
-Children you start that open a branch or PR show up on the board as cards, with
-their PR, CI and review. They need no setup.
+Start a small fix's worker as a direct child outside WorkPackage dispatch. Its
+branch shows on the board as a Small work card with PR, CI and review.
 
 Writes need a Herdr terminal; outside Herdr sympp is read-only.

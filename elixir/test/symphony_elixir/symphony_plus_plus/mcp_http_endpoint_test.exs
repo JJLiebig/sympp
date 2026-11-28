@@ -383,7 +383,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       |> post_json(headers)
 
     request_id = get_in(json_response(created, 200), ["result", "structuredContent", "work_request", "id"])
-    assert herdr_binding(created) == %{"role" => "architect", "work_request_id" => request_id, "show_inspector" => true}
+    assert get_resp_header(created, "sympp-herdr-binding") == []
 
     read =
       tool_call_request("read", "read_work_request", %{"work_request_id" => request_id})
@@ -392,6 +392,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
     assert json_response(read, 200)["result"]
     assert get_resp_header(read, "sympp-herdr-binding") == []
+
+    first_write =
+      tool_call_request("claim", "set_report", %{"work_request_id" => request_id, "brief" => "Claim the request"})
+      |> with_terminal("t1")
+      |> post_json(headers)
+
+    assert json_response(first_write, 200)["result"]
+    assert herdr_binding(first_write) == %{"role" => "architect", "work_request_id" => request_id, "show_inspector" => true}
 
     refused =
       tool_call_request("report", "set_report", %{"work_request_id" => request_id, "brief" => "Not mine"})

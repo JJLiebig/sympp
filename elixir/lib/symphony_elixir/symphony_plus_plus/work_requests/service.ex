@@ -2,6 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Service, as: WorkPackageService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
@@ -63,7 +64,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
   def list_decisions(repo, work_request_id), do: Repository.list_decisions(repo, work_request_id)
 
   @spec complete(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, error() | :work_request_archived}
-  def complete(repo, work_request_id), do: notify_dashboard(Completion.complete(repo, work_request_id))
+  @spec complete(Repository.repo(), String.t(), Terminal.t() | nil) ::
+          {:ok, WorkRequest.t()} | {:error, error() | :work_request_archived | :work_request_owner_required}
+  def complete(repo, work_request_id, terminal \\ nil), do: notify_dashboard(Completion.complete(repo, work_request_id, terminal))
 
   @spec archive(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, error() | :not_completed}
   def archive(repo, work_request_id), do: notify_dashboard(Completion.archive(repo, work_request_id))

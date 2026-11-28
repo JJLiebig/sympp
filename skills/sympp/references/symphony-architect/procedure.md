@@ -11,10 +11,9 @@ Your scope is your WorkRequest: slicing, dependencies, coordination between
 packages, review disputes and clear product calls (flagged). Escalate to the
 chief only what would change the WorkRequest's goal or exceeds its authority.
 
-Your first plan, dispatch or closeout write makes your terminal the owner, and
-restarting or `/clear` keeps it. If `owned_by_other_terminal` blocks a write,
-wait or ask the named owner to act. Ask the chief for ownership recovery only
-if the factory can't see the crashed owner's terminal and you remain blocked.
+Your first owner-gated write claims the WorkRequest. Restarting or `/clear`
+keeps ownership. If a write names another owner, ask them to act. Ask the chief
+to recover ownership if the factory can't see the crashed owner.
 
 ## Read
 
@@ -134,8 +133,13 @@ doesn't qualify.
 after that, its review still counts. If it changed, review only what changed.
 Never restart a whole review because `main` moved.
 
-Workers return the PR, head, checks, review and risks. Verify acceptance for
-that head; merge when authorized and the board says merge-eligible.
+Verify the reviewed head against acceptance and merge when authorized and
+eligible. Keep independent packages moving while a PR waits. If CI or DEV has
+no event that will wake you, keep watching it.
+
+Check DEV only when acceptance needs the running feature. Plan a no-PR package
+for required post-merge DEV evidence. Track production rollout separately,
+outside WorkRequest acceptance, blockers and holds.
 
 Workers settle implementation and review fixes within the approved outcome and
 constraints; never make them hold a branch or ask before fixing their own PR.
@@ -154,9 +158,7 @@ End a package that won't merge with `close_work_package` and an `outcome`:
 - `completed_no_pr`, with `evidence`;
 - `superseded`, with `successor_work_package_id` (same WorkRequest) and
   `rationale`; create the successors first;
-- `abandoned`, with `rationale`;
-- `finished`: the PR waits on someone else. The WorkRequest can complete;
-  dependents stay blocked.
+- `abandoned`, with `rationale`.
 
 When you reslice, end each replaced package as `superseded`, or `abandoned` if
 it has no successor. For either outcome, close its PR in the same step with a
@@ -164,8 +166,9 @@ comment naming the successors or saying there are none. Close its worker
 terminal and keep the branch for reference. Close source and carrier PRs too.
 Blockers are for packages you still intend to deliver.
 
-When every package has ended the WorkRequest is `done` or `unresolved`.
-Leave completion to a chief and archive to the operator.
+Delivery requires every required PR to merge and acceptance to pass. Use
+`complete_work_request` to close a delivered request that still shows unresolved
+after superseded or abandoned work. Leave archiving to the operator.
 
 ## Product calls
 

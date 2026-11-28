@@ -18,6 +18,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.Terminal
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
@@ -49,15 +50,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   def default_archive_after_days, do: @default_archive_after_days
 
   @doc """
-  Operator completion. Withdraws open asks, resolves package blockers and
-  queues cleanup of ended packages' worktrees. It does not stop
-  workers or merge PRs. Refused on an archived WorkRequest.
+  Explicit completion by the operator, a chief or the owning architect.
+  Withdraws open asks, resolves package blockers and queues cleanup of ended
+  packages' worktrees. Refused on an archived WorkRequest.
   """
   @spec complete(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, Repository.error() | :work_request_archived}
-  def complete(repo, work_request_id) when is_atom(repo) and is_binary(work_request_id) do
+  @spec complete(Repository.repo(), String.t(), Terminal.t() | nil) ::
+          {:ok, WorkRequest.t()} | {:error, Repository.error() | :work_request_archived | :work_request_owner_required}
+  def complete(repo, work_request_id, terminal \\ nil) when is_atom(repo) and is_binary(work_request_id) do
     repo.transaction(fn ->
       with {:ok, %WorkRequest{} = work_request} <- Repository.get(repo, work_request_id),
            :ok <- Phase.require_writable(work_request),
+           :ok <- authorize_completion(repo, work_request_id, terminal),
            {:ok, work_packages} <- Repository.list_work_packages(repo, work_request_id),
            :ok <- clear_completed_attention(repo, work_request.id, work_packages),
            {:ok, updated} <- mark_operator_completed(repo, work_request) do
@@ -68,6 +72,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     end)
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
+  defp authorize_completion(_repo, _id, nil), do: :ok
+  defp authorize_completion(_repo, _id, %Terminal{role: "chief"}), do: :ok
+
+  defp authorize_completion(repo, id, %Terminal{role: "architect", key: key}) do
+    if match?(%{terminal_key: ^key}, Ownership.owner(repo, id)), do: :ok, else: {:error, :work_request_owner_required}
   end
 
   @doc "Operator archive of a `done` or `unresolved` WorkRequest. Archiving again is a no-op."

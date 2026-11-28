@@ -84,14 +84,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AskTools do
   defp error(tool, {:ask_not_open, state}), do: precondition(tool, "ask_not_open", state, "Nothing to do: the ask is already #{state}.")
 
   defp error(tool, {:not_asker_or_owner, ask}) do
-    asker = if ask.asked_by_address, do: "#{ask.asked_by_address} or ", else: ""
+    asker = ask.asked_by_address || "the asker"
+    allowed = if ask.work_request_id, do: "#{asker}, a chief or the WorkRequest owner", else: asker
 
     {:error, -32_003, "Forbidden",
      %{
        "tool" => tool,
        "reason" => "not_asker_or_owner",
        "state" => "open",
-       "next_action" => "Only #{asker}the WorkRequest owner can resolve this ask; the operator answers it on the board."
+       "next_action" => "Ask #{allowed} to resolve this ask, or have the operator answer it on the board."
      }}
   end
 

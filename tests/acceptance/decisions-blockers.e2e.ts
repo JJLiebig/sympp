@@ -11,6 +11,7 @@ test('a conversational answer records its decision atomically and a resolved ask
   const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
   const architect = await factory.client();
   const id = await architect.request('Human decision');
+  await architect.call('set_report', { brief: 'Reviewing the scope.' });
   const ask = (await chief.call('ask', {
     work_request_id: id, question: 'Ship the bounded option?',
     decision_prompt: { tl_dr: 'Choose scope', details: 'Keep this delivery bounded.',
@@ -88,7 +89,7 @@ test('asks and operator reports leave explicit package blockers and sibling stat
   expect(report.parking.resumed_at).toBeTruthy();
 });
 
-test('an ask on a package is withdrawn when the package ends, and only the asker or owner resolves an ask', async ({ factory }) => {
+test('package endings withdraw their asks, and chiefs and the owner can resolve WorkRequest asks', async ({ factory }) => {
   const architect = await factory.client();
   const id = await architect.request('Package asks');
   const [wp] = await architect.addPackages([contract('Package with a question')]);
@@ -103,6 +104,8 @@ test('an ask on a package is withdrawn when the package ends, and only the asker
   await architect.call('close_work_package', { work_package_id: wp, outcome: 'skipped' });
   expect(await architect.readAsk(id, onPackage.id)).toMatchObject({ state: 'withdrawn', answered_by: 'subject_ended' });
   expect((await architect.readAsk(id, onSibling.id)).state).toBe('open');
+  const anotherChief = await factory.client(nextTerminal(), { 'sympp.role': 'chief' });
+  expect((await anotherChief.call('resolve_ask', { ask_id: onSibling.id, to: 'withdrawn' })).ask).toMatchObject({ state: 'withdrawn', answered_by: anotherChief.address });
   await chief.reject('ask', { work_request_id: id, work_package_id: wp, question: 'Too late?' }, 'work_package_ended');
 });
 
@@ -139,6 +142,7 @@ test('human choice submission rejects unknown or empty redirects and preserves t
   const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
   const architect = await factory.client();
   const id = await architect.request('Structured human choices');
+  await architect.call('set_report', { brief: 'Reviewing choices.' });
   const refused = await architect.reject('ask', {
     work_request_id: id, question: 'May this PR exceed the size guide?',
   }, 'chief_only');
@@ -215,6 +219,7 @@ const nativeBoard = async (client: Client, request: string) =>
 coreTest('asks go open to answered or withdrawn, take no ownership, and an answer reaches only a live asker on this core', async ({ core }) => {
   const architect = await core.client();
   const id = await architect.request('Ship "EU" &\n<US>');
+  await architect.call('set_report', { brief: 'Checking regions.' });
   await (await core.factory.client(null)).reject('ask', { work_request_id: id, question: 'Anyone?' }, 'read_only_outside_herdr');
   await (await core.client({ 'sympp.role': 'chief' })).reject('ask', { work_request_id: 'missing-request', question: 'Where?' }, 'not_found');
   const asker = await core.client({ 'sympp.role': 'chief' });
@@ -346,7 +351,7 @@ test('flagged decisions reject long text while unflagged evidence stays unrestri
 coreTest('flagged decisions stay visible for review, with feedback submitted to the recorder or dismissed when undelivered', async ({ core }) => {
   const architect = await core.client();
   const reviewed = (await architect.call('create_work_request', {
-    repo: 'example/service', base_branch: 'beta', title: 'Reviewed decisions', description, work_type: 'feature', own: false,
+    repo: 'example/service', base_branch: 'beta', title: 'Reviewed decisions', description, work_type: 'feature',
   })).work_request.id as string;
   let recorder = await core.client();
   const leavingRecorder = await core.client();

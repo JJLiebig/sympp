@@ -244,9 +244,9 @@ if (process.platform !== 'win32') {
       expect((await chief.call('list_work_requests')).work_requests).toEqual([]);
       await git(root, service.checkout, 'remote', 'set-url', 'origin', `${gitHost.replace('//', '//person@')}/service.git`);
 
-      // The factory records the request against the remote, owned by this terminal.
+      // The factory records the request against the remote without taking ownership.
       const created = await chief.call('create_work_request', ask);
-      expect(created.worked_on.address).toBe('desk/t1');
+      expect(created.worked_on).toBeUndefined();
       const request = created.work_request.id;
       expect((await chief.call('read_work_request', { work_request_id: request })).work_request.repo).toBe(remote);
       const planned = await chief.call('edit_plan', { work_request_id: request, ops: [{ op: 'add_package', ...contract('Installed change', { branch_pattern: 'feature/installed' }) }] });
@@ -254,6 +254,7 @@ if (process.platform !== 'win32') {
 
       // Dispatch prepares a factory-owned worktree from its own clone; the launch line starts the worker.
       const dispatched = await chief.call('dispatch_work_package', { work_package_id: wp, review_mode: 'none' });
+      expect((await chief.call('sympp.health')).caller.owns).toEqual([]);
       const worktree = dispatched.worktree.path;
       expect(worktree.startsWith(repos)).toBe(true);
       expect(await git(root, worktree, 'branch', '--show-current')).toBe('feature/installed');

@@ -36,6 +36,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
   @spec receipt_result(map()) :: map()
   def receipt_result(payload), do: result(payload, WorkerContext.encode_tool_payload(payload))
 
+  @spec put_note(map(), String.t()) :: map()
+  def put_note(%{"structuredContent" => payload, "content" => [%{"text" => text} = content]} = result, note) do
+    line = WorkerContext.encode_tool_payload(%{"note" => note})
+    %{result | "structuredContent" => Map.put(payload, "note", note), "content" => [%{content | "text" => text <> "\n" <> line}]}
+  end
+
   @spec agent_tool_result(term(), String.t() | (-> String.t())) :: map()
   def agent_tool_result(payload, agent_text) when is_binary(agent_text),
     do: result(payload, text_for_profile(payload, fn -> agent_text end))

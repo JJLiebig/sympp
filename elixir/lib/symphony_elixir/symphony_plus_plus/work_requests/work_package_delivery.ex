@@ -14,7 +14,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery do
   # migration wrote for packages that ended before ending rows were required.
   @outcomes ["pr_merged", "finished", "completed_no_pr", "superseded", "abandoned", "skipped"]
   # Outcomes close_work_package records. Merges are recorded from GitHub.
-  @close_outcomes ["skipped", "completed_no_pr", "superseded", "abandoned", "finished"]
+  @close_outcomes ["skipped", "completed_no_pr", "superseded", "abandoned"]
   @legacy_outcome "legacy"
 
   @evidence_contract %{

@@ -34,7 +34,7 @@ it with `read_work_request` views.
 A WorkRequest's phase is derived on read from its packages and their endings,
 while explicit completion and archive state are stored. The phase uses the
 first match among `archived` (archived by the operator or retention), `done`
-(explicitly marked done by a chief or the operator),
+(explicitly marked done),
 `intake` (no packages), `active` (a package is dispatched or ready), `planned`
 (a package is still planned, even beside ended ones), `unresolved` (every
 package ended, but every one was skipped or one does not resolve the goal) and
@@ -75,10 +75,8 @@ Needs you. The operator answers in the Herdr panel or through the operator HTTP
 route. The board answer resolves the ask, then the factory submits a `<sympp>`
 message with the full question and answer to the asking terminal. Only terminals
 the factory's own herdr-core sees live receive it. The answer stays on the ask.
-The asker or WorkRequest owner uses `resolve_ask` to record an answer given in
-their conversation or to withdraw an ask, with an optional decision. An ask on a
-package is withdrawn when the package ends. Archiving or completing a WorkRequest
-withdraws its open asks.
+An ask on a package is withdrawn when the package ends. Archiving or completing
+a WorkRequest withdraws its open asks.
 Asks never block planning, dispatch or a phase.
 
 A chief or architect that makes an in-scope product call itself records it with

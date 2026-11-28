@@ -6,8 +6,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   - every trusted caller may read;
   - writes need the Herdr terminal identity the sympp bridge sends in
     `_meta.herdr` (`read_only_outside_herdr` otherwise);
-  - owner-gated writes also take or confirm ownership of the target
-    WorkRequest through `Ownership` (`owned_by_other_terminal` otherwise).
+  - architect writes can take or require ownership of the target WorkRequest.
+    Chiefs can write without taking ownership.
   """
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments,
@@ -56,6 +56,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   @ask_tools AskTools.tools()
   @version_resource "sympp://health/version"
   @version_resource_spec %{"uri" => @version_resource, "name" => "sympp version", "mimeType" => "application/json"}
+  @chief_ownership_note "Architects own WorkRequests. This write ran without taking ownership."
 
   @enforce_keys [:config]
   defstruct [
@@ -354,7 +355,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     with :ok <- Ownership.require_owner(repo, id, terminal), do: fun.()
   end
 
+  defp with_ownership(_tool, _repo, _id, %Terminal{role: "chief"} = terminal, fun), do: chief_write_result(fun.(), terminal)
   defp with_ownership(_tool, repo, id, terminal, fun), do: Ownership.gated(repo, id, terminal, fun)
+
+  defp chief_write_result({:ok, result}, %Terminal{role: "chief"}), do: {:ok, ToolResult.put_note(result, @chief_ownership_note)}
+  defp chief_write_result(result, _terminal), do: result
 
   defp target_work_request_id(repo, %{"work_request_id" => id}) when is_binary(id) and id != "" do
     case WorkRequestService.get(repo, id) do
@@ -418,22 +423,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp run("set_blocker", arguments, terminal, %__MODULE__{config: config}),
     do: BlockerTools.call("set_blocker", config, terminal, arguments)
 
-  defp run("complete_work_request" = tool, %{"work_request_id" => id}, %Terminal{role: "chief"}, %__MODULE__{config: config}) do
-    case WorkRequestService.complete(config.repo, String.trim(id)) do
+  defp run("complete_work_request" = tool, %{"work_request_id" => id}, %Terminal{} = terminal, %__MODULE__{config: config}) do
+    case WorkRequestService.complete(config.repo, String.trim(id), terminal) do
       {:ok, work_request} -> {:ok, ToolResult.receipt_result(%{"work_request_id" => work_request.id, "phase" => "done"})}
       {:error, :not_found} -> not_found_error(tool)
       {:error, :work_request_archived} -> archived_error(tool)
+      {:error, :work_request_owner_required} -> completion_owner_error(tool)
       {:error, _reason} -> service_error(tool)
     end
-  end
-
-  defp run("complete_work_request" = tool, _arguments, _terminal, _server) do
-    {:error, -32_003, "Forbidden",
-     %{
-       "tool" => tool,
-       "reason" => "chief_only",
-       "next_action" => "Ask a chief to complete the WorkRequest."
-     }}
   end
 
   defp run("set_report", arguments, _terminal, %__MODULE__{config: config}) do
@@ -457,9 +454,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp run("create_work_request", arguments, terminal, %__MODULE__{config: config}) do
     with {:ok, attrs} <- create_work_request_attrs(arguments, terminal),
-         {:ok, own?} <- own_argument(arguments),
          {:ok, work_request} <- WorkRequestService.create(config.repo, attrs) do
-      {:ok, ToolResult.tool_result(create_work_request_payload(config.repo, work_request, terminal, own?))}
+      result =
+        ToolResult.tool_result(%{
+          "status" => "created",
+          "work_request" => WorkRequestPayloads.work_request(work_request),
+          "next_action" => "an architect takes ownership of #{work_request.id} with its first owner-gated write"
+        })
+
+      chief_write_result({:ok, result}, terminal)
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "create_work_request", "reason" => reason}}
       {:error, reason} -> create_work_request_error(reason)
@@ -524,43 +527,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp own_argument(arguments) do
-    case Map.get(arguments, "own", true) do
-      value when is_boolean(value) -> {:ok, value}
-      _value -> {:tool_error, "invalid_own"}
-    end
-  end
-
-  defp create_work_request_payload(repo, %WorkRequest{} = work_request, terminal, true) do
-    case Ownership.acquire(repo, work_request.id, terminal) do
-      {:ok, row, _how} ->
-        %{"status" => "created", "work_request" => WorkRequestPayloads.work_request(work_request), "worked_on" => Ownership.public(row)}
-
-      # The WorkRequest exists either way; say why this terminal doesn't own it yet.
-      {:error, {:owned_by_other_terminal, owner}} ->
-        not_owned_payload(work_request, "owned_by_other_terminal", owner["next_action"])
-
-      {:error, reason} ->
-        not_owned_payload(work_request, reason_text(reason), "retry an owner-gated write on #{work_request.id} to take ownership")
-    end
-  end
-
-  defp create_work_request_payload(_repo, %WorkRequest{} = work_request, _terminal, false) do
-    %{
-      "status" => "created",
-      "work_request" => WorkRequestPayloads.work_request(work_request),
-      "next_action" => "hand #{work_request.id} to an architect; its first plan write makes it the owner"
-    }
-  end
-
-  defp not_owned_payload(%WorkRequest{} = work_request, reason, next_action) do
-    %{
-      "status" => "created",
-      "work_request" => WorkRequestPayloads.work_request(work_request),
-      "ownership_error" => reason,
-      "next_action" => next_action
-    }
-  end
+  defp completion_owner_error(tool),
+    do: {:error, -32_003, "Forbidden", %{"tool" => tool, "reason" => "work_request_owner_required", "next_action" => "Ask the owning architect or a chief to complete the WorkRequest."}}
 
   defp create_work_request_error(%Ecto.Changeset{} = changeset),
     do: ErrorDetails.changeset_invalid_params_error("create_work_request", "invalid_work_request", changeset)

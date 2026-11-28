@@ -227,8 +227,6 @@ export class Client {
       work_type: 'feature',
     });
     expect(created.status).toBe('created');
-    // Creating a WorkRequest makes this terminal its owner.
-    expect(created.worked_on.address).toBe(this.address);
     const id = created.work_request.id;
     const read = await this.call('read_work_request', { work_request_id: id });
     expect(read.work_request.phase).toBe('intake');

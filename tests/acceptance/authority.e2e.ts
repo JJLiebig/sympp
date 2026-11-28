@@ -256,18 +256,31 @@ test('ownership lets every terminal read any request but refuses writes to anoth
   }
 });
 
-test('a chief can complete a WorkRequest owned by an architect', async ({ processes }) => {
+test('an owning architect or any chief can complete a WorkRequest', async ({ processes }) => {
   const factory = processes.factory();
   const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
   const architect = await factory.client();
-  const target = { work_request_id: await architect.request('Chief completion authority') };
-  await architect.addPackages([contract('Planned package')]);
+  const target = { work_request_id: await architect.request('Architect completion authority') };
+  await architect.reject('complete_work_request', target, 'work_request_owner_required');
+  expect((await architect.call('sympp.health')).caller.owns).toEqual([]);
 
-  const refused = await architect.reject('complete_work_request', { ...target, work_package_id: 'unused' }, 'chief_only');
-  expect(refused.state).toBe('planned');
-  expect((await architect.call('read_work_request', target)).work_request.phase).toBe('planned');
-  expect(await chief.call('complete_work_request', target)).toEqual({ ...target, phase: 'done' });
+  const [abandoned] = await packages(architect, ['Abandoned package']);
+  await architect.call('close_work_package', { work_package_id: abandoned, outcome: 'abandoned', rationale: 'This scope is no longer required.' });
+  const peer = await factory.client();
+  const refused = await peer.reject('complete_work_request', { ...target, work_package_id: 'unused' }, 'work_request_owner_required');
+  expect(refused.state).toBe('unresolved');
+  expect((await architect.call('read_work_request', target)).work_request.phase).toBe('unresolved');
+  expect(await architect.call('complete_work_request', target)).toEqual({ ...target, phase: 'done' });
   expect((await architect.call('read_work_request', target)).work_request.phase).toBe('done');
+
+  const chiefTarget = { work_request_id: await architect.request('Chief completion authority') };
+  const [, skipped] = await architect.addPackages([contract('Planned package'), contract('Skip this package')]);
+  expect(await chief.call('close_work_package', { work_package_id: skipped, outcome: 'skipped' })).toMatchObject({
+    work_package_delivery: { outcome: 'skipped' }, note: expect.stringContaining('without taking ownership'),
+  });
+  expect((await architect.call('sympp.health')).caller.owns.map((entry: any) => entry.work_request_id)).toContain(chiefTarget.work_request_id);
+  expect(await chief.call('complete_work_request', chiefTarget)).toEqual({ ...chiefTarget, phase: 'done' });
+  expect((await architect.call('read_work_request', chiefTarget)).work_request.phase).toBe('done');
 });
 
 test('read views give a terminal that owns another request the same live plan and ended counts as the owner', async ({ processes }) => {
@@ -276,6 +289,7 @@ test('read views give a terminal that owns another request the same live plan an
   const request = await architect.request('Plan projection authority');
   const reader = await factory.client();
   await reader.request('Secondary plan reader', 'integration', 'example/client');
+  await reader.call('set_report', { brief: 'Owns another request.' });
   const views = ['overview', 'plan', 'board'];
   const read = async (client: Client, view: string) => client.call('read_work_request', { work_request_id: request, view });
   for (const client of [architect, reader]) expect((await read(client, 'plan')).plan.work_packages).toEqual([]);
@@ -447,6 +461,7 @@ test('asks and decisions preserve provenance and redact their responses', async 
   const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
   const architect = await factory.client();
   const request = await architect.request('Redacted ask authority');
+  await architect.call('set_report', { brief: 'Reviewing the questions.' });
   const asked = await chief.call('ask', { work_request_id: request, question: 'Avoid Bearer raw_secret_synthetic',
     decision_prompt: { tl_dr: 'Choose scope', details: 'A bounded decision is required.',
       options: [{ id: 'continue', label: 'Continue', answer: 'Proceed with the bounded scope.' }],
@@ -614,6 +629,8 @@ test('the native board\'s operator actions finish, release, complete, archive, r
   const request = await architect.request('Native operator actions');
   const [dispatched] = await packages(architect, ['Native finish']);
   const [planned] = await architect.addPackages([contract('Native planned')]);
+  await architect.reject('close_work_package', { work_package_id: dispatched, outcome: 'finished' }, 'invalid_outcome');
+  expect((await architect.readPackage(request, dispatched)).status).toBe('dispatched');
   const finished = await act(`work-packages/${dispatched}/finish`);
   expect(finished.body).toMatchObject({ ok: true, work_package_id: dispatched, status: 'ended' });
   expect((await act(`work-packages/${dispatched}/finish`)).status).toBe(200);
