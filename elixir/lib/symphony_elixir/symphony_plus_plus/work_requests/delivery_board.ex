@@ -38,6 +38,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     "active_blocker" => {"Blocker", "critical", "Active blocker."},
     "active_runtime" => {"Active", "info", "Worker activity is still current."},
     "unmet_dependencies" => {"Dependency Blocked", "warning", "Required WorkPackages are not resolved."},
+    "pr_closed" => {"Closed", "warning", "The PR closed without merging."},
     "work_package_active_after_delivery" => {"Active After Delivery", "warning", "Worker activity remains after delivery closeout."},
     "work_package_blocked_after_delivery" => {"Blocked After Delivery", "warning", "A blocker remains after delivery closeout."},
     "work_package_status_stale_after_delivery" => {"Status Needs Repair", "warning", "Package status does not match the delivery outcome."},
@@ -504,11 +505,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     work_package_summary = slice_work_package_summary(work_package.id, delivery, context, opts)
     operational_work_package = work_package_summary || hidden_work_package_marker(work_package, context)
     operational_state = operational_state(work_package, delivery, operational_work_package)
+    eligibility = merge_eligibility(work_package, context, operational_state.key)
 
     activity_signal =
       Signals.activity(
         work_package,
-        Map.put(work_package_summary || %{}, :merge_eligibility, merge_eligibility(work_package, context)),
+        Map.put(work_package_summary || %{}, :merge_eligibility, eligibility),
         operational_state,
         Map.get(context.progress_events, work_package.id, [])
       )
@@ -520,15 +522,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
       if(work_package_summary, do: Map.put(work_package_summary, :board_state, Signals.board_state(work_package, work_package_summary, delivery)))
 
     if Keyword.get(opts, :slice_projection) == :operational_state do
-      operational_slice(work_package, delivery, operational_state, context)
+      operational_slice(work_package, delivery, operational_state, eligibility, context)
     else
       successor = successor_context(delivery, slices_by_scope, context)
 
-      full_slice(work_package, delivery, context, work_package_summary, successor, operational_state)
+      full_slice(work_package, delivery, context, work_package_summary, successor, operational_state, eligibility)
     end
   end
 
-  defp operational_slice(%WorkPackage{} = work_package, delivery, operational_state, context) do
+  defp operational_slice(%WorkPackage{} = work_package, delivery, operational_state, eligibility, context) do
     %{
       id: work_package.id,
       work_request_id: work_package.work_request_id,
@@ -536,12 +538,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
       delivery_outcome: delivery && delivery.outcome,
       successor_work_package_id: visible_work_package_id(delivery && delivery.successor_work_package_id, context),
       operational_state: operational_state,
-      merge_eligibility: merge_eligibility(work_package, context),
-      attention_reason_codes: Enum.uniq(Map.fetch!(operational_state, :attention_reason_codes) ++ dependency_attention(work_package, context))
+      merge_eligibility: eligibility,
+      attention_reason_codes: Enum.uniq(Map.fetch!(operational_state, :attention_reason_codes) ++ dependency_attention(eligibility))
     }
   end
 
-  defp full_slice(%WorkPackage{} = work_package, delivery, context, work_package_summary, successor, operational_state) do
+  defp full_slice(%WorkPackage{} = work_package, delivery, context, work_package_summary, successor, operational_state, eligibility) do
     %{
       id: work_package.id,
       work_request_id: work_package.work_request_id,
@@ -554,12 +556,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
       work_package_hidden?: hidden_work_package?(work_package.id, context),
       successor: successor,
       operational_state: operational_state,
-      merge_eligibility: merge_eligibility(work_package, context),
-      attention_reason_codes: Enum.uniq(Map.fetch!(operational_state, :attention_reason_codes) ++ dependency_attention(work_package, context))
+      merge_eligibility: eligibility,
+      attention_reason_codes: Enum.uniq(Map.fetch!(operational_state, :attention_reason_codes) ++ dependency_attention(eligibility))
     }
   end
 
-  defp merge_eligibility(work_package, context) do
+  defp merge_eligibility(work_package, context, operational_key) do
     eligibility =
       context
       |> get_in([:execution_graphs, work_package.work_request_id])
@@ -569,6 +571,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
       end
 
     cond do
+      operational_key == "pr_closed" ->
+        eligibility
+        |> Map.put(:eligible, false)
+        |> Map.update!(:reason_codes, &Enum.uniq(["pr_closed" | &1]))
+        |> Map.put(:next_action, "close_work_package")
+
       get_in(context, [:activity_contexts, work_package.id, :blocker_state, :active?]) == true ->
         eligibility
         |> Map.put(:eligible, false)
@@ -616,10 +624,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     end
   end
 
-  defp dependency_attention(work_package, context) do
-    merge_eligibility(work_package, context).reason_codes
-    |> Enum.filter(&(&1 == "delivery_order_violation"))
-  end
+  defp dependency_attention(eligibility), do: Enum.filter(eligibility.reason_codes, &(&1 == "delivery_order_violation"))
 
   defp slice_work_package_summary(work_package_id, delivery, context, opts) do
     if Keyword.get(opts, :slice_projection) == :operational_state do
@@ -649,6 +654,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
           merge_required: merge_required?(work_package),
           pr_required: pr_required?(work_package),
           pr: pr_summary(legacy_pr_metadata(metadata), nil),
+          pr_signal: Signals.pr(metadata),
           dependency_signal: Signals.dependency(work_package, context),
           worker_signal: Map.get(activity, :worker_signal),
           worker_terminal: Signals.worker_terminal(Map.get(Map.get(context, :workers, %{}), work_package.id)),
@@ -892,6 +898,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
           "Terminal package needs delivery closeout.",
           ["terminal_package_without_delivery_outcome"]
         }
+
+      get_in(work_package, [:pr_signal, :status]) == "closed" ->
+        {label, tone, reason} = Map.fetch!(@attention_details, "pr_closed")
+        {"pr_closed", label, tone, reason, ["pr_closed"]}
 
       true ->
         active_work_package_state(work_package)
