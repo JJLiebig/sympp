@@ -68,14 +68,11 @@ limit then applies at once.
 
 The board does not create requests. Start one from a trusted local MCP session.
 
-An optional architect report gives the goal a brief, free-text ETA, parking
-reason, and explicit question requiring a human decision. The hydrated dashboard
-returns it at `work_request_details[].work_request.operator_report`;
-`read_work_request` previews the report text. Each brief/ETA has `text` and
-`written_at`. Parking has `reason`, `parked_at`, and `resumed_at`. A missing
-report/field is absent information; a non-null resume time means that interval
-is closed. Questions the chief sends to the operator are asks, which the board shows as Needs
-you; worker waits do not. Reports do not change blockers or completion. See the
+An optional architect report gives the goal a brief, free-text ETA and request-wide
+waits. The dashboard and `read_work_request` show each blocker as waiting,
+cleared or impossible. An impossible target calls for replanning. A chief can
+record a hold that stays in place until someone clears it. Legacy free-text
+holds ask for reclassification. Questions from a chief appear as Needs you. See the
 [architect procedure](../packages/sympp/skills/symphony-architect/SKILL.md#report)
 for optional milestone updates.
 

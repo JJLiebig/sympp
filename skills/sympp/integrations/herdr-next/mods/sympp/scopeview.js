@@ -372,10 +372,21 @@ function pkgActions(v, t, job, pkg, ctx) {
     ui ? ghost(t, `studio-${pkg.id}`, "Studio", (cx) => v.openStudio(job, pkg, cx), { glyph: "monitor" }) : null,
   ].filter(Boolean);
   const action = list.length ? h_flex().gap(2).flex_wrap().children(list) : null;
-  if (!action && ctx.review?.id !== pkg.id) return null;
+  if (!action && ctx.review?.id !== pkg.id && !pkg.blockers?.length) return null;
   return v_flex().pl(26).pr(8).pb(10).pt(2).gap(8)
+    .children(blockerRows(t, pkg.blockers))
     .when(Boolean(action), (el) => el.child(action))
     .when(ctx.review?.id === pkg.id, (el) => el.child(reviewPane(v, t, pkg, ctx, true)));
+}
+
+function blockerRows(t, blockers = []) {
+  return blockers.map((blocker) => {
+    const state = blocker.hold === "legacy" ? "Hold · Reclassify" : blocker.hold ? "On hold"
+      : blocker.state === "impossible" ? "Impossible · Replan" : blocker.state === "cleared" ? "Cleared · Dispatch"
+      : blocker.unknown ? "Waiting · Lookup unavailable" : "Waiting";
+    return div().text_size(12).text_color(blocker.state === "impossible" ? t.blocked : t.muted)
+      .child([state, blocker.target?.id, blocker.summary].filter(Boolean).join(" · "));
+  });
 }
 
 // A package: its box, its name (an orange dot while an ask waits on the person), its checks, the
@@ -462,6 +473,7 @@ function taskHead(v, t, job, task) {
       .child(P.ownerChip(v, t, job.owner, `job-${job.id}`, { path: `/work-requests/${encodeURIComponent(job.id)}` }) ?? div())
       .child(div().flex_1())
       .child(P.phaseActions(v, t, job)))
+    .children(blockerRows(t, job.blockers))
     .when(task.total > 0, (el) => el.child(strip(v, t, task.strip, `strip-${job.id}`, 11)))
     .when(job.phase === "unresolved" && dropped.length > 0, (el) => el.child(v_flex().id("unresolved").gap(2)
       .children(dropped.map((pkg) => h_flex().gap(8).items_center()

@@ -842,9 +842,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
   defp active_blocking_edge(blocker, %WorkPackage{} = work_package) do
     endpoint = %{kind: "work_package", id: work_package.id}
+    target = if blocker.target, do: %{kind: blocker.target["kind"], id: blocker.target["id"]}, else: %{kind: "legacy_hold", id: blocker.id}
 
     blocker
-    |> build_active_blocking_edge(work_package, endpoint, endpoint)
+    |> build_active_blocking_edge(work_package, endpoint, target)
     |> Map.put(:work_request_id, work_package.work_request_id)
     |> Map.put(:work_package_id, work_package.id)
   end
@@ -856,6 +857,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       from: from,
       to: to,
       summary: blocker.summary,
+      state: blocker.state,
+      next_action: blocker.next_action,
       body: blocker.body,
       updated_at: blocker.updated_at,
       work_package_id: work_package.id

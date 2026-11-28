@@ -22,6 +22,7 @@ export type Seg = { stage: Stage; from: number; to: number; failed: boolean; unt
 export type HistoryEvent = { t: string; s?: string; y?: string; c?: string; m?: boolean; n?: number; u?: string; a?: string; r?: string; x?: string };
 // What the factory could not read on its last look: GitHub, or the Review Suite host. Nothing moves on it until it can.
 export type Stale = "github" | "review";
+export type Blocker = { id: string; state: "waiting" | "cleared" | "impossible"; target?: { id: string } | null; summary?: string | null; hold?: "operator" | "legacy"; unknown?: boolean };
 
 export type Pkg = {
   id: string;
@@ -46,6 +47,7 @@ export type Pkg = {
   // The package that took over when this one was superseded or skipped.
   successor: string | null;
   stale: Stale[];
+  blockers?: Blocker[];
 };
 
 // Something the architect wrote, and when.
@@ -57,7 +59,7 @@ export type ArchitectReport = { brief: Note | null; eta: Note | null; parked: No
 export type DeployStep = { env: "Dev" | "Prod"; state: "ok" | "failed" | "pending" | "waiting"; at: number | null };
 export type Phase = "intake" | "planned" | "active" | "done" | "unresolved" | "archived";
 // `phase` is the backend's reading of the goal when it was read. `completedAt` and `archivedAt` place it in time for a replay.
-export type Goal = { id: string; title: string; area: string[]; org: string | null; repo: string; baseBranch: string | null; defaultBranch: string | null; createdAt: number; phase: Phase; completedAt: number | null; archivedAt: number | null; pkgs: Pkg[]; owner: Terminal | null; report?: ArchitectReport; deploy?: DeployStep[] };
+export type Goal = { id: string; title: string; area: string[]; org: string | null; repo: string; baseBranch: string | null; defaultBranch: string | null; createdAt: number; phase: Phase; completedAt: number | null; archivedAt: number | null; pkgs: Pkg[]; owner: Terminal | null; report?: ArchitectReport; deploy?: DeployStep[]; blockers?: Blocker[] };
 
 // A question for the operator. Its subject is a goal (optionally one of its packages) or a card.
 // With choices the answer is one of them; `redirect` names the extra choice of answering in free text instead.
@@ -86,6 +88,7 @@ export type PrSignal = { status?: string | null; head_sha?: string | null; numbe
 export type ReviewSignal = { status?: string | null; accepted_head?: string | null; mode?: string | null; round?: number | null; started_at?: string | null; round_started_at?: string | null };
 export type Slice = {
   id: string;
+  blockers?: Blocker[];
   work_package_id?: string | null;
   title?: string | null;
   sequence?: number;
@@ -105,11 +108,11 @@ export type Slice = {
 type Observed = { status?: string | null; at?: string | null };
 type Deployments = Record<string, { dev?: Observed | null; prod?: Observed | null } | null>;
 type Written = { text?: string | null; written_at?: string | null };
-export type OperatorReport = { brief?: Written | null; eta?: Written | null; parking?: { reason?: string | null; parked_at?: string | null; resumed_at?: string | null } | null };
+export type OperatorReport = { brief?: Written | null; eta?: Written | null; parking?: { hold?: string | null; reason?: string | null; parked_at?: string | null; resumed_at?: string | null } | null };
 export type Prompt = { tl_dr?: string | null; details?: string | null; custom_redirect_label?: string | null; options?: Array<{ recommended?: boolean; id: string; label?: string | null; answer?: string | null; description?: string | null; pros?: string[] | null; cons?: string[] | null }> | null };
 export type AskEntry = { id: string; work_request_id?: string | null; work_package_id?: string | null; card_id?: string | null; question?: string | null; decision_prompt?: Prompt | null; state?: string | null; asked_by?: string | null; asked_at?: string | null; resolved_at?: string | null; answer?: string | null };
 export type DecisionEntry = { id: string; work_request_id: string; decision?: string | null; rationale?: string | null; recorded_by?: string | null; created_at?: string | null; review_state?: string | null; feedback?: string | null; undelivered_reason?: string | null };
-export type Request = { id: string; title?: string | null; phase?: string | null; repo?: string | null; repo_display?: string | null; repo_key?: string | null; repo_remote?: string | null; repo_aliases?: string[] | null; base_branch?: string | null; inserted_at?: string | null; completed_at?: string | null; operator_completed_at?: string | null; archived_at?: string | null; worked_on?: Owned | null; operator_report?: OperatorReport | null; area_path?: string[] | null; default_branch?: string | null; deployments?: Deployments | null };
+export type Request = { id: string; title?: string | null; phase?: string | null; repo?: string | null; repo_display?: string | null; repo_key?: string | null; repo_remote?: string | null; repo_aliases?: string[] | null; base_branch?: string | null; inserted_at?: string | null; completed_at?: string | null; operator_completed_at?: string | null; archived_at?: string | null; worked_on?: Owned | null; operator_report?: OperatorReport | null; area_path?: string[] | null; default_branch?: string | null; deployments?: Deployments | null; blockers?: Blocker[] };
 export type Detail = { work_request: Request; work_packages?: Slice[]; asks?: AskEntry[]; decisions_to_review?: DecisionEntry[] };
 export type CardEntry = { id: string; state?: string | null; title?: string | null; worked_on?: Owned | null; repository?: string | null; branch?: string | null; pr?: { repository?: string | null; number?: number | null; url?: string | null; state?: string | null; ci?: { status?: string | null } | null } | null; review?: { state?: string | null; status?: string | null } | null; stale?: string[] | null; asks?: AskEntry[] | null; since?: string | null; ended_at?: string | null; updated_at?: string | null };
 // What the operator can change. A backend that lacks a setting leaves it out.
@@ -193,6 +196,7 @@ function buildGoal(detail: Detail, history: Record<string, HistoryEvent[]>, now:
     pkgs: (detail.work_packages ?? []).map((slice) => ({ ...buildPkg(slice, history[slice.work_package_id || slice.id] ?? [], now), goalTitle: title, goalRepos: reposOf(request), area })),
     owner: ownerOf(request.worked_on),
     report: reportOf(request.operator_report, now),
+    blockers: request.blockers,
   };
 }
 
@@ -326,13 +330,15 @@ function stepOf(env: DeployStep["env"], seen: Observed): DeployStep {
 function reportOf(report: OperatorReport | null | undefined, now: number): ArchitectReport | undefined {
   if (!report) return undefined;
   const note = (text?: string | null, at?: string | null): Note | null => (text ? { text, at: ms(at) ?? now } : null);
-  const parking = report.parking?.resumed_at ? null : report.parking;
-  return { brief: note(report.brief?.text, report.brief?.written_at), eta: note(report.eta?.text, report.eta?.written_at), parked: note(parking?.reason, parking?.parked_at) };
+  const parking = report.parking;
+  const hold = parking && (parking.hold ? `On hold · ${parking.hold}` : parking.reason ? `Hold · Reclassify · ${parking.reason}` : null);
+  return { brief: note(report.brief?.text, report.brief?.written_at), eta: note(report.eta?.text, report.eta?.written_at), parked: parking?.resumed_at ? null : note(hold, parking?.parked_at) };
 }
 
 function blankPkg(slice: Slice, now: number): Pkg {
   const stale = staleOf(slice.observation_stale);
   return {
+    blockers: slice.blockers,
     id: slice.work_package_id || slice.id,
     title: slice.title || slice.id,
     seq: slice.sequence ?? 0,

@@ -287,9 +287,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle do
   end
 
   defp clear_blocker(repo, work_package_id, blocker) do
+    blocker = %{blocker | summary: "Cleared blocker when the package ended: #{blocker.summary || blocker.id}"}
+
     with :ok <- WorkRequestPhase.require_writable_package(repo, work_package_id),
          {:ok, _blocker, :changed} <-
-           Blockers.append(repo, nil, work_package_id, blocker.id, false, "Cleared blocker when the package ended: #{blocker.summary || blocker.id}", nil) do
+           Blockers.append(repo, nil, work_package_id, blocker, "cleared") do
       {:cont, :ok}
     else
       {:error, :work_request_archived} -> {:cont, :ok}

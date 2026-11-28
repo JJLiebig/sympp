@@ -20,7 +20,7 @@ function laneOf(view: GoalView, at: number): keyof Lanes {
   if (view.phase === "archived") return "archived";
   if (view.phase === "done") return settledLane(view, at);
   // An open question always keeps a goal in sight.
-  if (view.ask || view.phase === "active" || view.phase === "unresolved") return "main";
+  if (view.ask || view.phase === "active" || view.phase === "unresolved" || view.goal.blockers?.some((blocker) => !blocker.hold)) return "main";
   // The architect set the goal aside on purpose; it comes back when work resumes.
   if (view.goal.report?.parked) return "parked";
   if (view.done.length === 0) return "backlog";

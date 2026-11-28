@@ -142,11 +142,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         },
         "eta" => nullable_text,
         "parking" => %{
-          "type" => ["object", "null"],
-          "additionalProperties" => false,
-          "properties" => %{"reason" => string_schema()},
-          "required" => ["reason"],
-          "description" => "Why the WorkRequest is parked; null records that it resumed."
+          "oneOf" => [
+            schema(%{"targets" => %{"type" => "array", "minItems" => 1, "items" => blocker_target_schema()}}, ["targets"]),
+            schema(%{"hold" => described_string_schema("An explicit operator or chief hold. Set by a chief.")}, ["hold"]),
+            %{"type" => "null"}
+          ]
         }
       },
       ["work_request_id"]
@@ -157,11 +157,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     schema(
       %{
         "work_package_id" => string_schema(),
-        "blocker_id" => described_string_schema("Your stable id for this blocker, reused to update or clear it."),
+        "target" => blocker_target_schema(),
         "active" => boolean_schema() |> Map.put("description", "true declares or updates the blocker; false clears it."),
         "summary" => described_string_schema("What blocks the package. Required when active is true.")
       },
-      ["work_package_id", "blocker_id", "active"]
+      ["work_package_id", "target", "active"]
     )
   end
 
@@ -254,6 +254,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
       ["work_package_id", "review_mode"]
     )
     |> Map.put("additionalProperties", true)
+  end
+
+  defp blocker_target_schema do
+    schema(
+      %{
+        "kind" => string_enum_schema(~w(work_package pr work_request ask)),
+        "id" => described_string_schema("Package id in this WorkRequest, owner/repo#number for a GitHub PR, another WorkRequest id, or ask id.")
+      },
+      ["kind", "id"]
+    )
   end
 
   defp schema(properties, required) do

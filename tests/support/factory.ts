@@ -58,6 +58,7 @@ export class Factory extends Candidate {
 
 let terminalCount = 0;
 export const nextTerminal = () => `t${++terminalCount}`;
+export const unknownRequest = (label: string) => ({ kind: 'work_request', id: `wr_${label}` });
 
 // The identity a verified sympp bridge sends for its Herdr terminal.
 export const herdr = (terminal: string, labels: Record<string, string> = {}) => ({

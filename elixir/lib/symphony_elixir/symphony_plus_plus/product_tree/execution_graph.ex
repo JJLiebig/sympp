@@ -120,6 +120,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
 
   def scope(graph, _visible_work_package_ids), do: graph
 
+  @doc "Whether a declared edge joins a cycle in the dispatch graph."
+  @spec blocker_cycle?(graph(), map()) :: boolean()
+  def blocker_cycle?(graph, edge) do
+    Enum.any?(graph.cycles, fn cycle ->
+      edge.dependent_work_package_id in cycle and edge.prerequisite_work_package_id in cycle
+    end)
+  end
+
   defp scope_graph(%{available: true} = graph, visible_ids) do
     visible? = &MapSet.member?(visible_ids, &1)
     work_package_ids = Enum.filter(graph.work_package_ids, visible?)
@@ -180,6 +188,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
       %{
         prerequisite_work_package_id: prerequisite_id,
         dependent_work_package_id: dependent_id,
+        reason: Enum.find_value(edges, &value(&1, :reason)),
         dependency_ids: edges |> Enum.map(&value(&1, :id)) |> Enum.uniq() |> Enum.sort()
       }
     end)

@@ -2,7 +2,7 @@ import { expect } from 'e2e';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import { contract } from '../support/factory.js';
+import { contract, unknownRequest } from '../support/factory.js';
 import { blockerActive, board, close, head, installReviewSuite, pr, prUrl, progress, row, sync, test } from '../support/delivery.js';
 import { git, repository, githubCheckout } from '../support/worktree-git.js';
 
@@ -235,7 +235,7 @@ test('a ready package replays in its existing worktree and must requalify before
   expect((await row(architect, request, wp)).merge_eligibility.eligible).toBe(true);
   await architect.reject('dispatch_work_package', { ...args, review_mode: 'deep' }, 'review_mode_conflict');
   expect((await row(architect, request, wp)).status).toBe('ready');
-  await architect.call('set_blocker', { work_package_id: wp, blocker_id: 'proof', active: true, summary: 'Required regression proof remains' });
+  await architect.call('set_blocker', { work_package_id: wp, target: unknownRequest('proof'), active: true, summary: 'Required regression proof remains' });
 
   const replay = await architect.call('dispatch_work_package', args);
   expect(replay.replay).toBe(true);
@@ -252,7 +252,7 @@ test('a ready package replays in its existing worktree and must requalify before
   expect(resumed.pr_signal.url).toBe(prUrl(113));
   expect(resumed.merge_eligibility.reason_codes).toContain('active_blocker');
   // Clearing the blocker alone cannot restore the old ready status.
-  await architect.call('set_blocker', { work_package_id: wp, blocker_id: 'proof', active: false, summary: 'Regression proof accepted' });
+  await architect.call('set_blocker', { work_package_id: wp, target: unknownRequest('proof'), active: false, summary: 'Regression proof accepted' });
   expect((await row(architect, request, wp)).merge_eligibility.eligible).toBe(false);
   await architect.call('sync_pr', { work_package_id: wp, url: prUrl(113) });
   expect((await row(architect, request, wp)).merge_eligibility.eligible).toBe(true);
@@ -449,7 +449,7 @@ test('typed no-PR closeout resolves blockers once and terminal packages cannot r
   const [wp, abandoned, remaining] = (await architect.addPackages([contract('Findings', { repo: 'example/client', base_branch: 'integration' }), contract('Unstarted attempt'), contract('Remaining work')]));
   for (const id of [wp, abandoned]) {
     await architect.call('dispatch_work_package', { work_package_id: id });
-    await architect.call('set_blocker', { work_package_id: id, blocker_id: 'prerequisite', active: true, summary: 'An explicit prerequisite is missing.' });
+    await architect.call('set_blocker', { work_package_id: id, target: unknownRequest('prerequisite'), active: true, summary: 'An explicit prerequisite is missing.' });
     expect(await blockerActive(architect, id)).toBe(true);
   }
   // Merges are recorded from GitHub; close_work_package ends a package without one.
@@ -487,7 +487,7 @@ test('typed no-PR closeout resolves blockers once and terminal packages cannot r
     const before = await row(architect, request, id);
     expect(before.status).toBe(status);
     expect(await blockerActive(architect, id)).toBe(false);
-    await architect.reject('set_blocker', { work_package_id: id, blocker_id: 'prerequisite', active: false, summary: 'Already resolved.' }, 'work_package_ended');
+    await architect.reject('set_blocker', { work_package_id: id, target: unknownRequest('prerequisite'), active: false, summary: 'Already resolved.' }, 'work_package_ended');
     expect((await row(architect, request, id)).status).toBe(status);
     await architect.reject('edit_plan', { ops: [{ op: 'update_package', work_package_id: id, expected_revision: 1, patch: { title: 'Reactivate' } }] }, 'work_package_ended');
     await architect.reject('close_work_package', { work_package_id: id, outcome: 'skipped' }, 'delivery_outcome_conflict');
@@ -503,7 +503,7 @@ test('blocked handoff accepts new PR and head observations without reviving an o
   const request = await architect.request('Replacement PR observation');
   const [wp] = (await architect.addPackages([contract('Changing candidate')]));
   await architect.call('dispatch_work_package', { work_package_id: wp });
-  await architect.call('set_blocker', { work_package_id: wp, blocker_id: 'scope', active: true, summary: 'Resolve scope before accepting handoff.' });
+  await architect.call('set_blocker', { work_package_id: wp, target: unknownRequest('scope'), active: true, summary: 'Resolve scope before accepting handoff.' });
   let priorHeadChanged: string | undefined;
   for (const [number, sha] of [[103, head('a')], [103, head('b')], [104, head('c')], [104, head('a')]] as const) {
     provider.set(number, pr(number, sha));
@@ -516,7 +516,7 @@ test('blocked handoff accepts new PR and head observations without reviving an o
     priorHeadChanged = detail.metadata.pr.head_changed_at;
     expect(((await row(architect, request, wp)).delivery?.outcome ?? null)).toBeNull();
   }
-  await architect.call('set_blocker', { work_package_id: wp, blocker_id: 'scope', active: false, summary: 'Scope accepted; continue handoff.' });
+  await architect.call('set_blocker', { work_package_id: wp, target: unknownRequest('scope'), active: false, summary: 'Scope accepted; continue handoff.' });
   expect((await sync(architect, wp, 104, head('a'))).pr_sync.readiness_reasons).toEqual([]);
   expect((await row(architect, request, wp)).merge_eligibility.eligible).toBe(true);
   provider.set(103, pr(103, head('b'), { state: 'MERGED', mergedAt: new Date().toISOString(), mergeCommit: { oid: head('e') } }));
@@ -527,7 +527,7 @@ test('blocked handoff accepts new PR and head observations without reviving an o
   provider.set(104, pr(104, head('a'), { state: 'MERGED', mergedAt: new Date().toISOString(), mergeCommit: { oid: head('f') } }));
   await architect.call('sync_pr', { work_package_id: wp });
   expect((await row(architect, request, wp)).delivery.pr_number).toBe(104);
-  await architect.reject('set_blocker', { work_package_id: wp, blocker_id: 'scope', active: false, summary: 'Late resolution.' }, 'work_package_ended');
+  await architect.reject('set_blocker', { work_package_id: wp, target: unknownRequest('scope'), active: false, summary: 'Late resolution.' }, 'work_package_ended');
   expect((await row(architect, request, wp)).status).toBe('ended');
   expect((await architect.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.completed_at).toBeTruthy();
   await factory.stop();
@@ -555,13 +555,14 @@ test('architect integration holds gate a ready PR without reopening work or chan
   expect(before.status).toBe('ready');
   expect(before.merge_eligibility.eligible).toBe(true);
   const metadata = (await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).metadata;
-  const hold = { work_package_id: wp, blocker_id: 'integration-authority', active: true, summary: 'Integration requires a final human decision.' };
+  const hold = { work_package_id: wp, target: unknownRequest('integration-authority'), active: true, summary: 'Integration requires a final human decision.' };
+  await architect.reject('set_blocker', { ...hold, target: { kind: 'pr', id: 'Example/Service#801' } }, 'blocker_cycle');
   const outsider = await factory.client();
   await outsider.request('Unrelated authority');
   expect((await outsider.rpc('tools/call', { name: 'set_blocker', arguments: hold })).error).toBeTruthy();
   expect((await row(architect, request, wp)).merge_eligibility.eligible).toBe(true);
-  for (const [blocker_id, reason] of [['', 'missing_blocker_id'], ['   ', 'missing_blocker_id'], [42, 'invalid_blocker_id']] as const) {
-    await architect.reject('set_blocker', { ...hold, blocker_id }, reason);
+  for (const target of [{ kind: 'work_request', id: ' ' }, { kind: 'free_text', id: 'unknown' }, { kind: 'pr', id: 'example/service#0' }]) {
+    await architect.reject('set_blocker', { ...hold, target }, 'invalid_blocker_target');
   }
   expect((await architect.call('set_blocker', hold)).changed).toBe(true);
   expect((await architect.call('set_blocker', hold)).changed).toBe(false);
@@ -569,11 +570,11 @@ test('architect integration holds gate a ready PR without reopening work or chan
   expect(held.status).toBe('ready');
   expect(held.merge_eligibility.eligible).toBe(false);
   expect(held.merge_eligibility.reason_codes).toContain('active_blocker');
-  expect(held.merge_eligibility.next_action).toBe('clear_blocker');
-  expect(held.blocker_ids).toEqual([hold.blocker_id]);
+  expect(held.merge_eligibility.next_action).toBe('wait');
+  expect(held.blocker_ids).toEqual(['work_request:' + hold.target.id]);
   expect((await row(architect, request, sibling)).merge_eligibility.eligible).toBe(true);
   expect((await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).metadata).toEqual(metadata);
-  const resolution = { work_package_id: wp, blocker_id: held.blocker_ids[0], active: false, summary: 'Integration authorized.' };
+  const resolution = { work_package_id: wp, target: hold.target, active: false, summary: 'Integration authorized.' };
   expect((await row(architect, request, wp)).merge_eligibility.eligible).toBe(false);
   expect((await architect.call('set_blocker', resolution)).changed).toBe(true);
   expect((await architect.call('set_blocker', resolution)).changed).toBe(false);
@@ -585,6 +586,87 @@ test('architect integration holds gate a ready PR without reopening work or chan
   expect((await row(architect, request, wp)).status).toBe('ended');
   await architect.reject('set_blocker', hold, 'work_package_ended');
   expect(await blockerActive(architect, wp)).toBe(false);
+});
+
+test('the watcher clears merged PR blockers, marks closed PRs impossible and keeps unreadable PRs waiting', async ({ watched: { factory, provider, restart } }) => {
+  const architect = await factory.client();
+  const request = await architect.request('External prerequisites');
+  const [wp] = await architect.addPackages([contract('Dependent work')]);
+  const target = (number: number) => ({ kind: 'pr', id: `example/client#${number}` });
+  const observe = (number: number, state: 'OPEN' | 'CLOSED' | 'MERGED') => provider.set(number, pr(number, head('a'), {
+    url: `https://github.com/example/client/pull/${number}`, state,
+  }));
+  observe(971, 'OPEN');
+  observe(972, 'OPEN');
+  observe(973, 'MERGED');
+
+  const declaration = { work_package_id: wp, target: { kind: 'pr', id: 'Example/Client#971' }, active: true, summary: 'Wait for the shared change.' };
+  expect((await architect.call('set_blocker', declaration)).blocker).toMatchObject({ id: 'pr:example/client#971', target: target(971), state: 'waiting', unknown: false });
+  await architect.call('set_report', { parking: { targets: [target(972), target(973)] } });
+  const initial = await architect.board(request);
+  expect(initial.blockers).toMatchObject([
+    { target: target(972), state: 'waiting' }, { target: target(973), state: 'cleared', next_action: 'dispatch' },
+    { target: target(971), work_package_id: wp, state: 'waiting' },
+  ]);
+
+  provider.unreadable.add(971);
+  await factory.tick('sweep');
+  expect(await blockerActive(architect, wp)).toBe(true);
+  expect((await architect.board(request)).blockers.find((blocker: any) => blocker.work_package_id === wp))
+    .toMatchObject({ state: 'waiting', unknown: true, next_action: 'wait' });
+
+  provider.unreadable.delete(971);
+  observe(971, 'MERGED');
+  observe(972, 'CLOSED');
+  const restored = await restart();
+  const reader = await restored.client(architect.terminal);
+  await restored.tick('sweep');
+  expect(await blockerActive(reader, wp)).toBe(false);
+  const read = await reader.call('read_work_request', { work_request_id: request });
+  expect(read.work_request.next_action).toBe('replan');
+  expect((await reader.board(request)).blockers).toMatchObject([
+    { target: target(972), state: 'impossible', next_action: 'replan' },
+    { target: target(973), state: 'cleared', next_action: 'dispatch' },
+    { target: target(971), work_package_id: wp, summary: declaration.summary, state: 'cleared', next_action: 'dispatch' },
+  ]);
+  const panel = await reader.inspect('/api/v1/sympp/herdr/dashboard');
+  const summary = panel.work_request_details.find((entry: any) => entry.work_request.id === request);
+  const detail = await reader.inspect(`/api/v1/sympp/herdr/work-requests/${request}`);
+  for (const surface of [summary, detail]) {
+    expect(surface.work_request.blockers).toMatchObject([{ target: target(972), state: 'impossible' }, { target: target(973), state: 'cleared' }]);
+    expect(surface.work_packages[0].blockers).toMatchObject([{ target: target(971), state: 'cleared' }]);
+  }
+});
+
+test('attached PRs cannot create blocker cycles, including a PR discovered after declaration', async ({ watched: { factory, provider } }) => {
+  const architect = await factory.client();
+  const request = await architect.request('PR blocker cycles');
+  const [first, second, late] = await architect.addPackages([974, 975, 976]
+    .map((number) => contract(`Package ${number}`, { branch_pattern: `feature/delivery-${number}` })));
+  const declare = (work_package_id: string, number: number) => ({
+    work_package_id, target: { kind: 'pr', id: `example/service#${number}` }, active: true, summary: 'The prerequisite PR must merge.',
+  });
+  for (const [id, number, sha] of [[first, 974, head('a')], [second, 975, head('b')], [late, 976, head('c')]] as const) {
+    await architect.call('dispatch_work_package', { work_package_id: id });
+    provider.set(number, pr(number, sha));
+    if (id !== late) await sync(architect, id, number, sha);
+  }
+
+  provider.set(975, pr(975, head('b'), { state: 'CLOSED' }));
+  expect((await architect.call('set_blocker', declare(first, 975))).blocker.state).toBe('impossible');
+  provider.set(975, pr(975, head('b')));
+  await architect.reject('set_blocker', declare(second, 974), 'blocker_cycle');
+  await architect.reject('edit_plan', { ops: [{ op: 'set_dependency', from: second, to: first }] }, 'blocker_cycle');
+  expect((await architect.call('set_blocker', declare(late, 976))).blocker.state).toBe('waiting');
+  await sync(architect, late, 976, head('c'));
+  provider.unreadable.add(976);
+  await factory.tick('sweep');
+  expect((await row(architect, request, late)).blockers).toMatchObject([{ state: 'waiting', unknown: true }]);
+  provider.unreadable.delete(976);
+  for (const _sweep of [1, 2]) {
+    await factory.tick('sweep');
+    expect((await row(architect, request, late)).blockers).toMatchObject([{ state: 'impossible', next_action: 'replan' }]);
+  }
 });
 
 test('the watcher carries a dispatched package through ready to a recorded merge with no architect call, and a restart replays nothing', async ({ watched: { factory, provider, restart } }) => {

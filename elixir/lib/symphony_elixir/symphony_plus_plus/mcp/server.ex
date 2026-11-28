@@ -440,8 +440,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp run("set_report", arguments, _terminal, %__MODULE__{config: config}) do
-    case OperatorReport.set(config.repo, Map.fetch!(arguments, "work_request_id"), arguments) do
+  defp run("set_report", arguments, terminal, %__MODULE__{config: config}) do
+    case OperatorReport.set(config.repo, Map.fetch!(arguments, "work_request_id"), arguments, terminal.role) do
       {:ok, %WorkRequest{id: work_request_id}, applied} ->
         {:ok, ToolResult.receipt_result(%{"work_request_id" => work_request_id, "applied" => applied})}
 

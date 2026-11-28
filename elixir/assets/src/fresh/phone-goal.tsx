@@ -8,7 +8,7 @@ import { calm, EASE, Presence } from "./motion";
 import type { GoalStep } from "./operator";
 import { CiCell, deployLabel, LIFECYCLE, OrgIcon, OUTCOME, Pip, PrLink, ReviewCell, slotOf, StageStatus } from "./parts";
 import { AskCard, DecisionCard, Heading, INSET, Tap, useGoalStep, Who } from "./phone-parts";
-import { BriefAge, etaText, GoalTitle, looseStates, PhaseBadge, phaseStates, reportFor, type PhaseState } from "./report";
+import { BlockerList, BriefAge, etaText, GoalTitle, looseStates, PhaseBadge, phaseStates, reportFor, type PhaseState } from "./report";
 import { Reveal } from "./reveal";
 import { SinceChip } from "./since";
 
@@ -101,6 +101,7 @@ function GoalHead({ at, head, view }: { at: number; head: RefObject<HTMLElement 
         <Who terminal={goal.owner} />
       </p>
       {goal.owner?.liveness === "unknown" ? <Tap action={{ kind: "release", goalId: goal.id }} className="mt-3 items-start" confirm="Release?" label="Release" /> : null}
+      <BlockerList blockers={goal.blockers} className="mt-3" />
       {report.brief || report.eta ? (
         <p className="mt-3 text-[15px] leading-relaxed text-ink/90 [overflow-wrap:anywhere]">
           {report.brief}
@@ -286,6 +287,7 @@ function PkgDetail({ at, view }: { at: number; view: PkgView }) {
 
   return (
     <div className="space-y-2.5 pl-5">
+      <BlockerList blockers={pkg.blockers} />
       <p className="flex justify-between font-mono text-[11px]">
         {LIFECYCLE.map((slot, index) => (
           <span key={slot.label} className={index < now ? "text-dim" : index === now ? `font-semibold ${view.failed ? "text-fail" : slot.tone}` : "text-faint"}>
@@ -312,13 +314,14 @@ function RestCard({ pkg, ref }: { pkg: Pkg; ref?: (node: HTMLElement | null) => 
       <span className="mt-1.5 flex">
         <Pip stage={outcome ? "ended" : "planned"} />
       </span>
-      <span className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1">
         <span className={`block text-sm leading-snug [overflow-wrap:anywhere] ${outcome ? "text-faint line-through decoration-faint/60" : "text-dim"}`}>{pkg.title}</span>
         <span className="mt-1 flex flex-wrap items-center gap-x-3">
           <span className={`font-mono text-[11px] ${outcome?.tone ?? "text-faint"}`}>{outcome?.label ?? "Planned"}</span>
           <PrLink className={PR_TAP} pr={pkg.pr} repos={pkg.goalRepos} />
         </span>
-      </span>
+        <BlockerList blockers={pkg.blockers} className="mt-1" />
+      </div>
     </div>
   );
 }

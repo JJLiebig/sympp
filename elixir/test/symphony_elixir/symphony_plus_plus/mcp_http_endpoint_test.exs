@@ -419,7 +419,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     [package_id] = added_package_ids(sliced)
 
     progress =
-      tool_call_request("progress", "set_blocker", %{"work_package_id" => package_id, "blocker_id" => "bind-1", "active" => true, "summary" => "Waiting"})
+      tool_call_request("progress", "set_blocker", %{"work_package_id" => package_id, "target" => %{"kind" => "work_request", "id" => "wr_missing"}, "active" => true, "summary" => "Waiting"})
       |> with_terminal("t1")
       |> post_json(headers)
 

@@ -5,7 +5,7 @@ import { areaLabel } from "./areas";
 import { GoalOwner } from "./board";
 import type { GoalView } from "./model";
 import { Deploy, Fold, OrgIcon } from "./parts";
-import { Brief, DotStrip, GoalTitle, NeedsYouFlag, PhaseBadge, type Report } from "./report";
+import { BlockerList, Brief, DotStrip, GoalTitle, NeedsYouFlag, PhaseBadge, type Report } from "./report";
 import { Reveal, Roll } from "./reveal";
 import { SinceChip } from "./since";
 
@@ -51,6 +51,7 @@ export function GoalHead({ at, area, big, open, report, toggle, view }: { at: nu
         </span>
       </div>
       <GoalRefusal className="pl-7 pt-1" goalId={view.goal.id} />
+      <BlockerList blockers={view.goal.blockers} className="mt-1 pl-7" />
       <Reveal show={Boolean(report.brief || report.eta)}>
         <Brief at={at} className={`mt-1 pl-7 ${big ? "text-[15px] leading-relaxed text-ink/90" : "text-sm text-dim"}`} report={report}>
           {report.sample ? <span className="ml-2 rounded border border-line px-1 font-mono text-[10px] uppercase text-faint">sample wording</span> : null}

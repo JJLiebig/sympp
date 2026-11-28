@@ -57,7 +57,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryResolution do
         []
 
       is_nil(package) or is_nil(outcome) ->
-        [%{work_package_id: id, successor_of: via, ended_as: nil}]
+        [%{work_package_id: id, successor_of: via, ended_as: unrecorded_ending(package)}]
 
       outcome in @traversed_outcomes and not Map.has_key?(visited, id) ->
         case same_request_successors(package, packages, deliveries, successors) do
@@ -69,6 +69,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryResolution do
         [%{work_package_id: id, successor_of: via, ended_as: outcome}]
     end
   end
+
+  defp unrecorded_ending(package), do: if(value(package, :status) == "ended", do: "ended")
 
   defp same_request_successors(package, packages, deliveries, successors) do
     package

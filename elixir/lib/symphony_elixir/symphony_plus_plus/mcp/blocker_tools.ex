@@ -14,7 +14,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerTools do
     case arguments["active"] do
       active when is_boolean(active) ->
         config.repo
-        |> Blockers.set(Actor.from_terminal(terminal), arguments["work_package_id"], arguments["blocker_id"], active, arguments["summary"])
+        |> Blockers.set(Actor.from_terminal(terminal), arguments["work_package_id"], arguments["target"], active, arguments["summary"])
         |> result()
 
       _other ->
@@ -25,7 +25,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerTools do
   defp result({:ok, blocker, how}) do
     {:ok,
      ToolResult.tool_result(%{
-       "blocker" => blocker |> Map.take([:id, :active, :summary, :updated_at]) |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end),
+       "blocker" => Map.take(blocker, [:id, :target, :active, :summary, :state, :unknown, :next_action, :updated_at]),
        "changed" => how == :changed
      })}
   end
@@ -37,7 +37,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.BlockerTools do
     do: precondition("work_package_ended", "ended", "The package has ended; its blockers were cleared.")
 
   defp result({:error, :blocker_not_found}),
-    do: precondition("blocker_not_found", "none", "No blocker with this id exists on the package; declare it with active: true.")
+    do: precondition("blocker_not_found", "none", "No blocker names this target on the package.")
 
   defp result({:error, reason}) when reason == :database_busy or (is_tuple(reason) and elem(reason, 0) in [:storage_failed, :migration_failed]),
     do: {:error, -32_000, "Server error", %{"resource" => "set_blocker", "reason" => "ledger_unavailable"}}

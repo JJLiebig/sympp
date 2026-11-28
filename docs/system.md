@@ -60,13 +60,10 @@ dispatch. All ledger operations use MCP. The packaged
 
 ## Review And Delivery Authority
 
-The owning architect can optionally set a goal brief, free-text ETA and parking
-reason with `set_report`; `null` clears a field. The report is stored on the
-WorkRequest, and the dashboard and `read_work_request` expose it as
-`work_request.operator_report` with server-written times. Partial edits preserve
-other fields; resuming parked work keeps the reason and its times. Reports
-neither create/clear blockers nor change the WorkRequest phase. There is no
-worker reporting cadence.
+The owning architect can set a goal brief, free-text ETA and request-wide wait
+targets with `set_report`. The dashboard and `read_work_request` expose the
+report with server-written times. A chief can record an explicit hold.
+Use `parking: null` to clear the wait or hold and record when it ended.
 
 Asks are the only "Needs you". Only a chief opens one with `ask` on a
 WorkRequest, optionally naming a package and a decision prompt. An ask is
@@ -178,10 +175,12 @@ yet is checked on its next sweep. The check matches exact commit IDs, so a
 cherry-pick with a new commit ID is a different commit.
 
 A ready-for-merge package can acquire a new integration blocker without changing
-its readiness or reviewed evidence. The architect declares and clears it with
+its readiness or reviewed evidence. The architect declares the target with
 `set_blocker`, following the
 [architect blocker procedure](../packages/sympp/skills/symphony-architect/SKILL.md#report).
 An active blocker makes the delivery board's `merge_eligibility.eligible` false.
+The Observer checks for delivery, a closed PR or a withdrawn ask. An unavailable
+lookup keeps the blocker waiting. Package targets use existing plan dependencies.
 Workers route human decisions through the architect or chief.
 
 Before merging, the architect checks the delivery board's `merge_eligibility`

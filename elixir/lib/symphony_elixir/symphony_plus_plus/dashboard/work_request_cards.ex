@@ -128,6 +128,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     |> base_payload(repo_identity_catalog)
     |> Map.merge(phase_fields(work_request, phase))
     |> Map.put(:operator_report, Keyword.get(opts, :operator_report))
+    |> Map.put(:blockers, get_in(opts[:delivery_board], [:blockers]) || [])
     |> Map.put(
       :operational_state,
       operational_state(

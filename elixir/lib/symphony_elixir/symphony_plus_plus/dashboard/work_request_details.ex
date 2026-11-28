@@ -18,6 +18,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
   import Ecto.Query, only: [from: 2]
 
   @delivery_signal_keys [
+    :blockers,
     :dependency_signal,
     :repo_signal,
     :pr_signal,

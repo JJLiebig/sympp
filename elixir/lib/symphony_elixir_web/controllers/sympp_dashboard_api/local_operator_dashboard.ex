@@ -21,6 +21,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -234,6 +235,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
         :completed_at,
         :archived_at,
         :operator_report,
+        :blockers,
         :worked_on,
         :dispatched_by,
         :deployments
@@ -265,6 +267,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
           :activity_signal,
           :operational_state,
           :dependency_signal,
+          :blockers,
           :session_location,
           :worker_terminal,
           :observation_stale,
@@ -530,6 +533,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
       human_description: Sanitizer.redacted_text(work_request.human_description),
       constraints: Sanitizer.redacted_json(work_request.constraints || %{}),
       desired_dispatch_shape: work_request.desired_dispatch_shape,
+      blockers: OperatorReport.blockers(work_request.report),
       creator: %{
         kind: work_request.creator_kind,
         name: Sanitizer.redacted_text(work_request.creator_name),

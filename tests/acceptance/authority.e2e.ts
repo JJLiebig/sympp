@@ -1,7 +1,7 @@
 import { expect } from 'e2e';
 import { DatabaseSync } from 'node:sqlite';
 import { parseBoard } from '../../integrations/herdr-next/mods/sympp/model.js';
-import { Client, contract, nextTerminal } from '../support/factory.js';
+import { Client, contract, nextTerminal, unknownRequest } from '../support/factory.js';
 import { initialize, packages, test, tool } from '../support/authority.js';
 import { blockerActive, close, head, pr, prUrl, row, test as deliveryTest } from '../support/delivery.js';
 
@@ -339,12 +339,12 @@ test('package documents stay redacted and blocker history is attributed to the o
   const own = (args: object) => ({ work_package_id: wp, ...args });
   const progressBefore = (await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).progress;
   for (const [args, reason] of [
-    [{ blocker_id: 'no-summary', active: true }, 'missing_summary'],
-    [{ blocker_id: 'not-boolean', active: 'yes', summary: 'Invalid state' }, 'invalid_active'],
-    [{ blocker_id: 'forged', active: true, summary: 'Cannot forge audit identity', id: 'caller-progress-id', created_at: '2000-01-01T00:00:00Z', actor_id: 'forged-worker' }, 'unexpected_argument'],
+    [{ target: unknownRequest('no-summary'), active: true }, 'missing_summary'],
+    [{ target: unknownRequest('not-boolean'), active: 'yes', summary: 'Invalid state' }, 'invalid_active'],
+    [{ target: unknownRequest('forged'), active: true, summary: 'Cannot forge audit identity', id: 'caller-progress-id', created_at: '2000-01-01T00:00:00Z', actor_id: 'forged-worker' }, 'unexpected_argument'],
   ] as const) await architect.reject('set_blocker', own(args), reason);
   expect((await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).progress).toEqual(progressBefore);
-  const redacted = await architect.tool('set_blocker', own({ blocker_id: 'redacted', active: true, summary: 'Recorded blocker sk-synthetic-progress-token' }));
+  const redacted = await architect.tool('set_blocker', own({ target: unknownRequest('redacted'), active: true, summary: 'Recorded blocker sk-synthetic-progress-token' }));
   expect(redacted.result.structuredContent.blocker.summary).toContain('[REDACTED]');
   const history = (await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).progress;
   const audit = history.find((entry: any) => entry.summary === redacted.result.structuredContent.blocker.summary);
@@ -361,7 +361,7 @@ test('package documents stay redacted and blocker history is attributed to the o
   expect(redacted.result.content[0].text).not.toContain('sk-synthetic-progress-token');
   // Another terminal cannot change this request's blockers.
   const peer = await factory.client();
-  await peer.reject('set_blocker', own({ blocker_id: 'foreign', active: true, summary: 'Refused' }), 'owned_by_other_terminal');
+  await peer.reject('set_blocker', own({ target: unknownRequest('foreign'), active: true, summary: 'Refused' }), 'owned_by_other_terminal');
 });
 
 deliveryTest('architect CI observations reach the native dashboard with stable per-head change times', async ({ delivery: { factory, provider } }) => {
@@ -425,7 +425,9 @@ test('operator reports keep server times and partial edits and only the owner wr
   await architect.reject('set_report', { brief: 'Forged time', written_at: '2000-01-01T00:00:00Z' }, 'unexpected_argument');
   expect((await stored()).brief.text).toHaveLength(4000);
   const started = Date.now();
-  await architect.call('set_report', { brief: 'Core work is ready.', eta: 'After review', parking: { reason: 'Awaiting a release window' } });
+  const target = { kind: 'ask', id: question.id };
+  const parking = { targets: [target] };
+  await architect.call('set_report', { brief: 'Core work is ready.', eta: 'After review', parking });
   const first = await read();
   expect(first.brief.text).toBe('Core work is ready.');
   expect(Date.parse(first.brief.written_at)).toBeGreaterThanOrEqual(started - 1000);
@@ -442,13 +444,12 @@ test('operator reports keep server times and partial edits and only the owner wr
   expect(resumed.eta).toBeUndefined();
   expect(resumed.brief).toEqual(first.brief);
   expect(Date.parse(resumed.parking.resumed_at)).toBeGreaterThanOrEqual(Date.parse(first.parking.parked_at));
-  await architect.call('set_report', { parking: { reason: 'Waiting on a follow-up' } });
+  await architect.call('set_report', { parking });
   const reparked = await read();
-  expect(reparked.parking.reason).toBe('Waiting on a follow-up');
   expect(reparked.parking.resumed_at).toBeNull();
   const dashboard = await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated');
   const detail = dashboard.work_request_details.find((entry: any) => entry.work_request.id === request);
-  expect(detail.work_request.operator_report).toEqual(reparked);
+  expect(detail.work_request.operator_report).toEqual({ ...reparked, parking: { ...reparked.parking, targets: [{ ...target, state: 'waiting' }] } });
   expect(detail.work_request.worked_on.address).toBe(architect.address);
   const unchanged = await architect.call('read_work_request', { work_request_id: request });
   expect(unchanged.work_request.phase).toBe('active');
@@ -596,7 +597,7 @@ test('architect descendant planning stays owned through terminal closeout and re
   const architect = await factory.client();
   const request = await architect.request('Architect descendant evidence');
   const [wp] = await architect.addPackages([contract('Secondary planning', { repo: 'example/client', base_branch: 'integration' })]);
-  const blocker = (await architect.call('set_blocker', { work_package_id: wp, blocker_id: 'scoped', active: true, summary: 'Scoped evidence' })).blocker;
+  const blocker = (await architect.call('set_blocker', { work_package_id: wp, target: unknownRequest('scoped'), active: true, summary: 'Scoped evidence' })).blocker;
   const detail = await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`);
   expect(detail.blockers[0].id).toBe(blocker.id);
   expect(detail.progress[0].summary).toBe('Scoped evidence');
@@ -605,17 +606,17 @@ test('architect descendant planning stays owned through terminal closeout and re
   const [otherWp] = await packages(foreign, ['Private foreign plan']);
   // Reads by explicit id are free for trusted callers; writes need the owner.
   expect((await architect.readPackage(foreignRequest, otherWp)).title).toBe('Private foreign plan');
-  await architect.reject('set_blocker', { work_package_id: otherWp, blocker_id: 'foreign', active: true, summary: 'Foreign' }, 'owned_by_other_terminal');
+  await architect.reject('set_blocker', { work_package_id: otherWp, target: unknownRequest('foreign'), active: true, summary: 'Foreign' }, 'owned_by_other_terminal');
   await close(architect, wp);
   // Ending the package cleared its blocker; an ended package takes no new one.
-  await architect.reject('set_blocker', { work_package_id: wp, blocker_id: 'late', active: true, summary: 'Must not persist' }, 'work_package_ended');
-  expect((await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).blockers.map((entry: any) => [entry.id, entry.active])).toEqual([['scoped', false]]);
+  await architect.reject('set_blocker', { work_package_id: wp, target: unknownRequest('late'), active: true, summary: 'Must not persist' }, 'work_package_ended');
+  expect((await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).blockers.map((entry: any) => [entry.id, entry.active])).toEqual([[blocker.id, false]]);
   expect((await architect.operator(`/api/v1/sympp/operator/work-requests/${request}/archive`, {})).status).toBe(200);
   // Archiving ends ownership; the archived request's evidence stays readable by id and refuses writes.
   expect((await architect.call('sympp.health')).caller.owns).toEqual([]);
   expect((await architect.call('read_work_request', { work_request_id: request, view: 'package', work_package_id: wp })).work_package.id).toBe(wp);
   await architect.reject('edit_plan', { work_request_id: request, ops: [{ op: 'add_package', ...contract('Archived scope') }] }, 'work_request_archived');
-  expect((await architect.reject('set_blocker', { work_package_id: wp, blocker_id: 'scoped', active: false }, 'work_request_archived')).next_action).toBe('restore');
+  expect((await architect.reject('set_blocker', { work_package_id: wp, target: unknownRequest('scoped'), active: false }, 'work_request_archived')).next_action).toBe('restore');
 });
 
 
@@ -650,8 +651,8 @@ test('the native board\'s operator actions finish, release, complete, archive, r
   expect([ended.status, ended.body.error.code]).toEqual([409, 'already_ended']);
   // Clearing a blocker leaves delivery state alone and works again after it is raised again.
   for (const _ of [1, 2]) {
-    await architect.call('set_blocker', { work_package_id: active, blocker_id: 'review-scope', active: true, summary: 'Reviewer asked for an out-of-scope change.' });
-    expect((await architect.operator(`/api/v1/sympp/operator/work-packages/${active}/blockers/review-scope/clear`, {})).status).toBe(200);
+    const { blocker } = await architect.call('set_blocker', { work_package_id: active, target: unknownRequest('review-scope'), active: true, summary: 'Reviewer asked for an out-of-scope change.' });
+    expect((await architect.operator(`/api/v1/sympp/operator/work-packages/${active}/blockers/${encodeURIComponent(blocker.id)}/clear`, {})).status).toBe(200);
     expect(await blockerActive(architect, active)).toBe(false);
   }
   expect((await row(architect, request, active)).status).toBe('dispatched');

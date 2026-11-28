@@ -13,7 +13,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{BlockerTarget, WorkRequest}
 
   @request_chunk_size 400
   @string_limit 240
@@ -395,6 +395,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
     do: {"pr_closed", "architect", "close_work_package"}
 
   defp next_activity(work_package, summary, review, worker) do
+    activity = package_activity(work_package, summary, review, worker)
+    blockers = Enum.reject(Map.get(summary, :blockers, []), &(&1.next_action == "wait" and match?(%{"kind" => "work_package"}, &1.target)))
+
+    case {blocker_action(blockers), activity} do
+      {action, {_reason, _actor, prior}} when is_binary(action) and prior in [nil, "wait", "dispatch_work_package", "deliver_prerequisites", "merge_pr"] ->
+        {"active_blocker", "architect", action}
+
+      _lifecycle_action ->
+        activity
+    end
+  end
+
+  @spec blocker_action([map()]) :: String.t() | nil
+  def blocker_action(blockers) do
+    Enum.find(~w(replan reclassify wait), fn action -> Enum.any?(blockers, &(&1.next_action == action)) end)
+  end
+
+  defp package_activity(work_package, summary, review, worker) do
     dependency = map_value(summary, "dependency_signal") || %{}
     eligibility = Map.get(summary, :merge_eligibility, %{})
     unmet = Map.get(dependency, :unmet_work_package_ids, [])
@@ -481,6 +499,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
       |> Enum.flat_map(&(map_value(&1, "unmet_dependencies") |> List.wrap()))
 
     %{
+      blocker_edges: Enum.group_by(effective_edges, &map_value(&1, "dependent_work_package_id")),
       incoming_by_work_package_id:
         effective_edges
         |> Enum.group_by(&map_value(&1, "dependent_work_package_id"))
@@ -500,6 +519,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
           {map_value(dependency, "work_package_id"), dependency |> map_value("prerequisite_work_package_ids") |> List.wrap() |> MapSet.new()}
         end)
     }
+  end
+
+  @spec dependency_blockers(map(), String.t()) :: [map()]
+  def dependency_blockers(context, work_package_id) do
+    edges = get_in(context, [:dependency_indexes, :blocker_edges, work_package_id]) || []
+
+    for %{prerequisite_work_package_id: id, waiting_for: waiting, reason: reason} <- edges do
+      target = %{"kind" => "work_package", "id" => id}
+      BlockerTarget.present(target, BlockerTarget.dependency_state(waiting), bounded_string(reason)) |> Map.put(:id, BlockerTarget.id(target))
+    end
   end
 
   @spec dependency(WorkPackage.t(), map()) :: map() | nil

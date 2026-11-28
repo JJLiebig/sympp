@@ -11,7 +11,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, WorkPackage, WorkPackageDelivery}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerTarget
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{DecisionLogEntry, DeliveryBoard, OperatorReport, Phase}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
 
   @views ToolCatalog.work_request_views()
@@ -123,7 +125,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
 
     report = report_preview(OperatorReport.public(request.report))
     phase = payload["work_request"]["phase"]
-    {action, actor} = request_action(phase, asks, report, rows)
+    request_blockers = OperatorReport.blockers(request.report)
+    {action, actor} = request_action(phase, asks, request_blockers, rows, repo)
 
     work_request =
       payload["work_request"]
@@ -139,12 +142,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
       Map.merge(payload, %{
         "work_request" => work_request,
         "work_packages" => Enum.map(rows, &overview_row(&1, phase)),
+        "blockers" => blocker_rows(request_blockers, []),
         "asks" => asks,
         "decisions" => Enum.map(decisions, &headline/1),
         "older_decision_count" => repo.aggregate(query, :count, :id) - length(decisions)
       })
 
-    WorkRequestReadPage.rows(payload, [~w(asks), ~w(work_packages)], {request.id, "overview"}, cursor, @overview_bytes)
+    WorkRequestReadPage.rows(payload, [~w(asks), ~w(blockers), ~w(work_packages)], {request.id, "overview"}, cursor, @overview_bytes)
   end
 
   defp plan(repo, request, payload, packages, live, deliveries, cursor) do
@@ -184,14 +188,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
   defp board(request, payload, rows, cursor) do
     phase = payload["work_request"]["phase"]
     recovery = if phase == "archived", do: %{}, else: recovery_actions(rows)
-    board = %{"work_packages" => Enum.map(rows, &board_row(&1, phase)), "recovery" => recovery}
+    board = %{"work_packages" => Enum.map(rows, &board_row(&1, phase)), "blockers" => blocker_rows(OperatorReport.blockers(request.report), rows), "recovery" => recovery}
 
     WorkRequestReadPage.rows(
       Map.put(payload, "delivery_board", board),
-      [~w(delivery_board work_packages)],
+      [~w(delivery_board work_packages), ~w(delivery_board blockers)],
       {request.id, "board"},
       cursor
     )
+  end
+
+  defp blocker_rows(request_blockers, rows) do
+    package_blockers =
+      for row <- rows,
+          blockers = get_in(row, [:work_package, :blockers]) || [],
+          blocker <- Enum.sort_by(blockers, & &1.id),
+          do: Map.put(blocker, :work_package_id, row.id)
+
+    Enum.map(request_blockers ++ package_blockers, fn blocker ->
+      blocker
+      |> Map.take([:id, :target, :summary, :state, :unknown, :next_action, :hold, :work_package_id])
+      |> Map.update(:summary, nil, &preview(&1, 140))
+      |> Map.reject(fn {_key, value} -> value in [nil, false] end)
+    end)
   end
 
   defp document(_repo, request, "request", _arguments) do
@@ -320,20 +339,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
     end)
   end
 
-  defp request_action("archived", _asks, _report, _rows), do: {Phase.next_action("archived"), "operator"}
-  defp request_action("done", _asks, _report, _rows), do: {"done", nil}
-  defp request_action("unresolved", _asks, _report, _rows), do: {Phase.next_action("unresolved"), "operator"}
-  defp request_action(_phase, [_ | _], _report, _rows), do: {"answer_ask", "operator"}
-  defp request_action(_phase, _asks, %{"parking" => %{"resumed_at" => nil}}, _rows), do: {"resume_work", "architect"}
-  defp request_action("intake", _asks, _report, _rows), do: {"edit_plan", "architect"}
+  defp request_action("archived", _asks, _blockers, _rows, _repo), do: {Phase.next_action("archived"), "operator"}
+  defp request_action("done", _asks, _blockers, _rows, _repo), do: {"done", nil}
+  defp request_action("unresolved", _asks, _blockers, _rows, _repo), do: {Phase.next_action("unresolved"), "operator"}
+  defp request_action(_phase, [_ | _], _blockers, _rows, _repo), do: {"answer_ask", "operator"}
 
-  defp request_action(_phase, _asks, _report, rows) do
-    Enum.find_value(rows, fn row ->
-      case activity(row) do
-        {action, actor} when action not in [nil, "wait"] -> {action, actor}
-        _waiting -> nil
-      end
-    end) || activity(List.first(rows))
+  defp request_action(phase, _asks, blockers, rows, repo) do
+    case Signals.blocker_action(blockers) do
+      action when action in ["replan", "reclassify"] -> {action, "architect"}
+      "wait" -> request_wait(repo, blockers, rows)
+      nil when phase == "intake" -> {"edit_plan", "architect"}
+      nil -> Enum.find_value(rows, &actionable_package/1) || activity(List.first(rows))
+    end
+  end
+
+  defp request_wait(repo, blockers, rows) do
+    prerequisites =
+      for %{state: "waiting", target: %{"kind" => "work_package", "id" => id}} <- blockers,
+          {:ok, waits} <- [BlockerTarget.package_waits(repo, id)],
+          %{work_package_id: prerequisite, ended_as: nil} <- waits,
+          do: prerequisite
+
+    Enum.find_value(rows, fn row -> if row.id in prerequisites, do: actionable_package(row) end) || {"wait", nil}
+  end
+
+  defp actionable_package(row) do
+    case activity(row) do
+      {action, actor} when action not in [nil, "wait"] -> {action, actor}
+      _waiting -> nil
+    end
   end
 
   defp request_actor(repo, id, "architect") do
@@ -352,7 +386,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
         entry = report[field],
         is_map(entry),
         into: %{} do
-      {field, Map.update(entry, key, nil, &preview(&1, max_bytes))}
+      {field, entry |> Map.drop(["targets"]) |> Map.replace_lazy(key, &preview(&1, max_bytes)) |> Map.replace_lazy("hold", &preview(&1, max_bytes))}
     end
   end
 
@@ -451,7 +485,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
   defp recovery("run_launch_line"), do: "If no worker holds the package, repeat dispatch_work_package with its review_mode and run launch_line."
   defp recovery("inspect_worker"), do: "Check the worker and PR. Repeat dispatch_work_package with its review_mode to refresh the assignment."
   defp recovery("sync_pr"), do: "Read the PR on GitHub and sync_pr with its URL."
-  defp recovery("clear_blocker"), do: "Use set_blocker with a blocker_id and active: false. The operator board shows any additional blockers."
+  defp recovery("replan"), do: "Replace the impossible prerequisite or change the plan."
+  defp recovery("reclassify"), do: "Ask the operator to clear the legacy package hold after recording its replacement."
   defp recovery(_action), do: nil
 
   defp put_blockers(row, summary) do
