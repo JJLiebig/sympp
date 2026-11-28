@@ -120,19 +120,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
 
   def scope(graph, _visible_work_package_ids), do: graph
 
-  @doc "Tests a new dependency against the prerequisites that can still deliver it."
+  @doc "Whether a declared edge joins a cycle in the dispatch graph."
   @spec blocker_cycle?(graph(), map()) :: boolean()
   def blocker_cycle?(graph, edge) do
-    pairs =
-      for dependency <- graph.effective_edges,
-          Enum.all?(dependency.waiting_for, &is_nil(&1.ended_as)),
-          wait <- dependency.waiting_for,
-          do: {wait.work_package_id, dependency.dependent_work_package_id}
-
-    {_order, cycles} = topology(graph.work_package_ids, pairs)
-
-    Enum.any?(cycles, fn cycle ->
-      edge.dependent_work_package_id in cycle and Enum.any?(edge.waiting_for, &(&1.work_package_id in cycle))
+    Enum.any?(graph.cycles, fn cycle ->
+      edge.dependent_work_package_id in cycle and edge.prerequisite_work_package_id in cycle
     end)
   end
 

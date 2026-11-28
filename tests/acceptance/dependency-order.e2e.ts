@@ -178,7 +178,12 @@ test('the watcher holds a PR stacked on another package\'s unmerged work until t
   const stacked = await row(architect, request, feature);
   expect(stacked.status).toBe('dispatched');
   expect(await stacking(architect, request, feature)).toEqual([fix]);
-  expect(stacked.activity_signal.next_action).toBe(`remove ${fix}'s unmerged commits, or wait for its PR to merge`);
+  const correctiveAction = `remove ${fix}'s unmerged commits, or wait for its PR to merge`;
+  expect(stacked.activity_signal.next_action).toBe(correctiveAction);
+  const blocker = { work_package_id: feature, target: unknownRequest('stacked-integration'), summary: 'Wait for the integration contract.' };
+  await architect.call('set_blocker', { ...blocker, active: true });
+  expect((await row(architect, request, feature)).activity_signal.next_action).toBe(correctiveAction);
+  await architect.call('set_blocker', { ...blocker, active: false });
   expect(await status(fix)).toBe('ready');
   // Of two PRs sharing unmerged work that neither fully contains, the later one holds.
   open(313, head('d'), [head('a'), head('d')]);

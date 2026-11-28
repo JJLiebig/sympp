@@ -24,7 +24,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlanEdit do
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, ExecutionGraph}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerTarget
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{BlockerObservations, BlockerTarget}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -70,13 +70,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlanEdit do
          {:ok, changed} <- change_blocker_edge(edges, from, to, active, summary, context),
          {:ok, graph} <- ExecutionGraph.evaluate(repo, package.work_request_id),
          edge = Enum.find(graph.effective_edges, &(&1.dependent_work_package_id == from and &1.prerequisite_work_package_id == to)),
-         false <- active and ExecutionGraph.blocker_cycle?(graph, edge) do
+         :ok <- require_acyclic_blocker(repo, package.id, blocker, graph, edge) do
       blocker_receipt(blocker, BlockerTarget.dependency_state(if(edge, do: edge.waiting_for, else: [])), changed)
     else
-      true -> {:error, :blocker_cycle}
       {:error, {:self_dependency, _id}} -> {:error, :blocker_cycle}
       error -> error
     end
+  end
+
+  defp require_acyclic_blocker(_repo, _package_id, %{active: false}, _graph, _edge), do: :ok
+
+  defp require_acyclic_blocker(repo, package_id, blocker, graph, edge) do
+    if ExecutionGraph.blocker_cycle?(graph, edge),
+      do: {:error, :blocker_cycle},
+      else: BlockerObservations.require_acyclic(repo, {"work_package", package_id}, [blocker.target])
   end
 
   defp change_blocker_edge([], _from, _to, false, _summary, _context), do: {:ok, :unchanged}

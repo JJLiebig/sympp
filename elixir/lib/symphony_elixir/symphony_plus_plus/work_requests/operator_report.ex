@@ -58,9 +58,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport do
   defp observe_targets(repo, request_id, %{"parking" => %{"targets" => targets}} = patch, snapshots) do
     if Enum.any?(targets, &outside_request?(repo, request_id, &1)), do: repo.rollback({:tool_error, "blocker_package_outside_request"})
 
-    case BlockerObservations.require_acyclic(repo, request_id, targets) do
-      :ok -> put_in(patch, ["parking", "targets"], BlockerObservations.evaluate(repo, targets, snapshots))
-      {:error, reason} -> repo.rollback({:tool_error, Atom.to_string(reason)})
+    targets = BlockerObservations.evaluate(repo, targets, snapshots)
+
+    case BlockerObservations.require_acyclic(repo, {"work_request", request_id}, targets) do
+      :ok -> put_in(patch, ["parking", "targets"], targets)
+      {:error, :blocker_cycle} -> repo.rollback({:tool_error, "blocker_cycle"})
+      {:error, reason} -> repo.rollback(reason)
     end
   end
 

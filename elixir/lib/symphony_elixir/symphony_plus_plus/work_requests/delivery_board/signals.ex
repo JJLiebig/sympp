@@ -399,9 +399,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
     blockers = Enum.reject(Map.get(summary, :blockers, []), &(&1.next_action == "wait" and match?(%{"kind" => "work_package"}, &1.target)))
 
     case {blocker_action(blockers), activity} do
-      {_blocker, {_reason, _actor, action}} when action in ["run_launch_line", "inspect_worker", "sync_pr"] -> activity
-      {nil, _activity} -> activity
-      {action, _activity} -> {"active_blocker", "architect", action}
+      {action, {_reason, _actor, prior}} when is_binary(action) and prior in [nil, "wait", "dispatch_work_package", "deliver_prerequisites", "merge_pr"] ->
+        {"active_blocker", "architect", action}
+
+      _lifecycle_action ->
+        activity
     end
   end
 

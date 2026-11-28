@@ -638,6 +638,29 @@ test('the watcher clears merged PR blockers, marks closed PRs impossible and kee
   }
 });
 
+test('attached PRs cannot create blocker cycles, including a PR discovered after declaration', async ({ watched: { factory, provider } }) => {
+  const architect = await factory.client();
+  const request = await architect.request('PR blocker cycles');
+  const [first, second, late] = await architect.addPackages([974, 975, 976]
+    .map((number) => contract(`Package ${number}`, { branch_pattern: `feature/delivery-${number}` })));
+  const declare = (work_package_id: string, number: number) => ({
+    work_package_id, target: { kind: 'pr', id: `example/service#${number}` }, active: true, summary: 'The prerequisite PR must merge.',
+  });
+  for (const [id, number, sha] of [[first, 974, head('a')], [second, 975, head('b')], [late, 976, head('c')]] as const) {
+    await architect.call('dispatch_work_package', { work_package_id: id });
+    provider.set(number, pr(number, sha));
+    if (id !== late) await sync(architect, id, number, sha);
+  }
+
+  await architect.call('set_blocker', declare(first, 975));
+  await architect.reject('set_blocker', declare(second, 974), 'blocker_cycle');
+  expect((await architect.call('set_blocker', declare(late, 976))).blocker.state).toBe('waiting');
+  for (const _sweep of [1, 2]) {
+    await factory.tick('sweep');
+    expect((await row(architect, request, late)).blockers).toMatchObject([{ state: 'impossible', next_action: 'replan' }]);
+  }
+});
+
 test('the watcher carries a dispatched package through ready to a recorded merge with no architect call, and a restart replays nothing', async ({ watched: { factory, provider, restart } }) => {
   let architect = await factory.client();
   const request = await architect.request('Watched delivery');

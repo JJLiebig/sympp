@@ -40,6 +40,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerTarget do
 
   def pr_entry(_target), do: nil
 
+  @spec attached_pr_id(term()) :: String.t() | nil
+  def attached_pr_id({:ok, %{ref: %{repository: repository, number: number}}}) do
+    "#{String.downcase(repository)}##{number}"
+  end
+
+  def attached_pr_id(_attachment), do: nil
+
   @spec initial_snapshot([target()]) :: map()
   def initial_snapshot(targets), do: targets |> Enum.flat_map(&List.wrap(pr_entry(&1))) |> Snapshot.fetch()
 

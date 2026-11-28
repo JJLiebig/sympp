@@ -135,9 +135,14 @@ deliveryTest('typed dependencies reuse plan edges and reject cycles across packa
   expect((await architect.call('dispatch_work_package', { work_package_id: second })).work_package.id).toBe(second);
 
   const [cancelled, retired] = await architect.addPackages([contract('Cancelled prerequisite'), contract('Retired dependent')]);
-  await close(architect, cancelled, 'skipped', {});
+  await architect.call('edit_plan', { ops: [{ op: 'set_dependency', from: cancelled, to: retired }] });
+  await architect.call('close_work_package', { work_package_id: cancelled, outcome: 'skipped' });
+  await architect.reject('set_blocker', declare(retired, packageTarget(cancelled)), 'blocker_cycle');
+  expect((await architect.call('read_work_request', { work_request_id: request, view: 'plan' })).plan.dependencies)
+    .not.toContainEqual(expect.objectContaining({ from: retired, to: cancelled }));
+  await architect.call('edit_plan', { ops: [{ op: 'remove_dependency', from: cancelled, to: retired }] });
   expect((await architect.call('set_blocker', declare(retired, packageTarget(cancelled)))).blocker.state).toBe('impossible');
-  await close(architect, retired, 'skipped', {});
+  await architect.call('close_work_package', { work_package_id: retired, outcome: 'skipped' });
   const native = await architect.inspect(`/api/v1/sympp/herdr/work-requests/${request}`);
   expect(native.work_packages.find((row: any) => row.id === retired).blockers).toEqual([]);
 });

@@ -65,11 +65,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Blockers do
     do: PlanEdit.set_blocker(repo, package, blocker, actor && actor.id)
 
   defp apply_declaration(repo, actor, package, %{id: id, active: true} = blocker, snapshots) do
-    with :ok <- require_external_pr(repo, package.id, blocker.target),
-         :ok <- BlockerObservations.require_acyclic(repo, package.work_request_id, [blocker.target]),
-         {:ok, current} <- current(repo, package.id, id) do
-      state = BlockerTarget.state(repo, blocker.target, snapshots)
+    state = BlockerTarget.state(repo, blocker.target, snapshots)
+    target = Map.put(blocker.target, "state", state)
 
+    with :ok <- require_external_pr(repo, package.id, blocker.target),
+         :ok <- BlockerObservations.require_acyclic(repo, {"work_package", package.id}, [target]),
+         {:ok, current} <- current(repo, package.id, id) do
       if current && current.target == blocker.target && current.summary == blocker.summary && observed_state(current) == state,
         do: {:ok, current, :unchanged},
         else: append(repo, actor, package.id, blocker, state)
@@ -87,17 +88,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Blockers do
 
   defp require_external_pr(repo, package_id, %{"kind" => "pr", "id" => id}) do
     with {:ok, attachments} <- PlanningRepository.pr_attachments(repo, [package_id]) do
-      check_pr_target(attachments[package_id], id)
+      if BlockerTarget.attached_pr_id(attachments[package_id]) == id, do: {:error, :blocker_cycle}, else: :ok
     end
   end
 
   defp require_external_pr(_repo, _package_id, _target), do: :ok
-
-  defp check_pr_target({:ok, %{ref: %{repository: repository, number: number}}}, id) do
-    if id == "#{String.downcase(repository)}##{number}", do: {:error, :blocker_cycle}, else: :ok
-  end
-
-  defp check_pr_target(_attachment, _id), do: :ok
 
   @spec observed_state(map()) :: BlockerTarget.state()
   def observed_state(blocker), do: if(blocker.unknown, do: "unknown", else: blocker.state)
