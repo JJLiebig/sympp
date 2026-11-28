@@ -128,8 +128,7 @@ test('unknown inputs never end a card, a finished terminal without a PR does, an
 
   // The operator's answer is submitted to the asking terminal.
   const ask = (await early.call('ask', { question: 'Ship the dark theme?' })).ask;
-  expect(ask.card_id).toBe(board['Asking'].id);
-  expect((await cards(architect))['Asking'].asks.map((item: any) => item.id)).toEqual([ask.id]);
+  expect((await cards(architect))['Asking'].asks).toMatchObject([{ id: ask.id, card_id: board['Asking'].id }]);
   await early.reject('resolve_ask', { ask_id: ask.id, to: 'answered', answer: 'Yes',
     decision: { source_type: 'human', decision: 'Yes', rationale: 'Asked', scope_impact: 'None' } }, 'decision_needs_work_request');
   const answered = await architect.operator(`/api/v1/sympp/operator/asks/${ask.id}/answer`, { answer: 'Yes, ship it.' });
@@ -147,7 +146,7 @@ test('unknown inputs never end a card, a finished terminal without a PR does, an
   ].join('\n')]);
   // The agent can also read the answer from its card.
   const health = await early.call('sympp.health');
-  expect(health.caller.card).toMatchObject({ state: 'working', asks: [{ id: ask.id, answer: 'Yes, ship it.', state: 'answered' }] });
+  expect(health.caller.card).toMatchObject({ id: ask.card_id, state: 'working', asks: [{ id: ask.id, answer: 'Yes, ship it.', state: 'answered' }] });
   expect((await architect.call('sympp.health')).caller.card).toBeUndefined();
 
   // Dismissing from Herdr withdraws open asks; dismissing again changes nothing.
