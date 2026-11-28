@@ -378,7 +378,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
         archived_operational_state(work_request, attention_items)
 
       phase == "done" and not is_nil(work_request.operator_completed_at) ->
-        operational_state_map("completed", "Completed", "success", "The operator marked this WorkRequest done.", phase, attention_items)
+        operational_state_map("completed", "Completed", "success", "This WorkRequest was marked done.", phase, attention_items)
 
       true ->
         derived_operational_state(promoted_state, work_packages, phase, attention_items, delivery_state_opts)

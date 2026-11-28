@@ -57,6 +57,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolError do
   defp needs_target?(code, _data) when code in @no_lookup_codes, do: false
   defp needs_target?(_code, data), do: not Map.has_key?(data, "state") or is_nil(data["next_action"])
 
+  defp target(repo, "complete_work_request", arguments), do: target(repo, nil, Map.take(arguments, ["work_request_id"]))
   defp target(repo, _tool, %{"work_package_id" => id}) when is_binary(id) and id != "", do: lookup(fn -> repo.get(WorkPackage, id) end)
   defp target(repo, _tool, %{"ask_id" => id}) when is_binary(id) and id != "", do: lookup(fn -> repo.get(Ask, id) end)
   defp target(repo, _tool, %{"work_request_id" => id}) when is_binary(id) and id != "", do: lookup(fn -> work_request_target(repo, id) end)

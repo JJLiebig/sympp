@@ -432,7 +432,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
      %{
        "tool" => tool,
        "reason" => "chief_only",
-       "state" => nil,
        "next_action" => "Ask a chief to complete the WorkRequest."
      }}
   end

@@ -263,7 +263,8 @@ test('a chief can complete a WorkRequest owned by an architect', async ({ proces
   const target = { work_request_id: await architect.request('Chief completion authority') };
   await architect.addPackages([contract('Planned package')]);
 
-  await architect.reject('complete_work_request', target, 'chief_only');
+  const refused = await architect.reject('complete_work_request', { ...target, work_package_id: 'unused' }, 'chief_only');
+  expect(refused.state).toBe('planned');
   expect((await architect.call('read_work_request', target)).work_request.phase).toBe('planned');
   expect(await chief.call('complete_work_request', target)).toEqual({ ...target, phase: 'done' });
   expect((await architect.call('read_work_request', target)).work_request.phase).toBe('done');
