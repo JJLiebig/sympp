@@ -413,18 +413,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
             card
 
           %Card{} = card ->
-            now = DateTime.utc_now(:microsecond)
-
-            Enum.reduce(branch_cards(repo, card), card, fn member, requested ->
-              dismissed = repo.update!(Ecto.Changeset.change(member, state: "dismissed", ended_at: member.ended_at || now, observed_at: now))
-              end_card(repo, member.id)
-              if member.id == card.id, do: dismissed, else: requested
-            end)
+            dismiss_branch(repo, card)
         end
       end,
       mode: :immediate
     )
     |> DashboardPubSub.broadcast_changed_on_success()
+  end
+
+  defp dismiss_branch(repo, card) do
+    now = DateTime.utc_now(:microsecond)
+
+    Enum.reduce(branch_cards(repo, card), card, fn member, requested ->
+      dismissed = repo.update!(Ecto.Changeset.change(member, state: "dismissed", ended_at: member.ended_at || now, observed_at: now))
+      end_card(repo, member.id)
+      if member.id == card.id, do: dismissed, else: requested
+    end)
   end
 
   defp branch_cards(repo, card) do
