@@ -623,7 +623,7 @@ test('the watcher clears merged PR blockers, marks closed PRs impossible and kee
   expect(await blockerActive(reader, wp)).toBe(false);
   const read = await reader.call('read_work_request', { work_request_id: request });
   expect(read.work_request.next_action).toBe('replan');
-  expect(read.blockers).toMatchObject([
+  expect((await reader.board(request)).blockers).toMatchObject([
     { target: target(972), state: 'impossible', next_action: 'replan' },
     { target: target(973), state: 'cleared', next_action: 'dispatch' },
     { target: target(971), work_package_id: wp, summary: declaration.summary, state: 'cleared', next_action: 'dispatch' },

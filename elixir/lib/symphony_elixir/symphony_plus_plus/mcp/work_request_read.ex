@@ -141,7 +141,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
       Map.merge(payload, %{
         "work_request" => work_request,
         "work_packages" => Enum.map(rows, &overview_row(&1, phase)),
-        "blockers" => blocker_rows(request_blockers, rows),
+        "blockers" => blocker_rows(request_blockers, []),
         "asks" => asks,
         "decisions" => Enum.map(decisions, &headline/1),
         "older_decision_count" => repo.aggregate(query, :count, :id) - length(decisions)

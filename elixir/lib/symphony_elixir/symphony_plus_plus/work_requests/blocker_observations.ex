@@ -50,7 +50,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
 
       ids ->
         edges = repo |> watch() |> targets() |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
-        if reaches?(ids, request_id, edges, MapSet.new()), do: {:error, :blocker_cycle}, else: :ok
+        if reaches?(ids, request_id, edges, %{}), do: {:error, :blocker_cycle}, else: :ok
     end
   end
 
@@ -58,8 +58,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
   defp reaches?([goal | _rest], goal, _edges, _seen), do: true
 
   defp reaches?([id | rest], goal, edges, seen) do
-    next = if MapSet.member?(seen, id), do: rest, else: request_ids(Map.get(edges, id, [])) ++ rest
-    reaches?(next, goal, edges, MapSet.put(seen, id))
+    next = if Map.has_key?(seen, id), do: rest, else: request_ids(Map.get(edges, id, [])) ++ rest
+    reaches?(next, goal, edges, Map.put(seen, id, true))
   end
 
   defp request_ids(targets), do: for(%{"kind" => "work_request", "id" => id} <- targets, do: id)

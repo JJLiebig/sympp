@@ -73,7 +73,7 @@ deliveryTest('answering or withdrawing an ask changes only the blockers that nam
   await factory.tick('sweep');
   expect(await blockerActive(architect, affected)).toBe(false);
   const read = await architect.call('read_work_request', { work_request_id: id });
-  expect(read.blockers).toMatchObject([
+  expect((await architect.board(id)).blockers).toMatchObject([
     { target, state: 'cleared', next_action: 'dispatch' },
     { target: { id: withdrawn }, state: 'impossible', next_action: 'replan' },
     { target, work_package_id: affected, summary: declaration.summary, state: 'cleared', next_action: 'dispatch' },

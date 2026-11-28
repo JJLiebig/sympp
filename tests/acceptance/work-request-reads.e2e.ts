@@ -103,7 +103,7 @@ test('Kraken-sized status reads fit their model budgets and expose actionable ev
   const rows = board.payload.delivery_board.work_packages;
   expect(rows).toHaveLength(20);
   expect(rows.find((row: any) => row.id === ids[48])).toMatchObject({
-    next_actor: 'architect', next_action: 'deliver_prerequisites', merge_eligibility: { eligible: false },
+    next_actor: 'architect', next_action: 'replan', merge_eligibility: { eligible: false },
   });
   expect(rows.find((row: any) => row.id === ids[56])).toMatchObject({
     pr_url: prUrl(760), head_sha: head('0'), ci: { status: 'pending' }, merge_eligibility: { eligible: false },
