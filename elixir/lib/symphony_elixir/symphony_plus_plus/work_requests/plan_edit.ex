@@ -68,13 +68,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlanEdit do
          {:ok, ^to} <- resolve(to, context),
          edges = dependency_edges(context, from, to),
          {:ok, changed} <- change_blocker_edge(edges, from, to, active, summary, context),
-         {:ok, graph} <- ExecutionGraph.evaluate(repo, package.work_request_id) do
-      case {active, Enum.find(graph.effective_edges, &(&1.dependent_work_package_id == from and &1.prerequisite_work_package_id == to))} do
-        {true, _edge} when graph.cycles != [] -> {:error, :blocker_cycle}
-        {true, edge} -> blocker_receipt(blocker, BlockerTarget.dependency_state(edge.waiting_for), changed)
-        {false, _edge} -> blocker_receipt(blocker, "cleared", changed)
-      end
+         {:ok, graph} <- ExecutionGraph.evaluate(repo, package.work_request_id),
+         edge = Enum.find(graph.effective_edges, &(&1.dependent_work_package_id == from and &1.prerequisite_work_package_id == to)),
+         false <- active and ExecutionGraph.blocker_cycle?(graph, edge) do
+      blocker_receipt(blocker, BlockerTarget.dependency_state(if(edge, do: edge.waiting_for, else: [])), changed)
     else
+      true -> {:error, :blocker_cycle}
       {:error, {:self_dependency, _id}} -> {:error, :blocker_cycle}
       error -> error
     end

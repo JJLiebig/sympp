@@ -49,7 +49,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerTarget do
       %{"kind" => "pr"} -> pr_state(snapshots[pr_entry(target)])
       %{"kind" => "ask", "id" => id} -> ask_state(repo.get(Ask, id))
       %{"kind" => "work_request", "id" => id} -> request_state(repo, repo.get(WorkRequest, id))
-      %{"kind" => "work_package", "id" => id} -> package_state(repo, repo.get(WorkPackage, id))
+      %{"kind" => "work_package", "id" => id} -> package_state(repo, id)
     end
   rescue
     _error in Exqlite.Error -> "unknown"
@@ -76,17 +76,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerTarget do
     end
   end
 
-  defp package_state(_repo, nil), do: "unknown"
-  defp package_state(_repo, %WorkPackage{status: status}) when status != "ended", do: "waiting"
+  defp package_state(repo, id) do
+    case package_waits(repo, id) do
+      {:ok, waiting} -> dependency_state(waiting)
+      {:error, _reason} -> "unknown"
+    end
+  end
 
-  defp package_state(repo, package) do
+  @spec package_waits(module(), String.t()) :: {:ok, [map()]} | {:error, term()}
+  def package_waits(repo, id) do
+    case repo.get(WorkPackage, id) do
+      %WorkPackage{status: "ended"} = package -> ended_package_waits(repo, package)
+      %WorkPackage{} -> {:ok, [%{work_package_id: id, ended_as: nil}]}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  defp ended_package_waits(repo, package) do
     with {:ok, packages} <- Repository.list_work_packages(repo, package.work_request_id),
          {:ok, successors} <- ExecutionGraph.successors(repo, packages) do
       deliveries = Phase.delivery_records(repo, Enum.map(packages, & &1.id))
       waiting = DeliveryResolution.waiting_for(package.id, Map.new(packages, &{&1.id, &1}), deliveries, successors)
-      dependency_state(waiting)
-    else
-      {:error, _reason} -> "unknown"
+      {:ok, waiting}
     end
   end
 

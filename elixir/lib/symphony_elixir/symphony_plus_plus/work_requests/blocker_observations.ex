@@ -50,17 +50,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
 
       ids ->
         edges = repo |> watch() |> targets() |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
-        if reaches?(ids, request_id, edges, %{}), do: {:error, :blocker_cycle}, else: :ok
+        if reaches?(repo, ids, request_id, edges, %{}), do: {:error, :blocker_cycle}, else: :ok
     end
   end
 
-  defp reaches?([], _goal, _edges, _seen), do: false
-  defp reaches?([goal | _rest], goal, _edges, _seen), do: true
+  defp reaches?(_repo, [], _goal, _edges, _seen), do: false
+  defp reaches?(_repo, [goal | _rest], goal, _edges, _seen), do: true
 
-  defp reaches?([id | rest], goal, edges, seen) do
-    next = if Map.has_key?(seen, id), do: rest, else: request_ids(Map.get(edges, id, [])) ++ rest
-    reaches?(next, goal, edges, Map.put(seen, id, true))
+  defp reaches?(repo, [id | rest], goal, edges, seen) do
+    waits = request_ids(Map.get(edges, id, []))
+    unseen? = not Map.has_key?(seen, id)
+    next = if unseen? and waits != [] and unresolved_request?(repo, id), do: waits ++ rest, else: rest
+    reaches?(repo, next, goal, edges, Map.put(seen, id, true))
   end
+
+  defp unresolved_request?(repo, id), do: BlockerTarget.state(repo, %{"kind" => "work_request", "id" => id}, %{}) in ["waiting", "unknown"]
 
   defp request_ids(targets), do: for(%{"kind" => "work_request", "id" => id} <- targets, do: id)
   defp request_waiting?(request), do: is_nil(request.report["parking"]["resumed_at"]) and Enum.any?(request.report["parking"]["targets"], &(&1["state"] != "cleared"))

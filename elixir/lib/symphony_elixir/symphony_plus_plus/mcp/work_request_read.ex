@@ -11,6 +11,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, WorkPackage, WorkPackageDelivery}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerTarget
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{DecisionLogEntry, DeliveryBoard, OperatorReport, Phase}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
@@ -125,7 +126,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
     report = report_preview(OperatorReport.public(request.report))
     phase = payload["work_request"]["phase"]
     request_blockers = OperatorReport.blockers(request.report)
-    {action, actor} = request_action(phase, asks, request_blockers, rows)
+    {action, actor} = request_action(phase, asks, request_blockers, rows, repo)
 
     work_request =
       payload["work_request"]
@@ -338,22 +339,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
     end)
   end
 
-  defp request_action("archived", _asks, _report, _rows), do: {Phase.next_action("archived"), "operator"}
-  defp request_action("done", _asks, _report, _rows), do: {"done", nil}
-  defp request_action("unresolved", _asks, _report, _rows), do: {Phase.next_action("unresolved"), "operator"}
-  defp request_action(_phase, [_ | _], _report, _rows), do: {"answer_ask", "operator"}
+  defp request_action("archived", _asks, _blockers, _rows, _repo), do: {Phase.next_action("archived"), "operator"}
+  defp request_action("done", _asks, _blockers, _rows, _repo), do: {"done", nil}
+  defp request_action("unresolved", _asks, _blockers, _rows, _repo), do: {Phase.next_action("unresolved"), "operator"}
+  defp request_action(_phase, [_ | _], _blockers, _rows, _repo), do: {"answer_ask", "operator"}
 
-  defp request_action(phase, _asks, blockers, rows) do
+  defp request_action(phase, _asks, blockers, rows, repo) do
     case Signals.blocker_action(blockers) do
       action when action in ["replan", "reclassify"] -> {action, "architect"}
-      "wait" -> request_wait(blockers, rows)
+      "wait" -> request_wait(repo, blockers, rows)
       nil when phase == "intake" -> {"edit_plan", "architect"}
       nil -> Enum.find_value(rows, &actionable_package/1) || activity(List.first(rows))
     end
   end
 
-  defp request_wait(blockers, rows) do
-    prerequisites = for %{state: "waiting", target: %{"kind" => "work_package", "id" => id}} <- blockers, do: id
+  defp request_wait(repo, blockers, rows) do
+    prerequisites =
+      for %{state: "waiting", target: %{"kind" => "work_package", "id" => id}} <- blockers,
+          {:ok, waits} <- [BlockerTarget.package_waits(repo, id)],
+          %{work_package_id: prerequisite, ended_as: nil} <- waits,
+          do: prerequisite
+
     Enum.find_value(rows, fn row -> if row.id in prerequisites, do: actionable_package(row) end) || {"wait", nil}
   end
 

@@ -506,7 +506,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     delivery = delivery_for_slice(deliveries_by_slice_id, work_package)
     work_package_summary = slice_work_package_summary(work_package.id, delivery, context, opts)
     events = Map.get(context.progress_events, work_package.id, [])
-    blockers = BlockerProjection.blockers(events) ++ Signals.dependency_blockers(context, work_package.id)
+    blockers = package_blockers(work_package, context, events)
     work_package_summary = if work_package_summary, do: Map.put(work_package_summary, :blockers, blockers)
     operational_work_package = work_package_summary || hidden_work_package_marker(work_package, context)
     operational_state = operational_state(work_package, delivery, operational_work_package)
@@ -534,6 +534,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
       full_slice(work_package, delivery, context, work_package_summary, successor, operational_state, eligibility)
     end
   end
+
+  defp package_blockers(%WorkPackage{status: "ended"}, _context, _events), do: []
+
+  defp package_blockers(work_package, context, events),
+    do: BlockerProjection.blockers(events) ++ Signals.dependency_blockers(context, work_package.id)
 
   defp operational_slice(%WorkPackage{} = work_package, delivery, operational_state, eligibility, context) do
     %{

@@ -395,11 +395,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
     do: {"pr_closed", "architect", "close_work_package"}
 
   defp next_activity(work_package, summary, review, worker) do
+    activity = package_activity(work_package, summary, review, worker)
     blockers = Enum.reject(Map.get(summary, :blockers, []), &(&1.next_action == "wait" and match?(%{"kind" => "work_package"}, &1.target)))
 
-    case blocker_action(blockers) do
-      nil -> package_activity(work_package, summary, review, worker)
-      action -> {"active_blocker", "architect", action}
+    case {blocker_action(blockers), activity} do
+      {_blocker, {_reason, _actor, action}} when action in ["run_launch_line", "inspect_worker", "sync_pr"] -> activity
+      {nil, _activity} -> activity
+      {action, _activity} -> {"active_blocker", "architect", action}
     end
   end
 

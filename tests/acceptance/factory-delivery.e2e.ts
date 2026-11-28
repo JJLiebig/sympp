@@ -556,6 +556,7 @@ test('architect integration holds gate a ready PR without reopening work or chan
   expect(before.merge_eligibility.eligible).toBe(true);
   const metadata = (await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).metadata;
   const hold = { work_package_id: wp, target: unknownRequest('integration-authority'), active: true, summary: 'Integration requires a final human decision.' };
+  await architect.reject('set_blocker', { ...hold, target: { kind: 'pr', id: 'Example/Service#801' } }, 'blocker_cycle');
   const outsider = await factory.client();
   await outsider.request('Unrelated authority');
   expect((await outsider.rpc('tools/call', { name: 'set_blocker', arguments: hold })).error).toBeTruthy();

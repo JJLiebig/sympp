@@ -196,6 +196,7 @@ test('package endings follow their allowed statuses, replay idempotently and cle
   for (const [work_package_id, blocker_id] of [[dispatched, 'ended-blocker'], [sibling, 'sibling-blocker']]) {
     await architect.call('set_blocker', { work_package_id, target: unknownRequest(blocker_id), active: true, summary: `Blocked by ${blocker_id}` });
   }
+  expect((await architect.board(id)).work_packages.find((entry: any) => entry.id === sibling).next_action).toBe('run_launch_line');
   const ending = { work_package_id: dispatched, outcome: 'abandoned', rationale: 'Rehomed.' };
   const first = await architect.call('close_work_package', ending);
   expect(first.work_package.status).toBe('ended');

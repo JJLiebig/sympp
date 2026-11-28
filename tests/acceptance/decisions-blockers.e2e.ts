@@ -96,7 +96,7 @@ deliveryTest('typed dependencies reuse plan edges and reject cycles across packa
   const other = await factory.client();
   const request = await architect.request('Product delivery');
   const otherId = await other.request('Prerequisite delivery');
-  const [first, second] = await architect.addPackages([contract('Prerequisite'), contract('Dependent')]);
+  const [first, second, replacement] = await architect.addPackages([contract('Prerequisite'), contract('Dependent'), contract('Replacement prerequisite')]);
   const [foreign] = await other.addPackages([contract('Shared prerequisite')]);
   const packageTarget = (id: string) => ({ kind: 'work_package', id });
   const requestTarget = (id: string) => ({ kind: 'work_request', id });
@@ -114,7 +114,17 @@ deliveryTest('typed dependencies reuse plan edges and reject cycles across packa
   expect((await architect.call('read_work_request', { work_request_id: request })).work_request.next_action).toBe('dispatch_work_package');
   await other.reject('set_blocker', declare(foreign, requestTarget(request)), 'blocker_cycle');
   await other.reject('set_report', { parking: { targets: [requestTarget(request)] } }, 'blocker_cycle');
-  await close(architect, first);
+  await close(architect, first, 'superseded', { successor_work_package_id: replacement, rationale: 'The replacement covers the same acceptance.' });
+  await architect.reject('set_blocker', declare(replacement, packageTarget(first)), 'blocker_cycle');
+  expect((await architect.call('read_work_request', { work_request_id: request })).work_request.next_action).toBe('dispatch_work_package');
+
+  const completed = await factory.client();
+  const completedId = await completed.request('Delivered with old wait');
+  await completed.call('set_report', { parking: { targets: [requestTarget(otherId)] } });
+  await completed.call('complete_work_request', { work_request_id: completedId });
+  expect((await other.call('set_blocker', declare(foreign, requestTarget(completedId)))).blocker.state).toBe('cleared');
+
+  await close(architect, replacement);
   await close(other, foreign);
   await factory.tick('sweep');
   expect((await architect.board(request)).blockers).toMatchObject([
@@ -123,6 +133,13 @@ deliveryTest('typed dependencies reuse plan edges and reject cycles across packa
     { target: packageTarget(first), work_package_id: second, state: 'cleared' },
   ]);
   expect((await architect.call('dispatch_work_package', { work_package_id: second })).work_package.id).toBe(second);
+
+  const [cancelled, retired] = await architect.addPackages([contract('Cancelled prerequisite'), contract('Retired dependent')]);
+  await close(architect, cancelled, 'skipped', {});
+  expect((await architect.call('set_blocker', declare(retired, packageTarget(cancelled)))).blocker.state).toBe('impossible');
+  await close(architect, retired, 'skipped', {});
+  const native = await architect.inspect(`/api/v1/sympp/herdr/work-requests/${request}`);
+  expect(native.work_packages.find((row: any) => row.id === retired).blockers).toEqual([]);
 });
 
 test('package endings withdraw their asks, and chiefs and the owner can resolve WorkRequest asks', async ({ factory }) => {
