@@ -162,8 +162,8 @@ Retire a replaced package as soon as its successors exist. For `superseded` or
 `abandoned`, also close its PR with a comment naming the successors (the branch
 stays) and close its worker terminal.
 
-When every package has ended the WorkRequest is `done` or `unresolved`. Only the
-operator completes or archives it.
+When every package has ended the WorkRequest is `done` or `unresolved`.
+Leave completion to a chief and archive to the operator.
 
 ## Product calls
 

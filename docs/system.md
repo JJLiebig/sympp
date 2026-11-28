@@ -31,9 +31,10 @@ readiness. Visual card order and grouping do not create dependencies. The
 architect changes the plan with one atomic `edit_plan` call per change and reads
 it with `read_work_request` views.
 
-A WorkRequest's phase is derived on read from its packages and their endings;
-only the operator overrides are stored. The first match wins: `archived`
-(archived by the operator or retention), `done` (completed by the operator),
+A WorkRequest's phase is derived on read from its packages and their endings,
+while explicit completion and archive state are stored. The phase uses the
+first match among `archived` (archived by the operator or retention), `done`
+(explicitly marked done by a chief or the operator),
 `intake` (no packages), `active` (a package is dispatched or ready), `planned`
 (a package is still planned, even beside ended ones), `unresolved` (every
 package ended, but every one was skipped or one does not resolve the goal) and
@@ -147,7 +148,7 @@ the artifact fingerprint and complete tool-name sets for non-Elixir release
 smoke tests. A runtime test keeps those names aligned with `ToolCatalog`; the
 artifact does not duplicate schemas.
 
-Every chief, architect or card terminal is served the same 14 tools, one schema
+Every chief, architect or card terminal is served the same tools, one schema
 each; worker terminals get none. A refused tool call's `error.data` carries
 `code`, `message`, `state` (the actual WorkPackage status, WorkRequest phase or
 ask state, or `null` when the call names nothing that exists) and

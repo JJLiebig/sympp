@@ -1,5 +1,5 @@
 {
-  "mcp_contract_fingerprint": "2e6901f4d2ede4dc9b685d5b65bad65f7aa2439fba882f5acb6fece4c02d0912",
+  "mcp_contract_fingerprint": "4aaa9b240e75a14b68812539ba9f7cb4646f32a1b3dec4db5e2e967641879b1f",
   "tool_sets": {
     "owner_gated_tools": [
       "move_work_request",
@@ -21,6 +21,7 @@
       "list_work_requests",
       "read_work_request",
       "create_work_request",
+      "complete_work_request",
       "move_work_request",
       "edit_plan",
       "dispatch_work_package",

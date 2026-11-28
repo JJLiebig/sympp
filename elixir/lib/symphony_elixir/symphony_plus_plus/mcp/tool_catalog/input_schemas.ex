@@ -46,6 +46,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
+  defp tool_schema("complete_work_request") do
+    schema(%{"work_request_id" => string_schema()}, ["work_request_id"])
+    |> Map.put("additionalProperties", true)
+  end
+
   defp tool_schema("move_work_request") do
     schema(
       %{

@@ -27,6 +27,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "list_work_requests",
     "read_work_request",
     "create_work_request",
+    "complete_work_request",
     "move_work_request",
     "edit_plan",
     "dispatch_work_package",
@@ -115,6 +116,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   defp description("create_work_request"),
     do: "Create a WorkRequest. The calling terminal becomes its owner unless own is false."
+
+  defp description("complete_work_request"), do: "Chief only. Mark a WorkRequest done."
 
   defp description("move_work_request"),
     do:

@@ -418,6 +418,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp run("set_blocker", arguments, terminal, %__MODULE__{config: config}),
     do: BlockerTools.call("set_blocker", config, terminal, arguments)
 
+  defp run("complete_work_request" = tool, %{"work_request_id" => id}, %Terminal{role: "chief"}, %__MODULE__{config: config}) do
+    case WorkRequestService.complete(config.repo, String.trim(id)) do
+      {:ok, work_request} -> {:ok, ToolResult.receipt_result(%{"work_request_id" => work_request.id, "phase" => "done"})}
+      {:error, :not_found} -> not_found_error(tool)
+      {:error, :work_request_archived} -> archived_error(tool)
+      {:error, _reason} -> service_error(tool)
+    end
+  end
+
+  defp run("complete_work_request" = tool, _arguments, _terminal, _server) do
+    {:error, -32_003, "Forbidden",
+     %{
+       "tool" => tool,
+       "reason" => "chief_only",
+       "state" => nil,
+       "next_action" => "Ask a chief to complete the WorkRequest."
+     }}
+  end
+
   defp run("set_report", arguments, _terminal, %__MODULE__{config: config}) do
     case OperatorReport.set(config.repo, Map.fetch!(arguments, "work_request_id"), arguments) do
       {:ok, %WorkRequest{id: work_request_id}, applied} ->
