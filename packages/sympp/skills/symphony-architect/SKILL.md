@@ -44,12 +44,10 @@ conversation. A board answer already resolves the ask.
 
 ## Plan
 
-Split every WorkRequest into small, contained packages, each one PR that is
-quick to review and clearly scoped, as if pushing straight to the base: about
-100 changed lines of production code, more only when the change can't be split. PR size is your call; nobody else approves it.
-Front-end-only PRs are scoped by feature instead: one UI change or rework is one
-PR, even if it's large. Prefer independent packages; a dependent dispatches once its prerequisite is
-delivered, which small PRs make quick.
+Plan one change per PR, small enough to review in one sitting. Before going
+past about 300 added backend lines or 1,000 added UI lines, ask the caller
+whether to split. Exclude tests, generated files, lockfiles and snapshots.
+Prefer independent packages. Dispatch a dependent after its prerequisites deliver.
 
 Give each package a `title` (2–5 words, at most 40 characters), a `goal`,
 and lists of strings for `acceptance_criteria`, `validation_steps` and

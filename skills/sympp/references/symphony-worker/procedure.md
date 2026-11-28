@@ -11,7 +11,8 @@ the assignment file. Your assignment opens with what the WorkRequest is
 building and how your package fits into it. It names the branch, base and
 review step, and carries the contract: goal, owned and forbidden paths,
 acceptance, validation, dependencies and stop conditions. Stay inside that
-worktree and scope, and keep the PR small.
+worktree and scope.
+If a PR grows past about 300 added backend lines or 1,000 added UI lines, excluding tests, generated files, lockfiles and snapshots, ask your parent once whether to split before going on.
 Branch from the base and target it; never merge or cherry-pick another unmerged
 branch. Once handed off, leave the branch alone unless your parent asks.
 
