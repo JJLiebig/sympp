@@ -540,7 +540,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     do: service_error("create_work_request")
 
   defp create_work_request_error(reason),
-    do: {:error, -32_602, "Invalid params", %{"tool" => "create_work_request", "reason" => reason_text(reason)}}
+    do: ErrorDetails.invalid_params_error("create_work_request", reason)
 
   defp prepare_repository(repo, resource) do
     case Repository.ensure_migrated(repo) do
@@ -553,10 +553,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp not_found_error(tool), do: {:error, -32_004, "Not found", %{"tool" => tool, "reason" => "not_found"}}
   defp service_error(resource), do: {:error, -32_000, "Server error", %{"resource" => resource, "reason" => "ledger_unavailable"}}
-
-  defp reason_text(reason) when is_binary(reason), do: reason
-  defp reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp reason_text(reason), do: inspect(reason)
 
   defp request_params(%{"params" => params}) when is_map(params), do: {:ok, params}
   defp request_params(%{"params" => params}) when is_list(params), do: {:error, -32_602, "Invalid params", %{"reason" => "params_must_be_object"}}
