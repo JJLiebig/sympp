@@ -1409,6 +1409,14 @@ async function bridge(identity, state, runtimeFile) {
         }
         if (parsed?.method === "tools/call") {
           const payload = JSON.parse(content);
+          const caller = payload.result?.structuredContent?.caller;
+          if (useAgyHealthName && parsed.params?.name === "sympp.health" && caller) {
+            // Antigravity exposes text content to the agent without structuredContent.
+            const fields = ["caller:", `  access: ${JSON.stringify(caller.access)}`];
+            if (caller.terminal) fields.push(`  terminal: ${JSON.stringify(caller.terminal)}`);
+            payload.result.content.push({ type: "text", text: fields.join("\n") });
+            forwarded = JSON.stringify(payload);
+          }
           if ([-32601, -32602].includes(payload.error?.code) && sessionContract && sessionTools?.has(parsed.params?.name)) {
             const health = await backendHealth(current.identity.backend);
             if (health?.contract && health.contract !== sessionContract) {

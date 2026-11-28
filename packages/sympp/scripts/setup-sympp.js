@@ -16,12 +16,66 @@ function hostInstalled(host) {
   return spawnSync(process.platform === "win32" ? "where.exe" : "which", [host], { encoding: "utf8", windowsHide: true }).status === 0;
 }
 
-function parseAgyConfig(source) {
+function agyJson(source) {
+  // Keep offsets so setup can edit its own entry without removing JSONC comments.
   const withoutComments = source.replace(/"(?:\\[\s\S]|[^"\\])*"|\/\/[^\r\n]*|\/\*[\s\S]*?\*\//g,
-    token => token.startsWith('"') ? token : " ");
-  const json = withoutComments.replace(/"(?:\\[\s\S]|[^"\\])*"|,(?=\s*[}\]])/g,
-    token => token === "," ? "" : token);
-  return JSON.parse(json.trim() || "{}");
+    token => token.startsWith('"') ? token : token.replace(/[^\r\n]/g, " "));
+  return withoutComments.replace(/"(?:\\[\s\S]|[^"\\])*"|,(?=\s*[}\]])/g,
+    token => token === "," ? " " : token);
+}
+
+function jsonProperty(json, objectStart, key) {
+  const tokens = /"(?:\\[\s\S]|[^"\\])*"|[{}\[\]:,]|[^\s{}\[\]:,]+/g;
+  tokens.lastIndex = objectStart + 1;
+  let depth = 0, valueStart, valueEnd, range;
+  for (let match; (match = tokens.exec(json));) {
+    const token = match[0];
+    if (depth === 0) {
+      if (valueStart !== undefined && (token === "," || token === "}")) {
+        range = [valueStart, valueEnd];
+        valueStart = undefined;
+      }
+      if (token === "}") break;
+      const colon = token.startsWith('"') && /^\s*:\s*/.exec(json.slice(tokens.lastIndex));
+      if (colon && JSON.parse(token) === key) {
+        tokens.lastIndex += colon[0].length;
+        valueStart = tokens.lastIndex;
+        continue;
+      }
+    }
+    if (token === "{" || token === "[") depth++;
+    if (token === "}" || token === "]") depth--;
+    valueEnd = tokens.lastIndex;
+  }
+  return range;
+}
+
+function agyConfig(before, registration) {
+  const json = agyJson(before);
+  const config = JSON.parse(json.trim() || "{}");
+  const servers = config?.mcpServers ?? {};
+  if (!config || typeof config !== "object" || Array.isArray(config) || typeof servers !== "object" || Array.isArray(servers)) {
+    throw new Error("Antigravity CLI MCP configuration must contain a JSON object for its server entries.");
+  }
+  const previous = servers[name];
+  if (Object.hasOwn(servers, name) && previous?.env?.SYMPP_SKILLS_MANAGED !== "1") {
+    throw new Error("Antigravity CLI already has an unrelated sympp registration. Explicitly remove it before setup.");
+  }
+  const { command, args, env } = registration;
+  const next = { ...previous, command, args, env: { ...env, SYMPP_MCP_HOST: "agy" } };
+  if (isDeepStrictEqual(previous, next)) return before;
+
+  const rootStart = json.indexOf("{");
+  if (rootStart < 0) return `${before}${before ? "\n" : ""}${JSON.stringify({ mcpServers: { [name]: next } }, null, 2)}\n`;
+  const serverRange = jsonProperty(json, rootStart, "mcpServers");
+  const hasServers = config.mcpServers != null;
+  const objectStart = hasServers ? serverRange[0] : rootStart;
+  const range = hasServers ? jsonProperty(json, objectStart, name) : serverRange;
+  const value = JSON.stringify(hasServers ? next : { [name]: next });
+  if (range) return before.slice(0, range[0]) + value + before.slice(range[1]);
+  const key = hasServers ? name : "mcpServers";
+  const comma = Object.keys(hasServers ? servers : config).length ? "," : "";
+  return before.slice(0, objectStart + 1) + `\n  ${JSON.stringify(key)}: ${value}${comma}\n` + before.slice(objectStart + 1);
 }
 
 const begin = "# BEGIN sympp Skills MCP";
@@ -182,15 +236,8 @@ function main(args) {
   }
   if (hosts.includes("agy")) {
     const file = path.join(os.homedir(), ".gemini", "config", "mcp_config.json");
-    const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "{}";
-    const config = parseAgyConfig(before);
-    const servers = config.mcpServers ??= {};
-    const previous = servers[name];
-    if (Object.hasOwn(servers, name) && previous?.env?.SYMPP_SKILLS_MANAGED !== "1") {
-      throw new Error("Antigravity CLI already has an unrelated sympp registration. Explicitly remove it before setup.");
-    }
-    servers[name] = { ...previous, command: registration.command, args: registration.args, env: { ...env, SYMPP_MCP_HOST: "agy" } };
-    plans.push({ host: "agy", file, before, after: isDeepStrictEqual(previous, servers[name]) ? before : JSON.stringify(config, null, 2) + "\n" });
+    const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+    plans.push({ host: "agy", file, before, after: agyConfig(before, registration) });
   }
   if (remote) require("./sympp-remote.js").privateWrite(env.SYMPP_SERVER_TOKEN_FILE, remote.token);
   for (const plan of plans) {
