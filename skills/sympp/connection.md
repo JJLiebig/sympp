@@ -7,8 +7,9 @@ It needs Git, Node.js 22.20+, and PowerShell 7 on Windows.
 
 Install with `npx skills add JJLiebig/sympp -g`, then run
 `node ~/.agents/skills/sympp/scripts/setup-sympp.js` (Claude-only copies live in
-`~/.claude/skills/sympp`). Setup finds Codex and Claude Code on PATH; pick one
-with `--host codex|claude|both`. It installs the `sympp` command and, when
+`~/.claude/skills/sympp`). Setup finds Codex, Claude Code, and Antigravity CLI
+on PATH. Use `--host codex|claude|agy` to select one, or `--host both` for
+Codex and Claude Code. It installs the `sympp` command and, when
 Herdr-app is present, its panel. It doesn't add tools to open sessions: open a
 fresh agent session and check that the `sympp` tools are there.
 

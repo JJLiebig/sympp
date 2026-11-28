@@ -4,11 +4,12 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { isDeepStrictEqual } = require("node:util");
 
 const root = path.resolve(__dirname, "..");
 const name = "sympp";
 const oldName = "symphony_plus_plus";
-const usage = "sympp [board|update|status] [--host auto|codex|claude|both] [--server <ssh-host|http://127.0.0.1:19998>] [--help] [--version]";
+const usage = "sympp [board|update|status] [--host auto|codex|claude|agy|both] [--server <ssh-host|http://127.0.0.1:19998>] [--help] [--version]";
 const emit = (key, value) => process.stdout.write(`${key}: ${JSON.stringify(value)}\n`);
 
 function hostInstalled(host) {
@@ -110,17 +111,17 @@ function codexConfig(config, registration) {
 function main(args) {
   const install = JSON.parse(fs.readFileSync(path.join(root, fs.existsSync(path.join(root, ".sympp-install.json")) ? ".sympp-install.json" : "package.json"), "utf8"));
   if (args.length === 1 && ["--version", "-v", "-V"].includes(args[0])) { process.stdout.write(`${install.version}\n`); return; }
-  if (args.length === 1 && args[0] === "--help") { emit("usage", usage); emit("help", "Setup registers sympp for this user. sympp board opens the selected factory signed in. Omit --host to register installed Codex and Claude Code. Local setup: Windows x64. Remote setup: Windows and Linux."); return; }
+  if (args.length === 1 && args[0] === "--help") { emit("usage", usage); emit("help", "Setup registers sympp for this user. sympp board opens the selected factory signed in. Omit --host to register installed Codex, Claude Code, and Antigravity CLI. Local setup: Windows x64. Remote setup: Windows and Linux."); return; }
   let selection = "auto", server;
   for (let i = 0; i < args.length; i += 2) {
-    if (args[i] === "--host" && ["auto", "codex", "claude", "both"].includes(args[i + 1])) selection = args[i + 1];
+    if (args[i] === "--host" && ["auto", "codex", "claude", "agy", "both"].includes(args[i + 1])) selection = args[i + 1];
     else if (args[i] === "--server" && args[i + 1]) server = args[i + 1];
     else { emit("error", "Unknown argument. " + usage); process.exitCode = 2; return; }
   }
   if (!server && (process.platform !== "win32" || process.arch !== "x64")) throw new Error("Local sympp Skills setup supports Windows x64 only. Use --server for an existing factory.");
-  const commands = { codex: hostInstalled("codex"), claude: hostInstalled("claude") };
+  const commands = { codex: hostInstalled("codex"), claude: hostInstalled("claude"), agy: hostInstalled("agy") };
   const hosts = selection === "auto" ? Object.keys(commands).filter(host => commands[host]) : selection === "both" ? ["codex", "claude"] : [selection];
-  if (!hosts.length || hosts.some(host => !commands[host])) throw new Error("The selected host is not installed on PATH. Install Codex or Claude Code, then retry setup with --host codex or --host claude.");
+  if (!hosts.length || hosts.some(host => !commands[host])) throw new Error("The selected host is not installed on PATH. Install Codex, Claude Code, or Antigravity CLI, then retry setup.");
   const symppHome = path.resolve(process.env.SYMPP_HOME || path.join(os.homedir(), ".agents", "splusplus"));
   let env = {
     SYMPP_SKILLS_MANAGED: "1", SYMPP_RUNTIME_CHANNEL: "stable", SYMPP_HOME: symppHome,
@@ -170,6 +171,18 @@ function main(args) {
     const file = path.join(path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), ".codex")), "config.toml");
     const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
     plans.push({ host: "codex", file, before, after: codexConfig(before, registration) });
+  }
+  if (hosts.includes("agy")) {
+    const file = path.join(os.homedir(), ".gemini", "config", "mcp_config.json");
+    const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "{}";
+    const config = JSON.parse(before.trim() || "{}");
+    const servers = config.mcpServers ??= {};
+    const previous = servers[name];
+    if (Object.hasOwn(servers, name) && previous?.env?.SYMPP_SKILLS_MANAGED !== "1") {
+      throw new Error("Antigravity CLI already has an unrelated sympp registration. Explicitly remove it before setup.");
+    }
+    servers[name] = { ...previous, command: registration.command, args: registration.args, env };
+    plans.push({ host: "agy", file, before, after: isDeepStrictEqual(previous, servers[name]) ? before : JSON.stringify(config, null, 2) + "\n" });
   }
   if (remote) require("./sympp-remote.js").privateWrite(env.SYMPP_SERVER_TOKEN_FILE, remote.token);
   for (const plan of plans) {
