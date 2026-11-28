@@ -59,7 +59,7 @@ export type ArchitectReport = { brief: Note | null; eta: Note | null; parked: No
 export type DeployStep = { env: "Dev" | "Prod"; state: "ok" | "failed" | "pending" | "waiting"; at: number | null };
 export type Phase = "intake" | "planned" | "active" | "done" | "unresolved" | "archived";
 // `phase` is the backend's reading of the goal when it was read. `completedAt` and `archivedAt` place it in time for a replay.
-export type Goal = { id: string; title: string; area: string[]; org: string | null; repo: string; baseBranch: string | null; defaultBranch: string | null; createdAt: number; phase: Phase; completedAt: number | null; archivedAt: number | null; pkgs: Pkg[]; owner: Terminal | null; report?: ArchitectReport; deploy?: DeployStep[]; blockers?: Blocker[] };
+export type Goal = { id: string; title: string; area: string[]; org: string | null; repo: string; baseBranch: string | null; defaultBranch: string | null; createdAt: number; phase: Phase; completedAt: number | null; archivedAt: number | null; pkgs: Pkg[]; owner: Terminal | null; ownerStatus?: string | null; report?: ArchitectReport; deploy?: DeployStep[]; blockers?: Blocker[] };
 
 // A question for the operator. Its subject is a goal (optionally one of its packages) or a card.
 // With choices the answer is one of them; `redirect` names the extra choice of answering in free text instead.
@@ -112,7 +112,7 @@ export type OperatorReport = { brief?: Written | null; eta?: Written | null; par
 export type Prompt = { tl_dr?: string | null; details?: string | null; custom_redirect_label?: string | null; options?: Array<{ recommended?: boolean; id: string; label?: string | null; answer?: string | null; description?: string | null; pros?: string[] | null; cons?: string[] | null }> | null };
 export type AskEntry = { id: string; work_request_id?: string | null; work_package_id?: string | null; card_id?: string | null; question?: string | null; decision_prompt?: Prompt | null; state?: string | null; asked_by?: string | null; asked_at?: string | null; resolved_at?: string | null; answer?: string | null };
 export type DecisionEntry = { id: string; work_request_id: string; decision?: string | null; rationale?: string | null; recorded_by?: string | null; created_at?: string | null; review_state?: string | null; feedback?: string | null; undelivered_reason?: string | null };
-export type Request = { id: string; title?: string | null; phase?: string | null; repo?: string | null; repo_display?: string | null; repo_key?: string | null; repo_remote?: string | null; repo_aliases?: string[] | null; base_branch?: string | null; inserted_at?: string | null; completed_at?: string | null; operator_completed_at?: string | null; archived_at?: string | null; worked_on?: Owned | null; operator_report?: OperatorReport | null; area_path?: string[] | null; default_branch?: string | null; deployments?: Deployments | null; blockers?: Blocker[] };
+export type Request = { id: string; title?: string | null; phase?: string | null; repo?: string | null; repo_display?: string | null; repo_key?: string | null; repo_remote?: string | null; repo_aliases?: string[] | null; base_branch?: string | null; inserted_at?: string | null; completed_at?: string | null; operator_completed_at?: string | null; archived_at?: string | null; worked_on?: Owned | null; owner_status?: string | null; operator_report?: OperatorReport | null; area_path?: string[] | null; default_branch?: string | null; deployments?: Deployments | null; blockers?: Blocker[] };
 export type Detail = { work_request: Request; work_packages?: Slice[]; asks?: AskEntry[]; decisions_to_review?: DecisionEntry[] };
 export type CardEntry = { id: string; state?: string | null; title?: string | null; worked_on?: Owned | null; repository?: string | null; branch?: string | null; pr?: { repository?: string | null; number?: number | null; url?: string | null; state?: string | null; ci?: { status?: string | null } | null } | null; review?: { state?: string | null; status?: string | null } | null; stale?: string[] | null; asks?: AskEntry[] | null; since?: string | null; ended_at?: string | null; updated_at?: string | null };
 // What the operator can change. A backend that lacks a setting leaves it out.
@@ -195,6 +195,7 @@ function buildGoal(detail: Detail, history: Record<string, HistoryEvent[]>, now:
     archivedAt: ms(request.archived_at),
     pkgs: (detail.work_packages ?? []).map((slice) => ({ ...buildPkg(slice, history[slice.work_package_id || slice.id] ?? [], now), goalTitle: title, goalRepos: reposOf(request), area })),
     owner: ownerOf(request.worked_on),
+    ownerStatus: request.owner_status,
     report: reportOf(request.operator_report, now),
     blockers: request.blockers,
   };

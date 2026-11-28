@@ -93,25 +93,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
       %WorkRequest{archived_at: %DateTime{}} ->
         {:error, :work_request_archived}
 
-      %WorkRequest{} ->
+      %WorkRequest{} = request ->
         case live_row(repo, @subject, work_request_id) do
-          nil -> insert(repo, work_request_id, terminal)
+          nil -> insert(repo, request, terminal)
           %WorkedOn{terminal_key: key} = row when key == terminal.key -> {:ok, refresh_role(repo, row, terminal), :held}
-          %WorkedOn{} = row -> take_over_or_refuse(repo, row, work_request_id, terminal)
+          %WorkedOn{} = row -> take_over_or_refuse(repo, row, request, terminal)
         end
     end
   end
 
-  defp take_over_or_refuse(repo, %WorkedOn{} = row, work_request_id, terminal) do
+  defp take_over_or_refuse(repo, %WorkedOn{} = row, request, terminal) do
     if finished_on_factory_core?(row) do
       finish(repo, row, "taken_over")
-      insert(repo, work_request_id, terminal)
+      insert(repo, request, terminal)
     else
       {:error, {:owned_by_other_terminal, refusal(row)}}
     end
   end
 
-  defp insert(repo, work_request_id, %Terminal{} = terminal) do
+  defp insert(repo, %WorkRequest{id: work_request_id} = request, %Terminal{} = terminal) do
     now = DateTime.utc_now(:microsecond)
 
     row = %WorkedOn{
@@ -128,6 +128,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
 
     case repo.insert(Ecto.Changeset.unique_constraint(Ecto.Changeset.change(row), [:subject_kind, :subject_id], name: :sympp_worked_on_one_live_per_subject_index)) do
       {:ok, row} ->
+        if request.vacated_owner_id, do: repo.update!(Ecto.Changeset.change(request, vacated_owner_id: nil))
         {:ok, row, :acquired}
 
       {:error, %Ecto.Changeset{}} ->

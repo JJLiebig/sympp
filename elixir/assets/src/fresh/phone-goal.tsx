@@ -98,7 +98,7 @@ function GoalHead({ at, head, view }: { at: number; head: RefObject<HTMLElement 
       <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
         {view.ask ? <span className="text-xs font-semibold text-you">Needs you{view.asks.length > 1 ? ` · ${view.asks.length}` : ""}</span> : null}
         <SinceChip goalId={goal.id} />
-        <Who terminal={goal.owner} />
+        {goal.ownerStatus ? <span className="text-xs font-semibold text-checks">{goal.ownerStatus}</span> : <Who terminal={goal.owner} />}
       </p>
       {goal.owner?.liveness === "unknown" ? <Tap action={{ kind: "release", goalId: goal.id }} className="mt-3 items-start" confirm="Release?" label="Release" /> : null}
       <BlockerList blockers={goal.blockers} className="mt-3" />

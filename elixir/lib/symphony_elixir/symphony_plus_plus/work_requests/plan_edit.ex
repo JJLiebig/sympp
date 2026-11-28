@@ -220,6 +220,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlanEdit do
   defp require_acyclic_edit(_edges, _from, _to, _repo), do: :ok
 
   defp write_dependency([], from, to, reason, context) do
+    state = BlockerTarget.state(context.repo, %{"kind" => "work_package", "id" => to}, %{})
+
     %{
       "work_request_id" => context.work_request_id,
       "source_kind" => "work_package",
@@ -231,6 +233,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlanEdit do
     }
     |> put_present("reason", reason)
     |> DependencyEdge.create_changeset()
+    |> Ecto.Changeset.put_change(:blocker_state, state)
     |> context.repo.insert()
     |> ok_or_error()
   end

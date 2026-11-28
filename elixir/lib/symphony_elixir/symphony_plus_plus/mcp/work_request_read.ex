@@ -15,6 +15,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{DecisionLogEntry, DeliveryBoard, OperatorReport, Phase}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @views ToolCatalog.work_request_views()
   @live_views ~w(overview plan board)
@@ -82,7 +83,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead do
 
     with {:ok, phases} <- Phase.load(repo, [request], packages, repo, deliveries) do
       phase = Map.fetch!(phases, request.id).phase
-      work_request = %{"id" => request.id, "phase" => phase} |> put_present("next_action", Phase.next_action(phase))
+
+      work_request =
+        %{"id" => request.id, "phase" => phase}
+        |> put_present("next_action", Phase.next_action(phase))
+        |> put_present("owner_status", WorkRequest.owner_status(request, phase))
+
       payload = %{"work_request" => work_request, "ended" => ended_counts(ended, deliveries)}
       read_live_view(repo, request, view, payload, {packages, live, deliveries}, cursor)
     end

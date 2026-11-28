@@ -92,6 +92,7 @@ function Landed({ at, views }: { at: number; views: GoalView[] }) {
 
 // The architect or chief working on a goal.
 export function GoalOwner({ className, view }: { className?: string; view: GoalView }) {
+  if (view.goal.ownerStatus) return <span className={`font-mono text-[11px] text-checks ${className ?? ""}`}>{view.goal.ownerStatus}</span>;
   return <Owner className={className} goalId={view.goal.id} owner={view.goal.owner} />;
 }
 
