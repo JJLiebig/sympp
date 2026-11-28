@@ -308,7 +308,7 @@ function PkgDetail({ at, view }: { at: number; view: PkgView }) {
 // A planned or ended package: its title and how it ended.
 function RestCard({ pkg, ref }: { pkg: Pkg; ref?: (node: HTMLElement | null) => void }) {
   const outcome = pkg.outcome ? OUTCOME[pkg.outcome] : null;
-  const blocked = outcome ? null : blockedOn(pkg.blockers);
+  const blocked = blockedOn(pkg);
   return (
     <div ref={ref} className={`flex min-h-11 items-start gap-3 py-2.5 ${ROUTE_INSET}`} data-pkg-row>
       <span className="mt-1.5 flex">

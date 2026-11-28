@@ -60,6 +60,7 @@ export function useGoalLevel(verdict: Verdict, goalId: string) {
   useOpenWhenBrought(`goal:${goalId}`, () => {
     if (level === "closed") setOverride({ density, level: reopened });
   });
+  useOpenWhenBrought(`all:${goalId}`, () => setOverride({ density, level: "full" }));
 
   return {
     level,
@@ -69,9 +70,13 @@ export function useGoalLevel(verdict: Verdict, goalId: string) {
 }
 
 // Which phases of one goal are opened. A phase with work in progress is open unless closed by hand.
-export function usePhaseControl(): PhaseControl {
+export function usePhaseControl(goalId: string): PhaseControl {
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
   const [all, setAllState] = useState(false);
+  useOpenWhenBrought(`all:${goalId}`, () => {
+    setOverrides({});
+    setAllState(true);
+  });
   const isOpen = (state: PhaseState) => overrides[state.phase.id] ?? (all || state.status === "active");
 
   return {
@@ -225,7 +230,7 @@ const SECTIONS: Array<{ label: string; tone: string; keep: "first" | "last"; sta
 // At the "now" level only the middle part shows, with the rest summed up on one line.
 // Done and up-next phases are one line each until opened; long lists fold behind "more".
 export function GoalPackages({ at, control, level, onFull, view }: { at: number; control?: PhaseControl; level: "now" | "full"; onFull: () => void; view: GoalView }) {
-  const own = usePhaseControl();
+  const own = usePhaseControl(view.goal.id);
   const phases = phaseStates(view);
   const states = phases.length > 0 ? phases : looseStates(view);
   const use = control ?? own;
@@ -434,7 +439,7 @@ export function PkgLine({ at, ref, view }: { at: number; ref?: (node: HTMLElemen
 
 function RestLine({ pkg, ref }: { pkg: Pkg; ref?: (node: HTMLElement | null) => void }) {
   const outcome = pkg.outcome ? OUTCOME[pkg.outcome] : null;
-  const blocked = outcome ? null : blockedOn(pkg.blockers);
+  const blocked = blockedOn(pkg);
   return (
     <div ref={ref} className={ROW} data-pkg={pkg.id} data-pkg-row>
       <Pip stage={outcome ? "ended" : "planned"} />

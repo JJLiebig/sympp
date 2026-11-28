@@ -496,7 +496,7 @@ function jobRows(v, t, job, ctx) {
   return [
     taskHead(v, t, job, task),
     task.asks.length ? div().px(10).pb(4).child(micro(t, "Needs you", signal().you)) : null,
-    ...task.asks.map((ask) => div().pl(10).child(P.askBlock(v, t, ask.question))),
+    ...task.asks.map((ask) => div().pl(10).rounded(6).when(v.glowing === `ask:${ask.question.id}`, (el) => el.bg(tint(t.accent, "40"))).child(P.askBlock(v, t, ask.question))),
     task.decisions.length ? div().px(10).pt(4).pb(4).child(micro(t, "Decisions to review", t.dim)) : null,
     ...task.decisions.map((d) => div().pl(10).child(P.decisionBlock(v, t, d))),
     !task.total ? empty(t, "Not sliced into packages yet") : null,

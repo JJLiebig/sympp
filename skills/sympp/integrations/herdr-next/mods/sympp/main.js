@@ -776,7 +776,8 @@ export default class Lens extends View {
       .map((chief) => ({ chief, agent: L.chiefAgent(chief, bindings, terminals(), this.agentChecks, now) }));
   }
 
-  // Opens what holds a package up: a PR in the browser; a package, task or ask where it sits, lit briefly.
+  // Opens what holds a package up: a PR in the browser; a package, task or ask where it sits, lit
+  // briefly. A task's own tab shows only that task, so another task opens in its tab.
   openBlocker(target, cx) {
     if (target.kind === "pr") return cx.open_url(target.url);
     const jobs = this.net.data?.jobs ?? [];
@@ -784,13 +785,17 @@ export default class Lens extends View {
       : target.kind === "work_package" ? jobs.find((j) => j.packages.some((p) => p.id === target.id))
       : jobs.find((j) => j.asks.some((a) => a.id === target.id));
     if (!job) return;
-    const pkgId = target.kind === "work_package" ? target.id : target.kind === "ask" ? job.asks.find((a) => a.id === target.id).pkgId : null;
-    const pkg = job.packages.find((p) => p.id === pkgId) ?? null;
+    if (this.pinned && job.id !== this.pinned) {
+      const { name, args } = this.jobAction(job);
+      return run(name, args);
+    }
+    const ask = target.kind === "ask" ? job.asks.find((a) => a.id === target.id) : null;
+    const pkg = job.packages.find((p) => p.id === (ask ? ask.pkgId : target.id)) ?? null;
     // A landed or planned package sits in its fold, which opens to show it.
     const fold = pkg?.stage === "ended" ? "Landed" : pkg?.stage === "planned" ? "Up next" : null;
     if (fold) this.expanded.add(`${fold}:${job.id}`);
     this.openJob(job, { pkg: pkg?.id ?? null }, cx);
-    const key = pkg ? `pkg:${pkg.id}` : `job:${job.id}`;
+    const key = ask ? `ask:${ask.id}` : pkg ? `pkg:${pkg.id}` : `job:${job.id}`;
     this.glowing = key;
     cx.timer.after(GLOW_MS, (cx) => { if (this.glowing === key) { this.glowing = null; cx.notify(); } });
   }

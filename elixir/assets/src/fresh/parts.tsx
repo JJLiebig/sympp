@@ -3,8 +3,8 @@ import { useState, type ReactNode } from "react";
 
 import { GoalActions, GoalRefusal, ShelfCleanup } from "./actions";
 import { areaLabel } from "./areas";
-import { blockedOn, type BlockedOn } from "./blocked";
-import { deployAt, inRepos, span, type BlockerTarget, type Ci, type DeployStep, type Goal, type GoalView, type Outcome, type Pr, type PkgView, type Review, type Stage } from "./model";
+import { blockedOn, type BlockedOn, type BlockerTarget } from "./blocked";
+import { deployAt, inRepos, span, type Ci, type DeployStep, type Goal, type GoalView, type Outcome, type Pr, type PkgView, type Review, type Stage } from "./model";
 import { focusAsk, focusGoal, focusPkg, POP, Presence, useFlash } from "./motion";
 import { Reveal } from "./reveal";
 
@@ -177,7 +177,7 @@ function MarkIcon({ mark }: { mark: Mark }) {
 export function StageStatus({ at, still = false, view }: { at: number; still?: boolean; view: PkgView }) {
   const { pkg } = view;
   const cell = "truncate whitespace-nowrap text-right font-mono text-[11px] tabular-nums";
-  const blocked = blockedOn(pkg.blockers);
+  const blocked = blockedOn(pkg);
   if (blocked) return <BlockedLabel blocked={blocked} className={cell} still={still} />;
   // A worker that finished without opening a PR leaves its package implementing with nobody on it.
   if (pkg.exited && view.stage === "implementing") return <span className={`${cell} font-semibold text-checks`} title="The worker finished without opening a PR">Exited</span>;

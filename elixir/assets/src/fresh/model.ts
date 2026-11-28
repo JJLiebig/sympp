@@ -1,6 +1,6 @@
 // Clean-slate model. A Goal is a WorkRequest; a Pkg is a WorkPackage with the stages it has moved through.
 import { areaFor, githubSlug, type Slug } from "./areas";
-import { placeBlockers } from "./blocked";
+import { placeBlockers, type BlockerTarget } from "./blocked";
 
 // A package's progress is derived from what its worker terminal, its PR, CI and Review Suite show.
 export type Stage = "planned" | "launching" | "implementing" | "review_ci" | "ready" | "ended";
@@ -23,8 +23,6 @@ export type Seg = { stage: Stage; from: number; to: number; failed: boolean; unt
 export type HistoryEvent = { t: string; s?: string; y?: string; c?: string; m?: boolean; n?: number; u?: string; a?: string; r?: string; x?: string };
 // What the factory could not read on its last look: GitHub, or the Review Suite host. Nothing moves on it until it can.
 export type Stale = "github" | "review";
-// A PR is `owner/name#number`. A package target also carries the goal it sits in once the board is built.
-export type BlockerTarget = { kind: "pr" | "work_request" | "work_package" | "ask"; id: string; goalId?: string };
 export type Blocker = { id: string; state: "waiting" | "cleared" | "impossible"; target?: BlockerTarget | null; summary?: string | null; hold?: "operator" | "legacy"; unknown?: boolean };
 
 export type Pkg = {
@@ -50,6 +48,7 @@ export type Pkg = {
   // The package that took over when this one was superseded or skipped.
   successor: string | null;
   stale: Stale[];
+  blocked: boolean;
   blockers?: Blocker[];
 };
 
@@ -92,6 +91,7 @@ export type ReviewSignal = { status?: string | null; accepted_head?: string | nu
 export type Slice = {
   id: string;
   blockers?: Blocker[];
+  operational_state?: { key?: string | null } | null;
   work_package_id?: string | null;
   title?: string | null;
   sequence?: number;
@@ -343,6 +343,7 @@ function blankPkg(slice: Slice, now: number): Pkg {
   const stale = staleOf(slice.observation_stale);
   return {
     blockers: slice.blockers,
+    blocked: slice.operational_state?.key === "blocked",
     id: slice.work_package_id || slice.id,
     title: slice.title || slice.id,
     seq: slice.sequence ?? 0,

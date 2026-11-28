@@ -1,4 +1,7 @@
-import type { Blocker, BlockerTarget, Goal } from "./model";
+import type { Blocker, Goal, Pkg } from "./model";
+
+// A PR is `owner/name#number`. A package target also carries the goal it sits in once the board is built.
+export type BlockerTarget = { kind: "pr" | "work_request" | "work_package" | "ask"; id: string; goalId?: string };
 
 // A package named as a blocker opens inside its own goal.
 export function placeBlockers(goals: Goal[]) {
@@ -9,10 +12,11 @@ export function placeBlockers(goals: Goal[]) {
 }
 
 // What a blocked package waits on: one short line per blocker that hasn't cleared, and the first of them that can be opened.
+// A package is blocked when the factory says so, as Herdr reads it: plan order alone shows as Planned, not Blocked.
 export type BlockedOn = { lines: string[]; target: BlockerTarget | null };
-export function blockedOn(blockers: Blocker[] | undefined): BlockedOn | null {
-  const open = (blockers ?? []).filter((blocker) => blocker.state !== "cleared");
-  if (!open.length) return null;
+export function blockedOn(pkg: Pkg): BlockedOn | null {
+  if (!pkg.blocked || pkg.outcome) return null;
+  const open = (pkg.blockers ?? []).filter((blocker) => blocker.state !== "cleared");
   return { lines: open.map(blockerLine), target: open.find((blocker) => blocker.target)?.target ?? null };
 }
 
