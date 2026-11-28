@@ -12,12 +12,18 @@ test('competing terminals end with one owner, Release hands over and ownership s
   const chief = await factory.client(nextTerminal(), { 'sympp.role': 'chief', 'sympp.domain': 'Acceptance' });
   const created = await chief.call('create_work_request', {
     repo: 'example/service', base_branch: 'beta', title: 'Contended request', description,
-    work_type: 'feature', own: false,
+    work_type: 'feature',
   });
   const request = created.work_request.id;
   expect(created.worked_on).toBeUndefined();
   expect(created.next_action).toContain(request);
   expect((await chief.inspect(`/api/v1/sympp/operator/work-requests/${request}`)).work_request.dispatched_by).toEqual({ kind: 'chief', domain: 'Acceptance' });
+  const chiefWrite = await chief.raw({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: chief.toolParams('set_report', { work_request_id: request, brief: 'Ready for an architect' }) });
+  const receipt = chiefWrite.body.result;
+  expect(receipt.structuredContent).toMatchObject({ work_request_id: request, applied: { brief: 'set' }, note: expect.stringContaining('without taking ownership') });
+  expect(receipt.content[0].text).toContain(receipt.structuredContent.note);
+  expect(chiefWrite.binding).toBeNull();
+  expect((await chief.call('sympp.health')).caller.owns).toEqual([]);
   // Reads never take ownership.
   const contenders = await Promise.all([factory.client(), factory.client()]);
   for (const contender of contenders) await contender.call('read_work_request', { work_request_id: request });
@@ -183,7 +189,8 @@ test('STDIO initialization serves trusted local reads, refuses writes outside He
   expect((await peer.rawRequest('tools/call', { name: 'create_work_request', arguments: createArgs })).error.data.code).toBe('read_only_outside_herdr');
   const meta = { herdr: herdr('t-stdio') };
   const created = (await peer.request('tools/call', { name: 'create_work_request', arguments: createArgs, _meta: meta })).structuredContent;
-  expect(created.worked_on.address).toBe('acceptance/t-stdio');
+  expect(created).toMatchObject({ status: 'created' });
+  expect(created.worked_on).toBeUndefined();
   const blocker = { work_package_id: wp, blocker_id: 'stdio-foreign', active: true, summary: 'Not the owner' };
   expect((await peer.rawRequest('tools/call', { name: 'set_blocker', arguments: blocker, _meta: meta })).error.data.code).toBe('owned_by_other_terminal');
   expect((await peer.rawRequest('tools/call', { name: 'set_blocker', arguments: blocker })).error.data.code).toBe('read_only_outside_herdr');
@@ -297,6 +304,7 @@ test('HTTP client leases preserve local request boundaries and a clean detach en
   // so a clean detach ends its ownership while a lapsed heartbeat never would.
   const owner = await factory.client();
   const request = await owner.request('Detached owner');
+  await owner.call('set_report', { brief: 'Owned during detach' });
   const terminal = { core_id: 'acceptance-core', terminal_id: owner.terminal };
   const leaseFor = async (action: string) => (await client.raw({ client_id: 'owner-bridge', action, terminal }, {}, 'POST', '/mcp/client-lease')).status;
   expect(await leaseFor('attach')).toBe(200);
@@ -317,6 +325,7 @@ test('HTTP client leases preserve local request boundaries and a clean detach en
 coreTest('ownership follows the factory core: a live owner keeps its request and a successor takes over only once the core reports it finished', async ({ core }) => {
   const owner = await core.client({}, { status: 'idle' });
   const request = await owner.request('Liveness handover');
+  await owner.call('set_report', { brief: 'Owned before handover' });
   const successor = await core.client();
   const early = await successor.reject('set_report', { work_request_id: request, brief: 'Too early' }, 'owned_by_other_terminal');
   expect(early.owner).toMatchObject({ address: owner.address, status_state: 'idle' });
@@ -332,7 +341,7 @@ coreTest('ownership follows the factory core: a live owner keeps its request and
   await ghost.reject('set_report', { work_request_id: request, brief: 'Ghost' }, 'terminal_not_live');
   // The first owner-gated write takes ownership even when the write itself is invalid.
   const handed = (await owner.call('create_work_request', {
-    repo: 'example/service', base_branch: 'beta', title: 'Handed off', description, work_type: 'feature', own: false,
+    repo: 'example/service', base_branch: 'beta', title: 'Handed off', description, work_type: 'feature',
   }));
   expect(handed.next_action).toContain('architect');
   const taker = await core.client();
@@ -357,7 +366,7 @@ coreTest('ownership follows the factory core: a live owner keeps its request and
     expect(owner).toMatchObject({ address: successor.address, role: 'architect', liveness: 'live' });
     expect(Number.isFinite(Date.parse(owner.since))).toBe(true);
   }
-  const unowned = await resumed.call('create_work_request', { repo: 'example/service', base_branch: 'beta', title: 'Nobody yet', description, work_type: 'feature', own: false });
+  const unowned = await resumed.call('create_work_request', { repo: 'example/service', base_branch: 'beta', title: 'Nobody yet', description, work_type: 'feature' });
   expect((await resumed.raw(null, {}, 'GET', '/api/v1/sympp/herdr/dashboard')).body.work_request_details
     .find((entry: any) => entry.work_request.id === unowned.work_request.id).work_request.worked_on).toBeUndefined();
   // The handed-off request's live owner keeps it across the restart.

@@ -1,11 +1,13 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkedOnMigrationTest do
   use ExUnit.Case, async: false
 
+  alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
 
   @migration_version 20_261_108_150_000
   @previous_version 20_261_108_140_000
+  @release_chiefs_version 20_261_128_140_000
 
   # Setup runs in the test process, so the dynamic repo stays selected for the test.
   setup do
@@ -56,6 +58,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkedOnMigrationTest do
 
     assert {:ok, _} = insert_owner.("wo_one", "core/t1")
     assert {:error, %Exqlite.Error{}} = insert_owner.("wo_two", "core/t2")
+  end
+
+  test "releasing chief ownership leaves its history and frees the request for an architect" do
+    insert = fn id, request, role ->
+      Repo.query!(
+        """
+        INSERT INTO sympp_worked_on (id, subject_kind, subject_id, terminal_key, display_address, role, state, started_at, inserted_at, updated_at)
+        VALUES (?1, 'work_request', ?2, ?1, ?1, ?3, 'live', '2026-11-08T00:00:00Z', '2026-11-08T00:00:00Z', '2026-11-08T00:00:00Z')
+        """,
+        [id, request, role]
+      )
+    end
+
+    insert.("chief", "wr_reported", "chief")
+    insert.("architect", "wr_quiet", "architect")
+    assert @release_chiefs_version in Ecto.Migrator.run(Repo, Migrations.all(), :up, to: @release_chiefs_version, log: false)
+
+    assert %WorkedOn{state: "finished", role: "chief", finish_reason: "chief_ownership_released", started_at: started_at, finished_at: %DateTime{}} =
+             Repo.get!(WorkedOn, "chief")
+
+    assert DateTime.compare(started_at, ~U[2026-11-08 00:00:00Z]) == :eq
+    assert %WorkedOn{state: "live", role: "architect", finished_at: nil} = Repo.get!(WorkedOn, "architect")
+    insert.("successor", "wr_reported", "architect")
+    assert %WorkedOn{state: "live"} = Repo.get!(WorkedOn, "successor")
   end
 
   defp seed! do

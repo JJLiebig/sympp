@@ -49,10 +49,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
     end
   end
 
-  @doc "Takes or confirms ownership of a WorkRequest for `terminal`."
+  @doc "Takes or confirms a WorkRequest's ownership for an architect terminal."
   @spec acquire(repo(), String.t(), Terminal.t()) ::
           {:ok, WorkedOn.t(), :held | :acquired} | {:error, {:owned_by_other_terminal, owner()}} | {:error, term()}
-  def acquire(repo, work_request_id, %Terminal{} = terminal) when is_binary(work_request_id) do
+  def acquire(repo, work_request_id, %Terminal{role: "architect"} = terminal) when is_binary(work_request_id) do
     # The common case, a terminal writing to a WorkRequest it already owns,
     # needs no write lock.
     case held_unchanged(repo, work_request_id, terminal) do

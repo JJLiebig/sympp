@@ -101,7 +101,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   end
 
   @doc """
-  The asker or the WorkRequest owner records a conversational answer
+  The asker, a WorkRequest's owner or a chief resolving a WorkRequest ask records a conversational answer
   (`to: "answered"`) or withdraws the ask (`to: "withdrawn"`), optionally with
   one decision recorded in the same transaction. Repeating an answer returns
   the original answer without changing the ask or recording another decision.
@@ -126,7 +126,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
 
   defp resolve_in_transaction(repo, terminal, ask_id, to, answer, decision) do
     with {:ok, %Ask{} = ask} <- fetch(repo, Ask, ask_id),
-         :ok <- require_asker_or_owner(repo, ask, terminal) do
+         :ok <- authorize_resolution(repo, ask, terminal) do
       resolve_authorized(repo, ask, to, answer, decision, terminal.display_address)
     end
   end
@@ -148,13 +148,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Asks do
   defp resolution_answer("withdrawn", nil), do: {:ok, nil}
   defp resolution_answer("withdrawn", answer), do: text(answer, :invalid_answer)
 
-  defp require_asker_or_owner(repo, %Ask{} = ask, %Terminal{key: key}) do
-    cond do
-      ask.asked_by_terminal == key -> :ok
-      is_binary(ask.work_request_id) and match?(%WorkedOn{terminal_key: ^key}, Ownership.owner(repo, ask.work_request_id)) -> :ok
-      true -> {:error, {:not_asker_or_owner, ask}}
-    end
+  defp authorize_resolution(_repo, %Ask{asked_by_terminal: key}, %Terminal{key: key}), do: :ok
+  defp authorize_resolution(_repo, %Ask{work_request_id: id}, %Terminal{role: "chief"}) when is_binary(id), do: :ok
+
+  defp authorize_resolution(repo, %Ask{work_request_id: id} = ask, %Terminal{key: key}) when is_binary(id) do
+    if match?(%WorkedOn{terminal_key: ^key}, Ownership.owner(repo, id)), do: :ok, else: {:error, {:not_asker_or_owner, ask}}
   end
+
+  defp authorize_resolution(_repo, ask, _terminal), do: {:error, {:not_asker_or_owner, ask}}
 
   @doc """
   The operator answers an open ask. With a decision prompt the answer is the

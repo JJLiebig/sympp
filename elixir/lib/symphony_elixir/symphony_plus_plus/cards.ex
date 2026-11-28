@@ -136,8 +136,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
   end
 
   # A parent is an address on this core (`t81`) or `machine/address` on
-  # another one. Chiefs and architects are known from their labels on this
-  # core and from the terminals that have worked on a WorkRequest.
+  # another one. The roster identifies chiefs by label. WorkRequest history
+  # also identifies parents that have owned a request.
   defp parent_predicate(repo, core_id, terminals) do
     owners = repo.all(from(row in WorkedOn, where: row.role in ["chief", "architect"], distinct: true, select: {row.terminal_key, row.display_address}))
     keys = MapSet.new(owners, &elem(&1, 0))
@@ -145,10 +145,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
 
     fn
       parent when is_binary(parent) ->
-        if String.contains?(parent, "/") do
-          MapSet.member?(addresses, parent)
-        else
-          MapSet.member?(keys, Terminal.key(core_id, parent)) or get_in(terminals, [parent, "labels", "sympp.role"]) == "chief"
+        cond do
+          get_in(terminals, [parent, "labels", "sympp.role"]) == "chief" -> true
+          String.contains?(parent, "/") -> MapSet.member?(addresses, parent)
+          true -> MapSet.member?(keys, Terminal.key(core_id, parent))
         end
 
       _none ->

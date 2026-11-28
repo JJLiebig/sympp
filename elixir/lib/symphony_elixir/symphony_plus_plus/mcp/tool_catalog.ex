@@ -78,15 +78,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   def read_call?(name, _arguments), do: tool_access(name) == :read
 
   @doc """
-  Whether one call must own the target WorkRequest. A chief may move a request
-  without taking ownership. Any chief or architect may finish a package.
+  Whether one call uses the WorkRequest ownership gate. Chiefs pass through
+  without taking ownership, and can move a request directly.
   """
   @spec owner_gated_call?(tool_name(), map()) :: boolean()
   def owner_gated_call?(name, arguments), do: owner_gated_call?(name, arguments, nil)
 
   @spec owner_gated_call?(tool_name(), map(), Terminal.t() | nil) :: boolean()
   def owner_gated_call?("move_work_request", _arguments, %Terminal{role: "chief"}), do: false
-  def owner_gated_call?("close_work_package", %{"outcome" => "finished"}, _terminal), do: false
   def owner_gated_call?(name, arguments, _terminal) when is_map(arguments), do: name in @owner_gated_tools
 
   @spec input_schema(tool_name()) :: map()
@@ -115,16 +114,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
       "Read WorkRequest status (overview), dependencies (plan), or delivery actions (board). Use request for the brief and constraints, package for one contract, ask or decision for one entry, and flagged_decisions for the review index."
 
   defp description("create_work_request"),
-    do: "Create a WorkRequest. The calling terminal becomes its owner unless own is false."
+    do: "Create an unowned WorkRequest. An architect takes ownership on its first owner-gated write."
 
-  defp description("complete_work_request"), do: "Chief only. Mark a WorkRequest done."
+  defp description("complete_work_request"), do: "Mark a WorkRequest done. Any chief or its owning architect can complete it."
 
   defp description("move_work_request"),
     do:
       "Move a WorkRequest and its open packages in the source repository to another repository. The owner or a chief can move it. GitHub-confirmed renames keep attached PRs. Resolve source PRs before importing. A move to the current repository changes nothing."
 
   defp description("edit_plan"),
-    do: "Edit a WorkRequest plan you own. Returns ordered receipts in applied. See the symphony-architect skill for contract fields."
+    do: "Edit a WorkRequest plan. Returns ordered receipts in applied. See the symphony-architect skill for contract fields."
 
   defp description("dispatch_work_package"),
     do:
@@ -135,7 +134,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   defp description("close_work_package"),
     do:
-      "End a WorkPackage without a merge; the factory records merges itself. skipped: a planned package. completed_no_pr: delivered without a PR (evidence). superseded: replaced by successor_work_package_id in the same WorkRequest (rationale). abandoned: dropped (rationale). finished: its PR waits on someone else; any chief or architect may finish, without owning the WorkRequest. Repeating the same close changes nothing; a different close of an ended package is refused with its outcome."
+      "End a WorkPackage without a merge; the factory records merges itself. skipped: a planned package. completed_no_pr: delivered without a PR (evidence). superseded: replaced by successor_work_package_id in the same WorkRequest (rationale). abandoned: dropped (rationale). Repeating the same close changes nothing; a different close of an ended package is refused with its outcome."
 
   defp description("record_decision"),
     do:
@@ -146,14 +145,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   defp description("resolve_ask"),
     do:
-      "Use to: answered only for an answer the operator gave in your conversation. Board answers already resolve the ask. The asker or WorkRequest owner may record a conversational answer or use to: withdrawn. A repeat answer returns the stored answer. decision records a decision when the ask first closes."
+      "Use to: answered only for an answer the operator gave in your conversation. Board answers already resolve the ask. The asker may resolve their asks; a chief or the owner may also resolve WorkRequest asks. A repeat answer returns the stored answer. decision records a decision when the ask first closes."
 
   defp description("set_blocker"),
     do:
-      "Declare (active: true, with a summary) or clear (active: false) a blocker on a package of a WorkRequest you own. Blockers are keyed by blocker_id; setting the state a blocker already has changes nothing. Ending a package clears its blockers."
+      "Declare (active: true, with a summary) or clear (active: false) a WorkPackage blocker. Blockers are keyed by blocker_id; setting the state a blocker already has changes nothing. Ending a package clears its blockers."
 
   defp description("set_report"),
-    do: "Patch the operator report on a WorkRequest you own: brief, eta and parking. null clears a field; clearing parking records that work resumed."
+    do: "Patch the WorkRequest's operator report: brief, eta and parking. null clears a field; clearing parking records that work resumed."
 
   defp description("summarize_failed_mcp_calls"),
     do: "Count failed sympp tool calls per day, tool, reason and layer, including unknown tools and denied calls. Kept across restarts; arguments are never stored."

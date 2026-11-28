@@ -139,6 +139,7 @@ test('the person answers a question, reviews flagged decisions and releases a go
   const { client, factory } = candidate;
   const chief = await factory!.client(undefined, { 'sympp.role': 'chief' });
   const request = await client.request('Board review');
+  await client.call('set_report', { brief: 'Preparing the review.' });
   const ask = (await chief.call('ask', { work_request_id: request, question: 'Which scope should ship?', decision_prompt: {
     tl_dr: 'Choose scope', details: 'Keep this delivery bounded.',
     options: [{ id: 'bounded', label: 'Bounded option', answer: 'Ship the bounded option.', recommended: true }, { id: 'wide', label: 'Wide option', answer: 'Ship everything.' }],

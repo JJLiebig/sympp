@@ -144,8 +144,7 @@ output.
 
 ## WorkRequest Flow
 
-1. Create a WorkRequest from a Herdr terminal (`own: false` when handing it to
-   an architect).
+1. Create a WorkRequest from a Herdr terminal.
 2. Give an architect the WorkRequest id; its first plan write makes its terminal
    the owner.
 3. Answer the asks the board shows as Needs you, and acknowledge or give

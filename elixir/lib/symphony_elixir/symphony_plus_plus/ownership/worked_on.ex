@@ -10,7 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn do
 
   @subject_kinds ["work_request", "work_package", "card"]
   @roles ["chief", "architect", "worker", "card"]
-  @finish_reasons ["terminal_finished", "subject_ended", "taken_over", "released_by_operator"]
+  @finish_reasons ["terminal_finished", "subject_ended", "taken_over", "released_by_operator", "chief_ownership_released"]
 
   @type t :: %__MODULE__{}
 

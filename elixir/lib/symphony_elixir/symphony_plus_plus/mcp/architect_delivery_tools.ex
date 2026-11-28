@@ -61,9 +61,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
     end
   end
 
-  # Any chief or architect may close a package as finished (its PR waits on
-  # someone else); the server requires ownership of the WorkRequest for every
-  # other outcome before this runs.
   def call("close_work_package", %Config{} = config, %Terminal{} = terminal, arguments) do
     tool = "close_work_package"
 
@@ -88,9 +85,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
     end
   end
 
-  # The same close repeated by any terminal allowed to make it (the owner, or
-  # any chief or architect for finished) returns the ending it recorded; only
-  # the outcome and its evidence identify it. Ownership is checked first.
+  # A repeat by a chief or the owner returns the recorded ending, identified
+  # by its outcome and evidence.
   defp close(repo, work_request_id, work_package_id, attrs, terminal) do
     case recorded_same_close(repo, work_package_id, attrs) do
       {:ok, existing} -> {:ok, existing}
@@ -164,7 +160,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   defp close_fields("completed_no_pr"), do: %{"evidence" => "no_pr_evidence"}
   defp close_fields("superseded"), do: %{"successor_work_package_id" => "successor_work_package_id", "rationale" => "superseded_reason"}
   defp close_fields("abandoned"), do: %{"rationale" => "abandoned_rationale"}
-  defp close_fields(_skipped_or_finished), do: %{}
+  defp close_fields("skipped"), do: %{}
 
   defp close_attrs(arguments, work_package_id, outcome, %Terminal{} = terminal) do
     with {:ok, supplied} <- close_evidence_arguments(arguments),

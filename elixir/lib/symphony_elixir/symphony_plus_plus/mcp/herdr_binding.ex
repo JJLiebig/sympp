@@ -3,8 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HerdrBinding do
   The `sympp-herdr-binding` response header: which WorkRequest the calling
   terminal works on, so the bridge can label its Herdr pane.
 
-  Only a successful owner-gated write (or creating a WorkRequest it owns) sets
-  the binding; reads never do.
+  A successful owner-gated write by an architect sets the binding.
   """
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog
@@ -25,8 +24,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HerdrBinding do
     arguments = if is_map(params["arguments"]), do: params["arguments"], else: %{}
 
     with false <- Map.get(result, "isError", false),
-         %Terminal{} = terminal <- Terminal.from_params(params),
-         true <- binds?(name, arguments, response, terminal),
+         %Terminal{role: "architect"} = terminal <- Terminal.from_params(params),
+         true <- ToolCatalog.owner_gated_call?(name, arguments, terminal),
          work_request_id when is_binary(work_request_id) <- work_request_id(arguments, response, repo) do
       %{"role" => terminal.role, "work_request_id" => work_request_id, "show_inspector" => true}
     else
@@ -44,9 +43,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HerdrBinding do
     |> Jason.encode!()
     |> Base.url_encode64(padding: false)
   end
-
-  defp binds?("create_work_request", _arguments, response, _terminal), do: is_map(get_in(response, ["result", "structuredContent", "worked_on"]))
-  defp binds?(name, arguments, _response, terminal), do: ToolCatalog.owner_gated_call?(name, arguments, terminal)
 
   # A package-only call names its WorkRequest through the package.
   defp work_request_id(arguments, response, repo) do

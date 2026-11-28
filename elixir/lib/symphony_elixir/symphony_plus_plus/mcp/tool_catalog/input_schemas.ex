@@ -39,8 +39,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
           WorkRequest.dispatch_shapes()
           |> string_enum_schema()
           |> Map.put("default", "architect_led_feature_branch"),
-        "constraints" => object_schema(),
-        "own" => boolean_schema() |> Map.put("description", "Make the calling terminal the owner (default true). Pass false when handing the WorkRequest to an architect.")
+        "constraints" => object_schema()
       },
       ["base_branch", "title", "work_type", "description"]
     )

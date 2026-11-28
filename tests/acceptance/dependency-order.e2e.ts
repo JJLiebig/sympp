@@ -41,8 +41,9 @@ test('all dependency endpoint combinations dispatch only after canonical deliver
   expect(refusal.state).toBe('planned');
   expect(refusal.prerequisite_work_package_ids.sort()).toEqual([direct, cancelled].sort());
   expect(refusal.next_action).toContain(`${cancelled} ended skipped and never delivers: add a successor that delivers it or remove the dependency`);
-  // A finished package's code isn't on the base: it never satisfies a dependent.
-  await close(architect, parked, 'finished', {});
+  // Operator Finish still records a readable ending that never satisfies a dependent.
+  await architect.call('dispatch_work_package', { work_package_id: parked });
+  expect((await architect.operator(`/api/v1/sympp/operator/work-packages/${parked}/finish`, {})).status).toBe(200);
   expect((await architect.reject('dispatch_work_package', { work_package_id: later }, 'unmet_work_package_dependencies')).next_action)
     .toBe(`${parked} ended finished and never delivers: remove the dependency or depend on a package that delivers it`);
   expect((await plan(architect, request)).dependencies.find((edge: any) => edge.from === later))

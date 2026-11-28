@@ -27,6 +27,7 @@ const branchPr = (number: number, sha: string, branch: string, patch: object = {
 test('a terminal working for an architect or chief gets a card that follows its branch, PR, review and merge; workers never do', async ({ watched: { factory, provider, root } }) => {
   const architect = await factory.client();
   await architect.request('Card parent');
+  await architect.call('set_report', { brief: 'Working on the card parent request.' });
   await mkdir(join(root, 'checkouts'));
   const child = await checkout(root, 'child', 'feature/card-1');
   live(provider, { address: 'c1', cwd: child.dir, parent: architect.terminal!, title: 'Dark theme' });
@@ -37,6 +38,8 @@ test('a terminal working for an architect or chief gets a card that follows its 
   live(provider, { address: 'k1', cwd: (await checkout(root, 'labelled', 'feature/labelled', false)).dir, title: 'Labelled', labels: { 'sympp.card': '1' } });
   live(provider, { address: 'ch', title: 'Chief', labels: { 'sympp.role': 'chief' } });
   live(provider, { address: 'c2', cwd: (await checkout(root, 'chief-child', 'feature/chief-child')).dir, parent: 'ch', title: 'Chief child' });
+  live(provider, { address: 'builder/ch', title: 'Forwarded chief', labels: { 'sympp.role': 'chief' } });
+  live(provider, { address: 'builder/c3', cwd: (await checkout(root, 'forwarded-child', 'feature/forwarded-child')).dir, parent: 'builder/ch', title: 'Forwarded child' });
   live(provider, { address: 'x1', cwd: (await checkout(root, 'stranger', 'feature/stranger')).dir, title: 'Stranger' });
   // The sweep should finish even while individual terminal reads cannot reply.
   const blockedGet = provider.holdTerminalGets().then((address) => {
@@ -45,7 +48,7 @@ test('a terminal working for an architect or chief gets a card that follows its 
   const sweep = () => Promise.race([observe(factory), blockedGet]);
   await sweep();
   let board = await cards(architect);
-  expect(Object.keys(board).sort()).toEqual(['Chief child', 'Dark theme', 'Labelled']);
+  expect(Object.keys(board).sort()).toEqual(['Chief child', 'Dark theme', 'Forwarded child', 'Labelled']);
   expect(board['Dark theme']).toMatchObject({ state: 'working', repository: 'example/service', base_branch: 'main', branch: 'feature/card-1' });
   expect(board['Dark theme'].worked_on).toMatchObject({ address: 'acceptance/c1', role: 'card' });
   // Without origin/HEAD the base is origin/main.
@@ -95,6 +98,7 @@ test('a terminal working for an architect or chief gets a card that follows its 
 test('unknown inputs never end a card, a finished terminal without a PR does, and the operator answers and dismisses cards', async ({ watched: { factory, provider, root } }) => {
   const architect = await factory.client();
   await architect.request('Card parent');
+  await architect.call('set_report', { brief: 'Working on the card parent request.' });
   await mkdir(join(root, 'checkouts'));
   // Before it works on a branch, a terminal has no card to ask on.
   const early = await factory.client('a1', { 'sympp.role': 'chief' });
