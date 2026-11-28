@@ -400,20 +400,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
     Ownership.end_subject(repo, "card", card_id)
   end
 
-  @doc "The operator dismisses all cards on the same repository and branch."
-  @spec dismiss(repo(), String.t()) :: {:ok, Card.t()} | {:error, :not_found}
+  @doc "The operator dismisses the cards for the row shown on the board."
+  @spec dismiss(repo(), String.t()) :: {:ok, %{id: String.t(), state: String.t()}} | {:error, :not_found}
   def dismiss(repo, card_id) when is_binary(card_id) do
     repo.transaction(
       fn ->
-        case repo.get(Card, card_id) do
-          nil ->
+        case dismissal_members(repo, card_id) do
+          [] ->
             repo.rollback(:not_found)
 
-          %Card{state: "dismissed"} = card ->
-            card
-
-          %Card{} = card ->
-            dismiss_branch(repo, card)
+          members ->
+            now = DateTime.utc_now(:microsecond)
+            Enum.each(members, &dismiss_member(repo, &1, now))
+            %{id: card_id, state: "dismissed"}
         end
       end,
       mode: :immediate
@@ -421,25 +420,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
     |> DashboardPubSub.broadcast_changed_on_success()
   end
 
-  defp dismiss_branch(repo, card) do
-    now = DateTime.utc_now(:microsecond)
+  defp dismiss_member(_repo, %Card{state: "dismissed"}, _now), do: :ok
 
-    Enum.reduce(branch_cards(repo, card), card, fn member, requested ->
-      dismissed = repo.update!(Ecto.Changeset.change(member, state: "dismissed", ended_at: member.ended_at || now, observed_at: now))
-      end_card(repo, member.id)
-      if member.id == card.id, do: dismissed, else: requested
-    end)
+  defp dismiss_member(repo, card, now) do
+    repo.update!(Ecto.Changeset.change(card, state: "dismissed", ended_at: card.ended_at || now, observed_at: now))
+    end_card(repo, card.id)
   end
 
-  defp branch_cards(repo, card) do
-    case branch_key(card) do
-      {repository, branch} ->
-        repo.all(from(member in Card, where: fragment("lower(?)", member.repository) == ^repository and member.branch == ^branch and member.state != "dismissed"))
-
-      _id ->
-        [card]
+  defp dismissal_members(repo, "branch_" <> encoded) do
+    with {:ok, json} <- Base.url_decode64(encoded, padding: false),
+         {:ok, [repository, branch]} when is_binary(repository) and is_binary(branch) <- Jason.decode(json) do
+      repo.all(from(member in Card, where: fragment("lower(?)", member.repository) == ^repository and member.branch == ^branch))
+    else
+      _invalid -> []
     end
   end
+
+  defp dismissal_members(repo, id), do: List.wrap(repo.get(Card, id))
+
+  # The board ID stays with the branch when a terminal switches checkouts.
+  defp board_id({repository, branch}), do: "branch_" <> Base.url_encode64(Jason.encode!([repository, branch]), padding: false)
+  defp board_id(id), do: id
 
   defp branch_key(%Card{repository: repository, branch: branch}) when is_binary(repository) and repository != "" and is_binary(branch) and branch != "",
     do: {String.downcase(repository), branch}
@@ -493,12 +494,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
 
   defp board_card(members) do
     card = Enum.min_by(members, &{&1.state not in @active, &1.state == "dismissed", &1.state == "working"})
+    pr = pr_identity(card.pr)
 
     # A helper may have the same PR observation without the review cycle.
-    Enum.find(members, card, fn member ->
-      is_binary(member.review_id) and member.state == card.state and member.pr == card.pr and Enum.member?(member.stale, "github") == Enum.member?(card.stale, "github")
-    end)
+    review =
+      Enum.find(members, card, fn member ->
+        pr != nil and member.state == card.state and is_binary(member.review_id) and pr_identity(member.pr) == pr
+      end)
+
+    stale = Enum.reject(card.stale, &(&1 == "review")) ++ Enum.filter(review.stale, &(&1 == "review"))
+    %{card | review_id: review.review_id, review: review.review, stale: stale}
   end
+
+  defp pr_identity(%{"repository" => repository, "number" => number, "head_sha" => head}) when is_binary(repository) and is_integer(number) and is_binary(head),
+    do: {String.downcase(repository), number, head}
+
+  defp pr_identity(_pr), do: nil
 
   defp live_workers(_repo, []), do: %{}
 
@@ -511,8 +522,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
   @doc "A card as the boards show it."
   @spec public(Card.t(), WorkedOn.t() | nil, [map()]) :: map()
   def public(%Card{} = card, row, asks) do
+    id = board_id(branch_key(card))
+
     %{
-      "id" => card.id,
+      "id" => id,
       "state" => card.state,
       "title" => card.title,
       "worked_on" => row && Ownership.public(row),
@@ -522,7 +535,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
       "pr" => public_pr(card.pr),
       "review" => public_review(card),
       "stale" => card.stale,
-      "asks" => Enum.map(asks, &Asks.public/1),
+      "asks" => Enum.map(asks, &Map.put(Asks.public(&1), "card_id", id)),
       "since" => iso(card.inserted_at),
       "ended_at" => iso(card.ended_at),
       "updated_at" => iso(card.updated_at)
