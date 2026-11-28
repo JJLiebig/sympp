@@ -242,17 +242,18 @@ function taskRow(v, t, task, wide) {
 // waits on; in a very narrow panel the name keeps a few letters and the last column gives way. The model works the line out on each read (model.js movingOf). A click opens the task at
 // the package.
 function movingRow(v, t, job, { pkg, slot, waits }) {
-  const step = slot === null ? "Planned" : S.LIFECYCLE[slot];
-  const stepTone = slot === null ? t.dim : pkg.failed ? signal().fail : signal()[SLOT_TONE[slot]];
-  const waitTone = waits.tone === "you" ? signal().you : waits.tone === "warn" ? signal().checks : t.dim;
+  const step = pkg.statusLabel ?? (slot === null ? "Planned" : S.LIFECYCLE[slot]);
+  const stepTone = pkg.statusLabel ? t.blocked : slot === null ? t.dim : pkg.failed ? signal().fail : signal()[SLOT_TONE[slot]];
+  const waitTone = waits?.tone === "you" ? signal().you : waits?.tone === "warn" ? signal().checks : t.dim;
   const el = h_flex().id(`moving-${pkg.id}`).flex_none().h(22).pl(10 + INDENT).pr(10).gap(8).items_center()
     .child(box(v, t, pkg, 7, `moving-box-${pkg.id}`))
     .child(div().flex_1().min_w(48).truncate().text_size(12.5).text_color(t.muted).child(pkg.title))
     .child(mono(11, stepTone).w(SLOT_WIDTH).child(step))
-    .child(h_flex().id(`moving-waits-${pkg.id}`).w(64).min_w(0).flex_shrink(1).justify_end().tooltip(waits.tip)
-      .child(div().min_w(0).flex_shrink(1).truncate().font_family(MONO).text_size(11).text_color(waitTone).child(waits.text)));
+    .child(h_flex().id(`moving-waits-${pkg.id}`).w(64).min_w(0).flex_shrink(1).justify_end()
+      .when(Boolean(waits), (el) => el.tooltip(waits.tip)
+        .child(div().min_w(0).flex_shrink(1).truncate().font_family(MONO).text_size(11).text_color(waitTone).child(waits.text))));
   return arriving(v, `moving:${job.id}`, pkg.id,
-    reach(v, t, el, `moving:${pkg.id}`, (cx) => v.openJob(job, { pkg: pkg.id }, cx), `${pkg.title}, ${step}. ${waits.tip}`));
+    reach(v, t, el, `moving:${pkg.id}`, (cx) => v.openJob(job, { pkg: pkg.id }, cx), `${pkg.title}, ${step}${waits ? `. ${waits.tip}` : ""}`));
 }
 
 // A task as one compact line under its topic on the Factory: its name, its phase when it isn't
@@ -333,8 +334,9 @@ function lifecycle(t, pkg, wide) {
   }).filter(Boolean));
 }
 
-// Under review, the status reads in the review's state colour; otherwise it is the time in the stage.
+// Blocked and closed packages use the blocked colour. Under review, colour reflects the review state.
 function statusTone(t, pkg) {
+  if (pkg.statusLabel) return t.blocked;
   if (S.lifecycleSlot(pkg) !== S.REVIEW_SLOT) return t.dim;
   const state = pkg.review.state;
   return state === "running" ? signal().review : state === "findings" ? signal().checks : state === "done" ? tint(signal().merge, "cc") : t.dim;
@@ -346,8 +348,8 @@ function progress(v, t, pkg, now, wide) {
   const ended = pkg.stage === "ended";
   const planned = pkg.stage === "planned";
   const live = !ended && !planned;
-  const label = ended ? M.ENDING_LABEL[pkg.ending] : planned ? (pkg.after.length ? `After ${pkg.after.join(", ")}` : "Planned") : null;
-  const tone = ended ? (pkg.outcome === "dropped" ? t.dim : tint(signal().merge, "cc")) : t.dim;
+  const label = ended ? M.ENDING_LABEL[pkg.ending] : pkg.statusLabel ?? (pkg.after.length ? `After ${pkg.after.join(", ")}` : "Planned");
+  const tone = ended ? (pkg.outcome === "dropped" ? t.dim : tint(signal().merge, "cc")) : pkg.statusLabel ? t.blocked : t.dim;
   const pr = pkg.pr.number ? Button.new(`pr-step-${pkg.id}`).flex_none().cursor_pointer().font_family(MONO).text_size(11).text_color(t.muted).underline()
     .hover((s) => s.text_color(t.foreground)).tooltip(`Open ${pkg.pr.repo && pkg.pr.repo !== pkg.repo ? pkg.pr.repo : "PR"} #${pkg.pr.number}`)
     .on_click((_e, cx) => { cx.stop_propagation(); if (pkg.pr.url) cx.open_url(pkg.pr.url); })
@@ -383,6 +385,7 @@ function pkgRow(v, t, job, e, ctx, wide, odd, indent = 0) {
   const on = v.pkgSel === pkg.id;
   const focused = on && v.keys.is_focused();
   const quiet = pkg.stage === "ended" || pkg.stage === "planned";
+  const status = pkg.statusLabel ?? (pkg.stage === "ended" ? M.ENDING_LABEL[pkg.ending] : quiet ? M.STAGE_LABEL[pkg.stage] : S.LIFECYCLE[S.lifecycleSlot(pkg)]);
   const name = h_flex().flex_1().min_w(0).gap(8).items_center()
     .child(div().min_w(0).flex_shrink(1).truncate().text_size(13).text_color(quiet ? t.muted : t.foreground).child(pkg.title))
     .when(e.needsYou, (el) => el.child(div().size(6).flex_none().rounded(3).bg(signal().you).tooltip("Waits on you")));
@@ -405,7 +408,7 @@ function pkgRow(v, t, job, e, ctx, wide, odd, indent = 0) {
   const row = h_flex().id(`pkg-${pkg.id}`).flex_none().px(10).py(wide ? 6 : 7).items_center().cursor_pointer().rounded(5)
     .bg(on ? tint(t.accent, "24") : odd ? tint(t.foreground, "07") : CLEAR).border(1).border_color(on ? tint(t.accent, focused ? "cc" : "80") : CLEAR)
     .hover((s) => s.bg(on ? tint(t.accent, "2e") : tint(t.foreground, "10")))
-    .accessibility_label(`${pkg.title}, ${pkg.stage === "ended" ? M.ENDING_LABEL[pkg.ending] : quiet ? M.STAGE_LABEL[pkg.stage] : S.LIFECYCLE[S.lifecycleSlot(pkg)]}${e.needsYou ? ", waits on you" : ""}`)
+    .accessibility_label(`${pkg.title}, ${status}${e.needsYou ? ", waits on you" : ""}`)
     .on_click((_e, cx) => v.selectPackage(on ? null : pkg.id, cx))
     .child(content);
   const actions = on ? pkgActions(v, t, job, pkg, ctx) : null;

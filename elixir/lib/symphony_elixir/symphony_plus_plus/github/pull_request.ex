@@ -6,7 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
   @minimum_sha_prefix_length 7
   @check_statuses ~w(passing failing pending unknown)
   @review_statuses ~w(approved changes_requested review_required unknown)
-  @merge_statuses ~w(merged clean blocked pending unknown)
+  @merge_statuses ~w(merged closed clean blocked pending unknown)
 
   @type ref :: %{
           owner: String.t(),
@@ -292,7 +292,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
         {:ok, "merged"}
 
       closed_pr_state?(Map.get(value, "state")) ->
-        {:ok, "blocked"}
+        {:ok, "closed"}
 
       true ->
         provider_merge_status(Map.get(value, "status") || Map.get(value, "mergeable_state") || Map.get(value, "state") || Map.get(value, "mergeable"))
@@ -313,8 +313,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
         "blocked" => "blocked",
         "behind" => "blocked",
         "draft" => "blocked",
-        "open" => "unknown",
-        "closed" => "blocked"
+        "open" => "unknown"
       })
 
   defp closed_pr_state?(state) when is_binary(state), do: String.downcase(String.trim(state)) == "closed"

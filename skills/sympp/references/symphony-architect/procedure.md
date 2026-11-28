@@ -158,9 +158,11 @@ End a package that won't merge with `close_work_package` and an `outcome`:
 - `finished`: the PR waits on someone else. The WorkRequest can complete;
   dependents stay blocked.
 
-Retire a replaced package as soon as its successors exist. For `superseded` or
-`abandoned`, also close its PR with a comment naming the successors (the branch
-stays) and close its worker terminal.
+When you reslice, end each replaced package as `superseded`, or `abandoned` if
+it has no successor. For either outcome, close its PR in the same step with a
+comment naming the successors or saying there are none. Close its worker
+terminal and keep the branch for reference. Close source and carrier PRs too.
+Blockers are for packages you still intend to deliver.
 
 When every package has ended the WorkRequest is `done` or `unresolved`. Only the
 operator completes or archives it.

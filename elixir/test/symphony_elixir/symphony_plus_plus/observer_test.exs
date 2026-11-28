@@ -3,15 +3,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
 
   alias SymphonyElixir.SymphonyPlusPlus.{DashboardCache, DashboardPubSub, Observer}
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestRead
   alias SymphonyElixir.SymphonyPlusPlus.Observer.Observation
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Blockers
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{WorkPackage, WorkPackageDelivery}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.WorkPackageFactory
   alias SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard
@@ -215,6 +218,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert read.(:priority) == first.priority
       assert read.(:archived) == first.archived
       assert Enum.map(1..4, &:counters.get(builds, &1)) == [1, 1, 2, 2]
+    end
+
+    test "a closed PR goes to the architect and a merged PR ends its package", %{repo: repo} do
+      closing = package!(repo, "WP-OBS-CLOSED", status: "ready")
+      merging = package!(repo, "WP-OBS-MERGED", status: "ready", work_request_id: closing.work_request_id)
+      owner!(repo, closing.work_request_id, "core-1/t1")
+      attach!(repo, closing, 10)
+      attach!(repo, merging, 11)
+      assert {:ok, _, :changed} = Blockers.set(repo, nil, closing.id, "hold", true, "Waiting on reslice.")
+
+      closed_pr = pr(10, "head-a", %{"state" => "closed"})
+      merged_pr = pr(11, "head-a", %{"state" => "merged", "merged" => true, "merged_at" => "2026-11-09T10:00:00Z", "merge_commit_sha" => "merge-11"})
+
+      # A manual sync can reopen a PR that closes again before the next sweep.
+      repo.insert!(%Observation{work_package_id: closing.id, pr: closed_pr, observed_at: ~U[2026-11-09 09:00:00.000000Z]})
+      :ok = sweep(repo, %{{:pr, "nextide", "repo", 10} => {:ok, closed_pr}, {:pr, "nextide", "repo", 11} => {:ok, merged_pr}})
+
+      assert %WorkPackage{status: "dispatched"} = repo.get!(WorkPackage, closing.id)
+      refute repo.get_by(WorkPackageDelivery, work_package_id: closing.id)
+      assert %WorkPackage{status: "ended"} = repo.get!(WorkPackage, merging.id)
+      assert %WorkPackageDelivery{outcome: "pr_merged"} = repo.get_by(WorkPackageDelivery, work_package_id: merging.id)
+
+      assert {:ok, %{work_packages: slices}} = DeliveryBoard.project(repo, closing.work_request_id)
+      assert %{work_package: %{pr_signal: %{status: "closed"}}, merge_eligibility: %{eligible: false}} = Enum.find(slices, &(&1.id == closing.id))
+
+      assert {:ok, %{"structuredContent" => %{"delivery_board" => %{"work_packages" => [row]}}}} =
+               WorkRequestRead.call(repo, %{"work_request_id" => closing.work_request_id, "view" => "board"})
+
+      assert %{"id" => id, "state" => "pr_closed", "next_action" => "close_work_package", "next_actor" => "architect", "blocker_ids" => ["hold"]} = row
+      assert id == closing.id
     end
 
     test "a merge whose evidence can't be recorded changes nothing", %{repo: repo} do

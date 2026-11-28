@@ -556,7 +556,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   defp observe_package(repo, %{package: package, observation: observation, github: github, pr: pr} = item, review, stacks) do
     previous_pr = observation && observation.pr
-    changed? = match?({:ok, %{}}, github) and pr != previous_pr and snapshot_changed?(previous_pr, pr)
+    changed? = item.fresh? and snapshot_changed?(previous_pr, pr, item.attached)
 
     stacked_on = Map.get(stacks, package.id, [])
     stale = stale(github, review, stacked_on, observation)
@@ -684,8 +684,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   defp with_failing_checks(pr, _previous, _opts), do: pr
 
-  defp snapshot_changed?(nil, %{}), do: true
-  defp snapshot_changed?(previous, pr), do: Map.take(previous, @snapshot_fields) != Map.take(pr, @snapshot_fields) or previous["number"] != pr["number"]
+  # A manual sync can reopen the attachment between sweeps. Record the
+  # current closure even when it matches the last observation.
+  defp snapshot_changed?(_previous, %{"state" => "closed"}, %{by_observer?: false}), do: true
+  defp snapshot_changed?(nil, %{}, _attached), do: true
+
+  defp snapshot_changed?(previous, pr, _attached),
+    do: previous != pr and (Map.take(previous, @snapshot_fields) != Map.take(pr, @snapshot_fields) or previous["number"] != pr["number"])
 
   # Returns `:ok` once the snapshot's effects are applied, or `:retry` when they
   # weren't: the previous snapshot is then kept, so the next sweep sees the
