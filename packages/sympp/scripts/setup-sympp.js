@@ -50,6 +50,14 @@ function jsonProperty(json, objectStart, key) {
   return range;
 }
 
+function setAgyProperty(source, json, objectStart, key, value, hasProperties) {
+  const range = jsonProperty(json, objectStart, key);
+  const encoded = JSON.stringify(value);
+  if (range) return source.slice(0, range[0]) + encoded + source.slice(range[1]);
+  const comma = hasProperties ? "," : "";
+  return source.slice(0, objectStart + 1) + `\n  ${JSON.stringify(key)}: ${encoded}${comma}\n` + source.slice(objectStart + 1);
+}
+
 function agyConfig(before, registration) {
   const json = agyJson(before);
   const config = JSON.parse(json.trim() || "{}");
@@ -62,20 +70,20 @@ function agyConfig(before, registration) {
     throw new Error("Antigravity CLI already has an unrelated sympp registration. Explicitly remove it before setup.");
   }
   const { command, args, env } = registration;
-  const next = { ...previous, command, args, env: { ...env, SYMPP_MCP_HOST: "agy" } };
-  if (isDeepStrictEqual(previous, next)) return before;
+  const next = { command, args, env: { ...env, SYMPP_MCP_HOST: "agy" } };
 
   const rootStart = json.indexOf("{");
   if (rootStart < 0) return `${before}${before ? "\n" : ""}${JSON.stringify({ mcpServers: { [name]: next } }, null, 2)}\n`;
-  const serverRange = jsonProperty(json, rootStart, "mcpServers");
-  const hasServers = config.mcpServers != null;
-  const objectStart = hasServers ? serverRange[0] : rootStart;
-  const range = hasServers ? jsonProperty(json, objectStart, name) : serverRange;
-  const value = JSON.stringify(hasServers ? next : { [name]: next });
-  if (range) return before.slice(0, range[0]) + value + before.slice(range[1]);
-  const key = hasServers ? name : "mcpServers";
-  const comma = Object.keys(hasServers ? servers : config).length ? "," : "";
-  return before.slice(0, objectStart + 1) + `\n  ${JSON.stringify(key)}: ${value}${comma}\n` + before.slice(objectStart + 1);
+  if (config.mcpServers == null) return setAgyProperty(before, json, rootStart, "mcpServers", { [name]: next }, Object.keys(config).length > 0);
+  const serversStart = jsonProperty(json, rootStart, "mcpServers")[0];
+  if (!previous) return setAgyProperty(before, json, serversStart, name, next, Object.keys(servers).length > 0);
+
+  const serverStart = jsonProperty(json, serversStart, name)[0];
+  let after = before;
+  for (const [key, value] of Object.entries(next)) {
+    if (!isDeepStrictEqual(previous[key], value)) after = setAgyProperty(after, agyJson(after), serverStart, key, value, true);
+  }
+  return after;
 }
 
 const begin = "# BEGIN sympp Skills MCP";
