@@ -330,9 +330,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   describe "terminals" do
     test "terminals the factory's core reports finished end their rows; other cores' rows stay", %{repo: repo} do
       package = package!(repo, "WP-OBS-OWNERS")
-      seen = owner!(repo, package.work_request_id, "core-1/t1")
+      started_at = DateTime.add(DateTime.utc_now(:microsecond), -1, :second)
+      seen = owner!(repo, package.work_request_id, "core-1/t1", started_at)
       other_request = package!(repo, "WP-OBS-OWNERS-OTHER").work_request_id
-      unseen = owner!(repo, other_request, "core-2/t1")
+      unseen = owner!(repo, other_request, "core-2/t1", started_at)
 
       Observer.observe_terminals(repo, {:ok, %{core_id: "core-1", terminals: %{}}})
 
@@ -343,7 +344,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
     test "a terminal that took ownership after the snapshot was read isn't ended by it", %{repo: repo} do
       package = package!(repo, "WP-OBS-LATE-OWNER")
       read_at = DateTime.utc_now(:microsecond)
-      late = owner!(repo, package.work_request_id, "core-1/t5")
+      late = owner!(repo, package.work_request_id, "core-1/t5", DateTime.add(read_at, 1, :microsecond))
 
       Ownership.observe_core(repo, "core-1", nil, %{}, [], read_at)
 
@@ -438,7 +439,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
     %{"type" => "pr", "source_tool" => "attach_pr", "url" => "https://github.com/#{@repo_name}/pull/#{number}", "repository" => @repo_name, "number" => number, "head_sha" => head}
   end
 
-  defp owner!(repo, work_request_id, terminal_key) do
+  defp owner!(repo, work_request_id, terminal_key, started_at \\ DateTime.utc_now(:microsecond)) do
     repo.insert!(%WorkedOn{
       id: "wo-#{System.unique_integer([:positive])}",
       subject_kind: "work_request",
@@ -447,7 +448,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       display_address: terminal_key,
       role: "architect",
       state: "live",
-      started_at: DateTime.utc_now(:microsecond)
+      started_at: started_at
     })
   end
 

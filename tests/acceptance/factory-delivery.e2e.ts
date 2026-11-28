@@ -653,6 +653,7 @@ test('the watcher wakes a busy architect once for merged and closed PR blockers'
 
   // Reopening gives the PR a new transition. A nonzero send result may still
   // have submitted text, so it does not get a second attempt.
+  const replan = ['--raw', architect.terminal, `<sympp> ${request} example/client#972 impossible. Replan.</sympp>`];
   observe(972, 'OPEN');
   await restarted.tick('sweep');
   observe(972, 'CLOSED');
@@ -660,9 +661,20 @@ test('the watcher wakes a busy architect once for merged and closed PR blockers'
   await restarted.tick('sweep');
   provider.sendExitCode = 0;
   await restarted.tick('sweep');
-  expect(provider.sent).toEqual([wake, [
-    '--raw', architect.terminal, `<sympp> ${request} example/client#972 impossible. Replan.</sympp>`,
-  ]]);
+  expect(provider.sent).toEqual([wake, replan]);
+
+  observe(972, 'OPEN');
+  await restarted.tick('sweep');
+  const core = provider.core;
+  provider.core = null;
+  observe(972, 'CLOSED');
+  await restarted.tick('sweep');
+  const observer = await restarted.client(null);
+  expect((await observer.board(request)).blockers[0]).toMatchObject({ target: target(972), state: 'impossible' });
+  expect(provider.sent).toEqual([wake, replan]);
+  provider.core = core;
+  await restarted.tick('sweep');
+  expect(provider.sent).toEqual([wake, replan]);
 });
 
 test('a package plan edge wakes the architect when its prerequisite delivers', async ({ watched: { factory, provider } }) => {
