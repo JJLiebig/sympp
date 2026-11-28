@@ -165,6 +165,7 @@ function buildJob(detail, now) {
     offPrimary: offPrimary(request.base_branch, request.default_branch),
     createdAt,
     report,
+    blockers: request.blockers ?? [],
     asks,
     needs,
     decisions: decisionsOf(detail.decisions_to_review).map((d) => ({ ...d, by: known(d.by), jobId: request.id })),
@@ -175,7 +176,7 @@ function buildJob(detail, now) {
     edges: (detail.product_tree?.execution_graph?.effective_edges ?? [])
       .map((edge) => [edge?.prerequisite_work_package_id, edge?.dependent_work_package_id]).filter(([pre, dep]) => pre && dep),
     counts: { live: live.length, queued: queued.length, done: done.length, dropped: done.filter((pkg) => pkg.outcome === "dropped").length, total: packages.length },
-    state: settled ? "settled" : live.length > 0 || needs.length > 0 || phase === "unresolved" ? "live" : "resting",
+    state: settled ? "settled" : live.length > 0 || needs.length > 0 || phase === "unresolved" || request.blockers?.some((blocker) => !blocker.hold) ? "live" : "resting",
     lastMoveAt: Math.max(createdAt, ...packages.map((pkg) => pkg.since ?? 0)),
     deployFailed: deployFailed(request.deployments),
     phases,
@@ -316,6 +317,7 @@ function buildPackage(slice, jobRepo) {
     phase: group[0] ?? null,
     stage,
     statusLabel,
+    blockers: slice.blockers ?? [],
     ending,
     outcome: ending ? OUTCOMES[ending] : null,
     since: since ?? ms(slice.inserted_at),
@@ -424,7 +426,7 @@ function reportOf(report, now) {
   return {
     brief: note(report?.brief?.text, report?.brief?.written_at),
     eta: note(report?.eta?.text, report?.eta?.written_at),
-    parked: note(parking?.reason, parking?.parked_at),
+    parked: note(parking?.hold ?? parking?.reason, parking?.parked_at),
   };
 }
 

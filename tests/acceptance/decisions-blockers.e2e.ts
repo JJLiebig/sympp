@@ -1,5 +1,5 @@
 import { expect } from 'e2e';
-import { blockerActive, row } from '../support/delivery.js';
+import { blockerActive, close, row, test as deliveryTest } from '../support/delivery.js';
 import { contract, herdr, nextTerminal, test, type Client } from '../support/factory.js';
 import { age, test as coreTest } from '../support/herdr-core.js';
 
@@ -44,7 +44,7 @@ test('a conversational answer records its decision atomically and a resolved ask
   expect((await architect.addPackages([contract('Approved outcome', { goal: `Implement decision ${decision.id}` })]))).toHaveLength(1);
 });
 
-test('asks and operator reports leave explicit package blockers and sibling state alone', async ({ factory }) => {
+deliveryTest('answering or withdrawing an ask changes only the blockers that name it', async ({ watched: { factory } }) => {
   const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
   const architect = await factory.client();
   const id = await architect.request('Decision versus blocker');
@@ -56,37 +56,73 @@ test('asks and operator reports leave explicit package blockers and sibling stat
   const ask = (await chief.call('ask', {
     work_request_id: id, work_package_id: affected, question: 'Should we change the optional detail?',
   })).ask.id;
-  await architect.call('set_report', { brief: 'Waiting for a human scope choice.', parking: { reason: 'Should the optional detail ship?' } });
-  const parked = await architect.call('read_work_request', { work_request_id: id });
-  expect(parked.work_request.operator_report.parking.reason).toBe('Should the optional detail ship?');
+  const withdrawn = (await chief.call('ask', { work_request_id: id, question: 'Is the old approval still needed?' })).ask.id;
+  const target = { kind: 'ask', id: ask };
+  await architect.call('set_report', { brief: 'Waiting for a human scope choice.', parking: { targets: [target, { kind: 'ask', id: withdrawn }] } });
+  expect((await architect.board(id)).blockers).toMatchObject([{ target, state: 'waiting' }, { target: { id: withdrawn }, state: 'waiting' }]);
   expect(await blockerActive(architect, affected)).toBe(false);
 
-  const declaration = { work_package_id: affected, blocker_id: 'schema', active: true, summary: 'Required schema is unavailable.' };
-  expect((await architect.call('set_blocker', declaration)).changed).toBe(true);
-  expect((await architect.call('set_blocker', declaration)).changed).toBe(false);
-  const reworded = await architect.call('set_blocker', { ...declaration, summary: 'Required schema is still unavailable.' });
-  expect([reworded.changed, reworded.blocker.summary]).toEqual([true, 'Required schema is still unavailable.']);
-  await architect.reject('set_blocker', { work_package_id: affected, blocker_id: 'schema-typo', active: false }, 'blocker_not_found');
-  await architect.call('set_blocker', { work_package_id: affected, blocker_id: 'access', active: true, summary: 'Required access is unavailable.' });
+  const declaration = { work_package_id: affected, target, active: true, summary: 'Confirm the optional detail.' };
+  expect((await architect.call('set_blocker', declaration)).blocker).toMatchObject({ id: `ask:${ask}`, state: 'waiting' });
   expect(await blockerActive(architect, affected)).toBe(true);
   await architect.call('resolve_ask', {
     ask_id: ask, to: 'answered', answer: 'Keep the optional detail deferred.',
     decision: { source_type: 'human', decision: 'Defer the optional detail.', rationale: 'The current scope is sufficient.', scope_impact: 'No package changes.' },
   });
-  await architect.call('set_report', { parking: null });
-  expect(await blockerActive(architect, affected)).toBe(true);
-
-  const cleared = await architect.call('set_blocker', { work_package_id: affected, blocker_id: 'schema', active: false });
-  expect(cleared.blocker).toMatchObject({ id: 'schema', active: false });
-  expect((await architect.call('set_blocker', { work_package_id: affected, blocker_id: 'schema', active: false })).changed).toBe(false);
-  expect(await blockerActive(architect, affected)).toBe(true);
-  await architect.call('set_blocker', { work_package_id: affected, blocker_id: 'access', active: false, summary: 'Access prerequisite available.' });
+  await architect.call('resolve_ask', { ask_id: withdrawn, to: 'withdrawn' });
+  await factory.tick('sweep');
   expect(await blockerActive(architect, affected)).toBe(false);
-  expect(await packageState(architect, id, sibling)).toEqual(siblingBefore);
-  const report = (await architect.call('read_work_request', { work_request_id: id })).work_request.operator_report;
-  expect(report.brief.text).toBe('Waiting for a human scope choice.');
-  expect(report.parking.reason).toBe('Should the optional detail ship?');
-  expect(report.parking.resumed_at).toBeTruthy();
+  const read = await architect.call('read_work_request', { work_request_id: id });
+  expect(read.blockers).toMatchObject([
+    { target, state: 'cleared', next_action: 'dispatch' },
+    { target: { id: withdrawn }, state: 'impossible', next_action: 'replan' },
+    { target, work_package_id: affected, summary: declaration.summary, state: 'cleared', next_action: 'dispatch' },
+  ]);
+  expect(read.work_request.next_action).toBe('replan');
+  expect(read.work_request.operator_report.brief.text).toBe('Waiting for a human scope choice.');
+  expect((await packageState(architect, id, sibling)).merge_eligibility).toEqual(siblingBefore.merge_eligibility);
+
+  const parking = { hold: 'The operator paused this goal.' };
+  await architect.reject('set_report', { parking }, 'hold_requires_chief');
+  await chief.call('set_report', { work_request_id: id, parking });
+  await factory.tick('sweep');
+  expect((await architect.board(id)).blockers[0]).toMatchObject({ hold: 'operator', summary: parking.hold, state: 'waiting' });
+  await architect.call('set_report', { parking: null });
+  expect((await architect.call('read_work_request', { work_request_id: id })).work_request.operator_report.parking.resumed_at).toBeTruthy();
+});
+
+deliveryTest('typed dependencies reuse plan edges and reject cycles across packages and requests', async ({ watched: { factory } }) => {
+  const architect = await factory.client();
+  const other = await factory.client();
+  const request = await architect.request('Product delivery');
+  const otherId = await other.request('Prerequisite delivery');
+  const [first, second] = await architect.addPackages([contract('Prerequisite'), contract('Dependent')]);
+  const [foreign] = await other.addPackages([contract('Shared prerequisite')]);
+  const packageTarget = (id: string) => ({ kind: 'work_package', id });
+  const requestTarget = (id: string) => ({ kind: 'work_request', id });
+  const declare = (work_package_id: string, target: object) => ({ work_package_id, target, active: true, summary: 'Required before this can ship.' });
+
+  await architect.reject('set_blocker', declare(first, packageTarget(first)), 'blocker_cycle');
+  expect((await architect.call('set_blocker', declare(second, packageTarget(first)))).blocker.state).toBe('waiting');
+  await architect.reject('set_blocker', declare(first, packageTarget(second)), 'blocker_cycle');
+  const plan = (await architect.call('read_work_request', { work_request_id: request, view: 'plan' })).plan;
+  expect(plan.dependencies).toMatchObject([{ from: second, to: first, reason: 'Required before this can ship.' }]);
+  await architect.reject('dispatch_work_package', { work_package_id: second }, 'unmet_work_package_dependencies');
+
+  await architect.reject('set_report', { parking: { targets: [requestTarget(request)] } }, 'blocker_cycle');
+  await architect.call('set_report', { parking: { targets: [requestTarget(otherId), packageTarget(first)] } });
+  expect((await architect.call('read_work_request', { work_request_id: request })).work_request.next_action).toBe('dispatch_work_package');
+  await other.reject('set_blocker', declare(foreign, requestTarget(request)), 'blocker_cycle');
+  await other.reject('set_report', { parking: { targets: [requestTarget(request)] } }, 'blocker_cycle');
+  await close(architect, first);
+  await close(other, foreign);
+  await factory.tick('sweep');
+  expect((await architect.board(request)).blockers).toMatchObject([
+    { target: requestTarget(otherId), state: 'cleared' },
+    { target: packageTarget(first), state: 'cleared' },
+    { target: packageTarget(first), work_package_id: second, state: 'cleared' },
+  ]);
+  expect((await architect.call('dispatch_work_package', { work_package_id: second })).work_package.id).toBe(second);
 });
 
 test('package endings withdraw their asks, and chiefs and the owner can resolve WorkRequest asks', async ({ factory }) => {

@@ -8,14 +8,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   alias SymphonyElixir.SymphonyPlusPlus.Ownership
   alias SymphonyElixir.SymphonyPlusPlus.Ownership.WorkedOn
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Blockers
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{WorkPackage, WorkPackageDelivery}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.WorkPackageFactory
   alias SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard
 
@@ -226,7 +227,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       owner!(repo, closing.work_request_id, "core-1/t1")
       attach!(repo, closing, 10)
       attach!(repo, merging, 11)
-      assert {:ok, _, :changed} = Blockers.set(repo, nil, closing.id, "hold", true, "Waiting on reslice.")
+
+      assert {:ok, legacy} =
+               PlanningRepository.append_progress_event(repo, %{
+                 work_package_id: closing.id,
+                 summary: "Waiting on reslice.",
+                 status: "blocked",
+                 payload: %{"type" => "blocker", "source_tool" => "set_blocker", "blocker_id" => "hold", "active" => true}
+               })
+
+      legacy_report = %{"parking" => %{"reason" => "Waiting for the old plan.", "parked_at" => "2026-11-09T09:00:00Z", "resumed_at" => nil}}
+      repo.get!(WorkRequest, closing.work_request_id) |> Ecto.Changeset.change(report: legacy_report) |> repo.update!()
 
       closed_pr = pr(10, "head-a", %{"state" => "closed"})
       merged_pr = pr(11, "head-a", %{"state" => "merged", "merged" => true, "merged_at" => "2026-11-09T10:00:00Z", "merge_commit_sha" => "merge-11"})
@@ -243,11 +254,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
       assert {:ok, %{work_packages: slices}} = DeliveryBoard.project(repo, closing.work_request_id)
       assert %{work_package: %{pr_signal: %{status: "closed"}}, merge_eligibility: %{eligible: false}} = Enum.find(slices, &(&1.id == closing.id))
 
-      assert {:ok, %{"structuredContent" => %{"delivery_board" => %{"work_packages" => [row]}}}} =
+      assert {:ok, %{"structuredContent" => %{"delivery_board" => %{"work_packages" => [row], "blockers" => blockers}}}} =
                WorkRequestRead.call(repo, %{"work_request_id" => closing.work_request_id, "view" => "board"})
 
       assert %{"id" => id, "state" => "pr_closed", "next_action" => "close_work_package", "next_actor" => "architect", "blocker_ids" => ["hold"]} = row
       assert id == closing.id
+
+      assert [
+               %{"hold" => "legacy", "next_action" => "reclassify", "summary" => "Waiting for the old plan."},
+               %{"hold" => "legacy", "next_action" => "reclassify", "work_package_id" => ^id, "summary" => "Waiting on reslice."}
+             ] = blockers
+
+      assert repo.get!(ProgressEvent, legacy.id) == legacy
+      assert repo.get!(WorkRequest, closing.work_request_id).report == legacy_report
     end
 
     test "a merge whose evidence can't be recorded changes nothing", %{repo: repo} do

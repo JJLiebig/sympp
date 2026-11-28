@@ -3,7 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
   import Ecto.Query, only: [from: 2]
 
-  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{BlockerProjection, MetadataProjection}
   alias SymphonyElixir.SymphonyPlusPlus.FactoryRepos
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
   alias SymphonyElixir.SymphonyPlusPlus.Observer
@@ -15,6 +15,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -80,7 +81,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
           project_slice(work_package, deliveries_by_slice_id, slices_by_scope, context, opts)
         end)
 
-      {:ok, board_payload(work_request_id, slices)}
+      {:ok, board_payload(work_request, slices)}
     end
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
@@ -154,7 +155,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     slices_by_scope = work_packages_by_scope(visible_request_work_packages)
     slices = Enum.map(visible_request_work_packages, &project_slice(&1, deliveries_by_slice_id, slices_by_scope, context, opts))
 
-    board = board_payload(work_request.id, slices)
+    board = board_payload(work_request, slices)
 
     board =
       if Keyword.get(opts, :include_execution_graph?, false),
@@ -289,9 +290,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     Enum.flat_map(work_requests, &Map.get(work_packages_by_request, &1.id, []))
   end
 
-  defp board_payload(work_request_id, work_packages) do
+  defp board_payload(work_request, work_packages) do
     %{
-      work_request_id: work_request_id,
+      work_request_id: work_request.id,
+      blockers: OperatorReport.blockers(work_request.report),
       work_package_count: length(work_packages),
       counts: state_counts(work_packages),
       work_packages: work_packages
@@ -503,16 +505,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   defp project_slice(%WorkPackage{} = work_package, deliveries_by_slice_id, slices_by_scope, context, opts) do
     delivery = delivery_for_slice(deliveries_by_slice_id, work_package)
     work_package_summary = slice_work_package_summary(work_package.id, delivery, context, opts)
+    events = Map.get(context.progress_events, work_package.id, [])
+    blockers = BlockerProjection.blockers(events) ++ Signals.dependency_blockers(context, work_package.id)
+    work_package_summary = if work_package_summary, do: Map.put(work_package_summary, :blockers, blockers)
     operational_work_package = work_package_summary || hidden_work_package_marker(work_package, context)
     operational_state = operational_state(work_package, delivery, operational_work_package)
-    eligibility = merge_eligibility(work_package, context, operational_state.key)
+    eligibility = merge_eligibility(work_package, context, operational_state.key, blockers)
 
     activity_signal =
       Signals.activity(
         work_package,
         Map.put(work_package_summary || %{}, :merge_eligibility, eligibility),
         operational_state,
-        Map.get(context.progress_events, work_package.id, [])
+        events
       )
 
     operational_state = Map.put(operational_state, :activity_signal, activity_signal)
@@ -561,14 +566,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     }
   end
 
-  defp merge_eligibility(work_package, context, operational_key) do
-    eligibility =
-      context
-      |> get_in([:execution_graphs, work_package.work_request_id])
-      |> case do
-        %{merge_eligibility: entries} -> Enum.find(entries, &(&1.work_package_id == work_package.id)) || %{eligible: false, reason_codes: ["dependencies_unavailable"]}
-        _unavailable -> %{eligible: false, reason_codes: ["dependencies_unavailable"]}
-      end
+  defp merge_eligibility(work_package, context, operational_key, blockers) do
+    entries = get_in(context, [:execution_graphs, work_package.work_request_id, :merge_eligibility]) || []
+    eligibility = Enum.find(entries, &(&1.work_package_id == work_package.id)) || %{eligible: false, reason_codes: ["dependencies_unavailable"]}
 
     cond do
       operational_key == "pr_closed" ->
@@ -581,7 +581,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
         eligibility
         |> Map.put(:eligible, false)
         |> Map.update!(:reason_codes, &Enum.uniq(["active_blocker" | &1]))
-        |> Map.put(:next_action, "clear_blocker")
+        |> Map.put(:next_action, Signals.blocker_action(blockers) || "wait")
+
+      Signals.blocker_action(blockers) == "replan" ->
+        Map.put(eligibility, :next_action, "replan")
 
       # A package whose GitHub or review state can't be read isn't merge
       # eligible until the Observer reads it again.

@@ -26,6 +26,8 @@ name it. Architects may change in-repo CI and tests without asking.
 
 Architects own WorkRequests. Chiefs can edit or complete them without taking ownership.
 
+Name a package here, a PR as `owner/repo#number`, another WorkRequest, or an open ask for a wait. Use `set_report(parking: {hold: "..."})` for an explicit operator or chief hold.
+
 ## Settle product calls
 
 - Apply the user's existing decisions. Settle scope conflicts and

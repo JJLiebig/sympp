@@ -12,7 +12,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
       counts as finished.
     * a live worker whose package has ended is closed at its Herdr address.
 
-  Every 60 s it sweeps the dispatched and ready packages:
+  On startup and every 60 s it sweeps the dispatched and ready packages:
     * one batched GraphQL snapshot covers every watched PR, plus branch
       discovery for packages without a PR (`GitHub.Snapshot`);
     * the Review Suite cycle is read by `review_id` on the worker's machine
@@ -26,7 +26,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
       commit lists are read and reused until the head or base moves. Pairs with
       incomplete lists use cached ancestry comparisons (`Stacking`);
     * the same snapshot reads the PRs of cards (`Cards`), the work of the
-      terminals the operator talks to.
+      terminals the operator talks to, and of declared blockers.
 
   An input that can't be read (GitHub, the review host, or another PR the
   stacking check needs) flags the package `stale` and changes nothing else.
@@ -49,7 +49,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.{Repo, RepoIdentity, ReviewStatus}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Lifecycle, Qualification, Stacking, WorkPackage}
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{BlockerObservations, WorkRequest}
 
   @terminal_interval_ms 15_000
   @sweep_interval_ms 60_000
@@ -302,9 +302,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     observations = observations(repo, Enum.map(watched, & &1.package.id))
     watched = Enum.map(watched, &Map.put(&1, :observation, Map.get(observations, &1.package.id)))
     cards = guarded(fn -> Cards.watch(repo, opts) end, [])
+    blockers = safely(fn -> BlockerObservations.watch(repo) end, {[], []})
 
     watched = Enum.map(watched, &Map.put(&1, :entry, github_entry(&1)))
-    {github, results} = github_results(watched, Enum.map(cards, & &1.entry), opts)
+    {github, results} = github_results(watched, Enum.map(cards, & &1.entry) ++ BlockerObservations.pr_entries(blockers), opts)
     github = with_commits(watched, github, opts)
 
     watched =
@@ -316,17 +317,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
     to_read = for %{package: package} = item <- watched, reviewed?(package) and not pre_pr?(item), do: package
     reviews = review_results(repo, to_read, opts)
-    apply_cards = fn -> guarded(fn -> Cards.apply(repo, cards, results, opts) end, :ok) end
-    plan_observations(repo, watched, reviews, round, apply_cards)
+
+    apply_signals = fn ->
+      safely(fn -> BlockerObservations.publish(repo, blockers, results) end)
+      guarded(fn -> Cards.apply(repo, cards, results, opts) end, :ok)
+    end
+
+    plan_observations(repo, watched, reviews, round, apply_signals)
   end
 
-  defp plan_observations(repo, watched, reviews, round, apply_cards) do
+  defp plan_observations(repo, watched, reviews, round, apply_signals) do
     {settled, waiting, read} = watched |> Enum.flat_map(&view/1) |> Stacking.prepare(round)
     {deferred, ready} = Enum.split_with(watched, &MapSet.member?(waiting, &1.package.id))
 
     DashboardPubSub.coalesce_changed(fn ->
       observe_packages(repo, ready, reviews, settled)
-      apply_cards.()
+      apply_signals.()
     end)
 
     if read != nil do
@@ -408,11 +414,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   defp closed?(_observation, _ref), do: false
 
-  # Package and card entries share one batched snapshot. Returns each
-  # package's result and the results by entry.
-  defp github_results(watched, card_entries, opts) do
+  # Packages, cards and blockers share one batched snapshot.
+  defp github_results(watched, other_entries, opts) do
     entries = Map.new(watched, &{&1.package.id, &1.entry})
-    wanted = (Map.values(entries) ++ card_entries) |> Enum.reject(&(&1 == :skip)) |> Enum.uniq()
+    wanted = (Map.values(entries) ++ other_entries) |> Enum.reject(&(&1 == :skip)) |> Enum.uniq()
 
     results =
       cond do

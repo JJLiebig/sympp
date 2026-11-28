@@ -21,9 +21,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlanEdit do
 
   import Ecto.Query, only: [from: 2]
 
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyEdge
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, ExecutionGraph}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Lifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerTarget
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Phase
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -35,6 +36,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlanEdit do
 
   @type applied :: map()
   @type op_error :: {:op_failed, non_neg_integer(), String.t(), term()}
+  @type blocker_result :: {:ok, map(), :changed | :unchanged} | {:error, term()}
 
   @spec ops() :: [String.t()]
   def ops, do: @ops
@@ -54,6 +56,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlanEdit do
         {:error, reason} -> repo.rollback(reason)
       end
     end)
+  end
+
+  @doc "Records a package blocker as a plan edge in the caller's transaction."
+  @spec set_blocker(module(), WorkPackage.t(), map(), String.t() | nil) :: blocker_result()
+  def set_blocker(repo, package, %{target: %{"id" => to}, active: active, summary: summary} = blocker, created_by) do
+    from = package.id
+    context = %{repo: repo, work_request_id: package.work_request_id, created_by: created_by, keys: %{}}
+
+    with :ok <- require_distinct(from, to),
+         {:ok, ^to} <- resolve(to, context),
+         edges = dependency_edges(context, from, to),
+         {:ok, changed} <- change_blocker_edge(edges, from, to, active, summary, context),
+         {:ok, graph} <- ExecutionGraph.evaluate(repo, package.work_request_id) do
+      case {active, Enum.find(graph.effective_edges, &(&1.dependent_work_package_id == from and &1.prerequisite_work_package_id == to))} do
+        {true, _edge} when graph.cycles != [] -> {:error, :blocker_cycle}
+        {true, edge} -> blocker_receipt(blocker, BlockerTarget.dependency_state(edge.waiting_for), changed)
+        {false, _edge} -> blocker_receipt(blocker, "cleared", changed)
+      end
+    else
+      {:error, {:self_dependency, _id}} -> {:error, :blocker_cycle}
+      error -> error
+    end
+  end
+
+  defp change_blocker_edge([], _from, _to, false, _summary, _context), do: {:ok, :unchanged}
+  defp change_blocker_edge([%{reason: summary}], _from, _to, true, summary, _context), do: {:ok, :unchanged}
+
+  defp change_blocker_edge(_edges, from, to, active, summary, context) do
+    result = if active, do: set_dependency(from, to, summary, context), else: remove_dependency(from, to, context)
+    with :ok <- result, do: {:ok, :changed}
+  end
+
+  defp blocker_receipt(blocker, state, changed) do
+    {:ok, Map.merge(%{blocker | active: state != "cleared"}, BlockerTarget.present(blocker.target, state, blocker.summary)), changed}
   end
 
   defp require_authoring(repo, work_request_id) do

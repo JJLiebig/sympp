@@ -4,7 +4,7 @@ import { join, delimiter } from 'node:path';
 import { promisify } from 'node:util';
 import { writeFile } from 'node:fs/promises';
 import { readFile } from 'node:fs/promises';
-import { contract, test } from '../support/factory.js';
+import { contract, test, unknownRequest } from '../support/factory.js';
 import { head, pr, prUrl, test as deliveryTest } from '../support/delivery.js';
 import { git, repository } from '../support/worktree-git.js';
 
@@ -194,7 +194,7 @@ test('package endings follow their allowed statuses, replay idempotently and cle
   expect((await architect.reject('close_work_package', { work_package_id: dispatched, outcome: 'skipped' }, 'ending_not_allowed')).state).toBe('dispatched');
   expect((await architect.call('close_work_package', { work_package_id: skipped, outcome: 'skipped' })).work_package_delivery.outcome).toBe('skipped');
   for (const [work_package_id, blocker_id] of [[dispatched, 'ended-blocker'], [sibling, 'sibling-blocker']]) {
-    await architect.call('set_blocker', { work_package_id, blocker_id, active: true, summary: `Blocked by ${blocker_id}` });
+    await architect.call('set_blocker', { work_package_id, target: unknownRequest(blocker_id), active: true, summary: `Blocked by ${blocker_id}` });
   }
   const ending = { work_package_id: dispatched, outcome: 'abandoned', rationale: 'Rehomed.' };
   const first = await architect.call('close_work_package', ending);
@@ -204,7 +204,7 @@ test('package endings follow their allowed statuses, replay idempotently and cle
   expect(conflict).toMatchObject({ state: 'ended', outcome: 'abandoned', next_action: 'none' });
   const blockers = async (wp: string) => (await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).blockers.filter((entry: any) => entry.active).map((entry: any) => entry.id);
   expect(await blockers(dispatched)).toEqual([]);
-  expect(await blockers(sibling)).toEqual(['sibling-blocker']);
+  expect(await blockers(sibling)).toEqual(['work_request:wr_sibling-blocker']);
   expect((await architect.call('read_work_request', { work_request_id: id })).work_packages.find((wp: any) => wp.id === planned).status).toBe('planned');
 });
 

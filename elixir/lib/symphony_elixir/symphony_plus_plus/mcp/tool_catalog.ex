@@ -148,11 +148,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
       "Use to: answered only for an answer the operator gave in your conversation. Board answers already resolve the ask. The asker may resolve their asks; a chief or the owner may also resolve WorkRequest asks. A repeat answer returns the stored answer. decision records a decision when the ask first closes."
 
   defp description("set_blocker"),
-    do:
-      "Declare (active: true, with a summary) or clear (active: false) a WorkPackage blocker. Blockers are keyed by blocker_id; setting the state a blocker already has changes nothing. Ending a package clears its blockers."
+    do: "Declare or clear a WorkPackage blocker by target. Package targets are plan dependencies. Other targets clear on observed delivery."
 
   defp description("set_report"),
-    do: "Patch the WorkRequest's operator report: brief, eta and parking. null clears a field; clearing parking records that work resumed."
+    do: "Patch the WorkRequest's brief, eta and request-wide blockers. Chiefs can record an explicit hold. null clears a field."
 
   defp description("summarize_failed_mcp_calls"),
     do: "Count failed sympp tool calls per day, tool, reason and layer, including unknown tools and denied calls. Kept across restarts; arguments are never stored."

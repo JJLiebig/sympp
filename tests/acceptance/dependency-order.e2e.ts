@@ -1,5 +1,5 @@
 import { expect } from 'e2e';
-import { contract, type Client } from '../support/factory.js';
+import { contract, type Client, unknownRequest } from '../support/factory.js';
 import { blockerActive, board, close, head, pr, prUrl, row, sync, test } from '../support/delivery.js';
 
 const plan = async (client: Client, request: string) => (await client.call('read_work_request', { work_request_id: request, view: 'plan' })).plan;
@@ -41,6 +41,8 @@ test('all dependency endpoint combinations dispatch only after canonical deliver
   expect(refusal.state).toBe('planned');
   expect(refusal.prerequisite_work_package_ids.sort()).toEqual([direct, cancelled].sort());
   expect(refusal.next_action).toContain(`${cancelled} ended skipped and never delivers: add a successor that delivers it or remove the dependency`);
+  expect((await architect.board(request)).blockers.find((blocker: any) => blocker.work_package_id === next && blocker.target?.id === cancelled))
+    .toMatchObject({ target: { kind: 'work_package', id: cancelled }, state: 'impossible', next_action: 'replan' });
   // Operator Finish still records a readable ending that never satisfies a dependent.
   await architect.call('dispatch_work_package', { work_package_id: parked });
   expect((await architect.operator(`/api/v1/sympp/operator/work-packages/${parked}/finish`, {})).status).toBe(200);
@@ -53,7 +55,7 @@ test('all dependency endpoint combinations dispatch only after canonical deliver
   expect((await row(architect, request, cancelled)).delivery?.outcome).toBe('skipped');
   await architect.call('edit_plan', { ops: [{ op: 'remove_dependency', from: next, to: cancelled }] });
   // Retiring scope is not completion; only the delivered end of the chain satisfies it.
-  await architect.call('set_blocker', { work_package_id: direct, blocker_id: 'old-attempt', active: true, summary: 'This attempt is blocked.' });
+  await architect.call('set_blocker', { work_package_id: direct, target: unknownRequest('old-attempt'), active: true, summary: 'This attempt is blocked.' });
   await close(architect, direct, 'superseded', { successor_work_package_id: successor, rationale: 'A replacement owns the same scope.' });
   expect(await blockerActive(architect, direct)).toBe(false);
   await close(architect, successor, 'superseded', { successor_work_package_id: final, rationale: 'The final attempt owns the same scope.' });
@@ -111,7 +113,7 @@ test('out-of-order automatic and manual closeout retain order violations through
   for (const [wp, number] of [[ui, 204], [replay, 205]] as const) {
     await architect.call('dispatch_work_package', { work_package_id: wp });
     await depend(architect, wp, backend, { reason: 'Prerequisite must deliver first.' });
-    await architect.call('set_blocker', { work_package_id: wp, blocker_id: 'merge-order', active: true, summary: 'External merge bypassed this blocker.' });
+    await architect.call('set_blocker', { work_package_id: wp, target: unknownRequest('merge-order'), active: true, summary: 'External merge bypassed this blocker.' });
     provider.set(number, pr(number, head('d')));
     expect((await sync(architect, wp, number, head('d'))).pr_sync.readiness_reasons).toContain('dependency_not_delivered');
     expect((await row(architect, request, wp)).merge_eligibility.eligible).toBe(false);

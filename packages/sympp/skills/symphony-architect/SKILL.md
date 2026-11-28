@@ -207,9 +207,8 @@ caller-requested action.
 
 ## Report
 
-- Put milestones and setbacks in `set_report` (`brief`, `eta`, `parking`,
-  with `null` to clear a field). Use `set_blocker` for a real package blocker.
-  Asks and waits aren't blockers.
+- Use `set_blocker` for a package wait or `set_report(parking: {targets: [...]})` for a WorkRequest wait. Name a package here, a PR as `owner/repo#number`, another WorkRequest, or an open ask.
+- Use `brief` and `eta` for milestones. Replan impossible blockers and have a chief record explicit holds.
 - Write `brief` for the owner in very plain words: what people will get, how
   far along it is, and what comes next. One sentence, two at most. Name the
   feature the way a user would, not the code. No file paths, IDs, PR numbers,

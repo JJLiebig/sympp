@@ -1,6 +1,6 @@
 import { expect } from 'e2e';
 import { realpath } from 'node:fs/promises';
-import { Client, contract, herdr, nextTerminal } from '../support/factory.js';
+import { Client, contract, herdr, nextTerminal, unknownRequest } from '../support/factory.js';
 import { initialize, packages, snapshot, test, tool } from '../support/authority.js';
 import { test as coreTest } from '../support/herdr-core.js';
 
@@ -48,12 +48,12 @@ test('competing terminals end with one owner, Release hands over and ownership s
 
   const [wp] = (await winner.addPackages([contract('Owned work')], { work_request_id: request }));
   await winner.call('dispatch_work_package', { work_package_id: wp });
-  const mutation = { work_package_id: wp, blocker_id: 'once', active: true, summary: 'Accepted exactly once' };
+  const mutation = { work_package_id: wp, target: unknownRequest('once'), active: true, summary: 'Accepted exactly once' };
   expect((await winner.call('set_blocker', mutation)).changed).toBe(true);
   // A new agent in the same terminal (restart, compact or /clear) keeps ownership; the blocker is already set.
   const sameTerminal = await factory.client(winner.terminal);
   expect((await sameTerminal.call('set_blocker', mutation)).changed).toBe(false);
-  await loser.reject('set_blocker', { ...mutation, blocker_id: 'stolen' }, 'owned_by_other_terminal');
+  await loser.reject('set_blocker', { ...mutation, target: unknownRequest('stolen') }, 'owned_by_other_terminal');
   expect((await winner.inspect(`/api/v1/sympp/operator/work-packages/${wp}`)).progress.filter((event: any) => event.summary === mutation.summary)).toHaveLength(1);
 
   // A caller outside Herdr reads but cannot write.
@@ -71,7 +71,7 @@ test('competing terminals end with one owner, Release hands over and ownership s
   expect((await winner.operator(path, {})).status).toBe(200);
   expect((await winner.operator(path, {})).status).toBe(409);
   await loser.call('set_report', { work_request_id: request, brief: 'Taken over after Release' });
-  const back = await winner.reject('set_blocker', { ...mutation, blocker_id: 'after-release' }, 'owned_by_other_terminal');
+  const back = await winner.reject('set_blocker', { ...mutation, target: unknownRequest('after-release') }, 'owned_by_other_terminal');
   expect(back.owner.address).toBe(loser.address);
 
   // After a backend restart the MCP session is gone, but ownership is not.
@@ -117,7 +117,7 @@ test('backend restart keeps the ledger and its owner but a different ledger refu
   const [wp] = await packages(architect, ['Survives restart']);
   const health = await architect.call('sympp.health');
   const ledgerPath = await realpath(original.database);
-  const mutation = { work_package_id: wp, blocker_id: 'restart-once', active: true, summary: 'Survives a real backend stop' };
+  const mutation = { work_package_id: wp, target: unknownRequest('restart-once'), active: true, summary: 'Survives a real backend stop' };
   expect((await architect.call('set_blocker', mutation)).changed).toBe(true);
   await original.stop();
   const restarted = processes.factory('factory');
@@ -191,7 +191,7 @@ test('STDIO initialization serves trusted local reads, refuses writes outside He
   const created = (await peer.request('tools/call', { name: 'create_work_request', arguments: createArgs, _meta: meta })).structuredContent;
   expect(created).toMatchObject({ status: 'created' });
   expect(created.worked_on).toBeUndefined();
-  const blocker = { work_package_id: wp, blocker_id: 'stdio-foreign', active: true, summary: 'Not the owner' };
+  const blocker = { work_package_id: wp, target: unknownRequest('stdio-foreign'), active: true, summary: 'Not the owner' };
   expect((await peer.rawRequest('tools/call', { name: 'set_blocker', arguments: blocker, _meta: meta })).error.data.code).toBe('owned_by_other_terminal');
   expect((await peer.rawRequest('tools/call', { name: 'set_blocker', arguments: blocker })).error.data.code).toBe('read_only_outside_herdr');
   const note = await peer.rawRequest('tools/call', { name: 'record_decision', arguments: {
@@ -244,7 +244,7 @@ test('STDIO protocol errors and batches cannot smuggle identity across requests'
   expect(JSON.parse(mixed[0].result.contents[0].text).mode).toBe('stdio');
   const batchTool = (id: number, name: string, args: object = {}, meta?: object) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args, ...(meta ? { _meta: meta } : {}) } });
   const owner = { herdr: herdr(architect.terminal!) };
-  const blocker = (key: string) => ({ work_package_id: first, blocker_id: key, active: true, summary: key });
+  const blocker = (key: string) => ({ work_package_id: first, target: unknownRequest(key), active: true, summary: key });
   // Each request carries its own identity: a batch cannot lend one request's terminal to another.
   const denied = await candidate.rawPayload([
     [{ jsonrpc: '2.0', id: 920, method: 'tools/list' }],

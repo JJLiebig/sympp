@@ -180,6 +180,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
       %{
         prerequisite_work_package_id: prerequisite_id,
         dependent_work_package_id: dependent_id,
+        reason: Enum.find_value(edges, &value(&1, :reason)),
         dependency_ids: edges |> Enum.map(&value(&1, :id)) |> Enum.uniq() |> Enum.sort()
       }
     end)

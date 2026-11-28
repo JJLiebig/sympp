@@ -1,6 +1,6 @@
 import { expect } from 'e2e';
 import { test } from '../support/browser-candidate.js';
-import { contract } from '../support/factory.js';
+import { contract, unknownRequest } from '../support/factory.js';
 import { blockerActive, close, head, pr, prUrl, row, sync } from '../support/delivery.js';
 import { repository } from '../support/worktree-git.js';
 import { DatabaseSync } from 'node:sqlite';
@@ -96,11 +96,12 @@ test('operator attention differs from explicit blockers and settings/archive act
   await app.open('/sympp/board');
   await expect(browser.locator('title')).toHaveText(/^\(1\)\s/);
   expect(await blockerActive(client, wp)).toBe(false);
-  await client.call('set_blocker', { work_package_id: wp, blocker_id: 'schema', active: true, summary: 'Required schema missing.' });
+  await client.call('set_blocker', { work_package_id: wp, target: unknownRequest('schema'), active: true, summary: 'Required schema missing.' });
   await client.call('resolve_ask', { ask_id: ask, to: 'withdrawn' });
   await candidate.capture('blocker-without-escalation');
   await browser.reload();
   await expect(browser.locator('title')).toHaveText(/^(?!\(\d+\))\S/);
+  await expect(screen.getByText('Waiting · Lookup unavailable', { exact: true, visible: true })).toBeVisible();
   expect(await blockerActive(client, wp)).toBe(true);
 
   await screen.getByRole('button', 'sympp settings', { exact: true }).tap();
