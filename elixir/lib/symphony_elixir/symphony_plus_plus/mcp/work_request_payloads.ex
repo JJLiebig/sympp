@@ -128,9 +128,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
 
       {:ok,
        Enum.map(work_requests, fn work_request ->
+         summary = Map.fetch!(summaries, work_request.id)
+
          work_request
          |> work_request_card()
-         |> put_phase(Map.fetch!(summaries, work_request.id))
+         |> put_phase(summary)
+         |> optional_put("owner_status", WorkRequest.owner_status(work_request, summary.phase))
          |> optional_put("open_asks", open_asks[work_request.id])
        end)}
     end

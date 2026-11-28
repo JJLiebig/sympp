@@ -588,8 +588,9 @@ test('architect integration holds gate a ready PR without reopening work or chan
   expect(await blockerActive(architect, wp)).toBe(false);
 });
 
-test('the watcher clears merged PR blockers, marks closed PRs impossible and keeps unreadable PRs waiting', async ({ watched: { factory, provider, restart } }) => {
+test('the watcher wakes a busy architect once for merged and closed PR blockers', async ({ watched: { factory, provider, restart } }) => {
   const architect = await factory.client();
+  provider.terminal({ address: architect.terminal!, state: 'live', status: 'working' });
   const request = await architect.request('External prerequisites');
   const [wp] = await architect.addPackages([contract('Dependent work')]);
   const target = (number: number) => ({ kind: 'pr', id: `example/client#${number}` });
@@ -611,6 +612,7 @@ test('the watcher clears merged PR blockers, marks closed PRs impossible and kee
 
   provider.unreadable.add(971);
   await factory.tick('sweep');
+  expect(provider.sent).toEqual([]);
   expect(await blockerActive(architect, wp)).toBe(true);
   expect((await architect.board(request)).blockers.find((blocker: any) => blocker.work_package_id === wp))
     .toMatchObject({ state: 'waiting', unknown: true, next_action: 'wait' });
@@ -621,6 +623,11 @@ test('the watcher clears merged PR blockers, marks closed PRs impossible and kee
   const restored = await restart();
   const reader = await restored.client(architect.terminal);
   await restored.tick('sweep');
+  const wake = [
+    '--raw', architect.terminal,
+    `<sympp> ${request} example/client#971 cleared. Dispatch. | ${request} example/client#972 impossible. Replan.</sympp>`,
+  ];
+  expect(provider.sent).toEqual([wake]);
   expect(await blockerActive(reader, wp)).toBe(false);
   const read = await reader.call('read_work_request', { work_request_id: request });
   expect(read.work_request.next_action).toBe('replan');
@@ -636,6 +643,42 @@ test('the watcher clears merged PR blockers, marks closed PRs impossible and kee
     expect(surface.work_request.blockers).toMatchObject([{ target: target(972), state: 'impossible' }, { target: target(973), state: 'cleared' }]);
     expect(surface.work_packages[0].blockers).toMatchObject([{ target: target(971), state: 'cleared' }]);
   }
+  await restored.tick('sweep');
+  provider.unreadable.add(972);
+  await restored.tick('sweep');
+  provider.unreadable.delete(972);
+  const restarted = await restart();
+  await restarted.tick('sweep');
+  expect(provider.sent).toEqual([wake]);
+
+  // Reopening gives the PR a new transition. A nonzero send result may still
+  // have submitted text, so it does not get a second attempt.
+  observe(972, 'OPEN');
+  await restarted.tick('sweep');
+  observe(972, 'CLOSED');
+  provider.sendExitCode = 1;
+  await restarted.tick('sweep');
+  provider.sendExitCode = 0;
+  await restarted.tick('sweep');
+  expect(provider.sent).toEqual([wake, [
+    '--raw', architect.terminal, `<sympp> ${request} example/client#972 impossible. Replan.</sympp>`,
+  ]]);
+});
+
+test('a package plan edge wakes the architect when its prerequisite delivers', async ({ watched: { factory, provider } }) => {
+  const architect = await factory.client();
+  const request = await architect.request('Package prerequisite');
+  const [prerequisite, dependent] = await architect.addPackages([contract('Prerequisite'), contract('Dependent work')]);
+  const blocker = await architect.call('set_blocker', {
+    work_package_id: dependent, target: { kind: 'work_package', id: prerequisite }, active: true, summary: 'Wait for delivery.',
+  });
+  expect(blocker.blocker.state).toBe('waiting');
+  await close(architect, prerequisite);
+  await factory.tick('sweep');
+  expect(provider.sent).toEqual([
+    ['--raw', architect.terminal, `<sympp> ${request} ${prerequisite} cleared. Dispatch.</sympp>`],
+  ]);
+  expect((await architect.call('dispatch_work_package', { work_package_id: dependent })).work_package.id).toBe(dependent);
 });
 
 test('attached PRs cannot create blocker cycles, including a PR discovered after declaration', async ({ watched: { factory, provider } }) => {
@@ -1110,11 +1153,71 @@ test('the watcher follows worker terminals from launch to exit and never treats 
   await factory.tick('terminals');
   await factory.tick('terminals');
   expect(await next(quick)).toBe('inspect_worker');
-  // The architect's terminal finishing ends its work on the request.
-  const owner = async () => (await architect.inspect('/api/v1/sympp/operator/dashboard/hydrated'))
-    .work_request_details.find((entry: any) => entry.work_request.id === request).work_request.worked_on;
-  expect((await owner()).address).toBe(architect.address);
-  provider.terminal({ address: architect.terminal!, state: 'finished' });
+});
+
+test('only a confirmed vacancy marks No owner and wakes one live chief per vacancy', async ({ watched: { factory, provider, restart } }) => {
+  const chief = (address: string, domain: string, state: 'live' | 'finished' = 'live') =>
+    provider.terminal({ address, state, labels: { 'sympp.role': 'chief', 'sympp.domain': domain } });
+  const creator = await factory.client('t10', { 'sympp.role': 'chief', 'sympp.domain': 'delivery' });
+  const request = await creator.request('Needs an architect');
+  chief('t01', 'other');
+  chief('t02', 'other');
+  chief('t10', 'different');
+  chief('t20', 'delivery');
+  const architect = await factory.client('t30');
+  const claim = (client: typeof architect) => client.call('set_report', { work_request_id: request, brief: 'I own this delivery.' });
+  const read = async (client = creator) => (await client.call('read_work_request', { work_request_id: request })).work_request;
+  const dashboard = async () => (await creator.inspect('/api/v1/sympp/operator/dashboard/hydrated'))
+    .work_request_details.find((entry: any) => entry.work_request.id === request).work_request;
+  const notice = (target: string) => ['--raw', target, `<sympp> ${request} No owner. Assign an architect.</sympp>`];
+
+  await claim(architect);
   await factory.tick('terminals');
-  expect(await owner()).toBeFalsy();
+  expect((await dashboard()).worked_on.address).toBe(architect.address);
+  provider.terminals.delete(architect.terminal!);
+  const core = provider.core;
+  provider.core = null;
+  await factory.tick('terminals');
+  await factory.tick('sweep');
+  expect((await read()).owner_status).toBeUndefined();
+  expect((await dashboard()).worked_on.address).toBe(architect.address);
+  expect(provider.sent).toEqual([]);
+
+  // The longer worker closeout lookup can see a partial roster. It cannot
+  // confirm the architect's absence when the normal read fails.
+  provider.core = core;
+  provider.terminalListReplies.push(null, [...provider.terminals.values()]);
+  await factory.tick('terminals');
+  expect((await read()).owner_status).toBeUndefined();
+  expect(provider.sent).toEqual([]);
+
+  await factory.tick('terminals');
+  expect((await dashboard()).owner_status).toBe('No owner');
+  expect((await dashboard()).worked_on).toBeFalsy();
+  expect((await read()).owner_status).toBe('No owner');
+  const native = await creator.inspect(`/api/v1/sympp/herdr/work-requests/${request}`);
+  expect(native.work_request.owner_status).toBe('No owner');
+  expect(provider.sent).toEqual([notice('t20')]);
+
+  const restored = await restart();
+  const reader = await restored.client(null);
+  await restored.tick('terminals');
+  expect((await read(reader)).owner_status).toBe('No owner');
+  expect(provider.sent).toEqual([notice('t20')]);
+
+  for (const [address, exited, expected] of [
+    ['t31', ['t20'], 't10'],
+    ['t32', ['t10'], 't01'],
+    ['t33', ['t01', 't02'], null],
+  ] as const) {
+    const successor = await restored.client(address);
+    await claim(successor);
+    expect((await read(reader)).owner_status).toBeUndefined();
+    for (const terminal of exited) provider.terminal({ address: terminal, state: 'finished' });
+    provider.terminal({ address, state: 'finished' });
+    const count = provider.sent.length;
+    await restored.tick('terminals');
+    expect((await read(reader)).owner_status).toBe('No owner');
+    expect(provider.sent.slice(count)).toEqual(expected ? [notice(expected)] : []);
+  }
 });

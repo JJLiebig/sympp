@@ -128,6 +128,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Ownership do
 
     case repo.insert(Ecto.Changeset.unique_constraint(Ecto.Changeset.change(row), [:subject_kind, :subject_id], name: :sympp_worked_on_one_live_per_subject_index)) do
       {:ok, row} ->
+        repo.update_all(from(request in WorkRequest, where: request.id == ^work_request_id and request.owner_missing), set: [owner_missing: false])
         {:ok, row, :acquired}
 
       {:error, %Ecto.Changeset{}} ->

@@ -22,6 +22,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyEdge do
           target_id: String.t() | nil,
           kind: String.t() | nil,
           reason: String.t() | nil,
+          blocker_state: String.t() | nil,
           decision_ref: map() | nil,
           created_by: String.t() | nil,
           created_at: DateTime.t() | nil,
@@ -37,6 +38,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyEdge do
     field(:target_id, :string)
     field(:kind, :string)
     field(:reason, :string)
+    field(:blocker_state, :string)
     field(:decision_ref, :map)
     field(:created_by, :string)
     field(:created_at, :utc_datetime_usec)

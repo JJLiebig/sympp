@@ -45,6 +45,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest do
           creator_terminal: String.t() | nil,
           created_via: String.t() | nil,
           operator_completed_at: DateTime.t() | nil,
+          owner_missing: boolean(),
           report: map() | nil,
           archived_at: DateTime.t() | nil,
           archive_reason: String.t() | nil,
@@ -68,6 +69,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest do
     field(:created_via, :string)
     field(:dispatched_by, :map)
     field(:operator_completed_at, :utc_datetime_usec)
+    field(:owner_missing, :boolean, default: false)
     field(:report, :map)
     field(:archived_at, :utc_datetime_usec)
     field(:archive_reason, :string)
@@ -84,6 +86,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest do
 
   @spec creator_kinds() :: [String.t()]
   def creator_kinds, do: @creator_kinds
+
+  @spec owner_status(t(), String.t()) :: String.t() | nil
+  def owner_status(%__MODULE__{owner_missing: true}, phase) when phase not in ["done", "archived"], do: "No owner"
+  def owner_status(%__MODULE__{}, _phase), do: nil
 
   @spec create_changeset(map()) :: Ecto.Changeset.t()
   def create_changeset(attrs) do

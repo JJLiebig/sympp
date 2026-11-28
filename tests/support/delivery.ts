@@ -35,6 +35,7 @@ export class Provider {
   readonly terminals = new Map<string, Terminal>();
   readonly terminalListReplies: (Terminal[] | null)[] = [];
   readonly sent: string[][] = [];
+  sendExitCode = 0;
   readonly execRoutes: string[] = [];
   private terminalGetRequested?: (address: string) => void;
   readonly server = createServer(async (request, response) => {
@@ -147,7 +148,7 @@ export class Provider {
     }
     if (command === 'send') {
       this.sent.push(rest);
-      return json({ ok: true });
+      return { ...json({ ok: this.sendExitCode === 0 }), exitCode: this.sendExitCode };
     }
     if (command === 'exec' && rest[0] === '--json' && rest[1] === '--on') {
       this.execRoutes.push(rest[2]);

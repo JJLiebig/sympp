@@ -145,6 +145,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
   defp phase_fields(%WorkRequest{} = work_request, %{phase: phase, completed_at: completed_at}) do
     %{
       phase: phase,
+      owner_status: WorkRequest.owner_status(work_request, phase),
       completed_at: timestamp(completed_at),
       operator_completed_at: timestamp(work_request.operator_completed_at),
       archived_at: timestamp(work_request.archived_at),
@@ -319,8 +320,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
   end
 
   defp card(%WorkRequest{} = work_request, summaries, repo_identity_catalog) do
-    Map.merge(Map.fetch!(summaries, work_request.id), %{
+    summary = Map.fetch!(summaries, work_request.id)
+
+    Map.merge(summary, %{
       id: work_request.id,
+      owner_status: WorkRequest.owner_status(work_request, summary.phase),
       title: redacted_text(work_request.title),
       repo: work_request.repo,
       base_branch: work_request.base_branch,

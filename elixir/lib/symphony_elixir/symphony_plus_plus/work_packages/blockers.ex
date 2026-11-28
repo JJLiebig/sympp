@@ -102,10 +102,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Blockers do
     event_id = blocker.event_id
 
     transact(repo, fn ->
-      case current(repo, package_id, blocker.id) do
-        {:ok, %{event_id: ^event_id}} -> append(repo, Actor.observer(), package_id, blocker, state)
-        {:ok, _changed_or_missing} -> {:ok, blocker, :unchanged}
+      with %WorkPackage{status: status} when status != "ended" <- repo.get(WorkPackage, package_id),
+           :ok <- Phase.require_writable_package(repo, package_id),
+           {:ok, %{event_id: ^event_id}} <- current(repo, package_id, blocker.id) do
+        append(repo, Actor.observer(), package_id, blocker, state)
+      else
         {:error, _reason} = error -> error
+        _changed_or_missing -> {:ok, blocker, :unchanged}
       end
     end)
   end

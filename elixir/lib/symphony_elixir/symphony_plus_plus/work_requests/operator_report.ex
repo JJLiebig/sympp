@@ -84,16 +84,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport do
   def public(report) when is_map(report) do
     report
     |> Map.take(@fields)
+    |> Map.new(&public_field/1)
     |> case do
       empty when map_size(empty) == 0 -> nil
       public -> Redactor.redact_output(public)
     end
   end
 
+  defp public_field({"parking", %{"targets" => targets} = parking}) do
+    {"parking", %{parking | "targets" => Enum.map(targets, &Map.delete(&1, "last_known_state"))}}
+  end
+
+  defp public_field(field), do: field
+
   @spec blockers(map() | nil) :: [map()]
   def blockers(%{"parking" => %{"resumed_at" => nil, "targets" => targets}}) do
     Enum.map(targets, fn %{"state" => state} = entry ->
-      target = Map.delete(entry, "state")
+      target = Map.take(entry, ["kind", "id"])
       BlockerTarget.present(target, state, nil) |> Map.put(:id, BlockerTarget.id(target))
     end)
   end

@@ -367,6 +367,7 @@ function GoalCard({ onOpen, ref, troubles, view }: { onOpen: (goalId: string) =>
         </span>
         <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
           <PhaseBadge small view={view} />
+          {view.goal.ownerStatus ? <span className="text-xs font-semibold text-checks">{view.goal.ownerStatus}</span> : null}
           {view.ask ? (
             <span className="flex items-center gap-1.5 text-xs font-semibold text-you">
               <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-you motion-reduce:animate-none" />

@@ -237,6 +237,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
         :operator_report,
         :blockers,
         :worked_on,
+        :owner_status,
         :dispatched_by,
         :deployments
       ])
@@ -540,6 +541,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
         via: work_request.created_via
       },
       phase: phase.phase,
+      owner_status: WorkRequest.owner_status(work_request, phase.phase),
       completed_at: timestamp(phase.completed_at),
       operator_completed_at: timestamp(work_request.operator_completed_at),
       archived_at: timestamp(work_request.archived_at),

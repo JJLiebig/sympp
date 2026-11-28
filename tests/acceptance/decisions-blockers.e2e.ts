@@ -44,7 +44,7 @@ test('a conversational answer records its decision atomically and a resolved ask
   expect((await architect.addPackages([contract('Approved outcome', { goal: `Implement decision ${decision.id}` })]))).toHaveLength(1);
 });
 
-deliveryTest('answering or withdrawing an ask changes only the blockers that name it', async ({ watched: { factory } }) => {
+deliveryTest('answering or withdrawing an ask changes only the blockers that name it', async ({ watched: { factory, provider } }) => {
   const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
   const architect = await factory.client();
   const id = await architect.request('Decision versus blocker');
@@ -83,11 +83,14 @@ deliveryTest('answering or withdrawing an ask changes only the blockers that nam
   expect((await packageState(architect, id, sibling)).merge_eligibility).toEqual(siblingBefore.merge_eligibility);
 
   const parking = { hold: 'The operator paused this goal.' };
+  const sentBeforeHold = provider.sent.slice();
   await architect.reject('set_report', { parking }, 'hold_requires_chief');
   await chief.call('set_report', { work_request_id: id, parking });
   await factory.tick('sweep');
   expect((await architect.board(id)).blockers[0]).toMatchObject({ hold: 'operator', summary: parking.hold, state: 'waiting' });
   await architect.call('set_report', { parking: null });
+  await factory.tick('sweep');
+  expect(provider.sent).toEqual(sentBeforeHold);
   expect((await architect.call('read_work_request', { work_request_id: id })).work_request.operator_report.parking.resumed_at).toBeTruthy();
 });
 

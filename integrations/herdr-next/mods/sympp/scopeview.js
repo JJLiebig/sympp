@@ -227,7 +227,8 @@ function taskRow(v, t, task, wide) {
   // The task's checks sit at the row's right edge, wide or narrow, in a slot kept from the start.
   const ci = quiet ? null : ciDot(v, t, job.id, task.ci, `ci-${job.id}`);
   const head = h_flex().flex_1().min_w(0).gap(6).items_center().child(foldToggle(v, t, task))
-    .child(h_flex().flex_1().min_w(0).gap(10).items_center().child(title).when(Boolean(phase), (x) => x.child(phase)));
+    .child(h_flex().flex_1().min_w(0).gap(10).items_center().child(title).when(Boolean(phase), (x) => x.child(phase))
+      .when(Boolean(job.ownerStatus), (x) => x.child(micro(t, job.ownerStatus, signal().checks))));
   const el = wide
     ? h_flex().id(`task-${job.id}`).flex_none().px(10).py(quiet ? 6 : 11).gap(24).items_center()
       .child(head).when(Boolean(runs), (x) => x.child(h_flex().w(380).flex_none().justify_end().child(runs)))
@@ -263,6 +264,7 @@ export function compactTask(v, t, job, now) {
   const el = h_flex().id(`ftask-${job.id}`).flex_none().pl(36).pr(10).py(5).gap(10).items_center()
     .child(div().min_w(0).flex_shrink(1).truncate().text_size(12.5).text_color(t.foreground).child(job.title))
     .when(job.phase !== "active", (x) => x.child(P.phaseBadge(t, job.phase, `f-${job.id}`)))
+    .when(Boolean(job.ownerStatus), (x) => x.child(micro(t, job.ownerStatus, signal().checks)))
     .child(div().flex_1())
     .when(job.needs.length > 0, (x) => x.child(h_flex().id(`fneeds-${job.id}`).flex_none().gap(5).items_center()
       .child(div().size(6).rounded(3).bg(signal().you)).child(div().text_size(11.5).font_semibold().text_color(signal().you).child("Needs you"))))
@@ -471,6 +473,7 @@ function taskHead(v, t, job, task) {
     .child(h_flex().gap(12).items_center().flex_wrap()
       .child(P.phaseBadge(t, job.phase, job.id))
       .child(P.ownerChip(v, t, job.owner, `job-${job.id}`, { path: `/work-requests/${encodeURIComponent(job.id)}` }) ?? div())
+      .when(Boolean(job.ownerStatus), (x) => x.child(micro(t, job.ownerStatus, signal().checks)))
       .child(div().flex_1())
       .child(P.phaseActions(v, t, job)))
     .children(blockerRows(t, job.blockers))

@@ -7,12 +7,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyEdge
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.{Blockers, WorkPackage}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{BlockerTarget, WorkRequest}
 
-  @type watching :: {[WorkRequest.t()], [{String.t(), map()}]}
+  @type watching :: {[WorkRequest.t()], [{String.t(), String.t(), map()}]}
   @type subject :: {String.t(), String.t()}
+  @type transition :: {String.t(), BlockerTarget.target(), BlockerTarget.state()}
 
   @spec watch(module()) :: watching()
   def watch(repo), do: watch(repo, false)
@@ -32,16 +34,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
           on: package.id == event.work_package_id,
           join: request in WorkRequest,
           on: request.id == package.work_request_id,
-          where: package.status != "ended" and (^include_archived? or is_nil(request.archived_at)) and fragment("json_extract(?, '$.type') = 'blocker'", event.payload)
+          where: package.status != "ended" and (^include_archived? or is_nil(request.archived_at)) and fragment("json_extract(?, '$.type') = 'blocker'", event.payload),
+          select: {{request.id, package.id}, event}
         )
       )
 
     packages =
-      for {package_id, group} <- Enum.group_by(events, & &1.work_package_id),
+      for {{request_id, package_id}, group} <- Enum.group_by(events, &elem(&1, 0), &elem(&1, 1)),
+          known = last_known_package_states(group),
           %{active: true, target: %{}} = blocker <- BlockerProjection.blockers(group),
-          do: {package_id, blocker}
+          do: {request_id, package_id, Map.put(blocker, :last_known_state, known[blocker.id])}
 
     {Enum.filter(requests, &request_waiting?/1), packages}
+  end
+
+  defp last_known_package_states(events) do
+    events
+    |> Enum.reject(&(&1.actor_id == "observer" and &1.payload["state"] == "unknown"))
+    |> BlockerProjection.blockers()
+    |> Map.new(&{&1.id, &1.state})
   end
 
   @spec pr_entries(watching()) :: list()
@@ -157,13 +168,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
 
   defp targets({requests, packages}) do
     reports = for request <- requests, do: {request, request.report["parking"]["targets"]}
-    events = for {id, blocker} <- packages, do: {id, blocker, Map.put(blocker.target, "state", blocker.state)}
+    events = for {request_id, id, blocker} <- packages, do: {request_id, id, blocker, Map.put(blocker.target, "state", blocker.state)}
     declaration_edges(reports, events)
   end
 
   defp declaration_edges(reports, events) do
     request_edges = for {request, targets} <- reports, target <- targets, target["state"] != "cleared", do: {{"work_request", request.id}, target}
-    request_edges ++ Enum.map(events, fn {id, _blocker, target} -> {{"work_package", id}, target} end)
+    request_edges ++ Enum.map(events, fn {_request_id, id, _blocker, target} -> {{"work_package", id}, target} end)
   end
 
   @spec evaluate(module(), [BlockerTarget.target()], map()) :: [map()]
@@ -174,25 +185,67 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
     end)
   end
 
-  @spec publish(module(), watching(), map()) :: :ok
+  @spec publish(module(), watching(), map()) :: [transition()]
   def publish(repo, {requests, packages}, snapshots) do
     reports = for request <- requests, do: {request, evaluate(repo, request.report["parking"]["targets"], snapshots)}
 
     events =
-      for {id, blocker} <- packages,
+      for {request_id, id, blocker} <- packages,
           state = BlockerTarget.state(repo, blocker.target, snapshots),
-          do: {id, blocker, Map.put(blocker.target, "state", state)}
+          do: {request_id, id, blocker, Map.put(blocker.target, "state", state)}
 
     graph = attachment_graph(repo, declaration_edges(reports, events))
 
-    for {id, blocker, target} <- events,
-        state = attachment_state(graph, {"work_package", id}, target)["state"],
-        state != Blockers.observed_state(blocker),
-        do: Blockers.observe(repo, id, blocker, state)
+    package_changes =
+      for {request_id, id, blocker, target} <- events,
+          state = attachment_state(graph, {"work_package", id}, target)["state"],
+          state != Blockers.observed_state(blocker),
+          {:ok, _blocker, :changed} <- [Blockers.observe(repo, id, blocker, state)],
+          wake?(blocker.last_known_state, state),
+          do: {request_id, blocker.target, state}
 
-    Enum.each(reports, fn {request, targets} ->
-      publish_report(repo, request, Enum.map(targets, &attachment_state(graph, {"work_request", request.id}, &1)))
-    end)
+    request_changes =
+      Enum.flat_map(reports, fn {request, targets} ->
+        publish_report(repo, request, Enum.map(targets, &attachment_state(graph, {"work_request", request.id}, &1)))
+      end)
+
+    package_changes ++ request_changes
+  end
+
+  @spec publish_dependencies(module()) :: [transition()]
+  def publish_dependencies(repo) do
+    edges = watched_dependencies(repo)
+    targets = Map.new(edges, &{&1.id, %{"kind" => "work_package", "id" => prerequisite(&1)}})
+    states = targets |> Map.values() |> Enum.uniq() |> Map.new(&{&1, BlockerTarget.state(repo, &1, %{})})
+
+    for edge <- edges,
+        target = targets[edge.id],
+        state = states[target],
+        state != "unknown" and state != edge.blocker_state,
+        {1, _rows} <- [store_dependency_state(repo, edge, state)],
+        edge.blocker_state != nil and wake?(edge.blocker_state, state),
+        do: {edge.work_request_id, target, state}
+  end
+
+  defp watched_dependencies(repo) do
+    repo.all(
+      from(edge in DependencyEdge,
+        join: package in WorkPackage,
+        on: (edge.kind == "depends_on" and edge.source_id == package.id) or (edge.kind == "blocks" and edge.target_id == package.id),
+        join: request in WorkRequest,
+        on: request.id == edge.work_request_id,
+        where: package.status != "ended" and is_nil(request.archived_at) and is_nil(request.operator_completed_at),
+        where: is_nil(edge.blocker_state) or edge.blocker_state != "cleared"
+      )
+    )
+  end
+
+  defp prerequisite(%DependencyEdge{kind: "depends_on", target_id: id}), do: id
+  defp prerequisite(%DependencyEdge{kind: "blocks", source_id: id}), do: id
+
+  defp store_dependency_state(repo, edge, state) do
+    query = from(current in DependencyEdge, where: current.id == ^edge.id and fragment("? IS ?", current.blocker_state, type(^edge.blocker_state, :string)))
+    repo.update_all(query, set: [blocker_state: state])
   end
 
   # A newly attached PR can reveal a cycle after a declaration. Use the fresh
@@ -211,12 +264,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
 
   defp publish_report(repo, request, targets) do
     parking = request.report["parking"]
+    previous = parking["targets"]
+    targets = Enum.zip_with(previous, targets, &remember_known_state/2)
 
-    if targets != parking["targets"] do
-      result = repo.transaction(fn -> update_report(repo, request.id, parking, targets) end, mode: :immediate)
-      if match?({:ok, %WorkRequest{}}, result), do: DashboardPubSub.broadcast_changed()
+    with true <- targets != previous,
+         {:ok, %WorkRequest{}} <- repo.transaction(fn -> update_report(repo, request.id, parking, targets) end, mode: :immediate) do
+      DashboardPubSub.broadcast_changed()
+
+      for {old, %{"state" => state} = target} <- Enum.zip(previous, targets),
+          wake?(known_state(old), state),
+          do: {request.id, Map.take(target, ["kind", "id"]), state}
+    else
+      _unchanged -> []
     end
   end
+
+  defp remember_known_state(previous, %{"state" => "unknown"} = target), do: Map.put(target, "last_known_state", known_state(previous))
+  defp remember_known_state(_previous, target), do: Map.delete(target, "last_known_state")
+  defp known_state(target), do: Map.get(target, "last_known_state", target["state"])
+  defp wake?(before, state), do: state in ["cleared", "impossible"] and before != state
 
   defp update_report(repo, id, parking, targets) do
     with %WorkRequest{archived_at: nil} = current <- repo.get(WorkRequest, id),

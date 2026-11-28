@@ -170,6 +170,7 @@ function buildJob(detail, now) {
     needs,
     decisions: decisionsOf(detail.decisions_to_review).map((d) => ({ ...d, by: known(d.by), jobId: request.id })),
     owner,
+    ownerStatus: request.owner_status ?? null,
     dispatchedBy: chiefOf(request.dispatched_by),
     packages,
     // Prerequisite → dependent package pairs from the effective execution graph.
