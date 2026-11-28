@@ -301,6 +301,8 @@ function buildPackage(slice, jobRepo) {
   const ending = slice.status === "ended" || slice.delivery?.outcome ? endingOf(slice.delivery) ?? "abandoned" : null;
   const stage = ending ? "ended" : slice.status === "ready" ? "ready"
     : slice.status === "dispatched" ? PROGRESS[slice.progress] ?? "launching" : "planned";
+  const statusLabel = ending ? null : pr.status === "closed" ? "Closed"
+    : slice.operational_state?.key === "blocked" ? "Blocked" : null;
   const since = stage === "ended" ? ms(slice.delivery?.recorded_at) : stage === "planned" ? null : ms(slice.board_state?.entered_at) ?? ms(slice.dispatched_at);
   const repo = slice.repo_display || slice.repo || jobRepo || null;
   const group = typeof slice.group === "string" ? slice.group.split("/").map((part) => part.trim()).filter(Boolean) : [];
@@ -313,6 +315,7 @@ function buildPackage(slice, jobRepo) {
     group,
     phase: group[0] ?? null,
     stage,
+    statusLabel,
     ending,
     outcome: ending ? OUTCOMES[ending] : null,
     since: since ?? ms(slice.inserted_at),
@@ -393,6 +396,7 @@ const WORKER = { live: wait("worker", "Waits on its worker"), unknown: wait("no 
   finished: wait("exited", "Its worker exited", "warn") };
 export function waitsOn(pkg, needsYou) {
   if (needsYou) return wait("you", "Waits on you", "you");
+  if (pkg.statusLabel) return null;
   if (pkg.stage === "launching") return wait("starting", "Its worker is starting");
   if (pkg.finishable) return wait(shortRepo(pkg.pr.repo), `Waiting for ${pkg.pr.repo} to merge this`);
   if (pkg.stage === "ready") return wait("merge", "Ready to merge");

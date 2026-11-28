@@ -3,7 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
 
   import Ecto.Query, only: [from: 2]
 
-  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.Sanitizer
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{MetadataProjection, Sanitizer}
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
   alias SymphonyElixir.SymphonyPlusPlus.HerdrCore
@@ -364,6 +364,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   defp accountable_owner(nil), do: nil
   defp accountable_owner(id), do: %{id: id, source: "work_package"}
 
+  defp activity_stage(_work_package, %{key: "pr_closed"}, _review), do: "pr_closed"
   defp activity_stage(%{status: status}, _operational_state, %{status: "in_progress"}) when status != "ended", do: "reviewing"
   defp activity_stage(%{status: "ready"}, _operational_state, _review), do: "ready"
 
@@ -389,6 +390,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   end
 
   defp next_activity(%{status: "ended"}, _summary, _review, _worker), do: {nil, nil, nil}
+
+  defp next_activity(_package, %{merge_eligibility: %{next_action: "close_work_package"}}, _review, _worker),
+    do: {"pr_closed", "architect", "close_work_package"}
 
   defp next_activity(work_package, summary, review, worker) do
     dependency = map_value(summary, "dependency_signal") || %{}
@@ -559,9 +563,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   defp pr_status(pr) do
     cond do
       PullRequestProgress.merged?(pr) -> "merged"
+      pr_closed?(pr) -> "closed"
       filled_string?(map_value(pr, "url")) or is_integer(first_map_value(pr, ["number", "pr_number"])) -> "open"
       true -> "unavailable"
     end
+  end
+
+  defp pr_closed?(pr) do
+    merge_state = map_value(pr, "merge_state")
+
+    map_value(pr, "stale") != true and
+      Enum.any?(
+        [map_value(pr, "state"), map_value(merge_state, "state"), map_value(merge_state, "status")],
+        &(MetadataProjection.normalized_status(&1) == "closed")
+      )
   end
 
   defp override_pr_status(signal, %{outcome: "pr_merged"}), do: %{signal | status: "merged"}

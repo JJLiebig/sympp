@@ -422,7 +422,7 @@ test('provider errors and incomplete or wrong-head evidence cannot complete a di
   await sync(architect, wp, 102, head('a'));
   const failed = await architect.inspect(`/api/v1/sympp/operator/work-packages/${wp}`);
   expect(failed.metadata.pr.check_summary.status).toBe('failing');
-  expect(failed.metadata.pr.merge_state).toEqual({ merged: false, status: 'blocked' });
+  expect(failed.metadata.pr.merge_state).toEqual({ merged: false, status: 'closed' });
   expect(failed.metadata.pr).toMatchObject({ changed_files: [], changed_files_count: 1, changed_files_available: false });
   expect(((await row(architect, request, wp)).delivery?.outcome ?? null)).toBeNull();
   for (const missing of [{ mergedAt: new Date().toISOString(), mergeCommit: null }, { mergedAt: null, mergeCommit: { oid: head('f') } }]) {
