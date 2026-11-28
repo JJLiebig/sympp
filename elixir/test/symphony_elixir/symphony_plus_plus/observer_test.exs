@@ -10,6 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Qualification
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
@@ -40,6 +41,68 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ObserverTest do
   end
 
   describe "GitHub" do
+    test "a first-sweep merge wakes the current owner of a legacy dependency and leaves a delivered request silent", %{repo: repo} do
+      prerequisite = package!(repo, "WP-OBS-LEGACY-PREREQUISITE", status: "ready")
+      dependent = package!(repo, "WP-OBS-LEGACY-DEPENDENT", status: "planned", work_request_id: prerequisite.work_request_id)
+      delivered = package!(repo, "WP-OBS-DELIVERED-WAKE", status: "ready")
+      request_id = prerequisite.work_request_id
+      owner!(repo, request_id, "core-1/t1")
+      owner!(repo, delivered.work_request_id, "core-1/t1")
+      attach!(repo, prerequisite, 12)
+      attach!(repo, delivered, 13)
+
+      assert {:ok, %{blocker_state: nil}} =
+               ProductTree.create_dependency_edge(repo, %{
+                 work_request_id: request_id,
+                 source_kind: "work_package",
+                 source_id: dependent.id,
+                 target_kind: "work_package",
+                 target_id: prerequisite.id,
+                 kind: "depends_on"
+               })
+
+      report = %{"parking" => %{"resumed_at" => nil, "targets" => [%{"kind" => "pr", "id" => "nextide/repo#14", "state" => "waiting"}]}}
+      repo.get!(WorkRequest, delivered.work_request_id) |> Ecto.Changeset.change(report: report) |> repo.update!()
+
+      for setting <- [:sympp_herdr_core, :sympp_herdr_send] do
+        previous = Application.get_env(:symphony_elixir, setting)
+        on_exit(fn -> Application.put_env(:symphony_elixir, setting, previous) end)
+      end
+
+      roster = {:ok, %{core_id: "core-1", terminals: %{"t1" => %{"state" => "live"}, "t2" => %{"state" => "live"}}}}
+
+      Application.put_env(:symphony_elixir, :sympp_herdr_core, fn ->
+        if Ownership.owner(repo, request_id).terminal_key == "core-1/t1" do
+          assert {:ok, _released} = Ownership.release(repo, request_id)
+          owner!(repo, request_id, "core-1/t2")
+        end
+
+        roster
+      end)
+
+      observer = self()
+
+      Application.put_env(:symphony_elixir, :sympp_herdr_send, fn args ->
+        send(observer, {:wake, args})
+        :ok
+      end)
+
+      snapshot = fn entries ->
+        assert Ownership.owner(repo, request_id).terminal_key == "core-1/t1"
+
+        Map.new(entries, fn {:pr, "nextide", "repo", number} = entry ->
+          merged = pr(number, "head-a", %{"state" => "merged", "merged" => true, "merged_at" => "2026-11-09T10:00:00Z", "merge_commit_sha" => "merge-#{number}"})
+          {entry, {:ok, merged}}
+        end)
+      end
+
+      assert :ok = Observer.sweep(repo, core: roster, snapshot: snapshot)
+      line = "<sympp> #{request_id} #{prerequisite.id} cleared. Dispatch.</sympp>"
+      assert_received {:wake, ["send", "--raw", "t2", ^line]}
+      refute_received {:wake, _args}
+      assert %WorkPackage{status: "ended"} = repo.get!(WorkPackage, delivered.id)
+    end
+
     test "a PR attachment closes the pre-PR display read window", %{repo: repo} do
       package = package!(repo, "WP-OBS-REVIEW-ATTACH", branch_pattern: "agent/example", review_mode: "fast", review_id: "review-attach")
       :ok = sweep(repo, %{{:branch, "nextide", "repo", "agent/example", "main"} => {:ok, nil}})

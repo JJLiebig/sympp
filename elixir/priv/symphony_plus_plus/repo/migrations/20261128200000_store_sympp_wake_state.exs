@@ -3,7 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.StoreSymppWakeState do
 
   def change do
     alter table(:sympp_work_requests) do
-      add(:owner_missing, :boolean, default: false, null: false)
+      add(:vacated_owner_id, :string)
     end
 
     alter table(:sympp_product_tree_dependency_edges) do

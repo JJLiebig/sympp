@@ -49,16 +49,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.OperatorReport do
         repo.rollback(:work_request_archived)
 
       %WorkRequest{} = work_request ->
-        patch = observe_targets(repo, work_request_id, patch, snapshots)
+        patch = observe_targets(repo, work_request, patch, snapshots)
         now = DateTime.utc_now(:microsecond) |> DateTime.to_iso8601()
         repo.update!(Ecto.Changeset.change(work_request, report: apply_patch(work_request.report || %{}, patch, now)))
     end
   end
 
-  defp observe_targets(repo, request_id, %{"parking" => %{"targets" => targets}} = patch, snapshots) do
+  defp observe_targets(repo, %WorkRequest{id: request_id} = request, %{"parking" => %{"targets" => targets}} = patch, snapshots) do
     if Enum.any?(targets, &outside_request?(repo, request_id, &1)), do: repo.rollback({:tool_error, "blocker_package_outside_request"})
 
-    targets = BlockerObservations.evaluate(repo, targets, snapshots)
+    targets = repo |> BlockerObservations.evaluate(targets, snapshots) |> BlockerObservations.keep_known_states(request.report["parking"])
 
     case BlockerObservations.require_acyclic(repo, {"work_request", request_id}, targets) do
       :ok -> put_in(patch, ["parking", "targets"], targets)

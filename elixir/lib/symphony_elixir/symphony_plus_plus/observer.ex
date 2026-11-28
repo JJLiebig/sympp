@@ -76,13 +76,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
 
   @impl true
   def handle_info(:terminals, state) do
-    workers = safely(fn -> observe_and_find_ended_workers(state.repo, nil, &background_wakes/1) end, [])
+    workers = safely(fn -> observe_and_find_ended_workers(state.repo, nil, &background_wakes/2) end, [])
     Process.send_after(self(), :terminals, @terminal_interval_ms)
     {:noreply, start_worker_closeout(state, workers)}
   end
 
   def handle_info(:sweep, %{pending: nil} = state) do
-    case safely(fn -> prepare_sweep(state.repo, [], state.sweep_round, &background_wakes/1) end, nil) do
+    case safely(fn -> prepare_sweep(state.repo, [], state.sweep_round, &background_wakes/2) end, nil) do
       nil ->
         finish_sweep(state)
 
@@ -204,15 +204,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
       fallback
   end
 
-  defp background_wakes([]), do: :ok
+  defp background_wakes(_repo, {_kind, []}), do: :ok
 
-  defp background_wakes(messages) do
-    Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn -> Wakes.deliver(messages) end)
+  defp background_wakes(repo, batch) do
+    Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn -> Wakes.deliver(repo, batch) end)
     :ok
   end
 
-  defp notify_wakes(notify, messages) do
-    unless OfflineSandbox.enabled?(), do: safely(fn -> notify.(messages.()) end)
+  defp notify_wakes(repo, notify, batch) do
+    unless OfflineSandbox.enabled?(), do: safely(fn -> notify.(repo, batch.()) end)
   end
 
   @doc "Stored observations of these packages, by package id."
@@ -234,7 +234,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   """
   @spec observe_terminals(module(), {:ok, map()} | :unavailable | nil) :: :ok
   def observe_terminals(repo, snapshot \\ nil) do
-    case observe_and_find_ended_workers(repo, snapshot, &Wakes.deliver/1) do
+    case observe_and_find_ended_workers(repo, snapshot, &Wakes.deliver/2) do
       :lookup_reachable_workers -> repo |> reachable_ended_workers() |> close_workers()
       workers -> close_workers(workers)
     end
@@ -249,7 +249,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     case snapshot do
       {:ok, %{core_id: core_id, terminals: terminals} = core} ->
         Ownership.observe_core(repo, core_id, Map.get(core, :core_name), terminals, in_flight_ids(repo), read_at)
-        notify_wakes(notify, fn -> Wakes.vacancies(repo, core, read_at) end)
+        notify_wakes(repo, notify, fn -> {:vacancies, Wakes.vacancies(repo, core, read_at)} end)
 
       _unavailable ->
         :ok
@@ -303,7 +303,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
   """
   @spec sweep(module(), keyword()) :: :ok
   def sweep(repo, opts \\ []) do
-    case prepare_sweep(repo, opts, 0, &Wakes.deliver/1) do
+    case prepare_sweep(repo, opts, 0, &Wakes.deliver/2) do
       nil -> :ok
       {read, publish} -> publish.(read.())
     end
@@ -315,6 +315,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     watched = Enum.map(watched, &Map.put(&1, :observation, Map.get(observations, &1.package.id)))
     cards = guarded(fn -> Cards.watch(repo, opts) end, [])
     blockers = safely(fn -> BlockerObservations.watch(repo) end, {[], []})
+    safely(fn -> BlockerObservations.publish_dependencies(repo, :baseline) end)
 
     watched = Enum.map(watched, &Map.put(&1, :entry, github_entry(&1)))
     {github, results} = github_results(watched, Enum.map(cards, & &1.entry) ++ BlockerObservations.pr_entries(blockers), opts)
@@ -333,7 +334,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Observer do
     apply_signals = fn ->
       changes = safely(fn -> BlockerObservations.publish(repo, blockers, results) end, [])
       dependencies = safely(fn -> BlockerObservations.publish_dependencies(repo) end, [])
-      notify_wakes(notify, fn -> Wakes.blockers(repo, changes ++ dependencies) end)
+      notify_wakes(repo, notify, fn -> {:blockers, changes ++ dependencies} end)
       guarded(fn -> Cards.apply(repo, cards, results, opts) end, :ok)
     end
 

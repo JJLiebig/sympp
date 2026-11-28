@@ -50,9 +50,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
 
   defp last_known_package_states(events) do
     events
-    |> Enum.reject(&(&1.actor_id == "observer" and &1.payload["state"] == "unknown"))
+    |> Enum.reject(&(&1.payload["state"] == "unknown"))
     |> BlockerProjection.blockers()
-    |> Map.new(&{&1.id, &1.state})
+    |> Map.new(&{&1.id, if(&1.active, do: &1.state)})
   end
 
   @spec pr_entries(watching()) :: list()
@@ -212,9 +212,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
     package_changes ++ request_changes
   end
 
-  @spec publish_dependencies(module()) :: [transition()]
-  def publish_dependencies(repo) do
-    edges = watched_dependencies(repo)
+  @spec publish_dependencies(module(), :baseline | :all) :: [transition()]
+  def publish_dependencies(repo, mode \\ :all) do
+    edges = watched_dependencies(repo, mode == :baseline)
     targets = Map.new(edges, &{&1.id, %{"kind" => "work_package", "id" => prerequisite(&1)}})
     states = targets |> Map.values() |> Enum.uniq() |> Map.new(&{&1, BlockerTarget.state(repo, &1, %{})})
 
@@ -227,7 +227,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
         do: {edge.work_request_id, target, state}
   end
 
-  defp watched_dependencies(repo) do
+  defp watched_dependencies(repo, baseline?) do
     repo.all(
       from(edge in DependencyEdge,
         join: package in WorkPackage,
@@ -235,7 +235,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
         join: request in WorkRequest,
         on: request.id == edge.work_request_id,
         where: package.status != "ended" and is_nil(request.archived_at) and is_nil(request.operator_completed_at),
-        where: is_nil(edge.blocker_state) or edge.blocker_state != "cleared"
+        where: is_nil(edge.blocker_state) or (not (^baseline?) and edge.blocker_state != "cleared")
       )
     )
   end
@@ -262,10 +262,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
 
   defp attachment_state(_graph, _subject, target), do: target
 
+  @spec keep_known_states([map()], map() | nil) :: [map()]
+  def keep_known_states(targets, %{"resumed_at" => nil, "targets" => previous}) do
+    states = Map.new(previous, &{BlockerTarget.id(&1), known_state(&1)})
+
+    Enum.map(targets, fn
+      %{"state" => "unknown"} = target -> Map.put(target, "last_known_state", states[BlockerTarget.id(target)])
+      target -> Map.delete(target, "last_known_state")
+    end)
+  end
+
+  def keep_known_states(targets, _no_prior_targets), do: targets
+
   defp publish_report(repo, request, targets) do
     parking = request.report["parking"]
     previous = parking["targets"]
-    targets = Enum.zip_with(previous, targets, &remember_known_state/2)
+    targets = keep_known_states(targets, parking)
 
     with true <- targets != previous,
          {:ok, %WorkRequest{}} <- repo.transaction(fn -> update_report(repo, request.id, parking, targets) end, mode: :immediate) do
@@ -279,8 +291,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
     end
   end
 
-  defp remember_known_state(previous, %{"state" => "unknown"} = target), do: Map.put(target, "last_known_state", known_state(previous))
-  defp remember_known_state(_previous, target), do: Map.delete(target, "last_known_state")
   defp known_state(target), do: Map.get(target, "last_known_state", target["state"])
   defp wake?(before, state), do: state in ["cleared", "impossible"] and before != state
 

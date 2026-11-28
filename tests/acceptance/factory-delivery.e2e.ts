@@ -592,7 +592,7 @@ test('the watcher wakes a busy architect once for merged and closed PR blockers'
   const architect = await factory.client();
   provider.terminal({ address: architect.terminal!, state: 'live', status: 'working' });
   const request = await architect.request('External prerequisites');
-  const [wp] = await architect.addPackages([contract('Dependent work')]);
+  const [wp, replanning] = await architect.addPackages([contract('Dependent work'), contract('Needs replanning')]);
   const target = (number: number) => ({ kind: 'pr', id: `example/client#${number}` });
   const observe = (number: number, state: 'OPEN' | 'CLOSED' | 'MERGED') => provider.set(number, pr(number, head('a'), {
     url: `https://github.com/example/client/pull/${number}`, state,
@@ -600,14 +600,18 @@ test('the watcher wakes a busy architect once for merged and closed PR blockers'
   observe(971, 'OPEN');
   observe(972, 'OPEN');
   observe(973, 'MERGED');
+  observe(974, 'OPEN');
 
   const declaration = { work_package_id: wp, target: { kind: 'pr', id: 'Example/Client#971' }, active: true, summary: 'Wait for the shared change.' };
   expect((await architect.call('set_blocker', declaration)).blocker).toMatchObject({ id: 'pr:example/client#971', target: target(971), state: 'waiting', unknown: false });
+  const impossible = { ...declaration, work_package_id: replanning, target: target(974) };
+  await architect.call('set_blocker', impossible);
   await architect.call('set_report', { parking: { targets: [target(972), target(973)] } });
   const initial = await architect.board(request);
   expect(initial.blockers).toMatchObject([
     { target: target(972), state: 'waiting' }, { target: target(973), state: 'cleared', next_action: 'dispatch' },
     { target: target(971), work_package_id: wp, state: 'waiting' },
+    { target: target(974), work_package_id: replanning, state: 'waiting' },
   ]);
 
   provider.unreadable.add(971);
@@ -620,12 +624,13 @@ test('the watcher wakes a busy architect once for merged and closed PR blockers'
   provider.unreadable.delete(971);
   observe(971, 'MERGED');
   observe(972, 'CLOSED');
+  observe(974, 'CLOSED');
   const restored = await restart();
   const reader = await restored.client(architect.terminal);
   await restored.tick('sweep');
   const wake = [
     '--raw', architect.terminal,
-    `<sympp> ${request} example/client#971 cleared. Dispatch. | ${request} example/client#972 impossible. Replan.</sympp>`,
+    `<sympp> ${request} example/client#971 cleared. Dispatch. | ${request} example/client#972 impossible. Replan. | ${request} example/client#974 impossible. Replan.</sympp>`,
   ];
   expect(provider.sent).toEqual([wake]);
   expect(await blockerActive(reader, wp)).toBe(false);
@@ -635,6 +640,7 @@ test('the watcher wakes a busy architect once for merged and closed PR blockers'
     { target: target(972), state: 'impossible', next_action: 'replan' },
     { target: target(973), state: 'cleared', next_action: 'dispatch' },
     { target: target(971), work_package_id: wp, summary: declaration.summary, state: 'cleared', next_action: 'dispatch' },
+    { target: target(974), work_package_id: replanning, state: 'impossible', next_action: 'replan' },
   ]);
   const panel = await reader.inspect('/api/v1/sympp/herdr/dashboard');
   const summary = panel.work_request_details.find((entry: any) => entry.work_request.id === request);
@@ -645,8 +651,12 @@ test('the watcher wakes a busy architect once for merged and closed PR blockers'
   }
   await restored.tick('sweep');
   provider.unreadable.add(972);
+  provider.unreadable.add(974);
   await restored.tick('sweep');
+  await reader.call('set_report', { work_request_id: request, parking: { targets: [target(972), target(973)] } });
+  await reader.call('set_blocker', { ...impossible, summary: 'Keep this blocker while the provider is unavailable.' });
   provider.unreadable.delete(972);
+  provider.unreadable.delete(974);
   const restarted = await restart();
   await restarted.tick('sweep');
   expect(provider.sent).toEqual([wake]);
