@@ -69,10 +69,14 @@ limit then applies at once.
 The board does not create requests. Start one from a trusted local MCP session.
 
 An optional architect report gives the goal a brief, free-text ETA and request-wide
-waits. The dashboard and `read_work_request` show each blocker as waiting,
-cleared or impossible. An impossible target calls for replanning. A chief can
-record a hold that stays in place until someone clears it. Legacy free-text
-holds ask for reclassification. Questions from a chief appear as Needs you. See the
+waits. `read_work_request` shows each blocker as waiting, cleared or impossible.
+On the board and in the Herdr panel, a package with an open blocker shows a red
+Blocked label in its status column. Hovering it lists what still blocks the
+package, and clicking it opens the first blocker (a PR in the browser, or the
+package, WorkRequest or ask on the board). Cleared blockers are not shown on the
+board. An impossible target calls for replanning. A chief can record a hold that
+stays in place until someone clears it. Legacy free-text holds ask for
+reclassification. Questions from a chief appear as Needs you. See the
 [architect procedure](../packages/sympp/skills/symphony-architect/SKILL.md#report)
 for optional milestone updates.
 

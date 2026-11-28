@@ -1,5 +1,6 @@
 // Clean-slate model. A Goal is a WorkRequest; a Pkg is a WorkPackage with the stages it has moved through.
 import { areaFor, githubSlug, type Slug } from "./areas";
+import { placeBlockers, type BlockerTarget } from "./blocked";
 
 // A package's progress is derived from what its worker terminal, its PR, CI and Review Suite show.
 export type Stage = "planned" | "launching" | "implementing" | "review_ci" | "ready" | "ended";
@@ -22,7 +23,7 @@ export type Seg = { stage: Stage; from: number; to: number; failed: boolean; unt
 export type HistoryEvent = { t: string; s?: string; y?: string; c?: string; m?: boolean; n?: number; u?: string; a?: string; r?: string; x?: string };
 // What the factory could not read on its last look: GitHub, or the Review Suite host. Nothing moves on it until it can.
 export type Stale = "github" | "review";
-export type Blocker = { id: string; state: "waiting" | "cleared" | "impossible"; target?: { id: string } | null; summary?: string | null; hold?: "operator" | "legacy"; unknown?: boolean };
+export type Blocker = { id: string; state: "waiting" | "cleared" | "impossible"; target?: BlockerTarget | null; summary?: string | null; hold?: "operator" | "legacy"; unknown?: boolean };
 
 export type Pkg = {
   id: string;
@@ -47,6 +48,7 @@ export type Pkg = {
   // The package that took over when this one was superseded or skipped.
   successor: string | null;
   stale: Stale[];
+  blocked: boolean;
   blockers?: Blocker[];
 };
 
@@ -89,6 +91,7 @@ export type ReviewSignal = { status?: string | null; accepted_head?: string | nu
 export type Slice = {
   id: string;
   blockers?: Blocker[];
+  operational_state?: { key?: string | null } | null;
   work_package_id?: string | null;
   title?: string | null;
   sequence?: number;
@@ -157,6 +160,7 @@ export function buildBoard(hydrated: Hydrated, history: Record<string, HistoryEv
   const asks = [...details.flatMap((detail) => detail.asks ?? []), ...cards.flatMap((card) => (card.asks ?? []).map((ask) => ({ ...ask, card_id: card.id })))];
 
   const goals = [...details, ...shelved.map((request) => ({ work_request: { ...request, phase: "archived" } }))].map((detail) => buildGoal(detail, history, now));
+  placeBlockers(goals);
   // A card is filed under the area of a goal in the same repository; the board carries no area for cards.
   const areas = new Map(goals.map((goal) => [goal.repo, goal.area]));
 
@@ -331,15 +335,15 @@ function stepOf(env: DeployStep["env"], seen: Observed): DeployStep {
 function reportOf(report: OperatorReport | null | undefined, now: number): ArchitectReport | undefined {
   if (!report) return undefined;
   const note = (text?: string | null, at?: string | null): Note | null => (text ? { text, at: ms(at) ?? now } : null);
-  const parking = report.parking;
-  const hold = parking && (parking.hold ? `On hold · ${parking.hold}` : parking.reason ? `Hold · Reclassify · ${parking.reason}` : null);
-  return { brief: note(report.brief?.text, report.brief?.written_at), eta: note(report.eta?.text, report.eta?.written_at), parked: parking?.resumed_at ? null : note(hold, parking?.parked_at) };
+  const parking = report.parking?.resumed_at ? null : report.parking;
+  return { brief: note(report.brief?.text, report.brief?.written_at), eta: note(report.eta?.text, report.eta?.written_at), parked: note(parking?.hold ?? parking?.reason, parking?.parked_at) };
 }
 
 function blankPkg(slice: Slice, now: number): Pkg {
   const stale = staleOf(slice.observation_stale);
   return {
     blockers: slice.blockers,
+    blocked: slice.operational_state?.key === "blocked",
     id: slice.work_package_id || slice.id,
     title: slice.title || slice.id,
     seq: slice.sequence ?? 0,

@@ -2,10 +2,11 @@ import { Check, Circle, type LucideIcon } from "lucide-react";
 import { createContext, useContext, useState, type MouseEvent, type ReactNode } from "react";
 
 import { PkgActions } from "./actions";
-import { span, waitsOnOthers, type Blocker, type Goal, type Phase as GoalPhase, type GoalView, type Pkg, type PkgView, type Stage } from "./model";
+import { blockedOn } from "./blocked";
+import { span, waitsOnOthers, type Goal, type Phase as GoalPhase, type GoalView, type Pkg, type PkgView, type Stage } from "./model";
 import { focusAsk, GLOW, Presence, useFlash, useOpenWhenBrought, useScramble, useSwap } from "./motion";
 import { Owner } from "./owner";
-import { CiCell, Lifecycle, NARROW_HIDDEN, slotOf, NARROW_STATUS, NARROW_UNDER, NARROW_WRAP, OUTCOME, Pip, PKG_GRID, PKG_TITLE, PR_AND_CI, PrLink, StageStatus } from "./parts";
+import { BlockedLabel, CiCell, Lifecycle, NARROW_HIDDEN, slotOf, NARROW_STATUS, NARROW_UNDER, NARROW_WRAP, OUTCOME, Pip, PKG_GRID, PKG_TITLE, PR_AND_CI, PrLink, StageStatus } from "./parts";
 import { Reveal } from "./reveal";
 import { sampleReport } from "./samples";
 
@@ -59,6 +60,7 @@ export function useGoalLevel(verdict: Verdict, goalId: string) {
   useOpenWhenBrought(`goal:${goalId}`, () => {
     if (level === "closed") setOverride({ density, level: reopened });
   });
+  useOpenWhenBrought(`all:${goalId}`, () => setOverride({ density, level: "full" }));
 
   return {
     level,
@@ -68,9 +70,13 @@ export function useGoalLevel(verdict: Verdict, goalId: string) {
 }
 
 // Which phases of one goal are opened. A phase with work in progress is open unless closed by hand.
-export function usePhaseControl(): PhaseControl {
+export function usePhaseControl(goalId: string): PhaseControl {
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
   const [all, setAllState] = useState(false);
+  useOpenWhenBrought(`all:${goalId}`, () => {
+    setOverrides({});
+    setAllState(true);
+  });
   const isOpen = (state: PhaseState) => overrides[state.phase.id] ?? (all || state.status === "active");
 
   return {
@@ -123,20 +129,6 @@ export function BriefAge({ at, report }: { at: number; report: Report }) {
   return <span className="ml-2 whitespace-nowrap font-mono text-[11px] text-faint" title="When the architect wrote this">{span(at - report.briefAt)} ago</span>;
 }
 
-export function BlockerList({ blockers, className = "" }: { blockers?: Blocker[]; className?: string }) {
-  if (!blockers?.length) return null;
-  return (
-    <ul className={`space-y-0.5 text-xs wrap-anywhere ${className}`}>
-      {blockers.map((blocker) => {
-        const state = blocker.hold === "legacy" ? "Hold · Reclassify" : blocker.hold ? "On hold"
-          : blocker.state === "impossible" ? "Impossible · Replan" : blocker.state === "cleared" ? "Cleared · Dispatch"
-          : blocker.unknown ? "Waiting · Lookup unavailable" : "Waiting";
-        return <li key={blocker.id} className="text-dim"><span className={blocker.state === "impossible" ? "text-checks" : "text-ink"}>{state}</span> {[blocker.target?.id, blocker.summary].filter(Boolean).join(" · ")}</li>;
-      })}
-    </ul>
-  );
-}
-
 function verdictFor(view: GoalView): Verdict {
   if (view.ask) return "needs_you";
   if (view.goal.report?.parked && view.phase !== "done" && view.phase !== "archived") return "parked";
@@ -145,7 +137,7 @@ function verdictFor(view: GoalView): Verdict {
 
 // Fallback wording where no architect brief exists. An open goal says nothing its package count does not already say.
 function draftBrief(view: GoalView) {
-  if (view.goal.report?.parked) return view.goal.blockers?.length ? "" : view.goal.report.parked.text;
+  if (view.goal.report?.parked) return `Parked: ${view.goal.report.parked.text}`;
   const total = view.live.length + view.queued.length + view.done.length;
   if (view.phase === "intake") return "Not sliced yet.";
   if (view.phase === "done" || view.phase === "archived") return `All ${total} packages have ended.`;
@@ -238,7 +230,7 @@ const SECTIONS: Array<{ label: string; tone: string; keep: "first" | "last"; sta
 // At the "now" level only the middle part shows, with the rest summed up on one line.
 // Done and up-next phases are one line each until opened; long lists fold behind "more".
 export function GoalPackages({ at, control, level, onFull, view }: { at: number; control?: PhaseControl; level: "now" | "full"; onFull: () => void; view: GoalView }) {
-  const own = usePhaseControl();
+  const own = usePhaseControl(view.goal.id);
   const phases = phaseStates(view);
   const states = phases.length > 0 ? phases : looseStates(view);
   const use = control ?? own;
@@ -421,6 +413,7 @@ export function PkgLine({ at, ref, view }: { at: number; ref?: (node: HTMLElemen
         ref?.(node);
       }}
       className={ROW}
+      data-pkg={pkg.id}
       data-pkg-row
     >
       <Pip stage={view.stage} failed={view.failed} />
@@ -440,24 +433,27 @@ export function PkgLine({ at, ref, view }: { at: number; ref?: (node: HTMLElemen
         <Owner owner={pkg.owner} />
       </span>
       {waitsOnOthers(pkg) ? <PkgActions pkg={pkg} /> : <span />}
-      <BlockerList blockers={pkg.blockers} className="col-span-full pl-5" />
     </div>
   );
 }
 
 function RestLine({ pkg, ref }: { pkg: Pkg; ref?: (node: HTMLElement | null) => void }) {
   const outcome = pkg.outcome ? OUTCOME[pkg.outcome] : null;
+  const blocked = blockedOn(pkg);
   return (
-    <div ref={ref} className={ROW} data-pkg-row>
+    <div ref={ref} className={ROW} data-pkg={pkg.id} data-pkg-row>
       <Pip stage={outcome ? "ended" : "planned"} />
       <span className={`${PKG_TITLE} ${outcome ? "text-faint line-through decoration-faint/60" : "text-dim"}`}>{pkg.title}</span>
       {/* The outcome starts where the lifecycle would and takes its status column too; narrow, it sits right of the title. */}
-      <span className={`truncate font-mono text-[11px] min-[1000px]:col-span-2 ${outcome?.tone ?? "text-faint"}`}>{outcome?.label ?? "Planned"}</span>
+      {blocked ? (
+        <BlockedLabel blocked={blocked} className="truncate text-left font-mono text-[11px] min-[1000px]:col-span-2" />
+      ) : (
+        <span className={`truncate font-mono text-[11px] min-[1000px]:col-span-2 ${outcome?.tone ?? "text-faint"}`}>{outcome?.label ?? "Planned"}</span>
+      )}
       <PrLink className={`${NARROW_WRAP} ${NARROW_UNDER}`} pr={pkg.pr} repos={pkg.goalRepos} />
       <span className={NARROW_HIDDEN} />
       <span className={NARROW_HIDDEN} />
       <span className={NARROW_HIDDEN} />
-      <BlockerList blockers={pkg.blockers} className="col-span-full pl-5" />
     </div>
   );
 }

@@ -11,7 +11,7 @@ import { Decisions } from "./decisions";
 import { answered, readDeliveriesWith, recheck, useUnarrived } from "./delivery";
 import { applyDemo, demoDelivery, demoLedger, type DemoLedger, type DemoVariant } from "./mock";
 import { buildBoard, liveCountAt, openAt, viewAt, type Board, type HistoryEvent, type Settings } from "./model";
-import { focusGoal } from "./motion";
+import { focusGoal, useLiftFilter } from "./motion";
 import { ActContext, send, type OperatorAction } from "./operator";
 import { Outline } from "./outline";
 import { operate, project, usePending } from "./pending";
@@ -94,6 +94,7 @@ export function App() {
     flushSync(() => showArea(null));
     focusGoal(goalId);
   };
+  useLiftFilter(() => showArea(null));
   const { views, changes, asks, areas, shown, cards, shownCards, lanes, grouped } = useShaped(data, at, since, area);
   const directions = DIRECTIONS.filter((entry) => entry.key !== "phases" || grouped);
   const current = directions.find((entry) => entry.key === DIRECTIONS[direction]?.key) ?? directions[0];

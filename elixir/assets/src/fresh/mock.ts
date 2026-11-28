@@ -2,7 +2,7 @@
 // own payload, with every v2 state on it at least once. Operator actions change it in memory the way the
 // backend would. It is the preview's data and the model's test fixture.
 import type { Delivery } from "./delivery";
-import type { Archived, AskEntry, CardEntry, DecisionEntry, Detail, Hydrated, Owned, Prompt, Request, Slice } from "./model";
+import type { Archived, AskEntry, Blocker, CardEntry, DecisionEntry, Detail, Hydrated, Owned, Prompt, Request, Slice } from "./model";
 import type { OperatorAction } from "./operator";
 
 const MIN = 60e3;
@@ -32,6 +32,7 @@ type Plan = {
   stale?: Array<"github" | "review">;
   // The sequence number of the package that took over.
   successor?: number;
+  blockers?: Blocker[];
 };
 type GoalPlan = { id: string; title: string; repo: string; phase: string; owner?: Owned; age?: number; completed?: number; brief?: [text: string, ago: number, eta?: string]; parked?: [text: string, ago: number]; plans: Plan[] };
 
@@ -94,6 +95,8 @@ function slice(goal: GoalPlan, seq: number, plan: Plan, now: number): Slice {
     ...endingOf(goal.id, plan, now),
     pr_signal: prSignal(plan, now),
     review_signal: plan.review ? { mode: plan.review[0], status: plan.review[1], round: plan.review[2] ?? 1 } : null,
+    blockers: plan.blockers,
+    operational_state: plan.blockers?.some((blocker) => blocker.state !== "cleared") ? { key: "blocked" } : null,
   };
 }
 
@@ -128,7 +131,7 @@ const GOALS: GoalPlan[] = [
       { title: "sympp_worked_on table and atomic acquisition", group: "Backend / Ledger", outcome: "pr_merged", started: 600, ended: 310, pr: [SYMPP, 848], ci: "passing" },
       { title: "Takeover when the owner has finished", group: "Backend / Ledger", progress: "ready", started: 260, since: 18, pr: [SYMPP, 851], ci: "passing", review: ["fast", "passed"], worker: ["jjdev/t3fa"] },
       { title: "Bridge heartbeat and clean detach", group: "Backend / Bridge", progress: "review_ci", started: 190, since: 52, pr: [SYMPP, 853], ci: "pending", review: ["normal", "in_progress", 2], worker: ["jjdev/t3fb"], stale: ["review"] },
-      { title: "Forward Herdr labels in _meta", group: "Backend / Bridge", progress: "implementing", started: 41, preview: "https://example.com/board-preview", worker: ["jjdev/t3fc"] },
+      { title: "Forward Herdr labels in _meta", group: "Backend / Bridge", progress: "implementing", started: 41, preview: "https://example.com/board-preview", worker: ["jjdev/t3fc"], blockers: [{ id: "work_package:wr-owner-6", state: "waiting", target: { kind: "work_package", id: "wr-owner-6" }, summary: "Needs the owner chip first." }] },
       { title: "Release route for unknown owners", group: "Board", progress: "launching", started: 3 },
       { title: "Owner chip on WorkRequest rows", group: "Board" },
     ],
@@ -139,7 +142,14 @@ const GOALS: GoalPlan[] = [
     plans: [
       { title: "Missed-segment detector", group: "Backend / Detection", outcome: "pr_merged", started: 2000, ended: 1400, pr: [KRAKEN, 311], ci: "passing" },
       { title: "Backfill the last 30 days", group: "Backend / Detection", outcome: "pr_merged", started: 1300, ended: 980, pr: [KRAKEN, 314], ci: "passing" },
-      { title: "Slack delivery with dedupe", group: "Backend / Delivery", progress: "review_ci", started: 300, since: 95, pr: [KRAKEN, 318], ci: "failing", review: ["deep", "failed", 3], worker: ["jjdesktop/t5k2"] },
+      {
+        title: "Slack delivery with dedupe", group: "Backend / Delivery", progress: "review_ci", started: 300, since: 95, pr: [KRAKEN, 318], ci: "failing", review: ["deep", "failed", 3], worker: ["jjdesktop/t5k2"],
+        blockers: [
+          { id: "pr:nextidemedia/control-dashboard#313", state: "waiting", target: { kind: "pr", id: "nextidemedia/control-dashboard#313" }, summary: "Hold merge until the shared reload operation qualifies." },
+          { id: "hold", state: "waiting", hold: "legacy", summary: "Waits on the site install and readback on both hosts before the release chief merges the removal." },
+          { id: "work_package:wr-alerts-1", state: "cleared", target: { kind: "work_package", id: "wr-alerts-1" }, summary: "Cleared blocker: the detector landed." },
+        ],
+      },
       { title: "Daily email digest", group: "Backend / Delivery", progress: "implementing", started: 140, worker: ["jjlaptop/t1x9", "unknown"] },
       { title: "Creator time zones for digests", group: "Backend / Delivery", progress: "worker_exited", started: 220, worker: ["jjdesktop/t5k4", "finished"] },
       { title: "Alert list on the stream page", group: "Dashboard / Stream page" },
@@ -166,7 +176,7 @@ const GOALS: GoalPlan[] = [
     brief: ["Opus inventoried25repos/115workflowfiles/221jobdefinitions and grouped them by runner, cache and secret use; 14 jobs still pin actions by tag. Report /tmp/ci-audit/2026-11-09/report.txt lists each job with its repo, file and line so the pinning slice can start from it.", 64, "Audit delivered."],
     plans: [
       { title: "Inventory workflows and jobs", outcome: "pr_merged", started: 900, ended: 300, pr: [SYMPP, 861], ci: "passing" },
-      { title: "Pin third-party actions by SHA", progress: "implementing", started: 60, worker: ["jjdev/t3fd"] },
+      { title: "Pin third-party actions by SHA", progress: "implementing", started: 60, worker: ["jjdev/t3fd"], blockers: [{ id: "work_package:wr-ci-audit-1", state: "cleared", target: { kind: "work_package", id: "wr-ci-audit-1" }, summary: "Cleared blocker: the inventory landed." }] },
       { title: "Share one cache key scheme" },
     ],
   },

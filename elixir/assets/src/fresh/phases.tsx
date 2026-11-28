@@ -28,7 +28,7 @@ export function Phases({ at, views }: { at: number; views: GoalView[] }) {
 function GoalRoute({ at, ref, view }: { at: number; ref: (node: HTMLElement | null) => void; view: GoalView }) {
   const report = reportFor(view);
   const { level, showAll, toggle } = useGoalLevel(report.verdict, view.goal.id);
-  const control = usePhaseControl();
+  const control = usePhaseControl(view.goal.id);
   const phases = phaseStates(view);
   const listed = (state: PhaseState) => level === "full" || (level === "now" && state.status === "active");
   // A box always answers a click: it opens its phase, widening the goal first when the phase is not listed yet.

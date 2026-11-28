@@ -291,15 +291,38 @@ export function focusAsk(id: string) {
   bringUp(`ask:${id}`, `[data-ask="${CSS.escape(id)}"]`);
 }
 
-// The row opens before it is scrolled to. Opening grows its height, so the scroll waits for that:
-// near the bottom of the page the row could not reach its place before.
-function bringUp(key: string, selector: string) {
-  flushSync(() => window.dispatchEvent(new CustomEvent(OPEN, { detail: key })));
-  const growing = document.querySelector(selector)?.getAnimations({ subtree: true }).filter((animation) => animation.effect instanceof KeyframeEffect && animation.effect.getKeyframes().some((frame) => "height" in frame)) ?? [];
-  void Promise.all(growing.map((animation) => animation.finished.catch(() => undefined))).then(() => spotlight(selector));
+// The same for one package: its goal shows all its packages when the row is folded away, then the row lights up,
+// or the goal's when the row still isn't drawn. The goal's package list mounts on the first reveal and opens on the second.
+export function focusPkg(goalId: string, id: string) {
+  const row = `[data-pkg="${CSS.escape(id)}"]`;
+  for (let tries = 0; tries < 2 && !document.querySelector(row); tries += 1) flushSync(() => window.dispatchEvent(new CustomEvent(OPEN, { detail: `all:${goalId}` })));
+  bringUp(`goal:${goalId}`, `[data-goal="${CSS.escape(goalId)}"]`, row);
 }
 
-// Opens a folded row when something brings it up: `goal:<id>` or `ask:<id>`.
+// The row opens before it is scrolled to. Opening grows its height, so the scroll waits for that:
+// near the bottom of the page the row could not reach its place before.
+function bringUp(key: string, selector: string, inside?: string) {
+  flushSync(() => window.dispatchEvent(new CustomEvent(OPEN, { detail: key })));
+  const growing = document.querySelector(selector)?.getAnimations({ subtree: true }).filter((animation) => animation.effect instanceof KeyframeEffect && animation.effect.getKeyframes().some((frame) => "height" in frame)) ?? [];
+  void Promise.all(growing.map((animation) => animation.finished.catch(() => undefined))).then(() => spotlight(inside && document.querySelector(inside) ? inside : selector));
+}
+
+const LIFT = "fresh:lift";
+
+// A jump to a goal the area filter hides lifts the filter first, as a jump from Needs you does.
+export function liftFilterFor(goalId: string) {
+  if (!document.querySelector(`[data-goal="${CSS.escape(goalId)}"]`)) flushSync(() => window.dispatchEvent(new Event(LIFT)));
+}
+
+export function useLiftFilter(lift: () => void) {
+  const onLift = useEffectEvent(lift);
+  useLayoutEffect(() => {
+    window.addEventListener(LIFT, onLift);
+    return () => window.removeEventListener(LIFT, onLift);
+  }, []);
+}
+
+// Opens a folded row when something brings it up: `goal:<id>`, `all:<goal id>` or `ask:<id>`.
 export function useOpenWhenBrought(key: string, open: () => void) {
   const onOpen = useEffectEvent(open);
   useLayoutEffect(() => {

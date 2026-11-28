@@ -249,7 +249,7 @@ function movingRow(v, t, job, { pkg, slot, waits }) {
   const el = h_flex().id(`moving-${pkg.id}`).flex_none().h(22).pl(10 + INDENT).pr(10).gap(8).items_center()
     .child(box(v, t, pkg, 7, `moving-box-${pkg.id}`))
     .child(div().flex_1().min_w(48).truncate().text_size(12.5).text_color(t.muted).child(pkg.title))
-    .child(mono(11, stepTone).w(STEP_WIDTH).flex_none().child(step))
+    .child(blockedStep(v, pkg, mono(11, stepTone).w(STEP_WIDTH).flex_none().child(step), `moving-blocked-${pkg.id}`))
     .child(h_flex().id(`moving-waits-${pkg.id}`).w(64).min_w(0).flex_shrink(1).justify_end()
       .when(Boolean(waits), (el) => el.tooltip(waits.tip)
         .child(div().min_w(0).flex_shrink(1).truncate().font_family(MONO).text_size(11).text_color(waitTone).child(waits.text))));
@@ -338,6 +338,14 @@ function lifecycle(t, pkg, wide) {
   }).filter(Boolean));
 }
 
+// The Blocked label: hover lists what the package waits on, a click opens the first of them.
+function blockedStep(v, pkg, el, id) {
+  const blocked = pkg.statusLabel === "Blocked" ? M.blockedOn(pkg.blockers) : null;
+  if (!blocked) return el;
+  return el.id(id).tooltip(blocked.lines.join("\n"))
+    .when(Boolean(blocked.target), (x) => x.cursor_pointer().on_click((_e, cx) => { cx.stop_propagation(); v.openBlocker(blocked.target, cx); }));
+}
+
 // Blocked and closed packages use the blocked colour. Under review, colour reflects the review state.
 function statusTone(t, pkg) {
   if (pkg.statusLabel) return t.blocked;
@@ -360,8 +368,8 @@ function progress(v, t, pkg, now, wide) {
     .child(pkg.finishable ? `${M.shortRepo(pkg.pr.repo)}#${pkg.pr.number}` : `#${pkg.pr.number}`) : null;
   return h_flex().flex_1().min_w(0).gap(6).items_center()
     .when(live, (el) => el.child(lifecycle(t, pkg, wide))
-      .child(h_flex().w(118).flex_none().justify_end().child(mono(11, statusTone(t, pkg)).child(S.lifecycleStatus(pkg, now)))))
-    .when(!live, (el) => el.child(mono(11, tone).font_semibold().when(ended, (x) => x.w(78)).when(planned, (x) => x.min_w(0).truncate()).child(label)))
+      .child(h_flex().w(118).flex_none().justify_end().child(blockedStep(v, pkg, mono(11, statusTone(t, pkg)).child(S.lifecycleStatus(pkg, now)), `blocked-${pkg.id}`))))
+    .when(!live, (el) => el.child(blockedStep(v, pkg, mono(11, tone).font_semibold().when(ended, (x) => x.w(78)).when(planned, (x) => x.min_w(0).truncate()).child(label), `blocked-${pkg.id}`)))
     .child(div().flex_1())
     .when(Boolean(pr), (el) => el.child(pr));
 }
@@ -374,21 +382,10 @@ function pkgActions(v, t, job, pkg, ctx) {
     ui ? ghost(t, `studio-${pkg.id}`, "Studio", (cx) => v.openStudio(job, pkg, cx), { glyph: "monitor" }) : null,
   ].filter(Boolean);
   const action = list.length ? h_flex().gap(2).flex_wrap().children(list) : null;
-  if (!action && ctx.review?.id !== pkg.id && !pkg.blockers?.length) return null;
+  if (!action && ctx.review?.id !== pkg.id) return null;
   return v_flex().pl(26).pr(8).pb(10).pt(2).gap(8)
-    .children(blockerRows(t, pkg.blockers))
     .when(Boolean(action), (el) => el.child(action))
     .when(ctx.review?.id === pkg.id, (el) => el.child(reviewPane(v, t, pkg, ctx, true)));
-}
-
-function blockerRows(t, blockers = []) {
-  return blockers.map((blocker) => {
-    const state = blocker.hold === "legacy" ? "Hold · Reclassify" : blocker.hold ? "On hold"
-      : blocker.state === "impossible" ? "Impossible · Replan" : blocker.state === "cleared" ? "Cleared · Dispatch"
-      : blocker.unknown ? "Waiting · Lookup unavailable" : "Waiting";
-    return div().text_size(12).text_color(blocker.state === "impossible" ? t.blocked : t.muted)
-      .child([state, blocker.target?.id, blocker.summary].filter(Boolean).join(" · "));
-  });
 }
 
 // A package: its box, its name (an orange dot while an ask waits on the person), its checks, the
@@ -420,8 +417,9 @@ function pkgRow(v, t, job, e, ctx, wide, odd, indent = 0) {
     : v_flex().flex_1().min_w(0).gap(4)
       .child(h_flex().gap(10).items_center().child(named).child(ci).when(Boolean(finish), (x) => x.child(finish)).child(owner))
       .child(h_flex().gap(10).items_center().child(div().w(10).flex_none()).child(columns));
+  const lit = v.glowing === `pkg:${pkg.id}`;
   const row = h_flex().id(`pkg-${pkg.id}`).flex_none().px(10).py(wide ? 6 : 7).items_center().cursor_pointer().rounded(5)
-    .bg(on ? tint(t.accent, "24") : odd ? tint(t.foreground, "07") : CLEAR).border(1).border_color(on ? tint(t.accent, focused ? "cc" : "80") : CLEAR)
+    .bg(lit ? tint(t.accent, "40") : on ? tint(t.accent, "24") : odd ? tint(t.foreground, "07") : CLEAR).border(1).border_color(on ? tint(t.accent, focused ? "cc" : "80") : CLEAR)
     .hover((s) => s.bg(on ? tint(t.accent, "2e") : tint(t.foreground, "10")))
     .accessibility_label(`${pkg.title}, ${status}${e.needsYou ? ", waits on you" : ""}`)
     .on_click((_e, cx) => v.selectPackage(on ? null : pkg.id, cx))
@@ -469,14 +467,13 @@ function fold(v, t, job, label, parts, ctx, wide) {
 // unresolved task names the packages that didn't land.
 function taskHead(v, t, job, task) {
   const dropped = job.packages.filter((pkg) => pkg.outcome === "dropped");
-  return v_flex().id("task-head").flex_none().px(10).pb(12).gap(10)
+  return v_flex().id("task-head").flex_none().px(10).pb(12).gap(10).when(v.glowing === `job:${job.id}`, (el) => el.rounded(6).bg(tint(t.accent, "40")))
     .child(h_flex().gap(12).items_center().flex_wrap()
       .child(P.phaseBadge(t, job.phase, job.id))
       .child(P.ownerChip(v, t, job.owner, `job-${job.id}`, { path: `/work-requests/${encodeURIComponent(job.id)}` }) ?? div())
       .when(Boolean(job.ownerStatus), (x) => x.child(micro(t, job.ownerStatus, signal().checks)))
       .child(div().flex_1())
       .child(P.phaseActions(v, t, job)))
-    .children(blockerRows(t, job.blockers))
     .when(task.total > 0, (el) => el.child(strip(v, t, task.strip, `strip-${job.id}`, 11)))
     .when(job.phase === "unresolved" && dropped.length > 0, (el) => el.child(v_flex().id("unresolved").gap(2)
       .children(dropped.map((pkg) => h_flex().gap(8).items_center()
@@ -499,7 +496,7 @@ function jobRows(v, t, job, ctx) {
   return [
     taskHead(v, t, job, task),
     task.asks.length ? div().px(10).pb(4).child(micro(t, "Needs you", signal().you)) : null,
-    ...task.asks.map((ask) => div().pl(10).child(P.askBlock(v, t, ask.question))),
+    ...task.asks.map((ask) => div().pl(10).rounded(6).when(v.glowing === `ask:${ask.question.id}`, (el) => el.bg(tint(t.accent, "40"))).child(P.askBlock(v, t, ask.question))),
     task.decisions.length ? div().px(10).pt(4).pb(4).child(micro(t, "Decisions to review", t.dim)) : null,
     ...task.decisions.map((d) => div().pl(10).child(P.decisionBlock(v, t, d))),
     !task.total ? empty(t, "Not sliced into packages yet") : null,
