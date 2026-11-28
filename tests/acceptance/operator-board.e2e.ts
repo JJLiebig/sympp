@@ -101,7 +101,7 @@ test('operator attention differs from explicit blockers and settings/archive act
   await candidate.capture('blocker-without-escalation');
   await browser.reload();
   await expect(browser.locator('title')).toHaveText(/^(?!\(\d+\))\S/);
-  await expect(screen.getByText('Waiting · Lookup unavailable', { exact: true, visible: true })).toBeVisible();
+  await expect(browser.locator('button[title="wr_schema (WorkRequest)"]')).toHaveText('Blocked');
   expect(await blockerActive(client, wp)).toBe(true);
 
   await screen.getByRole('button', 'sympp settings', { exact: true }).tap();
