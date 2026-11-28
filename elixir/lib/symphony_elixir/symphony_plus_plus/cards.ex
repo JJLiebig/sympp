@@ -492,7 +492,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Cards do
 
     # A helper may have the same PR observation without the review cycle.
     Enum.find(members, card, fn member ->
-      is_binary(member.review_id) and member.state == card.state and member.pr == card.pr and ("github" in member.stale) == ("github" in card.stale)
+      is_binary(member.review_id) and member.state == card.state and member.pr == card.pr and Enum.member?(member.stale, "github") == Enum.member?(card.stale, "github")
     end)
   end
 
