@@ -3,8 +3,9 @@ import { useState, type ReactNode } from "react";
 
 import { GoalActions, GoalRefusal, ShelfCleanup } from "./actions";
 import { areaLabel } from "./areas";
-import { deployAt, inRepos, span, type Ci, type DeployStep, type Goal, type GoalView, type Outcome, type Pr, type PkgView, type Review, type Stage } from "./model";
-import { POP, Presence, useFlash } from "./motion";
+import { blockedOn, type BlockedOn } from "./blocked";
+import { deployAt, inRepos, span, type BlockerTarget, type Ci, type DeployStep, type Goal, type GoalView, type Outcome, type Pr, type PkgView, type Review, type Stage } from "./model";
+import { focusAsk, focusGoal, focusPkg, POP, Presence, useFlash } from "./motion";
 import { Reveal } from "./reveal";
 
 // `pip` is the small square that stands for a package in a strip of dots; `bar` is its step on the track.
@@ -173,9 +174,11 @@ function MarkIcon({ mark }: { mark: Mark }) {
 // the review's state icon, its mode and round, and while it runs how long the round has run: the icon at the
 // column's start and the time at its end, so both line up with the rows above and below. Narrow, the cell sits
 // under the title and keeps to its right edge.
-export function StageStatus({ at, view }: { at: number; view: PkgView }) {
+export function StageStatus({ at, still = false, view }: { at: number; still?: boolean; view: PkgView }) {
   const { pkg } = view;
   const cell = "truncate whitespace-nowrap text-right font-mono text-[11px] tabular-nums";
+  const blocked = blockedOn(pkg.blockers);
+  if (blocked) return <BlockedLabel blocked={blocked} className={cell} still={still} />;
   // A worker that finished without opening a PR leaves its package implementing with nobody on it.
   if (pkg.exited && view.stage === "implementing") return <span className={`${cell} font-semibold text-checks`} title="The worker finished without opening a PR">Exited</span>;
   const review = pkg.review;
@@ -193,6 +196,37 @@ export function StageStatus({ at, view }: { at: number; view: PkgView }) {
   }
   // Narrow, the plain time in stage drops out; the exceptions above stay.
   return <span className={`${cell} text-dim max-[1000px]:hidden`}>{view.untimed ? "" : span(at - view.since)}</span>;
+}
+
+// A blocked package says so in its status cell. Hover lists what it waits on; a click opens the first of them.
+// `still` keeps it plain text where a tap already belongs to the row.
+export function BlockedLabel({ blocked, className, still = false }: { blocked: BlockedOn; className: string; still?: boolean }) {
+  const label = `${className} font-semibold text-fail`;
+  const tip = blocked.lines.join("\n");
+  const target = blocked.target;
+  if (still || !target) return <span className={label} title={tip}>Blocked</span>;
+  return (
+    <button
+      className={`${label} cursor-pointer underline-offset-2 hover:underline`}
+      title={tip}
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        openBlocker(target);
+      }}
+    >
+      Blocked
+    </button>
+  );
+}
+
+function openBlocker(target: BlockerTarget) {
+  if (target.kind === "pr") {
+    const [repo, number] = target.id.split("#");
+    window.open(`https://github.com/${repo}/pull/${number}`, "_blank", "noopener,noreferrer");
+  } else if (target.kind === "ask") focusAsk(target.id);
+  else if (target.kind === "work_request") focusGoal(target.id);
+  else if (target.goalId) focusPkg(target.goalId, target.id);
 }
 
 // The mode, then the state, in words, for a phone, which has no hover. A card's review has no known mode, so it shows the state alone.

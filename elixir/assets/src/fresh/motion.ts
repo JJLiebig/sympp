@@ -291,12 +291,17 @@ export function focusAsk(id: string) {
   bringUp(`ask:${id}`, `[data-ask="${CSS.escape(id)}"]`);
 }
 
+// The same for one package: its goal opens and the package's row lights up, or the goal's when the row isn't drawn.
+export function focusPkg(goalId: string, id: string) {
+  bringUp(`goal:${goalId}`, `[data-goal="${CSS.escape(goalId)}"]`, `[data-pkg="${CSS.escape(id)}"]`);
+}
+
 // The row opens before it is scrolled to. Opening grows its height, so the scroll waits for that:
 // near the bottom of the page the row could not reach its place before.
-function bringUp(key: string, selector: string) {
+function bringUp(key: string, selector: string, inside?: string) {
   flushSync(() => window.dispatchEvent(new CustomEvent(OPEN, { detail: key })));
   const growing = document.querySelector(selector)?.getAnimations({ subtree: true }).filter((animation) => animation.effect instanceof KeyframeEffect && animation.effect.getKeyframes().some((frame) => "height" in frame)) ?? [];
-  void Promise.all(growing.map((animation) => animation.finished.catch(() => undefined))).then(() => spotlight(selector));
+  void Promise.all(growing.map((animation) => animation.finished.catch(() => undefined))).then(() => spotlight(inside && document.querySelector(inside) ? inside : selector));
 }
 
 // Opens a folded row when something brings it up: `goal:<id>` or `ask:<id>`.

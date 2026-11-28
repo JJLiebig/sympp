@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { previewFiles, previewMain } from './preview.mjs';
+import { blockedOn } from './mods/sympp/model.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const app = process.env.HERDR_APP || 'herdr-app';
@@ -98,6 +99,13 @@ test("a topic lists each task's packages at work under it, its step and what it 
   assert.ok(at(open, 'task-wr-restore') < at(open, 'moving-r-4') && at(open, 'moving-r-7') < at(open, 'group-wr-recap'), 'the rows sit under their task');
   assert.equal(open.has('moving-wp-done') || open.has('moving-wp-queued'), false, 'landed and planned packages stay in the strip');
   assert.ok(open.text('Merge') && open.text('merge') && open.text('no answer') && open.text('starting'), 'each row names its step and what it waits on');
+  assert.ok(open.out.includes(':id[Str("moving-blocked-r-6")] :tooltip[Str("PR core#97\\nhold: Waits on the site install') && open.text('Blocked'),
+    'a blocked package says Blocked and names what still blocks it on hover');
+  assert.equal(open.has('moving-blocked-r-7'), false, 'cleared blockers leave no label');
+  assert.equal(blockedOn([{ state: 'waiting', hold: 'legacy', summary: 'x' }, { state: 'waiting', target: { kind: 'pr', id: 'upstream/core#97' } }]).target.url,
+    'https://github.com/upstream/core/pull/97', 'a click opens the first blocker with a target');
+  assert.deepEqual(blockedOn([{ state: 'cleared', target: { kind: 'pr', id: 'owner/web#1' } }, { state: 'waiting', target: { kind: 'work_package', id: 'r-4' } }]).target,
+    { kind: 'work_package', id: 'r-4' });
   assert.ok(open.has('fold-wr-restore') && !open.has('fold-wr-docs'), 'only a task with packages at work folds');
   assert.ok(open.out.includes('tooltip[Str("Collapse all")]'));
 
@@ -162,6 +170,7 @@ test('a task shows its phase and owner, its packages at work under their groups 
     assert.doesNotMatch(view.out, /box\/t\w+/, 'no terminal address is shown');
     assert.ok(view.text('Build') && view.text('Review') && view.text('Merge') && view.text('deep r3 · 50m') && view.text('r2 · findings'));
     assert.equal(view.text('Checks'), width === 1400, 'narrow, a package shows only its current stage');
+    assert.ok(view.has('blocked-r-6') && !view.has('blocked-r-7'), 'only an open blocker shows Blocked in the status column');
     assert.equal(view.has('finish-r-4') || view.has('restore-wr-restore') || view.has('archive-wr-restore'), false, 'no Finish for a PR into its own repository; no Archive or Restore while open');
     const at = (id) => view.out.indexOf(`:id[Str("${id}")]`);
     assert.ok(at('group-wr-restore-0-Recovery') < at('pkg-r-4') && at('pkg-r-4') < at('group-wr-restore-1-Shell') && at('group-wr-restore-1-Shell') < at('pkg-r-5')

@@ -76,6 +76,8 @@ const LEASE = 60e3;
 // The studio's own pane shrinks to its header, under Herdr's pane header, while a native preview
 // shows below it.
 const STRIP = 88;
+// How long a row a Blocked label jumped to stays lit.
+const GLOW_MS = 1600;
 
 async function runtimeConnection(path) {
   try {
@@ -772,6 +774,25 @@ export default class Lens extends View {
   chiefsOf(topic, board, desk, bindings, now) {
     return L.chiefsFor(topic, M.chiefsOf(terminals()), desk, this.repoTopics)
       .map((chief) => ({ chief, agent: L.chiefAgent(chief, bindings, terminals(), this.agentChecks, now) }));
+  }
+
+  // Opens what holds a package up: a PR in the browser; a package, task or ask where it sits, lit briefly.
+  openBlocker(target, cx) {
+    if (target.kind === "pr") return cx.open_url(target.url);
+    const jobs = this.net.data?.jobs ?? [];
+    const job = target.kind === "work_request" ? jobs.find((j) => j.id === target.id)
+      : target.kind === "work_package" ? jobs.find((j) => j.packages.some((p) => p.id === target.id))
+      : jobs.find((j) => j.asks.some((a) => a.id === target.id));
+    if (!job) return;
+    const pkgId = target.kind === "work_package" ? target.id : target.kind === "ask" ? job.asks.find((a) => a.id === target.id).pkgId : null;
+    const pkg = job.packages.find((p) => p.id === pkgId) ?? null;
+    // A landed or planned package sits in its fold, which opens to show it.
+    const fold = pkg?.stage === "ended" ? "Landed" : pkg?.stage === "planned" ? "Up next" : null;
+    if (fold) this.expanded.add(`${fold}:${job.id}`);
+    this.openJob(job, { pkg: pkg?.id ?? null }, cx);
+    const key = pkg ? `pkg:${pkg.id}` : `job:${job.id}`;
+    this.glowing = key;
+    cx.timer.after(GLOW_MS, (cx) => { if (this.glowing === key) { this.glowing = null; cx.notify(); } });
   }
 
   // An open review drill-down follows the selected package.

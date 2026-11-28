@@ -397,6 +397,29 @@ export const isActive = (pkg, needsYou) => LIVE_STAGES.includes(pkg.stage) || (p
 const wait = (text, tip, tone = "dim") => ({ text, tip, tone });
 const WORKER = { live: wait("worker", "Waits on its worker"), unknown: wait("no answer", "Its worker isn't answering", "warn"),
   finished: wait("exited", "Its worker exited", "warn") };
+// What a blocked package waits on: one short line per blocker that hasn't cleared, and the first of
+// them that can be opened. A PR target is `owner/name#number`.
+export function blockedOn(blockers) {
+  const open = (Array.isArray(blockers) ? blockers : []).filter((blocker) => blocker?.state !== "cleared");
+  if (!open.length) return null;
+  const target = open.find((blocker) => blocker.target?.kind && blocker.target?.id)?.target ?? null;
+  const [repo, number] = target?.kind === "pr" ? target.id.split("#") : [];
+  return { lines: open.map(blockerLine), target: target && (repo ? { ...target, url: `https://github.com/${repo}/pull/${number}` } : target) };
+}
+
+const HOLD_TEXT = 80;
+function blockerLine(blocker) {
+  const target = blocker.target;
+  const summary = typeof blocker.summary === "string" ? blocker.summary.trim() : "";
+  const clipped = summary.length > HOLD_TEXT ? `${summary.slice(0, HOLD_TEXT - 1).trimEnd()}…` : summary;
+  const what = blocker.hold || !target ? (clipped ? `hold: ${clipped}` : "hold")
+    : target.kind === "pr" ? `PR ${target.id.split("/").pop()}`
+    : target.kind === "work_package" ? `${target.id} (package)`
+    : target.kind === "work_request" ? `${target.id} (WorkRequest)`
+    : `ask ${target.id}`;
+  return blocker.state === "impossible" ? `impossible: ${what}, replan` : what;
+}
+
 export function waitsOn(pkg, needsYou) {
   if (needsYou) return wait("you", "Waits on you", "you");
   if (pkg.statusLabel) return null;

@@ -3,12 +3,13 @@ import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 
 import { ActionMenu, actionsFor, GoalRefusal, type Action } from "./actions";
 import { areaLabel } from "./areas";
+import { blockedOn } from "./blocked";
 import { deployAt, span, unresolvedPkgs, waitsOnOthers, type Ask, type Board, type Decision, type GoalView, type Phase, type Pkg, type PkgView } from "./model";
 import { calm, EASE, Presence } from "./motion";
 import type { GoalStep } from "./operator";
-import { CiCell, deployLabel, LIFECYCLE, OrgIcon, OUTCOME, Pip, PrLink, ReviewCell, slotOf, StageStatus } from "./parts";
+import { BlockedLabel, CiCell, deployLabel, LIFECYCLE, OrgIcon, OUTCOME, Pip, PrLink, ReviewCell, slotOf, StageStatus } from "./parts";
 import { AskCard, DecisionCard, Heading, INSET, Tap, useGoalStep, Who } from "./phone-parts";
-import { BlockerList, BriefAge, etaText, GoalTitle, looseStates, PhaseBadge, phaseStates, reportFor, type PhaseState } from "./report";
+import { BriefAge, etaText, GoalTitle, looseStates, PhaseBadge, phaseStates, reportFor, type PhaseState } from "./report";
 import { Reveal } from "./reveal";
 import { SinceChip } from "./since";
 
@@ -101,7 +102,6 @@ function GoalHead({ at, head, view }: { at: number; head: RefObject<HTMLElement 
         {goal.ownerStatus ? <span className="text-xs font-semibold text-checks">{goal.ownerStatus}</span> : <Who terminal={goal.owner} />}
       </p>
       {goal.owner?.liveness === "unknown" ? <Tap action={{ kind: "release", goalId: goal.id }} className="mt-3 items-start" confirm="Release?" label="Release" /> : null}
-      <BlockerList blockers={goal.blockers} className="mt-3" />
       {report.brief || report.eta ? (
         <p className="mt-3 text-[15px] leading-relaxed text-ink/90 [overflow-wrap:anywhere]">
           {report.brief}
@@ -264,7 +264,7 @@ function PkgCard({ at, ref, view }: { at: number; ref?: (node: HTMLElement | nul
             <StageWord view={view} />
             {exited ? null : (
               <span className="grid">
-                <StageStatus at={at} view={view} />
+                <StageStatus at={at} still view={view} />
               </span>
             )}
             <CiCell ci={pkg.ci} stale={pkg.stale.includes("github")} />
@@ -287,7 +287,6 @@ function PkgDetail({ at, view }: { at: number; view: PkgView }) {
 
   return (
     <div className="space-y-2.5 pl-5">
-      <BlockerList blockers={pkg.blockers} />
       <p className="flex justify-between font-mono text-[11px]">
         {LIFECYCLE.map((slot, index) => (
           <span key={slot.label} className={index < now ? "text-dim" : index === now ? `font-semibold ${view.failed ? "text-fail" : slot.tone}` : "text-faint"}>
@@ -309,19 +308,19 @@ function PkgDetail({ at, view }: { at: number; view: PkgView }) {
 // A planned or ended package: its title and how it ended.
 function RestCard({ pkg, ref }: { pkg: Pkg; ref?: (node: HTMLElement | null) => void }) {
   const outcome = pkg.outcome ? OUTCOME[pkg.outcome] : null;
+  const blocked = outcome ? null : blockedOn(pkg.blockers);
   return (
     <div ref={ref} className={`flex min-h-11 items-start gap-3 py-2.5 ${ROUTE_INSET}`} data-pkg-row>
       <span className="mt-1.5 flex">
         <Pip stage={outcome ? "ended" : "planned"} />
       </span>
-      <div className="min-w-0 flex-1">
+      <span className="min-w-0 flex-1">
         <span className={`block text-sm leading-snug [overflow-wrap:anywhere] ${outcome ? "text-faint line-through decoration-faint/60" : "text-dim"}`}>{pkg.title}</span>
         <span className="mt-1 flex flex-wrap items-center gap-x-3">
-          <span className={`font-mono text-[11px] ${outcome?.tone ?? "text-faint"}`}>{outcome?.label ?? "Planned"}</span>
+          {blocked ? <BlockedLabel blocked={blocked} className="font-mono text-[11px]" still /> : <span className={`font-mono text-[11px] ${outcome?.tone ?? "text-faint"}`}>{outcome?.label ?? "Planned"}</span>}
           <PrLink className={PR_TAP} pr={pkg.pr} repos={pkg.goalRepos} />
         </span>
-        <BlockerList blockers={pkg.blockers} className="mt-1" />
-      </div>
+      </span>
     </div>
   );
 }
