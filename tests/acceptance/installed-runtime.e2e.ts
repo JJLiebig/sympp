@@ -122,7 +122,7 @@ if (process.platform !== 'win32') {
       await writeFile(join(env.HERDR_APP_HOME, 'layouts/personal.json'), layout);
       await writeFile(join(env.HERDR_APP_HOME, 'shared.json'), JSON.stringify(topics));
       const core = join(root, 'herdr-core.json');
-      await writeFile(core, JSON.stringify({ core: { id: 'desk-core', name: 'desk' }, calls: [], terminals: { t1: { state: 'live', pid: 4242, labels: {} } } }));
+      await writeFile(core, JSON.stringify({ core: { id: 'desk-core', name: 'desk' }, calls: [], terminals: { t1: { state: 'live', pid: 4242, labels: { 'sympp.role': 'chief' } } } }));
 
       // Codex settings, an inert example of a sympp block and a registration from before the rename stay the person's.
       const configFile = join(env.CODEX_HOME!, 'config.toml');

@@ -90,6 +90,7 @@ test('every phase follows actual delivery, open asks never change it, and a succ
   const chief = await factory.client(undefined, { 'sympp.role': 'chief' });
   const ask = (id: string) => chief.call('ask', { work_request_id: id, question: 'Anything else?' });
   const end = (work_package_id: string, outcome: string, extra: object = {}) => client.call('close_work_package', { work_package_id, outcome, ...extra });
+  const finish = async (id: string) => expect((await client.operator(`/api/v1/sympp/operator/work-packages/${id}/finish`, {})).status).toBe(200);
   const noPr = { evidence: 'Delivered without a PR.' };
   const intake = await client.request('Phase intake');
   await ask(intake);
@@ -107,7 +108,7 @@ test('every phase follows actual delivery, open asks never change it, and a succ
   const [noPrWp, finished, abandonedLater] = await packages(client, ['No PR', 'Finished', 'Abandoned']);
   const [skipped] = await client.addPackages([contract('Skipped')]);
   await end(noPrWp, 'completed_no_pr', noPr);
-  await end(finished, 'finished');
+  await finish(finished);
   await end(skipped, 'skipped');
   // Ready-or-active work beside an abandoned package is still active.
   await end(abandonedLater, 'abandoned', { rationale: 'Retired scope.' });
@@ -116,7 +117,7 @@ test('every phase follows actual delivery, open asks never change it, and a succ
   const resolved = await client.request('Phase resolved by delivery');
   const [onlyDelivery, onlyFinished] = await packages(client, ['Only delivery', 'Only finished']);
   await end(onlyDelivery, 'completed_no_pr', noPr);
-  await end(onlyFinished, 'finished');
+  await finish(onlyFinished);
   await ask(resolved);
   // Delivery truth stays primary over an open ask.
   expect((await phase(resolved)).phase).toBe('done');
@@ -136,7 +137,7 @@ test('every phase follows actual delivery, open asks never change it, and a succ
   const [first] = await packages(client, ['First scope']);
   const [second] = await packages(client, ['Second scope']);
   await end(first, 'superseded', { successor_work_package_id: second, rationale: 'Recut.' });
-  await end(second, 'finished');
+  await finish(second);
   expect((await phase(chain)).phase).toBe('done');
 
   // Explicit operator completion is authoritative; archive and restore keep it.
