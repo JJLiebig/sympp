@@ -152,8 +152,15 @@ deliveryTest('typed dependencies reuse plan edges and reject cycles across packa
   await replanning.call('close_work_package', { work_package_id: oldAttempt, outcome: 'skipped' });
   await architect.call('set_report', { parking: { targets: [requestTarget(replanningId)] } });
   expect((await architect.board(request)).blockers[0]).toMatchObject({ target: requestTarget(replanningId), state: 'impossible' });
-  await replanning.addPackages([contract('Replanned attempt')]);
   await replanning.reject('set_report', { parking: { targets: [requestTarget(request)] } }, 'blocker_cycle');
+  const [newAttempt] = await replanning.addPackages([contract('Replanned attempt')]);
+  await replanning.reject('set_report', { parking: { targets: [requestTarget(request)] } }, 'blocker_cycle');
+
+  await architect.call('set_report', { parking: null });
+  await replanning.call('set_report', { parking: { targets: [requestTarget(request)] } });
+  await replanning.call('close_work_package', { work_package_id: newAttempt, outcome: 'skipped' });
+  expect((await architect.operator(`/api/v1/sympp/operator/work-requests/${replanningId}/archive`, {})).status).toBe(200);
+  await architect.reject('set_report', { parking: { targets: [requestTarget(replanningId)] } }, 'blocker_cycle');
 });
 
 test('package endings withdraw their asks, and chiefs and the owner can resolve WorkRequest asks', async ({ factory }) => {

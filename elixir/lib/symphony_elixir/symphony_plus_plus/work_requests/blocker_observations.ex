@@ -15,8 +15,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
   @type subject :: {String.t(), String.t()}
 
   @spec watch(module()) :: watching()
-  def watch(repo) do
-    requests = repo.all(from(request in WorkRequest, where: is_nil(request.archived_at) and fragment("json_type(?, '$.parking.targets') = 'array'", request.report)))
+  def watch(repo), do: watch(repo, false)
+
+  defp watch(repo, include_archived?) do
+    requests =
+      repo.all(
+        from(request in WorkRequest,
+          where: (^include_archived? or is_nil(request.archived_at)) and fragment("json_type(?, '$.parking.targets') = 'array'", request.report)
+        )
+      )
 
     events =
       repo.all(
@@ -25,7 +32,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
           on: package.id == event.work_package_id,
           join: request in WorkRequest,
           on: request.id == package.work_request_id,
-          where: package.status != "ended" and is_nil(request.archived_at) and fragment("json_extract(?, '$.type') = 'blocker'", event.payload)
+          where: package.status != "ended" and (^include_archived? or is_nil(request.archived_at)) and fragment("json_extract(?, '$.type') = 'blocker'", event.payload)
         )
       )
 
@@ -55,7 +62,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
   end
 
   defp check_dependencies(repo, subject, targets, mode) do
-    with edges when mode == :all or edges != [] <- targets(watch(repo)),
+    with edges when mode == :all or edges != [] <- targets(watch(repo, true)),
          {:ok, graph} <- dependency_graph(repo, edges),
          false <- cyclic?(graph, subject, targets, mode == :all) do
       :ok
@@ -70,9 +77,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
     parents =
       repo.all(
         from(package in WorkPackage,
-          join: request in WorkRequest,
-          on: request.id == package.work_request_id,
-          where: package.status != "ended" and is_nil(request.archived_at),
+          where: package.status != "ended" and not is_nil(package.work_request_id),
           select: {package.id, package.work_request_id}
         )
       )
@@ -132,7 +137,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BlockerObservations do
   defp vertices(%{"kind" => "pr", "id" => id}, graph), do: package_vertices(Map.get(graph.prs, id, []))
 
   defp vertices(%{"kind" => "work_request", "id" => id} = target, graph) do
-    if BlockerTarget.state(graph.repo, target, %{}) in ["waiting", "unknown"], do: [{"work_request", id}], else: []
+    # An undelivered request can be replanned or restored while the wait is active.
+    if BlockerTarget.state(graph.repo, target, %{}) == "cleared", do: [], else: [{"work_request", id}]
   end
 
   defp vertices(%{"kind" => "work_package", "id" => id}, graph) do
